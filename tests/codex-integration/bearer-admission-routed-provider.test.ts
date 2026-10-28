@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearComboTargetCooldowns } from "../../src/combos/failover";
-import { startServer } from "../../src/server";
+import { startServer as startProxyServer } from "../../src/server";
 import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests } from "../../src/codex/subagent-model-fallback";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import {
@@ -56,6 +56,30 @@ let nativeAccountIds: Array<string | null> = [];
 const ADMISSION_SECRET = "ocx_data_2132secret";
 const ROUTED_KEY = "sk-routed-provider-key";
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("bearer admission routed provider test");
+
+// Register synchronously, before startup can suspend. A Bun timeout does not
+// unwind the test body's finally, so afterEach must own these resources too.
+const runningServers = new Set<ReturnType<typeof startProxyServer>>();
+const captureClosers = new Set<() => Promise<void>>();
+
+function startServer(...args: Parameters<typeof startProxyServer>): ReturnType<typeof startProxyServer> {
+  const server = startProxyServer(...args);
+  runningServers.add(server);
+  const stop = server.stop.bind(server);
+  let stopping: Promise<void> | undefined;
+  Object.defineProperty(server, "stop", {
+    configurable: true,
+    value: (force?: boolean) => stopping ??= stop(force).then(() => { runningServers.delete(server); }),
+  });
+  return server;
+}
+
+async function stopActiveFixtures(): Promise<void> {
+  const servers = await Promise.allSettled([...runningServers].map(server => server.stop(true)));
+  const captures = await Promise.allSettled([...captureClosers].map(close => close()));
+  const failures = [...servers, ...captures].filter(result => result.status === "rejected");
+  if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Admission fixture cleanup failed");
+}
 
 /** A JWT whose `exp` is far in the future, so a stored main token reads as live. */
 function liveJwt(): string {
@@ -155,18 +179,17 @@ async function withCursorCaptureServer<T>(
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Cursor capture fixture did not bind");
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= tracedBearerStage(closeTrace, "capture_close", async () => {
+    for (const session of sessions) session.destroy();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    captureClosers.delete(close);
+  });
+  captureClosers.add(close);
   try {
     return await run(`http://127.0.0.1:${address.port}`, capturedAuth);
   } finally {
-    closeTrace?.begin("capture_close");
-    try {
-      for (const session of sessions) session.destroy();
-      await new Promise<void>(resolve => server.close(() => resolve()));
-      closeTrace?.end("capture_close");
-    } catch (error) {
-      closeTrace?.error("capture_close");
-      throw error;
-    }
+    await close();
   }
 }
 
@@ -207,24 +230,30 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  resetVisionDescriptionCache();
-  closeRequestHistoryIndex();
-  clearComboTargetCooldowns();
-  resetSubagentModelFallbackStateForTests();
-  if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-  else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
-  globalThis.fetch = originalFetch;
-  if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOcxHome;
-  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = previousCodexHome;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  // Startup's config-dir ACL hardening may still hold the homes on Windows; settle it first.
-  if (ocxHome) await removeTreeAfterBackgroundWork(ocxHome);
-  if (codexHome) await removeTreeAfterBackgroundWork(codexHome);
-  ocxHome = "";
-  codexHome = "";
+  try {
+    // Stop under the same homes/fetch overrides that startup captured, before
+    // releasing SQLite handles or removing directories still owned by a server.
+    await stopActiveFixtures();
+  } finally {
+    resetVisionDescriptionCache();
+    closeRequestHistoryIndex();
+    clearComboTargetCooldowns();
+    resetSubagentModelFallbackStateForTests();
+    if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
+    globalThis.fetch = originalFetch;
+    if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOcxHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
+    // Startup's config-dir ACL hardening may still hold the homes on Windows; settle it first.
+    if (ocxHome) await removeTreeAfterBackgroundWork(ocxHome);
+    if (codexHome) await removeTreeAfterBackgroundWork(codexHome);
+    ocxHome = "";
+    codexHome = "";
+  }
 });
 
 async function postResponses(
@@ -275,10 +304,17 @@ async function postClaudeMessages(
   });
 }
 
-async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
+async function startOwnedServer(
+  startupGate: () => Promise<unknown> = waitForNativeMainStartupGate,
+): Promise<ReturnType<typeof startServer>> {
   const server = startServer(0, { inspectNativeCodexOwnership });
-  await waitForNativeMainStartupGate();
-  return server;
+  try {
+    await startupGate();
+    return server;
+  } catch (error) {
+    await server.stop(true);
+    throw error;
+  }
 }
 
 /**
@@ -293,11 +329,13 @@ async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
  * numbers only — no path, header, token, or error text — an elapsed
  * correlation alone never proves an external kill. The request stage spans
  * the body read, and test_end is emitted from a finally so a failed stage
- * or assertion still closes the record after capture_close and
- * iteration_end. Tracing adds no timers, retries, or files and never alters
+ * or assertion still closes the record after capture_close and the fixture's
+ * iteration_end. The fixed "fixture" index attributes shared setup/teardown
+ * and positive controls separately from each negative row's request.
+ * Tracing adds no timers, retries, or files and never alters
  * the call sequence or cleanup: an undefined trace emits nothing.
  */
-type BearerTraceStage = "save_config" | "startup_gate" | "request" | "server_stop" | "capture_close";
+type BearerTraceStage = "save_config" | "startup_gate" | "positive_control" | "request" | "server_stop" | "capture_close";
 
 interface BearerIterationTrace {
   begin(stage: BearerTraceStage): void;
@@ -307,7 +345,7 @@ interface BearerIterationTrace {
 }
 
 interface BearerTestTrace {
-  iteration(caseIndex: number, caseCount: number): BearerIterationTrace;
+  iteration(caseIndex: number | "fixture", caseCount: number): BearerIterationTrace;
   finish(): void;
 }
 
@@ -452,29 +490,23 @@ interface AdmissionCaseDeps {
   readonly post?: BearerAdmissionPost;
 }
 
-/** One matrix iteration: real config, real servers, real stage tracing. */
+/** One negative row on the shared fixture; assertions remain per request. */
 async function runTracedAdmissionCase(
   iteration: BearerIterationTrace | undefined,
   surface: "Responses" | "Chat",
   extra: Record<string, string>,
+  url: string | URL,
+  capturedAuth: Array<string | null>,
   deps: AdmissionCaseDeps = {},
 ): Promise<void> {
-  await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
-    tracedBearerStageSync(iteration, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
-    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-    const server = await tracedBearerStage(iteration, "startup_gate", () => startOwnedServer());
-    try {
-      const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
-      const post = deps.post ?? (surface === "Chat" ? postChatCompletions : postResponses);
-      const { body } = await runBearerRequestStage(iteration, surface, server.url, headers, post);
-      if (surface === "Responses") {
-        expect(body).toMatchObject({ status: "failed" });
-      }
-      expect(capturedAuth).toEqual([]);
-    } finally {
-      await tracedBearerStage(iteration, "server_stop", () => server.stop(true));
-    }
-  }, undefined, iteration);
+  capturedAuth.length = 0;
+  const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+  const post = deps.post ?? (surface === "Chat" ? postChatCompletions : postResponses);
+  const { body } = await runBearerRequestStage(iteration, surface, url, headers, post);
+  if (surface === "Responses") {
+    expect(body).toMatchObject({ status: "failed" });
+  }
+  expect(capturedAuth).toEqual([]);
 }
 
 /**
@@ -487,23 +519,125 @@ async function runTracedAdmissionMatrix(
   deps: AdmissionCaseDeps = {},
 ): Promise<void> {
   const trace = bearerStageTracer(`ChatGPT-claimed bearer (${surface})`);
+  const fixture = trace?.iteration("fixture", cases.length);
   try {
-    for (const [caseIndex, extra] of cases.entries()) {
-      const iteration = trace?.iteration(caseIndex, cases.length);
+    // Auth varies by row; routing/config do not. Rewriting a legacy config and
+    // starting a full proxy per row repeated migration + private-file ACL work
+    // eleven times inside one 30s test budget on hosted Windows.
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      tracedBearerStageSync(fixture, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const server = await tracedBearerStage(fixture, "startup_gate", () => startOwnedServer());
+      const control = (bearer: string) => tracedBearerStage(fixture, "positive_control", async () => {
+        capturedAuth.length = 0;
+        const post = surface === "Chat" ? postChatCompletions : postResponses;
+        const response = await post(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET, authorization: `Bearer ${bearer}`,
+        });
+        await response.text();
+        expect(capturedAuth).toEqual([`Bearer ${bearer}`]);
+      });
       try {
-        await runTracedAdmissionCase(iteration, surface, extra, deps);
+        // Both ends must reach the wire on this SAME route, so a cooldown or a
+        // globally disabled path cannot make all negative rows vacuously green.
+        await control("cursor-matrix-before");
+        for (const [caseIndex, extra] of cases.entries()) {
+          const iteration = trace?.iteration(caseIndex, cases.length);
+          try {
+            await runTracedAdmissionCase(iteration, surface, extra, server.url, capturedAuth, deps);
+          } finally {
+            iteration?.finish();
+          }
+        }
+        await control("cursor-matrix-after");
       } finally {
-        iteration?.finish();
+        await tracedBearerStage(fixture, "server_stop", () => server.stop(true));
       }
-    }
+    }, undefined, fixture);
   } finally {
-    // test_end closes every run — including a failed stage or assertion,
-    // after that iteration's capture_close and iteration_end.
+    fixture?.finish();
     trace?.finish();
   }
 }
 
 describe("bearer stage tracer seam", () => {
+  test.each(["Responses", "Chat"])("%s matrix initializes once and brackets every negative row with live controls", async surface => {
+    await withTraceLines(async records => {
+      await runTracedAdmissionMatrix(surface, [
+        { authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "matrix-claim" })}` },
+        { authorization: "Bearer first, Bearer second" },
+      ]);
+      for (const stage of ["save_config", "startup_gate", "server_stop", "capture_close"]) {
+        expect(records().filter(record => record.event === `${stage}_end`)).toHaveLength(1);
+      }
+      const work = records().filter(record => record.event === "request_begin" || record.event === "positive_control_begin");
+      expect(work.map(record => [record.event, record.caseIndex])).toEqual([
+        ["positive_control_begin", "fixture"], ["request_begin", 0],
+        ["request_begin", 1], ["positive_control_begin", "fixture"],
+      ]);
+      expect(records().filter(record => record.event === "positive_control_end")).toHaveLength(2);
+    });
+  });
+
+  test("cleanup stops a server suspended in startup and releases its spend-ledger owner", async () => {
+    saveConfig(mixedConfig());
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = startOwnedServer(() => gate);
+    const server = [...runningServers][0]!;
+    const url = new URL("/healthz", server.url);
+    try {
+      expect((await originalFetch(url)).status).toBe(200);
+      await stopActiveFixtures();
+      await expect(originalFetch(url)).rejects.toThrow();
+      // Same home, while the old startup promise is STILL suspended: a leaked
+      // spend owner rejects this start even though its listener is gone.
+      const replacement = await startOwnedServer();
+      try {
+        const response = await postResponses(replacement.url, "gateway/gateway-model");
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(routedAuth).toEqual([`Bearer ${ROUTED_KEY}`]);
+      } finally {
+        await replacement.stop(true);
+      }
+    } finally {
+      release();
+      await (await pending).stop(true);
+    }
+  });
+
+  test("cleanup closes a capture fixture whose callback has not returned", async () => {
+    let entered!: (baseUrl: string) => void, release!: () => void;
+    const ready = new Promise<string>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = withCursorCaptureServer(async baseUrl => { entered(baseUrl); await gate; });
+    const url = await ready;
+    try {
+      expect(captureClosers.size).toBe(1);
+      await stopActiveFixtures();
+      await expect(new Promise<void>((resolve, reject) => {
+        const session = http2.connect(url);
+        session.once("connect", () => { session.destroy(); resolve(); });
+        session.once("error", error => { session.destroy(); reject(error); });
+      })).rejects.toThrow();
+      expect(captureClosers.size).toBe(0);
+    } finally {
+      release();
+      await pending;
+    }
+  });
+
+  test("a rejected startup gate stops its server before propagating the error", async () => {
+    saveConfig(mixedConfig());
+    const failure = new Error("fixture startup failure");
+    await expect(startOwnedServer(() => Promise.reject(failure))).rejects.toBe(failure);
+    expect(runningServers.size).toBe(0);
+    const replacement = await startOwnedServer();
+    await replacement.stop(true);
+  });
+
   test("a disabled trace runs a sync stage as a direct call — no microtask, same order", () => {
     // The whole point of the sync wrapper: a sync body must come back as a
     // value, not a resolved Promise, when tracing is off.
@@ -638,8 +772,12 @@ describe("bearer stage tracer seam", () => {
         "save_config_end",
         "startup_gate_begin",
         "startup_gate_end",
+        "positive_control_begin",
+        "positive_control_end",
+        "iteration_begin",
         "request_begin",
         "request_error",
+        "iteration_end",
         "server_stop_begin",
         "server_stop_end",
         "capture_close_begin",
