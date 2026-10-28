@@ -59,17 +59,25 @@ const inspectNativeCodexOwnership = ownedServiceHomeInspection("bearer admission
 
 // Register synchronously, before startup can suspend. A Bun timeout does not
 // unwind the test body's finally, so afterEach must own these resources too.
-const runningServers = new Set<ReturnType<typeof startProxyServer>>();
+const runningServers = new Set<{ stop(force?: boolean): Promise<void> }>();
 const captureClosers = new Set<() => Promise<void>>();
 
 function startServer(...args: Parameters<typeof startProxyServer>): ReturnType<typeof startProxyServer> {
-  const server = startProxyServer(...args);
+  return trackServer(startProxyServer(...args));
+}
+
+// One stop in flight at a time. A rejected stop keeps the server registered and
+// clears the cached attempt, so afterEach retries instead of re-reading a failure.
+function trackServer<T extends { stop(force?: boolean): Promise<void> }>(server: T): T {
   runningServers.add(server);
   const stop = server.stop.bind(server);
   let stopping: Promise<void> | undefined;
   Object.defineProperty(server, "stop", {
     configurable: true,
-    value: (force?: boolean) => stopping ??= stop(force).then(() => { runningServers.delete(server); }),
+    value: (force?: boolean) => stopping ??= stop(force).then(
+      () => { runningServers.delete(server); },
+      error => { stopping = undefined; throw error; },
+    ),
   });
   return server;
 }
@@ -585,7 +593,7 @@ describe("bearer stage tracer seam", () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const pending = startOwnedServer(() => gate);
-    const server = [...runningServers][0]!;
+    const server = [...runningServers][0] as ReturnType<typeof startProxyServer>;
     const url = new URL("/healthz", server.url);
     try {
       expect((await originalFetch(url)).status).toBe(200);
@@ -636,6 +644,22 @@ describe("bearer stage tracer seam", () => {
     expect(runningServers.size).toBe(0);
     const replacement = await startOwnedServer();
     await replacement.stop(true);
+  });
+
+  test("a rejected stop stays registered and the next cleanup retries it", async () => {
+    const failure = new Error("fixture stop failure");
+    let attempts = 0;
+    const server = trackServer({
+      stop: async (_force?: boolean) => {
+        attempts += 1;
+        if (attempts === 1) throw failure;
+      },
+    });
+    await expect(server.stop(true)).rejects.toBe(failure);
+    expect(runningServers.has(server)).toBe(true);
+    await stopActiveFixtures();
+    expect(attempts).toBe(2);
+    expect(runningServers.has(server)).toBe(false);
   });
 
   test("a disabled trace runs a sync stage as a direct call — no microtask, same order", () => {
