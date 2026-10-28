@@ -41,7 +41,7 @@ export const LOCALES = {
     description: "Which coding tools opencodex connects to, how each one is wired, and which protocol it speaks.",
     intro: "opencodex is one local gateway for your AI coding tools and models. Some tools it configures natively; for the others it exports or manages a config file that points the tool at the local proxy. This page is generated from the code registries, so it lists exactly what the current release ships.",
     levelsHeading: "Support levels",
-    implementedDefinition: "the client is in the registry. For exported configs, the protocol shown is read from the config opencodex generates, and generation fails if it changes. Protocols marked *curated* (native clients, and clients that pick their own endpoint) come from a review of the integration code, and the generator checks that the reviewed code is still in place.",
+    implementedDefinition: "the client is in the registry. For exported configs, the protocol shown is read from the config opencodex generates, and generation fails if it changes. A protocol marked *curated* names an endpoint that comes from a review instead of the config itself (native clients, and clients that turn a setting into a specific endpoint); the generator checks that the reviewed code is still in place. \"OpenAI-compatible\" rows make no endpoint claim.",
     testCoveredDefinition: "implemented, and a test case chosen in review that exercises this client is linked. The generator checks only that the test still exists and is enabled; read it to see what it asserts.",
     clientsHeading: "Clients",
     columns: { client: "Client", native: "Native", configExport: "Config export", managed: "Managed file integration", protocol: "Inbound protocol", level: "Support level", notes: "Notes" },
@@ -71,7 +71,7 @@ export const LOCALES = {
     description: "Les outils de code auxquels opencodex se connecte, la façon dont chacun est relié et le protocole qu’il utilise.",
     intro: "opencodex est une passerelle locale unique pour vos outils de code IA et vos modèles. Il configure certains outils nativement ; pour les autres, il exporte ou gère un fichier de configuration qui dirige l’outil vers le proxy local. Cette page est générée à partir des registres du code et reflète donc exactement ce que fournit la version actuelle.",
     levelsHeading: "Niveaux de prise en charge",
-    implementedDefinition: "le client figure dans le registre. Pour les configurations exportées, le protocole indiqué est lu dans la configuration générée par opencodex, et la génération échoue s’il change. Les protocoles marqués *revu* (clients natifs et clients qui choisissent eux-mêmes leur point de terminaison) proviennent d’une revue du code d’intégration, et le générateur vérifie que ce code est toujours en place.",
+    implementedDefinition: "le client figure dans le registre. Pour les configurations exportées, le protocole indiqué est lu dans la configuration générée par opencodex, et la génération échoue s’il change. Un protocole marqué *revu* désigne un point de terminaison issu d’une revue plutôt que de la configuration elle-même (clients natifs, et clients qui déduisent un point de terminaison précis d’un réglage) ; le générateur vérifie que le code revu est toujours en place. Les lignes « Compatible OpenAI » n’affirment aucun point de terminaison.",
     testCoveredDefinition: "implemented, et un cas de test choisi en revue qui exerce ce client est lié. Le générateur vérifie seulement que le test existe toujours et qu’il est actif ; lisez-le pour savoir ce qu’il vérifie.",
     clientsHeading: "Clients",
     columns: { client: "Client", native: "Natif", configExport: "Export de configuration", managed: "Intégration de fichier gérée", protocol: "Protocole entrant", level: "Niveau", notes: "Remarques" },
@@ -101,7 +101,7 @@ export const LOCALES = {
     description: "opencodex가 연결하는 코딩 도구, 각 도구의 연결 방식, 사용하는 프로토콜.",
     intro: "opencodex는 AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨이입니다. 일부 도구는 직접(네이티브로) 설정하고, 나머지는 로컬 프록시를 가리키는 설정 파일을 내보내거나 관리합니다. 이 페이지는 코드 레지스트리에서 생성되므로 현재 릴리스가 제공하는 내용과 정확히 일치합니다.",
     levelsHeading: "지원 수준",
-    implementedDefinition: "레지스트리에 등록된 클라이언트입니다. 내보내는 설정의 경우 표의 프로토콜은 opencodex가 생성하는 설정에서 읽으며, 바뀌면 생성이 실패합니다. *검토됨* 표시가 있는 프로토콜(네이티브 클라이언트, 엔드포인트를 스스로 고르는 클라이언트)은 연동 코드를 리뷰한 결과이며, 생성기는 리뷰한 코드가 그대로 있는지 확인합니다.",
+    implementedDefinition: "레지스트리에 등록된 클라이언트입니다. 내보내는 설정의 경우 표의 프로토콜은 opencodex가 생성하는 설정에서 읽으며, 바뀌면 생성이 실패합니다. *검토됨* 표시는 설정 자체가 아니라 리뷰에서 나온 특정 엔드포인트를 뜻합니다(네이티브 클라이언트, 설정값을 특정 엔드포인트로 바꾸는 클라이언트). 생성기는 리뷰한 코드가 그대로 있는지 확인합니다. 'OpenAI 호환' 행은 엔드포인트를 단정하지 않습니다.",
     testCoveredDefinition: "implemented이면서, 리뷰로 고른 이 클라이언트의 테스트 케이스가 링크되어 있습니다. 생성기는 테스트가 존재하고 비활성화되지 않았는지만 확인하므로, 무엇을 검증하는지는 테스트를 직접 읽어 보세요.",
     clientsHeading: "클라이언트",
     columns: { client: "클라이언트", native: "네이티브", configExport: "설정 내보내기", managed: "관리형 파일 연동", protocol: "수신 프로토콜", level: "지원 수준", notes: "참고" },
@@ -131,7 +131,7 @@ export const LOCALES = {
     description: "opencodex 能连接哪些编程工具、每个工具如何接入，以及它使用的协议。",
     intro: "opencodex 是一个本地网关，连接你的 AI 编程工具与模型。部分工具由它原生配置；其余工具则通过导出或托管一个指向本地代理的配置文件来接入。本页由代码中的注册表生成，因此与当前版本实际提供的内容完全一致。",
     levelsHeading: "支持级别",
-    implementedDefinition: "客户端已在注册表中。对于导出的配置，表中协议读取自 opencodex 生成的配置，一旦变化生成就会失败。标有*已审阅*的协议（原生客户端以及自行选择端点的客户端）来自对集成代码的审阅，生成器会检查被审阅的代码是否仍然存在。",
+    implementedDefinition: "客户端已在注册表中。对于导出的配置，表中协议读取自 opencodex 生成的配置，一旦变化生成就会失败。标有*已审阅*的协议表示其端点来自审阅而非配置本身（原生客户端，以及会把某个设置转换为特定端点的客户端）；生成器会检查被审阅的代码是否仍然存在。“OpenAI 兼容”的行不声明具体端点。",
     testCoveredDefinition: "满足 implemented，并链接了一个经评审选定、覆盖该客户端的测试用例。生成器只检查该测试仍然存在且未被禁用；它具体断言了什么，请阅读测试本身。",
     clientsHeading: "客户端",
     columns: { client: "客户端", native: "原生", configExport: "配置导出", managed: "托管文件集成", protocol: "入站协议", level: "支持级别", notes: "说明" },
@@ -161,7 +161,7 @@ export const LOCALES = {
     description: "opencodex 能連接哪些程式開發工具、每個工具如何接入，以及它使用的協定。",
     intro: "opencodex 是一個本機閘道，連接你的 AI 程式開發工具與模型。部分工具由它原生設定；其餘工具則透過匯出或代管一個指向本機代理的設定檔來接入。本頁由程式碼中的登錄表產生，因此與目前版本實際提供的內容完全一致。",
     levelsHeading: "支援等級",
-    implementedDefinition: "用戶端已在登錄表中。對於匯出的設定，表中協定讀取自 opencodex 產生的設定，一旦變更產生就會失敗。標示*已審查*的協定（原生用戶端以及自行選擇端點的用戶端）來自對整合程式碼的審查，產生器會檢查被審查的程式碼是否仍然存在。",
+    implementedDefinition: "用戶端已在登錄表中。對於匯出的設定，表中協定讀取自 opencodex 產生的設定，一旦變更產生就會失敗。標示*已審查*的協定表示其端點來自審查而非設定本身（原生用戶端，以及會把某個設定轉換為特定端點的用戶端）；產生器會檢查被審查的程式碼是否仍然存在。「OpenAI 相容」的列不聲明具體端點。",
     testCoveredDefinition: "符合 implemented，並連結了一個經審查選定、涵蓋該用戶端的測試案例。產生器只檢查該測試仍然存在且未被停用；它實際驗證什麼，請閱讀測試本身。",
     clientsHeading: "用戶端",
     columns: { client: "用戶端", native: "原生", configExport: "設定匯出", managed: "代管檔案整合", protocol: "入站協定", level: "支援等級", notes: "說明" },
@@ -191,7 +191,7 @@ export const LOCALES = {
     description: "К каким инструментам для кода подключается opencodex, как подключён каждый из них и какой протокол он использует.",
     intro: "opencodex — единый локальный шлюз для ваших ИИ-инструментов для кода и моделей. Часть инструментов он настраивает нативно; для остальных он экспортирует или ведёт файл конфигурации, который направляет инструмент на локальный прокси. Страница сгенерирована из реестров в коде и поэтому в точности соответствует текущему релизу.",
     levelsHeading: "Уровни поддержки",
-    implementedDefinition: "клиент есть в реестре. Для экспортируемых конфигураций протокол берётся из конфигурации, которую генерирует opencodex, и генерация падает, если он меняется. Протоколы с пометкой *проверено* (нативные клиенты и клиенты, сами выбирающие эндпоинт) взяты из ревью кода интеграции, а генератор проверяет, что этот код на месте.",
+    implementedDefinition: "клиент есть в реестре. Для экспортируемых конфигураций протокол берётся из конфигурации, которую генерирует opencodex, и генерация падает, если он меняется. Пометка *проверено* означает, что эндпоинт взят из ревью, а не из самой конфигурации (нативные клиенты и клиенты, которые превращают настройку в конкретный эндпоинт); генератор проверяет, что проверенный код на месте. Строки «Совместим с OpenAI» не утверждают конкретный эндпоинт.",
     testCoveredDefinition: "implemented, и есть ссылка на выбранный при ревью тест, который задействует этого клиента. Генератор проверяет только, что тест существует и не отключён; что именно он проверяет, смотрите в самом тесте.",
     clientsHeading: "Клиенты",
     columns: { client: "Клиент", native: "Нативно", configExport: "Экспорт конфигурации", managed: "Управляемая интеграция файла", protocol: "Входящий протокол", level: "Уровень", notes: "Примечания" },
@@ -221,7 +221,7 @@ export const LOCALES = {
     description: "opencodex が接続するコーディングツール、それぞれの接続方法、使用するプロトコル。",
     intro: "opencodex は、AI コーディングツールとモデルをつなぐ 1 つのローカルゲートウェイです。一部のツールはネイティブに設定し、それ以外はローカルプロキシを指す設定ファイルをエクスポートまたは管理します。このページはコードのレジストリから生成されるため、現在のリリースの内容と正確に一致します。",
     levelsHeading: "サポートレベル",
-    implementedDefinition: "レジストリに登録されたクライアントです。エクスポートされる設定では、表のプロトコルは opencodex が生成する設定から読み取られ、変わると生成が失敗します。*レビュー済み*と付いたプロトコル（ネイティブクライアントと、エンドポイントを自分で選ぶクライアント）は連携コードのレビューに基づくもので、レビューしたコードが残っているかを生成時に確認します。",
+    implementedDefinition: "レジストリに登録されたクライアントです。エクスポートされる設定では、表のプロトコルは opencodex が生成する設定から読み取られ、変わると生成が失敗します。*レビュー済み*は、エンドポイントが設定そのものではなくレビューに基づくことを示します（ネイティブクライアントと、設定を特定のエンドポイントに変換するクライアント）。レビューしたコードが残っているかを生成時に確認します。「OpenAI 互換」の行は特定のエンドポイントを主張しません。",
     testCoveredDefinition: "implemented であり、レビューで選んだこのクライアントのテストケースへのリンクがあります。生成時に確認するのはテストが存在し無効化されていないことだけです。何を検証しているかはテストを読んでください。",
     clientsHeading: "クライアント",
     columns: { client: "クライアント", native: "ネイティブ", configExport: "設定エクスポート", managed: "管理ファイル連携", protocol: "受信プロトコル", level: "サポートレベル", notes: "備考" },
@@ -251,7 +251,7 @@ export const LOCALES = {
     description: "opencodex'in bağlandığı kodlama araçları, her birinin nasıl bağlandığı ve hangi protokolü kullandığı.",
     intro: "opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçididir. Bazı araçları yerel olarak yapılandırır; diğerleri için aracı yerel proxy'ye yönlendiren bir yapılandırma dosyasını dışa aktarır veya yönetir. Bu sayfa koddaki kayıtlardan üretilir; bu yüzden mevcut sürümün sunduğu şeyle birebir aynıdır.",
     levelsHeading: "Destek düzeyleri",
-    implementedDefinition: "istemci kayıtta yer alır. Dışa aktarılan yapılandırmalarda gösterilen protokol, opencodex'in ürettiği yapılandırmadan okunur ve değişirse üretim başarısız olur. *İncelendi* işaretli protokoller (yerel istemciler ve uç noktasını kendisi seçen istemciler) entegrasyon kodunun incelemesinden gelir; üretici, incelenen kodun hâlâ yerinde olduğunu denetler.",
+    implementedDefinition: "istemci kayıtta yer alır. Dışa aktarılan yapılandırmalarda gösterilen protokol, opencodex'in ürettiği yapılandırmadan okunur ve değişirse üretim başarısız olur. *İncelendi* işareti, uç noktanın yapılandırmanın kendisinden değil bir incelemeden geldiğini belirtir (yerel istemciler ve bir ayarı belirli bir uç noktaya çeviren istemciler); üretici, incelenen kodun hâlâ yerinde olduğunu denetler. \"OpenAI uyumlu\" satırlar belirli bir uç nokta iddia etmez.",
     testCoveredDefinition: "implemented olmanın yanında, incelemede seçilmiş ve bu istemciyi çalıştıran bir test durumuna bağlantı verilir. Üretici yalnızca testin hâlâ var ve etkin olduğunu denetler; neyi doğruladığını görmek için testi okuyun.",
     clientsHeading: "İstemciler",
     columns: { client: "İstemci", native: "Yerel", configExport: "Yapılandırma dışa aktarımı", managed: "Yönetilen dosya entegrasyonu", protocol: "Gelen protokol", level: "Destek düzeyi", notes: "Notlar" },
@@ -279,5 +279,6 @@ export const LOCALES = {
 } as const satisfies Record<string, Strings>;
 
 export type MatrixLocale = keyof typeof LOCALES;
+
 
 

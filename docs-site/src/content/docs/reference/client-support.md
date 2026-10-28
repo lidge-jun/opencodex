@@ -10,7 +10,7 @@ opencodex is one local gateway for your AI coding tools and models. Some tools i
 
 ## Support levels
 
-- **implemented**: the client is in the registry. For exported configs, the protocol shown is read from the config opencodex generates, and generation fails if it changes. Protocols marked *curated* (native clients, and clients that pick their own endpoint) come from a review of the integration code, and the generator checks that the reviewed code is still in place.
+- **implemented**: the client is in the registry. For exported configs, the protocol shown is read from the config opencodex generates, and generation fails if it changes. A protocol marked *curated* names an endpoint that comes from a review instead of the config itself (native clients, and clients that turn a setting into a specific endpoint); the generator checks that the reviewed code is still in place. "OpenAI-compatible" rows make no endpoint claim.
 - **test-covered**: implemented, and a test case chosen in review that exercises this client is linked. The generator checks only that the test still exists and is enabled; read it to see what it asserts.
 
 ## Clients

@@ -10,7 +10,7 @@ opencodex est une passerelle locale unique pour vos outils de code IA et vos mod
 
 ## Niveaux de prise en charge
 
-- **implemented**: le client figure dans le registre. Pour les configurations exportées, le protocole indiqué est lu dans la configuration générée par opencodex, et la génération échoue s’il change. Les protocoles marqués *revu* (clients natifs et clients qui choisissent eux-mêmes leur point de terminaison) proviennent d’une revue du code d’intégration, et le générateur vérifie que ce code est toujours en place.
+- **implemented**: le client figure dans le registre. Pour les configurations exportées, le protocole indiqué est lu dans la configuration générée par opencodex, et la génération échoue s’il change. Un protocole marqué *revu* désigne un point de terminaison issu d’une revue plutôt que de la configuration elle-même (clients natifs, et clients qui déduisent un point de terminaison précis d’un réglage) ; le générateur vérifie que le code revu est toujours en place. Les lignes « Compatible OpenAI » n’affirment aucun point de terminaison.
 - **test-covered**: implemented, et un cas de test choisi en revue qui exerce ce client est lié. Le générateur vérifie seulement que le test existe toujours et qu’il est actif ; lisez-le pour savoir ce qu’il vérifie.
 
 ## Clients

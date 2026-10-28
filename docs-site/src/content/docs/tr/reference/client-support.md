@@ -10,7 +10,7 @@ opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yere
 
 ## Destek düzeyleri
 
-- **implemented**: istemci kayıtta yer alır. Dışa aktarılan yapılandırmalarda gösterilen protokol, opencodex'in ürettiği yapılandırmadan okunur ve değişirse üretim başarısız olur. *İncelendi* işaretli protokoller (yerel istemciler ve uç noktasını kendisi seçen istemciler) entegrasyon kodunun incelemesinden gelir; üretici, incelenen kodun hâlâ yerinde olduğunu denetler.
+- **implemented**: istemci kayıtta yer alır. Dışa aktarılan yapılandırmalarda gösterilen protokol, opencodex'in ürettiği yapılandırmadan okunur ve değişirse üretim başarısız olur. *İncelendi* işareti, uç noktanın yapılandırmanın kendisinden değil bir incelemeden geldiğini belirtir (yerel istemciler ve bir ayarı belirli bir uç noktaya çeviren istemciler); üretici, incelenen kodun hâlâ yerinde olduğunu denetler. "OpenAI uyumlu" satırlar belirli bir uç nokta iddia etmez.
 - **test-covered**: implemented olmanın yanında, incelemede seçilmiş ve bu istemciyi çalıştıran bir test durumuna bağlantı verilir. Üretici yalnızca testin hâlâ var ve etkin olduğunu denetler; neyi doğruladığını görmek için testi okuyun.
 
 ## İstemciler

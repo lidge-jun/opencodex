@@ -129,19 +129,27 @@ export function parseNativeRoster(source: string): string[] {
   return ids as string[];
 }
 
-/** Values at a dotted path; `*` matches every key or array index. */
-export function valuesAt(document: unknown, path: string): unknown[] {
+/**
+ * Values at a dotted path; `*` matches every key or array index. `missing` counts the branches
+ * that stopped early, so one model without the field cannot hide behind another that has it.
+ */
+export function valuesAt(document: unknown, path: string): { values: unknown[]; missing: number } {
   let current: unknown[] = [document];
+  let missing = 0;
   for (const segment of path.split(".")) {
     const next: unknown[] = [];
     for (const value of current) {
-      if (value === null || typeof value !== "object") continue;
+      if (value === null || typeof value !== "object") {
+        missing++;
+        continue;
+      }
       if (segment === "*") next.push(...Object.values(value as Record<string, unknown>));
       else if (Object.prototype.hasOwnProperty.call(value, segment)) next.push((value as Record<string, unknown>)[segment]);
+      else missing++;
     }
     current = next;
   }
-  return current;
+  return { values: current, missing };
 }
 
 function sha256(text: string): string {
@@ -158,9 +166,9 @@ function exportProtocols(id: string, meta: ExportClientMetadata, inputs: MatrixI
   }
   const seen = new Set<MatrixProtocol>();
   for (const field of meta.protocolFields) {
-    const values = valuesAt(document, field.path);
-    if (values.length === 0) {
-      problems.push(`${id}: protocol field ${field.path} is missing from the generated config`);
+    const { values, missing } = valuesAt(document, field.path);
+    if (values.length === 0 || missing > 0) {
+      problems.push(`${id}: protocol field ${field.path} is missing from ${values.length === 0 ? "the generated config" : `${missing} matched entr${missing === 1 ? "y" : "ies"}`}`);
       continue;
     }
     for (const value of values) {
@@ -175,7 +183,7 @@ function exportProtocols(id: string, meta: ExportClientMetadata, inputs: MatrixI
   const cells: ProtocolCell[] = [...seen].map(protocol => ({ protocol }));
   const override = meta.nativeOpenaiOverride;
   if (override) {
-    const entries = valuesAt(document, override.modelsPath).flatMap(list => Array.isArray(list) ? list : Object.values(list as object));
+    const entries = valuesAt(document, override.modelsPath).values.flatMap(list => Array.isArray(list) ? list : Object.values(list as object));
     const entryId = (entry: unknown) => (entry as Record<string, unknown>)?.[override.idKey];
     const nativeEntry = entries.find(entry => entryId(entry) === FIXTURE_NATIVE_MODEL_ID);
     if (!nativeEntry) problems.push(`${id}: no model entry for the native OpenAI fixture model at ${override.modelsPath}`);
@@ -208,10 +216,15 @@ function testCaseBody(source: string, title: string): string | undefined {
     return found;
   });
   if (starts.length !== 1) return undefined;
-  const start = starts[0]!;
-  const rest = source.slice(start + 1);
+  const afterTitle = source.indexOf(quoted, starts[0]!) + quoted.length;
+  const rest = source.slice(afterTitle);
   const next = rest.search(/\n\s*(test|it|describe)(\.\w+)?\(/);
-  return next < 0 ? rest : rest.slice(0, next);
+  return withoutComments(next < 0 ? rest : rest.slice(0, next));
+}
+
+/** Drop line and block comments so a mention in a comment cannot stand in for code. */
+function withoutComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\\])\/\/.*$/gm, "$1");
 }
 
 const DISABLING_MODIFIER = /\b(?:test|it|describe)\.(?:skip|todo|only|skipIf|if|failing|todoIf)\b/;
@@ -272,7 +285,7 @@ export function collectRows(inputs: MatrixInputs = defaultInputs()): MatrixRow[]
     const meta = inputs.nativeMetadata[id]!;
     for (const anchor of meta.anchors) {
       const source = inputs.readRepoFile(anchor.file);
-      if (source === undefined || !source.includes(anchor.text)) {
+      if (source === undefined || !withoutComments(source).includes(anchor.text)) {
         problems.push(`${id}: reviewed code ${JSON.stringify(anchor.text)} is no longer in ${anchor.file}; re-review the curated protocol`);
       }
     }

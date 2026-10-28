@@ -86,6 +86,11 @@ describe("client support matrix", () => {
     expect(moved).toContain("cline: protocol field catalog.providers.opencodex.provider.protocol is missing from the generated config");
   });
 
+  test("a protocol field missing on one matched entry fails even when another entry has it", () => {
+    const partial = problemsWith({ buildDocument: withDocument("workbuddy", doc => { delete doc.models[0].url; return doc; }) });
+    expect(partial).toContain("workbuddy: protocol field models.*.url is missing from 1 matched entry");
+  });
+
   test("the OMP Responses override is checked model by model", () => {
     const swapped = problemsWith({
       buildDocument: withDocument("omp", doc => {
@@ -107,6 +112,9 @@ describe("client support matrix", () => {
     const grok = NATIVE_CLIENT_METADATA.grok!.anchors[0]!;
     const gone = problemsWith({ readRepoFile: withFile(grok.file, text => text.replace(grok.text, "")) });
     expect(gone.some(problem => problem.startsWith("grok: reviewed code"))).toBe(true);
+    const codex = NATIVE_CLIENT_METADATA.codex!.anchors[0]!;
+    const commentedOut = problemsWith({ readRepoFile: withFile(codex.file, text => text.replace(codex.text, `"replaced"; // ${codex.text}`)) });
+    expect(commentedOut.some(problem => problem.startsWith("codex: reviewed code"))).toBe(true);
   });
 
   test("a test reference must be a single enabled case that names the client", () => {
@@ -116,7 +124,7 @@ describe("client support matrix", () => {
     expect(renamed).toContain(`prime: ${ref.file} has no single test titled ${quoted}`);
     const skipped = problemsWith({ readRepoFile: withFile(ref.file, text => `describe.skip("hidden", () => {});\n${text}`) });
     expect(skipped).toContain(`prime: ${ref.file} uses skip/todo/only/conditional modifiers; link a test from a file without them`);
-    const incidental = `// prime is only mentioned in this comment\ntest(${quoted}, () => {\n  expect(1).toBe(1);\n});\n`;
+    const incidental = `test(${quoted}, () => {\n  // exercises prime\n  /* Prime */\n  expect(1).toBe(1);\n});\n`;
     const comment = problemsWith({ readRepoFile: file => (file === ref.file ? incidental : BASE.readRepoFile(file)) });
     expect(comment).toContain(`prime: test ${quoted} does not mention prime or Prime`);
   });

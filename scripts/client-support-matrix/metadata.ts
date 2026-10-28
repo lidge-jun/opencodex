@@ -220,7 +220,7 @@ export const NATIVE_CLIENT_METADATA: Readonly<Record<string, NativeClientMetadat
   codex: {
     label: "Codex (CLI, app, SDK)",
     protocols: ["responses"],
-    anchors: [{ file: "src/codex/inject.ts", text: "openai_base_url" }],
+    anchors: [{ file: "src/codex/inject/config-toml.ts", text: "`openai_base_url = \"http://${providerBaseHost(hostname)}:${portOrTarget}/v1\"`" }],
     test: { file: "tests/codex-integration/codex-inject-missing-config.test.ts", title: "a Codex home without config.toml is bootstrapped and routed", mentions: ["runInject"] },
     guide: "guides/codex-integration",
   },
