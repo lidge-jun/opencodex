@@ -149,7 +149,7 @@ test("a saved selection Desktop has not received yet reads as pending apply, not
 
 test("clearing every shown model blocks saving", async () => {
   await mount();
-  await act(async () => { button("Clear all matching").click(); });
+  await act(async () => { button("Deselect all matching models").click(); });
   expect(container.textContent).toContain("Select at least one available model.");
   expect(button("Save").disabled).toBe(true);
 });
@@ -197,11 +197,11 @@ test("bulk labels disclose that matching rows beyond Show more are included", as
   await act(async () => { actions[0]!.click(); });
   expect(container.querySelector(".claude-visibility-counts")?.textContent).toContain("8 selected");
   expect(actions[0]!.textContent).toBe("Select all matching");
-  expect(actions[1]!.textContent).toBe("Clear all matching");
+  expect(actions[1]!.textContent).toBe("Deselect all matching models");
 });
 
-test("an equal preview describes the profile file and asks Desktop to reload it", async () => {
+test("an equal preview asks to apply profile changes before restarting Desktop", async () => {
   await mount();
   expect(container.querySelector(".claude-visibility-preview")?.textContent)
-    .toContain("The profile contains the same model IDs. Restart Desktop to load profile changes.");
+    .toContain("The profile contains the same model IDs. Apply profile changes before restarting Desktop.");
 });
