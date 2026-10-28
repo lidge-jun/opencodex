@@ -1,22 +1,4 @@
 import type { AdmissionModelScope } from "./admission-model-scope";
-import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import { internalCallCapability, isInternalCallCapability } from "../lib/local-internal-call-capability";
-
-export const ADVISOR_ADMISSION_POLICY_HEADER = "x-opencodex-advisor-admission-policy";
-const policies = new Map<string, { capability: string; policy: CapturedAdmissionPolicy }>();
-
-/** A consult owns its registry entry until completion, failure or cancellation. */
-export function registerAdvisorAdmissionPolicy(policy: CapturedAdmissionPolicy) {
-  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-  policies.set(token, { capability: internalCallCapability(), policy });
-  return { token, release: () => { policies.delete(token); } };
-}
-
-export function readAdvisorAdmissionPolicy(token: string | null, capability: string | null): CapturedAdmissionPolicy | undefined {
-  if (!token || !isInternalCallCapability(capability)) return undefined;
-  const entry = policies.get(token);
-  return entry?.capability === capability ? entry.policy : undefined;
-}
 
 /** Scope metadata accepted only alongside the process-owned Advisor capability. */
 export const ADVISOR_ADMISSION_SCOPE_HEADER = "x-opencodex-advisor-admission-scope";

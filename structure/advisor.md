@@ -84,21 +84,11 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials. `src/server/capture-admission-policy.ts` freezes a credential-free copy of
-the caller's model scope, metered consent class, fallback policy and resolved device ids during
-request preparation. `src/types/admission-policy.ts` defines these decision inputs.
-`src/server/advisor-admission-scope.ts` holds them in a process-local registry for one consultation.
-Its random 256-bit handle is honored only beside the current process-owned capability; unknown
-handles are refused and consultation completion, failure or cancellation releases the entry.
-The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
-
-The host keeps its admission identity and adds the captured caller constraints. Shared scope,
-metered-consent and fallback guards require the intersection of caller and host policy for every
-resolved destination, combo pick (including router-collapsed picks), proactive/reactive fallback
-and child invocation. Nested JEV decision turns retain that same admission. Scope intersection
-checks each original scope, preserving bare and provider-qualified model semantics. Later edits
-or removal of the caller's key or fallback settings cannot broaden the frozen decision inputs.
-`tests/advisor/advisor-caller-policy.test.ts` exercises these constraints through real handlers.
+provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
+immutable provider/model admission scope over the loopback hop as capability-authenticated
+metadata and remains authoritative for every final
+physical Advisor destination, including alias, policy, combo, and retry resolution; the local
+transport credential cannot widen it.
 
 ## Context and safety boundaries
 

@@ -33,12 +33,8 @@ import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
   AdvisorAdmissionScopeEncodedBoundExceeded,
   encodeAdvisorAdmissionScope,
-  ADVISOR_ADMISSION_POLICY_HEADER,
-  registerAdvisorAdmissionPolicy,
 } from "../server/advisor-admission-scope";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
-import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import { captureAdmissionPolicy } from "../server/capture-admission-policy";
 
 /**
  * The header the advisor presents on its own loopback request. Its VALUE is this process's
@@ -127,7 +123,6 @@ export async function consultAdvisor(
   abortSignal?: AbortSignal,
   baseUrlOverride?: string,
   admissionScope?: AdmissionModelScope,
-  admissionPolicy?: CapturedAdmissionPolicy,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
   const headers: Record<string, string> = {
@@ -139,8 +134,11 @@ export async function consultAdvisor(
   // require no token simply omit it.
   const admission = localAdmissionToken(config);
   if (admission) headers["x-opencodex-api-key"] = admission;
-  // Keep the bounded scope envelope for transport validation; the process-local policy
-  // registration below owns the complete snapshot. The receiver also enforces host limits.
+  // Always send the caller's resolved snapshot, including the unrestricted empty form: an
+  // omitted header would be re-resolved against the host admission token above, and a
+  // restricted host key would then narrow a caller whose own scope allows the destination.
+  // Empty lists decode as a defined-but-unrestricted scope, so the capability fence and the
+  // malformed-header refusal are unchanged.
   try {
     headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope ?? { providers: [], models: [] });
   } catch (error) {
@@ -169,8 +167,6 @@ export async function consultAdvisor(
     linkedSignal.cleanup();
     return { ok: false, cancelled: true, advice: "", advisorModel: input.advisorModel, error: "advisor cancelled before dispatch", durationMs: Date.now() - t0 };
   }
-  const policyRegistration = registerAdvisorAdmissionPolicy(admissionPolicy ?? captureAdmissionPolicy(config, undefined, admissionScope));
-  headers[ADVISOR_ADMISSION_POLICY_HEADER] = policyRegistration.token;
   try {
     const res = await fetch(`${baseUrlOverride ?? advisorBaseUrl(config)}/v1/chat/completions`, {
       method: "POST",
@@ -243,7 +239,6 @@ export async function consultAdvisor(
       durationMs,
     };
   } finally {
-    policyRegistration.release();
     sidecarExit();
     linkedSignal.cleanup();
   }

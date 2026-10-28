@@ -432,11 +432,10 @@ function mintContextPrincipal(kind: string, keyId: string, credential: string): 
     .digest("hex");
 }
 
-export type DataPlaneAdmission = (
+export type DataPlaneAdmission =
   | { kind: "configured"; keyId: string; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
   | { kind: "environment"; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
-  | { kind: "loopback"; source: "loopback" }
-) & { readonly callerPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy };
+  | { kind: "loopback"; source: "loopback" };
 
 /**
  * Which admission secret `token` is, or null when it is none of them.

@@ -118,11 +118,6 @@ A consultation may send:
 
 The configured Advisor provider may differ from the worker provider.
 
-Consultations obey both the caller's captured API-key model scope, paid-combo consent and device
-fallback limits, and the host's own limits. These rules also apply to combo choices, nested
-decision models and retries. A consultation that cannot satisfy them returns an unavailable
-notice to the worker.
-
 OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend-only
 config secrets, process environment, or hidden chain-of-thought into that prompt. It does not
 decrypt or forward encrypted provider-private reasoning. **Task content is not secret-redacted.**

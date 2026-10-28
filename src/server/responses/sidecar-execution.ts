@@ -75,7 +75,6 @@ export async function executeResponsesSidecars(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
     | "admissionScope"
-    | "advisorAdmissionPolicy"
   >,
   transportState: Pick<
     ResponsesTransport,
@@ -196,7 +195,6 @@ export async function executeResponsesSidecars(
       workerIdentity: `${route.modelId} (provider ${route.providerName})`,
       workerModelId: route.modelId,
       admissionScope,
-      admissionPolicy: requestState.advisorAdmissionPolicy,
       abortSignal: options.abortSignal,
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
