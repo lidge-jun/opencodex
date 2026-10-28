@@ -116,6 +116,36 @@ afterEach(() => {
 });
 
 for (const stream of [false, true]) {
+  for (const status of [400, 422]) {
+    for (const code of [undefined, "invalid_argument"]) {
+      test(`reflected quota prose stays terminal through runTurn (stream=${stream}, status=${status}, code=${code})`, async () => {
+        childFailure = {
+          type: "error", status, code, errorType: "invalid_request_error",
+          message: "Invalid parameter: value quotes 'weekly usage quota exceeded; quota exhausted'",
+        };
+        const cfg = config([{ provider: "cursor", model: MODEL }, { provider: "fallback", model: MODEL }]);
+        const response = await respond(cfg, stream);
+        expect(response.status).toBe(status);
+        expect(runTurnCalls).toBe(1);
+        expect(fallbackCalls).toBe(0);
+        // A validation error did not cool the healthy provider for a later valid request.
+        childFailure = undefined;
+        const next = await respond(cfg, stream);
+        expect(next.status).toBe(200);
+        expect(next.text).toContain("cursor answered");
+        expect(runTurnCalls).toBe(2);
+        expect(fallbackCalls).toBe(0);
+      });
+    }
+    test(`a structured spent window survives runTurn formatting (stream=${stream}, status=${status})`, async () => {
+      childFailure = { type: "error", status, code: "usage_limit_reached", message: "Account window spent" };
+      const response = await respond(config([{ provider: "cursor", model: MODEL }, { provider: "fallback", model: MODEL }]), stream);
+      expect(response.status).toBe(200);
+      expect(runTurnCalls).toBe(1);
+      expect(fallbackCalls).toBe(1);
+      expect(response.text).toContain("fallback answered");
+    });
+  }
   test(`a child that cannot take image input hands the turn to the next target (stream=${stream})`, async () => {
     childFailure = {
       type: "error", status: 400, errorType: "invalid_request_error", code: "unsupported_input_modality",

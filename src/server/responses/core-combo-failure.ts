@@ -18,6 +18,7 @@ import {
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
@@ -76,7 +77,8 @@ export async function consumeComboFailure(
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
-        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
+        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text)
+          ?? upstreamCodeForComboFailure(response, normalized.code);
         // Only the adapter's own normalized refusal may claim the plan-refusal hop; another
         // upstream echoing the code in any spelling keeps the meaning it had before, which was none.
         if (namesModelNotInPlanCode(upstreamCode) && !isModelNotInPlanRefusal(response, upstreamCode)) upstreamCode = undefined;

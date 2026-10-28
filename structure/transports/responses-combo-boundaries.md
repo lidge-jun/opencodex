@@ -122,3 +122,21 @@ deprecated, sunset, decommissioned, or no longer available). An unrelated applic
 not retried.
 
 > Decision record: [ADR-0071](../decisions/ADR-0071-combo-streaming-commit-boundary.md)
+
+## Upstream account quota exhaustion failover
+
+A structured account-window exhaustion code (`usage_limit_exceeded`, `usage_limit_reached`, `1308`, `insufficient_quota`) makes `comboFailureDecision` hop even inside a 400 / `invalid_request_error` envelope, ahead of that terminal stop. Exhaustion prose alone never reaches that arm, and quota prose inside a 400 or 422 response stops instead of hopping: a request-validation body can quote prompt or parameter text back. `ACCOUNT_EXHAUSTION_TEXT` (`usage limit reached`, `token-plan ... quota has been exhausted`, and account/weekly/monthly/daily quota exhausted or exceeded wording) only lengthens a target's cooldown to `MAX_COOLDOWN_MS` on other statuses.
+
+`src/server/responses/run-turn-execution.ts` passes the original adapter event code separately
+from its classified verdict to `src/bridge/errors.ts`. When formatting a 400/422 produces
+`insufficient_quota`, a response-identity WeakMap retains that original code (or its absence).
+`src/server/responses/core-combo-failure.ts` reads that provenance before treating the serialized
+code as upstream evidence. A prose-derived quota code cannot authorize a hop or provider scope
+on 400/422; genuine upstream exhaustion codes remain authoritative on both statuses. Rebuilt
+failure responses retain the same distinction. Raw upstream envelopes carry their own code;
+the formatter's client-facing classification and cyber-policy precedence remain intact.
+
+Account exhaustion stays target-scoped in `comboFailureCooldownScope`: it names one account, and a provider row can carry several pooled accounts whose healthy siblings must stay eligible on the next request. Provider scope remains reserved for provider-wide evidence (rejected or unpaid credentials, the existing `GoUsageLimitError` / monthly-cap and billing arms).
+
+The Devin direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) maps a Connect `failed_precondition` trailer to 429 only when it carries explicit spent-window wording (`TRAILER_EXHAUSTED_RE`: usage limit reached, out of credits, a weekly/monthly/daily/usage quota or usage window that has been or is exhausted). Per-minute, per-hour and rate wording vetoes that evidence. Only a 429 spent window earns the constant `usage limit reached` label, which survives formatting as target-local exhaustion with the 10-minute fallback instead of becoming provider-scoped `insufficient_quota`. Raw trailer text stays inside the parser. Unqualified exhaustion, transient quota preconditions and request-specific preconditions such as MCP configuration errors stay 400 and stop.
+Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, `tests/server/error-fidelity.test.ts`, `tests/codex-integration/combo-codex-exhaustion-cooldown.test.ts`, `tests/server/server-combo-quota-code-provenance.test.ts`, and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.

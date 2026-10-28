@@ -685,8 +685,16 @@ the combo returns the last real upstream failure without sending to that target.
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
 429s with upstream code `1302` or `1305`, 10 minutes for a spent account usage window, and 60
 seconds otherwise. A usage window is recognised by upstream code (`usage_limit_exceeded`,
-`usage_limit_reached`, `1308`) or by the prose `usage limit reached`, independent of HTTP status —
-the ChatGPT Codex backend reports a spent window as a 502 rather than the documented 429. Credential and
+`usage_limit_reached`, `1308`) or by quota exhaustion phrasing (such as `usage limit reached`,
+`token-plan ... quota has been exhausted`, or `weekly usage quota exceeded`)
+outside 400 and 422 responses, independent of HTTP status — the ChatGPT Codex backend reports a spent
+window as a 502 rather than the documented 429. A 400 or 422 response needs a structured code: a
+validation error that merely quotes quota wording (e.g. `quota exhausted`) does not hop. Codes
+inferred from that prose by the proxy's formatter do not count as upstream structured evidence.
+Devin's explicit weekly/monthly/daily or usage-window exhaustion becomes 429 and uses the
+10-minute target hold; per-minute/per-hour and MCP configuration `failed_precondition` trailers stay
+400 and stop. Raw Devin trailer text is redacted. A spent
+window cools only that target, so other accounts of the same provider stay eligible. Credential and
 billing failures that already black out the whole provider (`invalid_api_key`, `insufficient_quota`,
 `payment_required`, and the other provider-scoped codes) take the same 10-minute hold. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
