@@ -1,6 +1,6 @@
 import { m365CopilotClaims } from "../../oauth/m365-copilot";
-import { getToneForModel, m365CopilotScenario } from "../../providers/m365-copilot-models";
-import { resolveProviderEgress } from "../../lib/provider-egress";
+import { getToneForModel, m365CopilotScenario, M365_COPILOT_BASE_URL } from "../../providers/m365-copilot-models";
+import { resolveProviderEgress, providerSocketRoute } from "../../lib/provider-egress";
 import { effectiveProxyFor, noProxyMatches } from "../../lib/proxy-env";
 import type { OcxProviderConfig } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
@@ -65,10 +65,18 @@ export interface M365TurnOptions {
   onText(text: string): void; onThinking?(text: string): void; beforeSend?(): void; budget?: TranslatorBudget;
   createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
   /** Provider egress fields; the ChatHub socket follows the same route as discovery and uploads. */
-  route?: Pick<OcxProviderConfig, "proxy" | "noProxy"> & { fetch?: unknown };
+  route?: Pick<OcxProviderConfig, "proxy" | "noProxy"> & { fetch?: unknown; providerFetch?: typeof globalThis.fetch };
 }
 
 export interface M365SocketDialOptions { headers: Record<string, string>; proxy?: string }
+
+/** Admission runs before image preparation, and is rechecked by the physical socket transport. */
+export function m365RequestSocketRoute(route: NonNullable<M365TurnOptions["route"]>): NonNullable<M365TurnOptions["route"]> {
+  if (route.providerFetch === undefined) return route;
+  const authorized = providerSocketRoute(route.providerFetch, "m365-copilot", M365_COPILOT_BASE_URL);
+  if (!authorized) throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub cannot use this request-scoped fetch executor with a native socket", 400);
+  return { ...route, ...authorized };
+}
 
 function proxyDialOptions(proxy: string, headers: Record<string, string>): M365SocketDialOptions {
   if (!/^https?:\/\//i.test(proxy)) {
@@ -85,6 +93,7 @@ function proxyDialOptions(proxy: string, headers: Record<string, string>): M365S
  */
 export function m365SocketDialOptions(route: M365TurnOptions["route"], url: string, headers: Record<string, string>): M365SocketDialOptions {
   if (!route) return { headers };
+  route = m365RequestSocketRoute(route);
   if (typeof route.fetch === "function") throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub cannot use a custom fetch executor; remove providers.m365-copilot.fetch", 400);
   const egress = resolveProviderEgress({ providerName: "m365-copilot", provider: route, url });
   if (egress.kind === "proxy") return proxyDialOptions(egress.proxyUrl, headers);

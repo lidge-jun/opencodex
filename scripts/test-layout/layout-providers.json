@@ -1,5 +1,6 @@
 {
   "m365-copilot-security.test.ts": "providers",
+  "m365-copilot-executor.test.ts": "providers",
   "free-directory-runcrate.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro"
 }

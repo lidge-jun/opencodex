@@ -514,4 +514,4 @@ Generic OAuth conversation ownership and request-local selection receipts follow
 
 ## Microsoft 365 Copilot
 
-`src/adapters/m365-copilot/transport.ts` connects directly to the fixed Microsoft ChatHub WebSocket endpoint using account-bound conversation IDs and temporary-chat memory settings. It participates in the existing physical-send and translator-budget boundaries. Browser capture is login-only; no standalone HTTP relay is involved. See [the provider contract](../providers/m365-copilot.md).
+`src/adapters/m365-copilot/transport.ts` connects to the fixed Microsoft ChatHub WebSocket endpoint using account-bound conversation IDs and temporary-chat memory settings. It participates in the existing physical-send and translator-budget boundaries. `src/server/responses/fetch-helpers.ts` binds native socket-route authority only to built-in request executors without custom fetch, TLS replacement or dispatch overrides; opaque incoming executors are refused before uploads or dialing under [the provider contract](../providers/m365-copilot.md). Browser capture is login-only; no standalone HTTP relay is involved.

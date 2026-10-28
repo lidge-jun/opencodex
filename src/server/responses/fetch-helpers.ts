@@ -24,6 +24,7 @@ import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
 import {
   describeProviderEgressForLog,
+  bindProviderSocketRoute,
   markEgressTransparentExecutor,
   providerEgressSendInit,
   providerEgressIsExplicit,
@@ -485,6 +486,7 @@ export function providerFetch(
     unpacedFetch: Object.assign(unpaced, { preconnect }),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
+  if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
   return paceAware;
 }
 

@@ -24,6 +24,7 @@ export interface IncomingMeta {
    * Provider-scoped fetch prepared by the Responses router. Stateful transports that emit more
    * than one physical HTTP request per logical turn must reuse it so every request participates in
    * the same pacing queue and custom provider fetch seam.
+   * Native sockets require explicit socket-route authority; HTTP transparency is insufficient.
    */
   providerFetch?: typeof globalThis.fetch;
   /** Synchronous selection fence for adapter-owned sends; call after async setup, before dispatch. */

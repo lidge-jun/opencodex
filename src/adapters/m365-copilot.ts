@@ -9,7 +9,7 @@ import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
 import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
-import { createM365Conversation, runM365CopilotTurn, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
+import { createM365Conversation, runM365CopilotTurn, m365RequestSocketRoute, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
 import { m365ImageUrls, uploadM365Images } from "./m365-copilot/images";
 
 interface ConversationState { conversation: M365Conversation; sent: number; prefix: string; sentImages: number; imagePrefix: string; accessed: number; tail: Promise<void>; pendingNote?: string }
@@ -53,6 +53,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       try {
         incoming.abortSignal?.throwIfAborted();
+        const route = m365RequestSocketRoute({ ...provider, providerFetch: incoming.providerFetch });
         const imageUrls = m365ImageUrls(parsed.context.messages);
         if (messages.length <= state.sent || state.prefix !== digest(JSON.stringify(messages.slice(0, state.sent)))
           || state.sentImages > imageUrls.length || state.sentImages > 0 && state.imagePrefix !== digest(JSON.stringify(imageUrls.slice(0, state.sentImages)))) {
@@ -69,7 +70,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         heartbeat = setInterval(() => emit({ type: "heartbeat" }), 5_000);
         const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, incoming.beforePhysicalSend);
         const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, images, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
-          route: provider,
+          route,
           onText: delta => { if (!toolMode) emit({ type: "text_delta", text: delta }); },
           onThinking: thinking => { if (!thinking) return; thinkingText += thinking; emit({ type: "thinking_delta", thinking }); },
           beforeSend: () => {
