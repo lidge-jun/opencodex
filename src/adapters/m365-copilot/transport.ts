@@ -1,5 +1,8 @@
 import { m365CopilotClaims } from "../../oauth/m365-copilot";
 import { getToneForModel, m365CopilotScenario } from "../../providers/m365-copilot-models";
+import { resolveProviderEgress } from "../../lib/provider-egress";
+import { effectiveProxyFor } from "../../lib/proxy-env";
+import type { OcxProviderConfig } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import type { M365ImageAnnotation } from "./images";
@@ -61,6 +64,28 @@ export interface M365TurnOptions {
   token: string; model: string; text: string; conversation: M365Conversation; signal?: AbortSignal;
   onText(text: string): void; onThinking?(text: string): void; beforeSend?(): void; budget?: TranslatorBudget;
   createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
+  /** Provider egress fields; the ChatHub socket follows the same route as discovery and uploads. */
+  route?: Pick<OcxProviderConfig, "proxy" | "noProxy"> & { fetch?: unknown };
+}
+
+export interface M365SocketDialOptions { headers: Record<string, string>; proxy?: string }
+
+/**
+ * Bun's WebSocket ignores proxy environment variables, so the provider route is applied to the
+ * socket explicitly: an explicit provider proxy is pinned, noProxy/direct stays direct, and inherit
+ * adopts the global decision discovery and uploads already follow. A custom fetch executor cannot
+ * carry a WebSocket and is refused rather than silently bypassed.
+ */
+export function m365SocketDialOptions(route: M365TurnOptions["route"], url: string, headers: Record<string, string>): M365SocketDialOptions {
+  if (!route) return { headers };
+  if (typeof route.fetch === "function") throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub cannot use a custom fetch executor; remove providers.m365-copilot.fetch", 400);
+  const egress = resolveProviderEgress({ providerName: "m365-copilot", provider: route, url });
+  if (egress.kind === "proxy") return { headers, proxy: egress.proxyUrl };
+  if (egress.kind === "direct") return { headers };
+  const https = new URL(url);
+  https.protocol = "https:";
+  const inherited = effectiveProxyFor(https);
+  return inherited ? { headers, proxy: inherited } : { headers };
 }
 
 export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
@@ -68,11 +93,12 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
   const requestId = crypto.randomUUID();
   const url = m365WebSocketUrl(options.token, options.model, options.conversation, requestId);
   const headers = { Origin: "https://m365.cloud.microsoft", "User-Agent": "opencodex", "X-RoutingParameter-SessionKey": options.conversation.conversationId };
+  const dial = m365SocketDialOptions(options.route, url, headers);
   return new Promise((resolveTurn, reject) => {
     let socket: WebSocket;
     // lib.dom hides Bun's documented constructor extension when both type libraries are enabled.
-    const NativeSocket = WebSocket as unknown as { new(url: string, options: { headers: Record<string, string> }): WebSocket };
-    try { socket = options.createSocket ? options.createSocket(url, headers) : new NativeSocket(url, { headers }); }
+    const NativeSocket = WebSocket as unknown as { new(url: string, options: M365SocketDialOptions): WebSocket };
+    try { socket = options.createSocket ? options.createSocket(url, headers) : new NativeSocket(url, dial); }
     catch { reject(new M365CopilotTurnError("Microsoft 365 Copilot connection failed")); return; }
     socket.binaryType = "arraybuffer";
     const composer = new M365TextComposer();

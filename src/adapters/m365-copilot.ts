@@ -69,6 +69,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         heartbeat = setInterval(() => emit({ type: "heartbeat" }), 5_000);
         const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, incoming.beforePhysicalSend);
         const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, images, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
+          route: provider,
           onText: delta => { if (!toolMode) emit({ type: "text_delta", text: delta }); },
           onThinking: thinking => { if (!thinking) return; thinkingText += thinking; emit({ type: "thinking_delta", thinking }); },
           beforeSend: () => {

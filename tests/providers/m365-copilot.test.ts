@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createM365CopilotAdapter, clearM365CopilotConversations } from "../../src/adapters/m365-copilot";
 import { M365_COPILOT_BASE_URL, M365_COPILOT_MODELS, getToneForModel, m365CopilotScenario } from "../../src/providers/m365-copilot-models";
-import { createM365Conversation, M365TextComposer, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
+import { createM365Conversation, M365TextComposer, m365SocketDialOptions, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
+import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } from "../../src/config/provider-validation";
 import { m365CallbackCode } from "../../src/oauth/m365-copilot-browser";
 import { m365CopilotAuthorizationUrl, M365_COPILOT_CLIENT_ID, m365CopilotClaims, refreshM365CopilotToken } from "../../src/oauth/m365-copilot";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
@@ -190,5 +191,42 @@ describe("Microsoft 365 Copilot adapter", () => {
       await expect(cancelled.runTurn!(request(), { headers: new Headers(), translatorBudget: budget, abortSignal: abort.signal }, () => {})).rejects.toThrow();
       expect(called).toBe(false);
     } finally { budget.dispose(); }
+  });
+});
+
+describe("Microsoft 365 Copilot credential pinning", () => {
+  test("rejects a retargeted row, a foreign adapter and model wire overrides", () => {
+    expect(credentialPinnedProviderConfigError("m365-copilot", { adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL })).toBeNull();
+    expect(credentialPinnedProviderConfigError("m365-copilot", { adapter: "m365-copilot" })).toBeNull();
+    expect(credentialPinnedProviderConfigError("m365-copilot", { adapter: "openai-chat", baseUrl: "https://evil.example" })).toContain("adapter must stay");
+    expect(credentialPinnedProviderConfigError("m365-copilot", { adapter: "m365-copilot", baseUrl: "https://evil.example/v1" })).toContain("baseUrl must stay");
+    expect(modelAdapterRecordConfigError({ "claude-sonnet": "openai-chat" }, "modelAdapters", "m365-copilot", { adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL }))
+      .toContain("cannot be overridden");
+  });
+});
+
+describe("Microsoft 365 Copilot socket egress", () => {
+  const socketUrl = "wss://substrate.office.com/m365Copilot/Chathub/oid@tid?access_token=fixture";
+  const headers = { Origin: "https://m365.cloud.microsoft" };
+  test("applies the provider route to the ChatHub socket", () => {
+    expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("http://127.0.0.1:9/");
+    expect(m365SocketDialOptions({ proxy: "socks5://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("socks5://127.0.0.1:9");
+    expect(m365SocketDialOptions({ proxy: "direct" }, socketUrl, headers).proxy).toBeUndefined();
+    expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9", noProxy: ["substrate.office.com"] }, socketUrl, headers).proxy).toBeUndefined();
+    expect(m365SocketDialOptions(undefined, socketUrl, headers).proxy).toBeUndefined();
+  });
+  test("inherit adopts the global proxy decision Bun's WebSocket would otherwise ignore", () => {
+    const previous = process.env.HTTPS_PROXY;
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    try {
+      expect(m365SocketDialOptions({}, socketUrl, headers).proxy).toBe("http://127.0.0.1:9");
+      expect(m365SocketDialOptions({ noProxy: ["substrate.office.com"] }, socketUrl, headers).proxy).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previous;
+    }
+  });
+  test("refuses a custom fetch executor and a malformed route before dialing", () => {
+    expect(() => m365SocketDialOptions({ fetch: globalThis.fetch }, socketUrl, headers)).toThrow("cannot use a custom fetch executor");
+    expect(() => m365SocketDialOptions({ proxy: "" }, socketUrl, headers)).toThrow(/providers[.]m365-copilot[.]proxy is invalid/);
   });
 });
