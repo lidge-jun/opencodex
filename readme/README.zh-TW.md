@@ -106,7 +106,7 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 | Codex | 開啟儀表板 **Connect** 頁面的 Codex 開關，然後照常執行 `codex`。在本機監聽時，這會讓 Codex 內建供應商指向代理。使用終端機時，請在儀表板新增供應商之前執行 `ocx init` 並接受其 Codex 提示。 |
 | Claude Code | 安裝 `claude` CLI 後執行 `ocx claude`。它會在需要時啟動代理，並透過代理啟動 Claude Code。 |
 | Claude Desktop | 執行 `ocx claude desktop`。全新安裝時會為整個應用程式設定閘道設定檔；既有的 first-party 設定會保留，可執行 `ocx claude desktop apply --gateway` 明確切換。詳見 [Claude Code 指南](https://opencodex.me/zh-tw/guides/claude-code/)。 切換後請完全結束並重新開啟 Claude Desktop。 |
-| Grok Build | 在本機監聽時，若 `~/.grok` 存在，`ocx start` 會註冊模型；在 Grok Build 選擇 `ocx-*` 模型。遠端設定請參閱 [Grok Build 指南](https://opencodex.me/zh-tw/guides/grok-build/)。 新增供應商後，執行 `ocx ensure` 或重新啟動代理以更新清單。 |
+| Grok Build | 在本機監聽且啟用 Grok 整合時，若 `~/.grok` 存在，`ocx start` 會註冊模型；在 Grok Build 中選擇 `ocx-*` 模型。遠端設定請參見 [Grok Build 指南](https://opencodex.me/zh-tw/guides/grok-build/)。新增供應商後，重新啟動代理（或在啟用 Codex 自動啟動時執行 `ocx ensure`）以更新清單。 |
 | 具備受管理整合的工具 | 使用儀表板的 **Connect** 頁面，或執行 `ocx integration client enable --client <id>`。 |
 | 其他工具 | 將自訂 OpenAI 相容基本 URL 設為 `http://localhost:10100/v1`，或將 Anthropic 基本 URL 設為 `http://localhost:10100`。 |
 
