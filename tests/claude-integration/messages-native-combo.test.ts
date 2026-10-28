@@ -207,6 +207,22 @@ describe("native Messages candidates in a combo", () => {
     expect(text).toContain("fixture overloaded");
     expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
   });
+  for (const clearAt of [undefined, "never", "end_of_turn"]) test(`withdrawing a top-level tool inline (clear_at ${clearAt ?? "unset"}) never falls back to a translated child`, async () => {
+    const removal = { role: "system", ...(clearAt ? { clear_at: clearAt } : {}), content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "lookup" } }] };
+    answer = () => stream(prelude + refusal);
+    const { text } = await send({ messages: [removal, ...source.messages] });
+    expect(text).toContain("fixture overloaded");
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com"]);
+  });
+  test("a permanently withdrawn inline-only definition may still fall back to a translated child", async () => {
+    const definition = { name: "inline_only", description: "inline", input_schema: { type: "object" } };
+    const addition = { role: "system", content: [{ type: "tool_addition", tool: { type: "tool_definition", definition } }] };
+    const removal = { role: "system", content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "inline_only" } }] };
+    answer = () => stream(prelude + refusal);
+    const { text } = await send({ messages: [addition, removal, ...source.messages] });
+    expect(text).toContain("fallback reply");
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["api.anthropic.com", "backup.fixture.invalid"]);
+  });
   test("non-streaming caller retains exact native body and one final row", async () => {
     const { response, text, rows } = await send({ stream: false });
     expect(response.status).toBe(200);

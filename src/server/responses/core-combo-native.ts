@@ -56,6 +56,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * An inline definition without a usable name cannot be withdrawn by a tool_reference, so it stays in
  * force; nativeMessagesInlineToolNames tracks only named, callable tools and skips it.
  */
+/** The bridge drops inline removals too, so withdrawing a top-level tool would re-enable it there. */
+function withdrawsTopLevelTool(body: Record<string, unknown>): boolean {
+  const declared = new Set(Array.isArray(body.tools)
+    ? body.tools.flatMap(tool => isRecord(tool) && typeof tool.name === "string" ? [tool.name] : []) : []);
+  return declared.size > 0 && Array.isArray(body.messages) && body.messages.some(message => isRecord(message)
+    && message.role === "system" && Array.isArray(message.content) && message.content.some(block => isRecord(block)
+      && block.type === "tool_removal" && isRecord(block.tool) && block.tool.type === "tool_reference"
+      && typeof block.tool.name === "string" && declared.has(block.tool.name)));
+}
+
 function hasUnnamedInlineToolDefinition(body: Record<string, unknown>): boolean {
   return Array.isArray(body.messages) && body.messages.some(message => isRecord(message) && message.role === "system"
     && Array.isArray(message.content) && message.content.some(block => isRecord(block) && block.type === "tool_addition"
@@ -199,7 +209,8 @@ export function createComboProtocolLanes(input: {
   // The bridge keeps only text from system messages, so an active inline tool_addition definition
   // has no translated equivalent either; fail closed like a top-level native-only tool.
   const declaresNativeOnlyTool = (body: Record<string, unknown>) =>
-    hasNativeOnlyTool(body) || nativeMessagesInlineToolNames(body).size > 0 || hasUnnamedInlineToolDefinition(body);
+    hasNativeOnlyTool(body) || nativeMessagesInlineToolNames(body).size > 0 || hasUnnamedInlineToolDefinition(body)
+    || withdrawsTopLevelTool(body);
   const judge = (target: ComboTarget): CandidateVerdict => {
     const key = selector(target);
     const cached = verdicts.get(key);
