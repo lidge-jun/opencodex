@@ -8,6 +8,15 @@ runs helper features around provider requests.
 
 ## Server fields
 
+`completeOnMaxOutputTokens` is an optional boolean, default `false`. Set it to `true` to
+report a token-limited translated Responses text answer as `completed` rather than `incomplete`.
+The answer remains truncated: OpenCodex preserves its exact text, including unfinished Markdown.
+Only nonempty plain-text output qualifies. Tool calls and hosted operations (even if completed),
+reasoning, `text.format` with `json_schema` or `json_object`, compaction, explicitly unfinished
+turns, errors and missing terminal events remain excluded. Context-window exhaustion and
+`pause_turn` remain incomplete. Chat Completions, Anthropic Messages and native Responses
+passthrough, including native WebSocket output, retain their existing stop behavior.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy listen port. |
