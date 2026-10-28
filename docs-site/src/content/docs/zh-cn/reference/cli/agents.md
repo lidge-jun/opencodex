@@ -255,7 +255,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows x64 还支持经证明绑定的绝对路径标准 npm `codex.cmd`，以及由持有句柄绑定的 Node/npm 工具链（存在时为前缀本地，确认不存在时为锚定到启动器架构的已捕获 PATH 对）和已验证的前缀内平台支持组件，并使用拒绝重解析的持有句柄。其他 Windows 布局仍然推迟或不受管理。Windows 的 `managed` 结果仅对观察到的安装布局进行分类：绑定的 Node/npm 是更新器的只读元数据工具链，并不保证后续 `codex.cmd` 调用将解析到哪个解释器。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。Windows x64 的 apply 要求具有经过验证的私有写入权限的受限 npm 前缀，并保留无关的软件包和 shim；不受支持的已观测布局返回 `applicable: false` 且 `refusal: windows_apply_disabled`；仅 PATH 选择、OpenCodex 自启动包装器和 global/vendor 回退仍然推迟。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
+`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，并且在报告了候选版本时该版本与清单版本一致，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows x64 还支持经证明绑定的绝对路径标准 npm `codex.cmd`，以及由持有句柄绑定的 Node/npm 工具链（存在时为前缀本地，确认不存在时为锚定到启动器架构的已捕获 PATH 对）和已验证的前缀内平台支持组件，并使用拒绝重解析的持有句柄。其他 Windows 布局仍然推迟或不受管理。Windows 的 `managed` 结果仅对观察到的安装布局进行分类：绑定的 Node/npm 是更新器的只读元数据工具链，并不保证后续 `codex.cmd` 调用将解析到哪个解释器。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。Windows x64 的 apply 要求具有经过验证的私有写入权限的受限 npm 前缀，并保留无关的软件包和 shim；不受支持的已观测布局返回 `applicable: false` 且 `refusal: windows_apply_disabled`；仅 PATH 选择、OpenCodex 自启动包装器和 global/vendor 回退仍然推迟。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 在 Windows 上，如果捕获到 `CODEX_CLI_PATH=codex` 这样的裸命令、远程路径或设备路径，则报告 `candidate_path_unavailable`。这些情况下候选项已被捕获，但其路径不适用于此检查。
 

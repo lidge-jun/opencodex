@@ -1288,7 +1288,10 @@ On Windows, recovery checks the exact installer/verifier Job and original proces
 all Job members must have exited. Access failures keep admission closed and never stop an installer.
 Missing child identity, partial records or inaccessible liveness evidence require inspection. A complete terminal write left
 before its publication rename can restore admission after restart when its exact owner and current
-parent/group absence are verified; incomplete or armed pending writes still require inspection.
+parent/group absence are verified. On Windows, a complete pending child identity can also restore
+admission when it matches the armed owner and Job, the guardian's terminal proof is valid, and the
+parent, exact child lifetime and every Job member are proven gone. Missing proof, incomplete or armed
+pending writes still require inspection; guardian death alone cannot reopen admission.
 Recovery does not change an
 ambiguous job result, retry installation or reclaim an abandoned installation lease.
 Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary

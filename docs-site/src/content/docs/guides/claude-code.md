@@ -1102,6 +1102,13 @@ fields; `null` resets context/blocklist/compact-window values.
 
 ## Troubleshooting
 
+### Windows Desktop apply reports `client_lifecycle_lock_failed`
+
+Update OpenCodex if Desktop apply stalls while many old lock files are present. Lifecycle acquisition
+now verifies an already-private runtime directory before repeating its permission changes. It still
+refuses apply when required permission hardening fails. Keep the existing runtime lock files in place;
+removing them while clients are running can break coordination between processes.
+
 **Claude Code says "Did 0 searches"** — Current builds translate completed Responses
 `web_search_call` items into paired Anthropic `server_tool_use` and `web_search_tool_result` blocks,
 including `usage.server_tool_use.web_search_requests`. Update opencodex if an older build completed

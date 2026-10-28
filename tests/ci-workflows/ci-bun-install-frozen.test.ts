@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -74,7 +74,56 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
     expect(result.status, result.out).toBe(0);
     expect(result.calls).toBe(2);
     expect(result.out).toContain("::warning::bun install --frozen-lockfile");
+    expect(result.out).toContain("fake bun install --frozen-lockfile --force");
+    expect(result.out.split("fake bun ")[1]).toStartWith("install --frozen-lockfile in ");
   });
+
+  test("a genuine install failure after a timeout still fails without another retry", () => {
+    const result = run(["hang", "42", "ok"]);
+    expect(result.status, result.out).toBe(42);
+    expect(result.calls).toBe(2);
+    expect(result.out).toContain("::error::bun install --frozen-lockfile failed");
+    expect(result.out).toContain("not retrying");
+  });
+
+  test("retry completes a trusted postinstall interrupted after package extraction", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-bun-postinstall-"));
+    roots.push(root);
+    mkdirSync(join(root, "dep"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      name: "install-retry-fixture", dependencies: { fixture: "file:./dep" }, trustedDependencies: ["fixture"],
+    }));
+    writeFileSync(join(root, "dep", "package.json"), JSON.stringify({
+      name: "fixture", version: "1.0.0", scripts: { postinstall: "node postinstall.cjs" },
+    }));
+    // The first postinstall records extraction, then stalls before producing its binary.
+    // A plain install retry skips this already-extracted package and exits zero.
+    writeFileSync(join(root, "dep", "postinstall.cjs"), [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const marker = path.resolve('../..', 'started');",
+      "const retry = fs.existsSync(marker);",
+      "fs.appendFileSync(marker, 'started\\n');",
+      "if (!retry) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);",
+      "fs.writeFileSync('binary-ready', 'ready');",
+    ].join("\n"));
+    const lock = spawnSync(process.execPath, ["install", "--lockfile-only", "--ignore-scripts"], {
+      cwd: root, encoding: "utf8", timeout: 10_000,
+    });
+    expect(lock.status, lock.stdout + lock.stderr).toBe(0);
+    const lockBefore = readFileSync(join(root, "bun.lock"), "utf8");
+    const result = spawnSync("bash", [script, root], {
+      encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, BUN_INSTALL_BIN: process.execPath, BUN_INSTALL_ATTEMPT_SECONDS: "2",
+        BUN_INSTALL_KILL_GRACE_SECONDS: "1", BUN_INSTALL_MIN_ATTEMPT_SECONDS: "1" },
+    });
+    const out = result.stdout + result.stderr;
+    expect(result.status, out).toBe(0);
+    expect(out).toContain("::warning::bun install --frozen-lockfile");
+    expect(existsSync(join(root, "node_modules", "fixture", "binary-ready")), out).toBe(true);
+    expect(readFileSync(join(root, "started"), "utf8").trim().split("\n")).toHaveLength(2);
+    expect(readFileSync(join(root, "bun.lock"), "utf8")).toBe(lockBefore);
+  }, 30_000);
 
   test("an ordinary install failure such as a lockfile mismatch is not retried", () => {
     const result = run(["1", "ok"]);
