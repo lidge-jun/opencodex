@@ -20,8 +20,8 @@ export class ConfigWritePublishedError extends Error {
   }
 }
 
-/** The literal file, with no schema merge or default injection. */
-export function readRawConfigJson(projectRetired = false): Record<string, unknown> | undefined {
+/** The literal file, with no schema merge or default injection; preserve-only leaves it unprojected. */
+export function readRawConfigJson(projectRetired: boolean | "preserve-only" = false): Record<string, unknown> | undefined {
   try {
     const configPath = getConfigPath();
     if (!existsSync(configPath)) return undefined;
@@ -29,7 +29,10 @@ export function readRawConfigJson(projectRetired = false): Record<string, unknow
     const raw = bytes.toString("utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    if (projectRetired) projectRemovedOpenCodeFreeSnapshot(parsed, { path: configPath, bytes });
+    if (projectRetired) {
+      const projection = projectRetired === "preserve-only" ? structuredClone(parsed) : parsed;
+      projectRemovedOpenCodeFreeSnapshot(projection, { path: configPath, bytes });
+    }
     return parsed as Record<string, unknown>;
   } catch {
     // Unreadable or corrupt: behave exactly as before. Never fail a save over protection.
@@ -72,7 +75,8 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   const pinError = configReasoningPinsConfigError(config);
   if (pinError) throw new Error(pinError);
   const configPath = getConfigPath();
-  const rawBeforeWrite = readRawConfigJson();
+  // Protect late disk edits from these same bytes, retaining raw rows for guards and credential accounting.
+  const rawBeforeWrite = readRawConfigJson("preserve-only");
   const clientPersistenceError = failClosedClientPersistenceError(rawBeforeWrite, config);
   if (clientPersistenceError) throw new Error(clientPersistenceError);
   // External editors can add provider rows the live config deliberately does

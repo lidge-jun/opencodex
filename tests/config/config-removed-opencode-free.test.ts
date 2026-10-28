@@ -510,23 +510,53 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
   }
 }, 60000);
 
-test("late retired disk edits are preserved byte for byte by live saves", () => {
+test.each(["saveConfig", "saveConfigPreservingClaudeCode"])("late retired disk edits are preserved byte for byte by %s", writer => {
   const home = createTempHome("ocx-late-retired-");
-  const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    writeFileSync(getConfigPath(), JSON.stringify(getDefaultConfig()));
-    const live = loadConfig();
-    armClaudeCodeBaseline(live);
-    const raw = Buffer.from("\uFEFF" + JSON.stringify({ ...getDefaultConfig(), providers: {
-      "opencode-free": { apiKey: "synthetic-late-key", baseUrl: "https://example.test/v1" },
-    } }) + "\r\n");
-    writeFileSync(getConfigPath(), raw);
-    live.port = 10101;
-    saveConfigPreservingClaudeCode(live);
-    expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).providers["opencode-free"]).toBeUndefined();
-    expect(readFileSync(`${getConfigPath()}.pre-opencode-free-removal.bak`)).toEqual(raw);
-  } finally { warn.mockRestore(); home.remove(); }
-});
+    // A fresh process makes the once-per-process notice independent of earlier tests.
+    const module = pathToFileURL(repoPath("src/config.ts")).href;
+    const generation = pathToFileURL(repoPath("src/local-credentials/generation.ts")).href;
+    const script = `import { strict as assert } from 'node:assert';
+      import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+      import { armClaudeCodeBaseline, getConfigPath, getDefaultConfig, loadConfig, ${writer} as save } from ${JSON.stringify(module)};
+      import { readCredentialGeneration } from ${JSON.stringify(generation)};
+      const path = getConfigPath();
+      writeFileSync(path, JSON.stringify(getDefaultConfig()));
+      const live = loadConfig();
+      armClaudeCodeBaseline(live);
+      const original = getDefaultConfig();
+      original.providers['opencode-free'] = {
+        apiKey: 'keychain:synthetic-late-retired-account', baseUrl: 'https://example.test/v1',
+        apiKeyPool: [{ key: 'gcp-sa:synthetic-late-retired-pool' }],
+        unknownField: 'synthetic-preserved-value',
+      };
+      const raw = Buffer.from('\\uFEFF' + JSON.stringify(original, null, 2) + '\\r\\n');
+      const backup = path + '.pre-opencode-free-removal.bak';
+      assert.equal(existsSync(backup), false);
+      for (const port of [10101, 10102]) {
+        writeFileSync(path, raw);
+        live.port = port;
+        save(live);
+        const persisted = JSON.parse(readFileSync(path, 'utf8'));
+        assert.equal(persisted.port, port);
+        assert.equal(persisted.providers['opencode-free'], undefined);
+        assert.deepEqual(persisted.providers, live.providers);
+        assert.equal(existsSync(backup), true, 'late retired snapshot needs a recovery copy');
+        assert.deepEqual(readFileSync(backup), raw);
+        assert.deepEqual(readCredentialGeneration().keyAccounts.sort(),
+          ['synthetic-late-retired-account', 'synthetic-late-retired-pool']);
+      }
+      assert.equal(readdirSync(process.env.OPENCODEX_HOME).filter(name => name.endsWith('.bak')).length, 1);`;
+    const child = Bun.spawnSync([process.execPath, "--eval", script], { env: { ...process.env }, timeout: 30_000 });
+    expect(child.stderr.toString()).not.toContain("AssertionError");
+    expect(child.exitCode).toBe(0);
+    const notices = child.stderr.toString().split("\n").filter(line => line.includes("opencode-free support was removed"));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("the original file was saved to");
+    expect(notices[0]).toContain("restore by copying it back over config.json");
+    recoveryProtection(`${getConfigPath()}.pre-opencode-free-removal.bak`);
+  } finally { home.remove(); }
+}, 60_000);
 
 test.each(["loader", "diagnostics", "admission"])("passive %s projects retired data without files or notices", async reader => {
   const home = createTempHome("ocx-passive-retired-");
