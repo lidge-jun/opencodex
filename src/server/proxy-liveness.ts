@@ -157,8 +157,10 @@ type LivenessFetch = (
 export interface LiveProxy {
   pid: number | null;
   port: number;
-  /** Raw bind hostname the probe succeeded against; compose URLs via `probeHostname`. */
+  /** Original bind scope from the successful runtime/config candidate; never a probe alias. */
   hostname?: string;
+  /** Successful recovery probe address, when discovery checked both loopback families. */
+  probeHostname?: string;
   /** Whether the successful probe used runtime-port metadata or the configured listen port. */
   source: "runtime" | "config";
   /**
@@ -202,7 +204,7 @@ export type HomeOwnershipProof = "proven" | "refuted" | "indeterminate";
 export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<HomeOwnershipProof> {
   if (live.pid === null) return "indeterminate";
   return attestFencedIdentity(
-    `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
+    `http://${probeHostname(live.probeHostname ?? live.hostname)}:${live.port}/healthz`,
     live.port,
     live.pid,
     io,
@@ -522,7 +524,8 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     const hostname = normalizeBindHostname(opts.hostname);
     if (!observer || (!isLoopbackHostname(hostname) && !isWildcardHostname(hostname))) {
       const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer?.endpoint);
-      return identity ? { ...identity, hostname: opts.hostname } : null;
+      return identity ? { ...identity, hostname: opts.hostname,
+        ...(observer ? { probeHostname: probeHostname(opts.hostname) } : {}) } : null;
     }
     // Parallel families share the existing per-probe attempts/timeout and absolute
     // deadline. A slow family cannot multiply the serial discovery budget.
@@ -530,7 +533,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
       (io.loopbackAvailabilityFn ?? loopbackFamilyAvailability)(host) !== "unavailable");
     const identities = await Promise.all(hosts.map(async hostname => {
       const identity = await proxyIdentityAtObserved(port, { ...opts, hostname }, probeIo, observer.endpoint);
-      return identity ? { ...identity, hostname } : null;
+      return identity ? { ...identity, hostname: opts.hostname, probeHostname: hostname } : null;
     }));
     return identities.find(identity => identity !== null) ?? null;
   };
@@ -568,6 +571,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
           pid: trusted,
           port: runtime.port,
           hostname: identity.hostname,
+          ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
           source: "runtime",
           ...(identity.version === undefined ? {} : { version: identity.version }),
           ...(identity.role === undefined ? {} : { role: identity.role }),
@@ -593,6 +597,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
         pid: verifiedReportedPid(identity.pid),
         port: record.port,
         hostname: identity.hostname,
+        ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
         source: "runtime",
         ...(identity.version === undefined ? {} : { version: identity.version }),
         ...(identity.role === undefined ? {} : { role: identity.role }),
@@ -612,6 +617,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
       pid: verifiedReportedPid(identity.pid) ?? killablePid(pid),
       port,
       hostname: identity.hostname,
+      ...(identity.probeHostname === undefined ? {} : { probeHostname: identity.probeHostname }),
       source: "config",
       ...(identity.version === undefined ? {} : { version: identity.version }),
       ...(identity.role === undefined ? {} : { role: identity.role }),
