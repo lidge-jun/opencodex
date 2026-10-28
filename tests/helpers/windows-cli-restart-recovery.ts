@@ -8,13 +8,14 @@ import { createCodexCliWorkerCommitWindow } from "../../src/codex/cli-update-wor
 import { beginCodexCliSelectionParentWrite, codexCliUpdateSelectionGate, createCodexCliUpdateFence,
   allocateCodexCliUpdateGateOwner } from "../../src/codex/cli-update-selection-gate";
 import { startWindowsCliChild } from "../../src/codex/windows-cli-child";
+import { observeWindowsRecoveryFixture, windowsRecoveryFixtureIdentity } from "./windows-cli-recovery-state";
 
 const [role, root] = process.argv.slice(2) as [string, string];
 if (role && root) {
   trustWindowsTempFixtureAncestry(root);
   if (role === "probe") {
     const writer = beginCodexCliSelectionParentWrite();
-    console.log(JSON.stringify({ entered: writer.entered })); writer.exit();
+    console.log(JSON.stringify({ entered: writer.entered, recovery: observeWindowsRecoveryFixture(root) })); writer.exit();
   } else if (role === "owner" || role === "owner-descendant") {
     const f = await prepareRetentionFixture(root);
     mkdirSync(f.configDir);
@@ -43,8 +44,10 @@ if (role && root) {
     const result = await applyCodexCliUpdate(plan.planId, { ...f.deps, commitWindow,
       startWindowsChild(invocation) {
         if (invocation.policy !== "installer") throw new Error("unexpected_fixture_child");
+        writeFileSync(join(root, "native-starting"), "starting");
         const child = startWindowsCliChild({ ...invocation, executable: process.execPath,
           args: [script], cwd: root, env: { SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root } });
+        writeFileSync(join(root, "identity.json"), JSON.stringify(windowsRecoveryFixtureIdentity(child)));
         child.wait = async () => {
           const deadline = Date.now() + 15000;
           while (!existsSync(join(root, "ready"))) {
@@ -55,7 +58,6 @@ if (role && root) {
             if (Date.now() > deadline) throw new Error("primary_child_not_terminal");
             await Bun.sleep(5);
           }
-          writeFileSync(join(root, "identity.json"), JSON.stringify({ pid: child.pid, creationTime: child.creationTime }));
           process.exit(0); // Deliberate owner death while its native installer Job lives.
         };
         return child;

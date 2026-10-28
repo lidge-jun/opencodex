@@ -24,11 +24,11 @@ export const windowsCodexOwnedPath = (relative: string): boolean => roots.slice(
 function inventory(prefix: string) {
   const paths: string[] = [], directories: string[] = [], acl: WindowsAclEntry[] = [];
   const validate = windowsArchivePathValidator();
-  let entries = 0, total = 0;
+  let entries = 0, total = 0n;
   const walk = (relative: string) => {
     if (++entries > 4096) throw new Error("installation_readback_limit");
-    const path = win32.join(prefix, relative), st = lstatSync(path);
-    if (st.isSymbolicLink() || (!st.isDirectory() && !st.isFile()) || (!st.isDirectory() && st.nlink !== 1)) {
+    const path = win32.join(prefix, relative), st = lstatSync(path, { bigint: true });
+    if (st.isSymbolicLink() || (!st.isDirectory() && !st.isFile()) || (!st.isDirectory() && st.nlink !== 1n)) {
       throw new Error("installation_path_unverified");
     }
     validate(relative, st.isDirectory());
@@ -40,7 +40,7 @@ function inventory(prefix: string) {
       for (const name of readdirSync(path).sort()) walk(`${relative}/${name}`);
     } else {
       total += st.size;
-      if (st.size > MAX_CODEX_MEMBER_BYTES || total > MAX_CODEX_UNPACKED_BYTES) throw new Error("installation_readback_limit");
+      if (st.size > BigInt(MAX_CODEX_MEMBER_BYTES) || total > BigInt(MAX_CODEX_UNPACKED_BYTES)) throw new Error("installation_readback_limit");
       paths.push(relative);
     }
   };

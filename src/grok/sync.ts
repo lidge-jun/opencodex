@@ -26,12 +26,13 @@ async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
  * Build the model list and inject the fenced block. `hostname` should be the hostname the
  * RUNNING proxy actually bound (live.hostname from proxy-liveness for ensure's live branch;
  * config.hostname for a freshly spawned start) — a stale config.hostname could otherwise
- * name a host the process never bound.
+ * name a host the process never bound. `probeHostname` is only the reachable destination;
+ * it never replaces bind scope for admission policy or an explicit secondary listener.
  */
 export async function syncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean } } = {},
+  opts: { hostname?: string; probeHostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean } } = {},
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
   let projection: ReturnType<typeof projectGrokCatalog>;
@@ -57,6 +58,8 @@ export async function syncGrokConfig(
     hostname: target.requiresAdmissionToken
       ? (opts.hostname ?? config.hostname)
       : targetUrl.hostname,
+    ...(opts.probeHostname !== undefined && !config.unauthenticatedLoopbackListener?.enabled
+      ? { probeHostname: opts.probeHostname } : {}),
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
     ...opts.refreshOnly ? { refreshOnly: opts.refreshOnly } : {},
     excluded: new Set(config.grokExcludedModels ?? []),

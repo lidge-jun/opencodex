@@ -9,6 +9,8 @@
  *   set-default <name>  Change the default provider
  */
 import { hasOwnProvider, isValidProviderName, loadConfig, readConfigAdmissionSnapshot, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
@@ -248,165 +250,170 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
     process.exit(1);
   }
 
-  const config = loadConfig();
-
-  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
-  if (namespaceCollision) {
-    console.error(`Error: ${namespaceCollision}.`);
-    process.exit(1);
-  }
-
-  if (hasOwnProvider(config.providers, name) && !force) {
-    console.error(`Provider "${name}" already exists. Use --force to overwrite.`);
-    process.exit(1);
-  }
-
-  let provConfig: OcxProviderConfig;
-  const registryEntry = getProviderRegistryEntry(name);
-
-  if (registryEntry) {
-    if (registryEntry.deprecated) console.warn(`Warning: provider "${name}" is deprecated: ${registryEntry.deprecated}`);
-    provConfig = providerConfigSeed(registryEntry);
-    if (apiKey) {
-      const candidateError = providerCredentialInputError({ apiKey });
-      if (candidateError) {
-        console.error(`Error: ${candidateError}`);
-        process.exitCode = 2;
-        return;
-      }
-      if ((authMode ?? registryEntry.authKind) === "forward") {
-        console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
-      } else if ((authMode ?? registryEntry.authKind) === "oauth") {
-        console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${name}`);
-      } else {
-        provConfig.apiKey = apiKey;
-      }
-    }
-    if (defaultModel) provConfig.defaultModel = defaultModel;
-    if (adapter) provConfig.adapter = adapter;
-    if (baseUrl) provConfig.baseUrl = baseUrl;
-  } else {
-    if (!adapter || !baseUrl) {
-      console.error(`Provider "${name}" is not in the registry. --adapter and --base-url are required.`);
-      console.error("Usage: ocx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]");
-      process.exit(1);
-    }
-    provConfig = {
-      adapter,
-      baseUrl,
-      ...(apiKey ? { apiKey } : {}),
-      ...(defaultModel ? { defaultModel } : {}),
-    };
-  }
-
-  if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
-  const credentialError = providerCredentialInputError(provConfig);
-  if (credentialError) {
-    console.error(`Error: ${credentialError}`);
-    process.exitCode = 2;
-    return;
-  }
-  if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
-  if (name === "anthropic2") {
-    if (provConfig.adapter !== "anthropic" || provConfig.authMode !== "oauth") delete provConfig.anthropicOAuthInstance;
-    if (provConfig.anthropicOAuthInstance) {
-      try { assertAnthropicInstanceLoginConfig(config, name); }
-      catch {
-        console.error("Error: cannot add Pool 2 over an existing custom or unreadable provider configuration; resolve it first.");
-        process.exitCode = 2;
-        return;
-      }
-    }
-  }
-  if (name === "openai" && (authMode !== undefined || responsesPath !== undefined)
-    && !isCanonicalOpenAiForwardProvider(provConfig)) {
-    console.error("Error: Canonical OpenAI must keep its built-in forward destination and authentication. Use a separate provider name for a custom endpoint.");
-    process.exitCode = 2;
-    return;
-  }
-
-  if (apiKeyTransport !== undefined) {
-    if (apiKeyTransport !== "x-api-key" && apiKeyTransport !== "bearer") {
-      console.error('Error: --api-key-transport must be "x-api-key" or "bearer".');
-      process.exit(1);
-    }
-    const transportError = apiKeyTransportConfigError({ ...provConfig, apiKeyTransport });
-    if (transportError) {
-      console.error(`Error: ${transportError}.`);
-      process.exit(1);
-    }
-    provConfig.apiKeyTransport = apiKeyTransport;
-  }
-  if (googleToolSchemaPolicy !== undefined) {
-    if (googleToolSchemaPolicy !== "compatible" && googleToolSchemaPolicy !== "reject-lossy") {
-      console.error('Error: --google-tool-schema-policy must be "compatible" or "reject-lossy".');
-      process.exit(1);
-    }
-    if (provConfig.adapter !== "google") {
-      console.error("Error: --google-tool-schema-policy requires the google adapter.");
-      process.exit(1);
-    }
-    provConfig.googleToolSchemaPolicy = googleToolSchemaPolicy;
-  }
-
-  const existingProvider = config.providers[name];
-  if (existingProvider?.modelCapabilities !== undefined && provConfig.modelCapabilities === undefined) {
-    provConfig.modelCapabilities = structuredClone(existingProvider.modelCapabilities);
-  }
-  if (existingProvider?.modelContextTiers !== undefined && provConfig.modelContextTiers === undefined) {
-    provConfig.modelContextTiers = structuredClone(existingProvider.modelContextTiers);
-  }
-  if (textOnly) {
-    const modelId = capabilityModel ?? defaultModel ?? provConfig.defaultModel;
-    if (!modelId) {
-      console.error("Error: --text-only requires --model or a default model.");
-      process.exit(1);
-    }
-    const declaration = { [modelId]: { inputModalities: ["text"] } };
-    const error = modelCapabilitiesConfigError(declaration);
-    if (error) { console.error(`Error: ${error}.`); process.exit(1); }
-    provConfig.modelCapabilities = mergeModelCapabilities(provConfig.modelCapabilities, declaration);
-  }
-  // A --force overwrite rotates the key/endpoint but must not drop a
-  // user-configured price overlay (same rule as the /api/providers path and
-  // the login paths); there is no explicit clear/replace flag yet.
-  if (existingProvider?.modelCosts !== undefined && provConfig.modelCosts === undefined) {
-    provConfig.modelCosts = existingProvider.modelCosts;
-  }
-  if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
-  // New auth/path overrides use the management owner's completed-row contract.
-  // Validate overrides before registration state changes; the full candidate is
-  // validated again by validateAndSave for every local save.
-  if ((authMode !== undefined || responsesPath !== undefined)
-    && providerManagementConfigError(name, provConfig)) {
-    console.error("Error: Invalid provider configuration. Authentication, destination and provider options must satisfy the provider's management rules.");
-    process.exitCode = 2;
-    return;
-  }
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
-  let markerCollision = false;
-  let removedCredentials: string[] = [];
-  withConfigMutationLockSync(() => {
-    if (provConfig.anthropicOAuthInstance) {
-      try { assertAnthropicInstanceLoginConfig(config, name); }
-      catch { markerCollision = true; return; }
+  const admitted = await withConfigDirHardeningSettled(getConfigDir(), () => {
+    const config = readCliConfigForMutation();
+
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
+    if (namespaceCollision) {
+      console.error(`Error: ${namespaceCollision}.`);
+      process.exit(1);
     }
-    initializeProviderModelSelection(name, provConfig, existingProvider, config);
-    const durable = readConfigAdmissionSnapshot();
-    const durableProvider = durable.kind === "read" && durable.diagnostics.source === "file"
-      && durable.diagnostics.error === null ? durable.diagnostics.config.providers[name] : undefined;
-    removedCredentials = [config.providers[name], durableProvider].flatMap(provider => provider ? providerGcpCredentialMarkers(provider) : []);
-    config.providers[name] = provConfig;
-    if (setDefault) config.defaultProvider = name;
-    validateAndSave(config);
+
+    if (hasOwnProvider(config.providers, name) && !force) {
+      console.error(`Provider "${name}" already exists. Use --force to overwrite.`);
+      process.exit(1);
+    }
+
+    let provConfig: OcxProviderConfig;
+    const registryEntry = getProviderRegistryEntry(name);
+
+    if (registryEntry) {
+      if (registryEntry.deprecated) console.warn(`Warning: provider "${name}" is deprecated: ${registryEntry.deprecated}`);
+      provConfig = providerConfigSeed(registryEntry);
+      if (apiKey) {
+        const candidateError = providerCredentialInputError({ apiKey });
+        if (candidateError) {
+          console.error(`Error: ${candidateError}`);
+          process.exitCode = 2;
+          return;
+        }
+        if ((authMode ?? registryEntry.authKind) === "forward") {
+          console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
+        } else if ((authMode ?? registryEntry.authKind) === "oauth") {
+          console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${name}`);
+        } else {
+          provConfig.apiKey = apiKey;
+        }
+      }
+      if (defaultModel) provConfig.defaultModel = defaultModel;
+      if (adapter) provConfig.adapter = adapter;
+      if (baseUrl) provConfig.baseUrl = baseUrl;
+    } else {
+      if (!adapter || !baseUrl) {
+        console.error(`Provider "${name}" is not in the registry. --adapter and --base-url are required.`);
+        console.error("Usage: ocx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]");
+        process.exit(1);
+      }
+      provConfig = {
+        adapter,
+        baseUrl,
+        ...(apiKey ? { apiKey } : {}),
+        ...(defaultModel ? { defaultModel } : {}),
+      };
+    }
+
+    if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
+    const credentialError = providerCredentialInputError(provConfig);
+    if (credentialError) {
+      console.error(`Error: ${credentialError}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
+    if (name === "anthropic2") {
+      if (provConfig.adapter !== "anthropic" || provConfig.authMode !== "oauth") delete provConfig.anthropicOAuthInstance;
+      if (provConfig.anthropicOAuthInstance) {
+        try { assertAnthropicInstanceLoginConfig(config, name); }
+        catch {
+          console.error("Error: cannot add Pool 2 over an existing custom or unreadable provider configuration; resolve it first.");
+          process.exitCode = 2;
+          return;
+        }
+      }
+    }
+    if (name === "openai" && (authMode !== undefined || responsesPath !== undefined)
+      && !isCanonicalOpenAiForwardProvider(provConfig)) {
+      console.error("Error: Canonical OpenAI must keep its built-in forward destination and authentication. Use a separate provider name for a custom endpoint.");
+      process.exitCode = 2;
+      return;
+    }
+
+    if (apiKeyTransport !== undefined) {
+      if (apiKeyTransport !== "x-api-key" && apiKeyTransport !== "bearer") {
+        console.error('Error: --api-key-transport must be "x-api-key" or "bearer".');
+        process.exit(1);
+      }
+      const transportError = apiKeyTransportConfigError({ ...provConfig, apiKeyTransport });
+      if (transportError) {
+        console.error(`Error: ${transportError}.`);
+        process.exit(1);
+      }
+      provConfig.apiKeyTransport = apiKeyTransport;
+    }
+    if (googleToolSchemaPolicy !== undefined) {
+      if (googleToolSchemaPolicy !== "compatible" && googleToolSchemaPolicy !== "reject-lossy") {
+        console.error('Error: --google-tool-schema-policy must be "compatible" or "reject-lossy".');
+        process.exit(1);
+      }
+      if (provConfig.adapter !== "google") {
+        console.error("Error: --google-tool-schema-policy requires the google adapter.");
+        process.exit(1);
+      }
+      provConfig.googleToolSchemaPolicy = googleToolSchemaPolicy;
+    }
+
+    const existingProvider = config.providers[name];
+    if (existingProvider?.modelCapabilities !== undefined && provConfig.modelCapabilities === undefined) {
+      provConfig.modelCapabilities = structuredClone(existingProvider.modelCapabilities);
+    }
+    if (existingProvider?.modelContextTiers !== undefined && provConfig.modelContextTiers === undefined) {
+      provConfig.modelContextTiers = structuredClone(existingProvider.modelContextTiers);
+    }
+    if (textOnly) {
+      const modelId = capabilityModel ?? defaultModel ?? provConfig.defaultModel;
+      if (!modelId) {
+        console.error("Error: --text-only requires --model or a default model.");
+        process.exit(1);
+      }
+      const declaration = { [modelId]: { inputModalities: ["text"] } };
+      const error = modelCapabilitiesConfigError(declaration);
+      if (error) { console.error(`Error: ${error}.`); process.exit(1); }
+      provConfig.modelCapabilities = mergeModelCapabilities(provConfig.modelCapabilities, declaration);
+    }
+    // A --force overwrite rotates the key/endpoint but must not drop a
+    // user-configured price overlay (same rule as the /api/providers path and
+    // the login paths); there is no explicit clear/replace flag yet.
+    if (existingProvider?.modelCosts !== undefined && provConfig.modelCosts === undefined) {
+      provConfig.modelCosts = existingProvider.modelCosts;
+    }
+    if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
+    // New auth/path overrides use the management owner's completed-row contract.
+    // Validate overrides before registration state changes; the full candidate is
+    // validated again by validateAndSave for every local save.
+    if ((authMode !== undefined || responsesPath !== undefined)
+      && providerManagementConfigError(name, provConfig)) {
+      console.error("Error: Invalid provider configuration. Authentication, destination and provider options must satisfy the provider's management rules.");
+      process.exitCode = 2;
+      return;
+    }
+    let markerCollision = false;
+    let removedCredentials: string[] = [];
+    withConfigMutationLockSync(() => {
+      if (provConfig.anthropicOAuthInstance) {
+        try { assertAnthropicInstanceLoginConfig(config, name); }
+        catch { markerCollision = true; return; }
+      }
+      initializeProviderModelSelection(name, provConfig, existingProvider, config);
+      const durable = readConfigAdmissionSnapshot();
+      const durableProvider = durable.kind === "read" && durable.diagnostics.source === "file"
+        && durable.diagnostics.error === null ? durable.diagnostics.config.providers[name] : undefined;
+      removedCredentials = [config.providers[name], durableProvider].flatMap(provider => provider ? providerGcpCredentialMarkers(provider) : []);
+      config.providers[name] = provConfig;
+      if (setDefault) config.defaultProvider = name;
+      validateAndSave(config);
+    });
+    if (!markerCollision) cleanupRemovedGcpCredentials(removedCredentials);
+    return { config, provConfig, registryEntry, markerCollision };
   });
+  if (!admitted) return;
+  const { config, provConfig, registryEntry, markerCollision } = admitted;
   if (markerCollision) {
     console.error("Error: provider configuration changed while adding Pool 2; resolve the ownership collision first.");
     process.exitCode = 2;
     return;
   }
 
-  cleanupRemovedGcpCredentials(removedCredentials);
   let sync: LocalSyncResult | undefined;
   if (wantsSync) {
     try {
@@ -478,7 +485,7 @@ function handleRemove(args: string[]): void {
   }
   rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider remove <name> [--json]");
 
-  const config = loadConfig();
+  const config = readCliConfigForMutation();
   if (!hasOwnProvider(config.providers, name)) {
     console.error(`Provider "${name}" is not configured.`);
     process.exit(1);
@@ -585,7 +592,7 @@ function handleSetDefault(args: string[]): void {
   }
   rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider set-default <name> [--json]");
 
-  const config = loadConfig();
+  const config = readCliConfigForMutation();
   if (!hasOwnProvider(config.providers, name)) {
     console.error(`Provider "${name}" is not configured. Add it first: ocx provider add ${name}`);
     process.exit(1);
@@ -668,14 +675,14 @@ export async function handleProviderCommand(args: string[], deps: ProviderComman
       await handleAdd(subArgs, deps);
       break;
     case "remove":
-      handleRemove(subArgs);
+      await withConfigDirHardeningSettled(getConfigDir(), () => handleRemove(subArgs));
       break;
     case "show":
       await (await import("./link-child")).printLinkChildLocalNotice("The provider settings");
       handleShow(subArgs);
       break;
     case "set-default":
-      handleSetDefault(subArgs);
+      await withConfigDirHardeningSettled(getConfigDir(), () => handleSetDefault(subArgs));
       break;
     default: {
       const { handleProviderRuntimeCommand } = await import("./provider-runtime");

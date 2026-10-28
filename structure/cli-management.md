@@ -73,6 +73,8 @@ Management route declarations describe actual HTTP calls only; local Lab automat
 
 ## Provider live operations and bounded editor input
 
+Local config set/unset/import, offline effort, custom-model add/remove and provider add/remove/default wait for config-root ACL settlement before their synchronous mutation phase. Candidate reads and validation run inside admission; invalid or unreadable authority is refused without replacing its bytes. Models/provider runners in `src/cli/dispatch.ts` use `runCliAction` for the standard usage-error message and exit 2, retaining handler `process.exitCode` on normal completion. Post-save sync keeps its existing result contract. Custom-model removal rechecks the confirmed row after any prompt and admission. The [config admission contract](config.md) owns the deadline and writer ordering.
+
 Offline removal in `src/cli/provider.ts` snapshots GCP marker references before deletion and runs
 the [post-commit credential cleanup](providers/google.md#vertex-credential-markers) only after saving;
 live and latest durable rows are captured under the same mutation lock as deletion persistence.
