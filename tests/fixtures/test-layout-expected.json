@@ -225,6 +225,7 @@
   "claude-client-refusal-status.test.ts": "claude-integration",
   "claude-translated-cache-ttl.test.ts": "claude-integration",
   "claude-translated-server-tools.test.ts": "claude-integration",
+  "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "web-search-forced-declaration.test.ts": "web-search", "web-search-loop-iteration-usage.test.ts": "web-search",
   "web-search-loop-error-usage.test.ts": "web-search", "web-search-rotation-usage-attribution.test.ts": "web-search",
   "claude-devin-output-order.test.ts": "claude-integration",

@@ -1,5 +1,21 @@
 # Append-only Claude Tool Loading
 
+## Translated tool admission
+
+`src/claude/inbound-content-options.ts` omits hosted search from the translated catalog when any
+`web_search*` declaration supplies `allowed_domains`, `blocked_domains` or `user_location`.
+All duplicate hosted-search declarations are omitted together; shared sidecar backends cannot
+uniformly enforce these constraints. A forced hosted-search choice without a surviving declaration
+refuses locally. Typed originals still reach first-party Anthropic through the existing out-of-body
+server-tool lane; native passthrough retains its own declaration. Unrestricted search is unchanged.
+Valid function definitions marked `defer_loading` lower to ordinary callable functions on combo
+Responses/Chat destinations; the flag never drops the function or alone triggers compatibility
+rejection. `src/claude/compatibility.ts` still rejects unsupported top-level deferral, schema-less
+deferred declarations and server-executed discovery in enforce mode. This is eager-loading
+degradation, not native deferred discovery. `tests/claude-integration/claude-translated-tool-restrictions.test.ts`
+covers both physical fallback wires, sidecar availability, restriction combinations and duplicates,
+forced choice, original Anthropic declarations and deferred-function admission.
+
 `src/claude/inbound-tool-loading.ts` reconstructs successful client `ToolSearch` discovery from
 structured `tool_reference` results. For routes explicitly selected by
 `claudeCode.appendOnlyToolLoadingModels`, and only with a metadata-derived cache key,
