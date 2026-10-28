@@ -26,6 +26,8 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { currentServerFixtureConfig, settleServerAuthFixture, startManagementServerFixture, type ManagementServerFixture } from "../helpers/server-auth-fixture";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { flushAnthropicSessionAffinity } from "../../src/oauth/anthropic-session-affinity-store";
 
 describe("active registry admission", () => {
   describe("real HTTP boundaries", () => {
@@ -360,11 +362,22 @@ describe("active registry admission", () => {
     expect(peak).toBe(1);
   });
 
-  test("affinity rejects an oversized key component without colliding or changing routing", () => {
+  test("affinity rejects an oversized key component without colliding or changing routing", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-affinity-admission-"));
+    process.env.OPENCODEX_HOME = home;
     clearAnthropicAccountPoolState();
-    bindAnthropicSessionAffinity("valid-session", "account-a");
-    bindAnthropicSessionAffinity(`${"x".repeat(512)}-different`, "account-b");
-    expect(anthropicSessionAffinitySizeForTests()).toBe(1);
-    clearAnthropicAccountPoolState();
+    try {
+      await saveCredential("anthropic", { access: "fixture-affinity-access", refresh: "fixture-affinity-refresh",
+        expires: Date.now() + 3_600_000, accountId: "fixture-affinity-account" });
+      const accountId = getAccountSet("anthropic")!.accounts[0]!.id;
+      bindAnthropicSessionAffinity("valid-session", accountId);
+      bindAnthropicSessionAffinity(`${"x".repeat(512)}-different`, accountId);
+      expect(anthropicSessionAffinitySizeForTests()).toBe(1);
+    } finally {
+      await flushAnthropicSessionAffinity(); clearAnthropicAccountPoolState();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   });
 });

@@ -30,6 +30,72 @@ interface OutputItem {
   type?: string;
   content?: OutputTextBlock[];
 }
+/**
+ * Completed output text and citations. `parts` holds each output_text block's text keyed by
+ * `output_index:content_index`, and `incomplete` marks skipped malformed entries.
+ */
+type CompletedOutput = WebSearchResult & { incomplete: boolean; parts: Map<string, string> };
+/** Streamed text for one `output_text` content part. */
+interface StreamedPart {
+  delta: string;
+  done: string | null;
+}
+
+/** The streamed part for events that carry no valid `output_index`/`content_index`. */
+const UNINDEXED_PART = "unindexed";
+
+/**
+ * Key a streamed text event by its content part. An event without valid indexes joins the only
+ * indexed part when exactly one exists. The first indexed event identifies any preceding
+ * unindexed accumulator; once multiple indexed parts exist, unindexed text stays separate.
+ */
+function streamedPartKey(data: Record<string, unknown>, parts: Map<string, StreamedPart>): string {
+  const output = data.output_index;
+  const content = data.content_index;
+  if (Number.isInteger(output) && Number.isInteger(content)) {
+    const key = `${output}:${content}`;
+    if (parts.size === 1 && parts.has(UNINDEXED_PART)) {
+      parts.set(key, parts.get(UNINDEXED_PART)!);
+      parts.delete(UNINDEXED_PART);
+    }
+    return key;
+  }
+  const indexed = [...parts.keys()].filter(key => key !== UNINDEXED_PART);
+  return indexed.length === 1 ? indexed[0]! : UNINDEXED_PART;
+}
+
+/** Order `output_index:content_index` keys numerically. */
+function comparePartKeys(left: string, right: string): number {
+  const [leftOutput = 0, leftContent = 0] = left.split(":").map(Number);
+  const [rightOutput = 0, rightContent = 0] = right.split(":").map(Number);
+  return leftOutput - rightOutput || leftContent - rightContent;
+}
+
+/** One part's streamed text: its done text when present, otherwise its deltas. */
+function streamedPartText(part: StreamedPart): string {
+  return part.done?.trim() ? part.done : part.delta;
+}
+
+/** Join indexed parts in index order, followed by any unindexed text. */
+function assembleStreamedText(parts: Map<string, StreamedPart>): string {
+  const keys = [...parts.keys()].filter(key => key !== UNINDEXED_PART).sort(comparePartKeys);
+  if (parts.has(UNINDEXED_PART)) keys.push(UNINDEXED_PART);
+  return keys.map(key => streamedPartText(parts.get(key)!)).join("");
+}
+
+/**
+ * Rebuild an incomplete completed output part by part: a part keeps its completed text when the
+ * completed output has it, and otherwise takes that part's streamed text.
+ */
+function mergeIncompleteOutput(completed: Map<string, string>, streamed: Map<string, StreamedPart>): string {
+  const keys = [...new Set([...completed.keys(), ...streamed.keys()])].sort(comparePartKeys);
+  return keys.map(key => {
+    const text = completed.get(key);
+    if (text?.trim()) return text;
+    const part = streamed.get(key);
+    return part ? streamedPartText(part) : text ?? "";
+  }).join("");
+}
 
 // Keep this compatibility export for non-Responses sidecar executors and bounded error bodies.
 export const MAX_SIDECAR_RESPONSE_BYTES = 64 * 1024;
@@ -62,7 +128,8 @@ const URL_RE = /https?:\/\/[^\s<>()\[\]]+/i;
 // Recognize URI-like candidates separately from the HTTP(S)-only acceptance boundary. A rejected
 // citation (for example `javascript:`) still belongs to the trailing Sources block and must not be
 // left behind as ordinary assistant text.
-const URI_LIKE_RE = /[a-z][a-z0-9+.-]*:[^\s<>()\[\]]+/i;
+// The scheme length is bounded so a long word without a colon is scanned in linear time.
+const URI_LIKE_RE = /[a-z][a-z0-9+.-]{0,31}:[^\s<>()\[\]]+/i;
 // A "Sources:" / "Source:" header, allowing markdown prefixes (#, *, -, >) and bold/italic wrappers.
 const SOURCES_WORD_RE = /^sources?/i;
 
@@ -111,19 +178,65 @@ function isSourcesHeader(line: string): boolean {
   return cursor === line.length;
 }
 
-/** Trim wrapping/trailing noise from a captured URL: angle brackets, then trailing punctuation. */
+/** Trim wrapping/trailing noise from a captured URL: angle brackets, then trailing punctuation and code backticks. */
 function cleanUrl(url: string): string {
-  return url.replace(/^<+/, "").replace(/[)>\].,;:]+$/, "");
+  return url.replace(/^<+/, "").replace(/[)>\].,;:`]+$/, "");
 }
 
 /** Derive a human title from the list-item text preceding the URL (strip markers, md link, seps). */
 function cleanTitle(prefix: string): string {
-  let title = prefix.replace(/^[-*>\d.)\s]+/, "").trim();
+  let title = prefix.replace(/^[-*+>\d.)\s]+/, "").trim();
   // `[title](` from a markdown link, or a leading `[`.
-  title = title.replace(/^\[/, "").replace(/\]\(?$/, "").replace(/[:\-—(<]\s*$/, "").trim();
-  return title;
+  title = title.replace(/^\[/, "").replace(/\]\(?$/, "");
+  // Trailing separators and an opening code backtick, trimmed by a linear scan.
+  let end = title.length;
+  while (end > 0 && TITLE_TRAILING_SEPARATORS.has(title[end - 1]!)) end -= 1;
+  return title.slice(0, end).trim();
 }
 
+const TITLE_TRAILING_SEPARATORS = new Set([":", "-", "—", "(", "<", "`", " ", "\t"]);
+
+/** A line that looks like a list item (bullet, quote or ordinal marker). */
+const LIST_ITEM_RE = /^[-*+>\d.)]/;
+
+/**
+ * Replace inline code spans with spaces of equal length. A span opens and closes with backtick runs
+ * of equal length; runs are paired in one pass, so an unmatched run cannot cause backtracking.
+ */
+function maskInlineCode(line: string): string {
+  const runs: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < line.length;) {
+    if (line[index] !== "`") { index += 1; continue; }
+    const start = index;
+    while (line[index] === "`") index += 1;
+    runs.push({ start, end: index });
+  }
+  if (runs.length < 2) return line;
+  // For each run, the index of the next run with the same length, or -1.
+  const next = new Array<number>(runs.length).fill(-1);
+  const lastByLength = new Map<number, number>();
+  for (let run = runs.length - 1; run >= 0; run -= 1) {
+    const length = runs[run]!.end - runs[run]!.start;
+    next[run] = lastByLength.get(length) ?? -1;
+    lastByLength.set(length, run);
+  }
+  let masked = "";
+  let cursor = 0;
+  for (let run = 0; run < runs.length;) {
+    const close = next[run]!;
+    if (close === -1) { run += 1; continue; }
+    masked += line.slice(cursor, runs[run]!.start) + " ".repeat(runs[close]!.end - runs[run]!.start);
+    cursor = runs[close]!.end;
+    run = close + 1;
+  }
+  return masked + line.slice(cursor);
+}
+
+/**
+ * Move citation lines from the last `Sources:` block into `sources` and strip them from the text.
+ * List items that cannot be paired with a URL stay in the answer, and every consumed citation line,
+ * including one whose URL is rejected as unsafe, leaves the text.
+ */
 function extractTrailingSources(text: string): { text: string; sources: WebSearchSource[]; stripped: boolean } {
   const lines = text.split("\n");
   // Find the LAST line that is a "Sources:" header (markdown prefixes allowed).
@@ -139,6 +252,9 @@ function extractTrailingSources(text: string): { text: string; sources: WebSearc
   let lastConsumed = headerIdx;
   // A title line whose URL is expected on a following line (multiline entry).
   let pendingTitle: string | null = null;
+  let pendingIndex = -1;
+  // Line indexes of list items that turned out not to title a URL; they remain answer text.
+  const keptNotes: number[] = [];
   let consumedSourceLine = false;
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const raw = lines[i].trim();
@@ -148,52 +264,73 @@ function extractTrailingSources(text: string): { text: string; sources: WebSearc
       continue;
     }
     const httpMatch = raw.match(URL_RE);
-    const m = httpMatch ?? raw.match(URI_LIKE_RE);
+    // URI-like text inside an inline code span of any backtick run, such as `mode:fast`, is prose
+    // rather than a citation. HTTP(S) URLs keep their citation meaning even when code-formatted.
+    const m = httpMatch ?? maskInlineCode(raw).match(URI_LIKE_RE);
     if (!m) {
       // A list-ish line with no URL may be a title whose URL is on the next line. Only treat it as a
-      // pending title when it looks like a list item; otherwise it's prose → stop.
-      if (/^[-*>\d.)]/.test(raw) || pendingTitle === null) {
-        if (/^[-*>\d.)]/.test(raw)) { pendingTitle = raw; lastConsumed = i; continue; }
-      }
-      break;
+      // pending title when it looks like a list item; otherwise it's prose → stop. A second list item
+      // means the previous one was a note, so it is kept instead of discarded.
+      if (!LIST_ITEM_RE.test(raw)) break;
+      if (pendingTitle !== null) keptNotes.push(pendingIndex);
+      pendingTitle = raw;
+      pendingIndex = i;
+      continue;
     }
     // A non-HTTP URI embedded in prose is not sufficient to classify the line as a citation.
     // Accept it as a consumed source line only when it is a list item or the whole line starts with
     // the URI candidate, matching the existing bare-URL grammar.
-    if (!httpMatch && !/^[-*>\d.)]/.test(raw) && m.index !== 0) break;
+    if (!httpMatch && !LIST_ITEM_RE.test(raw) && m.index !== 0) break;
     const url = cleanUrl(m[0]);
     if (!url) { break; }
+    const inlinePrefix = raw.slice(0, m.index);
+    const inlineTitle = cleanTitle(inlinePrefix);
+    // A self-titled citation, or a URL that starts its own list item, does not prove that the
+    // preceding bullet was its title. Only an unmarked continuation line pairs with it.
+    const startsListItem = /^(?:[-*+>]|\d+[.)])\s/.test(raw);
+    const pairsWithPending = pendingTitle !== null && !inlineTitle && !startsListItem;
+    if (pendingTitle !== null && !pairsWithPending) keptNotes.push(pendingIndex);
     consumedSourceLine = true;
     lastConsumed = i;
     // Title: text before the URL on this line, else a buffered title from a preceding line.
-    const inlinePrefix = raw.slice(0, m.index);
-    const title = cleanTitle(inlinePrefix) || (pendingTitle ? cleanTitle(pendingTitle) : "");
+    const title = inlineTitle || (pairsWithPending ? cleanTitle(pendingTitle!) : "");
     pendingTitle = null;
     if (seen.has(url)) continue;
     if (appendSafeWebSearchSource(sources, title ? { url, title } : { url })) seen.add(url);
   }
   if (!consumedSourceLine) return { text, sources: [], stripped: false };
-  // Keep text before the header AND any prose after the consumed source lines.
+  // Keep text before the header, notes found between citations, and anything after the last citation.
   const before = lines.slice(0, headerIdx).join("\n").replace(/\s+$/, "");
-  const after = lines.slice(lastConsumed + 1).join("\n").replace(/^\s+/, "");
+  const notes = keptNotes.filter(index => index < lastConsumed).map(index => lines[index]);
+  const after = [...notes, lines.slice(lastConsumed + 1).join("\n").replace(/^\s+/, "")].filter(Boolean).join("\n");
   const body = after ? (before ? `${before}\n\n${after}` : after) : before;
   return { text: body, sources, stripped: true };
 }
 
-/** Pull final text + url_citation sources from a completed Responses `output[]` array. */
-function fromOutputArray(output: OutputItem[], seen: Set<string>): WebSearchResult {
+/**
+ * Pull final text + url_citation sources from a completed Responses `output[]` array.
+ * Malformed entries are skipped, and `incomplete` records that the text may be partial.
+ */
+function fromOutputArray(output: OutputItem[], seen: Set<string>): CompletedOutput {
   let text = "";
+  let incomplete = false;
+  const parts = new Map<string, string>();
   const sources: WebSearchSource[] = [];
-  for (const item of output) {
-    if (item.type !== "message" || !Array.isArray(item.content)) continue;
-    for (const block of item.content) {
-      if (block.type === "output_text" && typeof block.text === "string") {
+  for (const [outputIndex, item] of output.entries()) {
+    if (!item || typeof item !== "object") { incomplete = true; continue; }
+    if (item.type !== "message") continue;
+    if (!Array.isArray(item.content)) { incomplete = true; continue; }
+    for (const [contentIndex, block] of item.content.entries()) {
+      if (!block || typeof block !== "object") { incomplete = true; continue; }
+      if (block.type === "output_text") {
+        if (typeof block.text !== "string") { incomplete = true; continue; }
         text += block.text;
-        for (const ann of block.annotations ?? []) collectAnnotation(ann, sources, seen);
+        parts.set(`${outputIndex}:${contentIndex}`, block.text);
+        for (const ann of Array.isArray(block.annotations) ? block.annotations : []) collectAnnotation(ann, sources, seen);
       }
     }
   }
-  return { text, sources };
+  return { text, sources, incomplete, parts };
 }
 
 export function cancelReaderWithoutWaiting(
@@ -223,23 +360,29 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   const seen = new Set<string>();
   // Holder object — fields are mutated inside the closure, so they can't live as narrowed locals.
   const acc: {
-    deltaText: string;
-    doneText: string;
-    final: WebSearchResult | null;
+    parts: Map<string, StreamedPart>;
+    final: CompletedOutput | null;
     streamSources: WebSearchSource[];
     error: string | null;
     decodedChars: number;
     terminalEvent: boolean;
     limitReached: boolean;
   } = {
-    deltaText: "",
-    doneText: "",
+    parts: new Map(),
     final: null,
     streamSources: [],
     error: null,
     decodedChars: 0,
     terminalEvent: false,
     limitReached: false,
+  };
+
+  /** The accumulator for the content part that `data` belongs to. */
+  const streamedPart = (data: Record<string, unknown>): StreamedPart => {
+    const key = streamedPartKey(data, acc.parts);
+    let part = acc.parts.get(key);
+    if (!part) { part = { delta: "", done: null }; acc.parts.set(key, part); }
+    return part;
   };
 
   const acceptDecodedChars = (count: number): boolean => {
@@ -276,16 +419,19 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
       return;
     }
     const data = parsed as Record<string, unknown>;
-    const type = data.type as string | undefined;
+    const type = typeof data.type === "string" ? data.type : undefined;
     if (type === "response.output_text.delta" && typeof data.delta === "string") {
-      if (acceptDecodedChars(data.delta.length)) acc.deltaText += data.delta;
+      if (acceptDecodedChars(data.delta.length)) streamedPart(data).delta += data.delta;
     } else if (type === "response.output_text.done" && typeof data.text === "string") {
       // The `done` event carries the full, authoritative text for one content part.
-      if (acceptDecodedChars(data.text.length)) acc.doneText += data.text;
+      if (acceptDecodedChars(data.text.length)) {
+        const part = streamedPart(data);
+        part.done = (part.done ?? "") + data.text;
+      }
     } else if (type === "response.completed" || type === "response.done") {
       acc.terminalEvent = true;
       const resp = data.response as { output?: OutputItem[] } | undefined;
-      if (resp?.output) {
+      if (Array.isArray(resp?.output)) {
         const final = fromOutputArray(resp.output, seen);
         if (acceptDecodedChars(final.text.length)) acc.final = final;
       }
@@ -295,7 +441,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
       const msg = resp?.error?.message
         ?? (data.error as { message?: string } | undefined)?.message
         ?? (typeof data.message === "string" ? data.message : undefined);
-      acc.error = msg ?? `sidecar stream ended with ${type}`;
+      acc.error = typeof msg === "string" && msg.trim() ? msg : `sidecar stream ended with ${type}`;
     } else if (type?.includes("reasoning") && typeof data.delta === "string") {
       // Reasoning is not returned, but it is still decoded payload retained transiently by JSON.parse.
       acceptDecodedChars(data.delta.length);
@@ -345,9 +491,16 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   }
 
   // Prefer the authoritative completed output[], then the done text, then accumulated deltas.
-  const text = (acc.final?.text.trim() ? acc.final.text : "")
-    || acc.doneText.trim() && acc.doneText
-    || acc.deltaText;
+  // Each streamed content part contributes its done text, or its deltas when the done event never
+  // arrived. A completed output that skipped malformed entries may be partial: indexed streams fill
+  // only the parts it lacks, while an unindexed stream replaces it as a whole.
+  const streamedText = assembleStreamedText(acc.parts);
+  const completedText = acc.final?.text.trim() ? acc.final.text : "";
+  let text = completedText || streamedText;
+  if (acc.final?.incomplete) {
+    const repaired = acc.parts.has(UNINDEXED_PART) ? streamedText : mergeIncompleteOutput(acc.final.parts, acc.parts);
+    if (repaired.trim()) text = repaired;
+  }
   // Merge sources from the final output[] and the streaming annotation events.
   const sources = safeWebSearchSources(acc.final?.sources ?? []);
   for (const s of acc.streamSources) {

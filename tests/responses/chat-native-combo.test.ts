@@ -24,6 +24,14 @@ import { chatErrorStream, chatStream, responsesSuccess } from "../helpers/combo-
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import {
+  ADVISOR_ADMISSION_SCOPE_HEADER,
+  encodeAdvisorAdmissionScope,
+} from "../../src/server/advisor-admission-scope";
+import {
+  ADVISOR_INTERNAL_CAPABILITY_HEADER,
+  internalCallCapability,
+} from "../../src/lib/local-internal-call-capability";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -494,5 +502,247 @@ describe("unrepresentable candidates under the reject policy", () => {
     expect(rows[0]!.protocolTrace).toMatchObject({
       inbound: "chat", mode: "blocked", requestPath: [], reasonCodes: ["feature-unrepresentable"],
     });
+  });
+});
+
+/**
+ * An Advisor loopback consult carries TWO admission facts at once: the consult itself is
+ * admitted on the host's own broad first configured key (the one localAdmissionToken picks),
+ * while the restricted caller's captured scope rides only on the capability-authenticated
+ * header. Injecting the consult admission through logIds.admission and the scope through the
+ * two advisor headers exercises the same seams the real consult does — decode at the Chat
+ * ingress, then options.admissionScope into dispatch — without re-testing the socket path.
+ *
+ * The ordering is load-bearing for reproduction: if the restricted caller key were the FIRST
+ * configured key, the loopback's own admission would resolve that same narrow scope and deny
+ * the target for the wrong reason, hiding the scope-carry bug these cases cover.
+ */
+describe("advisor-inherited admission scope on native combos", () => {
+  const HOST: DataPlaneAdmission = { kind: "configured", keyId: "host", source: "dedicated" };
+  const NARROW = { providers: ["a"], models: [] };
+
+  function scopedComboConfig(
+    providers: Record<string, OcxProviderConfig>,
+    targets: Array<{ provider: string; model: string }>,
+  ): OcxConfig {
+    const config = comboConfig(providers, targets, NATIVE_ON);
+    config.apiKeys = [
+      { id: "host", name: "host", key: "ocx_data_" + "h".repeat(40), createdAt: "2026-01-01T00:00:00.000Z" },
+      {
+        id: "caller", name: "caller", key: "ocx_data_" + "c".repeat(40),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        allowedProviders: NARROW.providers, allowedModels: NARROW.models,
+      },
+    ];
+    return config;
+  }
+
+  const advisorHeaders = (scope: { providers: string[]; models: string[] }) => ({
+    [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
+    [ADVISOR_ADMISSION_SCOPE_HEADER]: encodeAdvisorAdmissionScope(scope),
+  });
+
+  test("a native-eligible failover target outside the inherited scope is never dispatched", async () => {
+    const a = upstream(() => Response.json({ error: { message: "fixture outage" } }, { status: 503 }));
+    const b = upstream(() => twoChoiceCompletion());
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, { transientRetryOn5xx: { attempts: 1 } }),
+        b: provider("openai-chat", b.baseUrl),
+      },
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+    );
+
+    const { response, text } = await send(config, { stream: false }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    expect(a.bodies.length).toBeGreaterThan(0);
+    // Load-bearing: the out-of-scope target's upstream never sees a body.
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(403);
+    // The combo surfaces the child's scope refusal as a Chat permission error.
+    expect(text).toContain("not allowed for this API key");
+  });
+
+  test("a native-eligible failover target inside the inherited scope is still reached", async () => {
+    const a = upstream(() => Response.json({ error: { message: "fixture outage" } }, { status: 503 }));
+    const b = upstream(() => twoChoiceCompletion());
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, { transientRetryOn5xx: { attempts: 1 } }),
+        b: provider("openai-chat", b.baseUrl),
+      },
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+    );
+
+    const { response, text } = await send(config, { stream: false, n: 2, logprobs: true, top_logprobs: 1 }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: [] }), admission: HOST,
+    });
+
+    expect(response.status).toBe(200);
+    expect(a.bodies.length).toBeGreaterThan(0);
+    expect(b.bodies).toHaveLength(1);
+    // Two choices reach the caller: the failover ran on the native lane, not the bridge.
+    expect((JSON.parse(text) as { choices: unknown[] }).choices).toHaveLength(2);
+    expect(b.bodies[0]).toMatchObject({ n: 2, logprobs: true });
+  });
+
+  test("a bridge failover target inside the inherited scope is reached unchanged", async () => {
+    const a = upstream(() => Response.json({ error: { message: "fixture outage" } }, { status: 503 }));
+    const b = upstream(() => responsesStream("bridge reached"));
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, { transientRetryOn5xx: { attempts: 1 } }),
+        b: provider("openai-responses", b.baseUrl),
+      },
+      [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
+    );
+
+    const { response, text } = await send(config, { stream: false }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: [] }), admission: HOST,
+    });
+
+    expect(response.status).toBe(200);
+    expect(text).toContain("bridge reached");
+    expect(b.bodies).toHaveLength(1);
+  });
+
+  test("the JEV decision destination is refused by an inherited scope that does not cover it", async () => {
+    let jevCalls = 0;
+    const a = upstream(body => body.stream === true ? chatStream("jev fallback") : twoChoiceCompletion());
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, {
+          models: ["m1"], liveModels: false, reasoningEfforts: ["low", "high"],
+        }),
+        jev: {
+          adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone",
+          authMode: "key", apiKey: "decision-fixture", liveModels: false,
+          fetch: (async () => {
+            jevCalls += 1;
+            return Response.json({ answers: { route: { choice: "a/m1:high" } } });
+          }) as typeof fetch,
+        },
+      },
+      [{ provider: "a", model: "m1" }],
+    );
+    config.combos!.pair!.strategy = "jev";
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    // The scope names provider "a" only: the TypeSafe decision call is refused before any
+    // credential lookup, so it is never sent; the declared fallback still serves target a.
+    expect(jevCalls).toBe(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+  });
+
+  test("the JEV decision destination inside the inherited scope is consulted", async () => {
+    let jevCalls = 0;
+    const a = upstream(body => body.stream === true ? chatStream("jev picked") : twoChoiceCompletion());
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, {
+          models: ["m1"], liveModels: false, reasoningEfforts: ["low", "high"],
+        }),
+        jev: {
+          adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone",
+          authMode: "key", apiKey: "decision-fixture", liveModels: false,
+          fetch: (async () => {
+            jevCalls += 1;
+            return Response.json({ answers: { route: { choice: "a/m1:high" } } });
+          }) as typeof fetch,
+        },
+      },
+      [{ provider: "a", model: "m1" }],
+    );
+    config.combos!.pair!.strategy = "jev";
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders({ providers: ["a", "jev"], models: [] }), admission: HOST,
+    });
+
+    expect(jevCalls).toBe(1);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    expect(a.bodies[0]!.reasoning_effort).toBe("high");
+  });
+
+  function decisionModelCombo(decisionModel: string): { config: OcxConfig; a: ReturnType<typeof upstream>; b: ReturnType<typeof upstream> } {
+    const a = upstream(body => body.stream === true ? chatStream("fallback answer") : twoChoiceCompletion());
+    // The decision turn is a streamed Responses request; b answers with the choice JSON.
+    const b = upstream(() => responsesStream("{\"choice\":\"a/m1:high\"}"));
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, {
+          models: ["m1"], liveModels: false, reasoningEfforts: ["low", "high"],
+        }),
+        b: provider("openai-responses", b.baseUrl, { models: ["m2"], liveModels: false }),
+      },
+      [{ provider: "a", model: "m1" }],
+    );
+    config.combos!.pair!.strategy = "jev";
+    config.combos!.pair!.decisionModel = decisionModel;
+    return { config, a, b };
+  }
+
+  test("a JEV decisionModel outside the inherited scope is never invoked", async () => {
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    // The internal decision turn must run under the caller's scope: b/m2 is refused before
+    // dispatch, provider b sees no body, and the declared fallback still serves target a.
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+  });
+
+  test("a JEV decisionModel inside the inherited scope is invoked", async () => {
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: [] }), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(1);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    expect(a.bodies[0]!.reasoning_effort).toBe("high");
+  });
+
+  test("a bare-id JEV decisionModel outside the inherited scope is refused the same way", async () => {
+    // "m2" has no provider qualifier: the model scan resolves it to provider b, and the
+    // scope must judge the resolved destination, not the string the config named.
+    const { config, a, b } = decisionModelCombo("m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+  });
+
+  test("a JEV decisionModel denied by the inherited model allowlist is never invoked", async () => {
+    // Both providers are in scope, so only the model list can refuse b/m2: the scope
+    // decision must reach the resolved destination, not stop at the provider name.
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response, text } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: ["a/m1"] }), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    // The declared fallback worker still produced the caller-visible answer.
+    expect(text).toContain("chatcmpl-native");
   });
 });

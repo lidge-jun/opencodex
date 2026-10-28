@@ -19,7 +19,6 @@ import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } f
 import { ConfigWritePublishedError, persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
 import { configDiagnosticsFromRaw, readConfigDiagnostics, validateConfigCandidate } from "./diagnostics";
 import { normalizePersistedClaudeCode } from "./load-degrade";
-import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
 import { reconcileApiKeys } from "./api-key-reconcile";
 import { captureLiveTopologyBaseline, LIVE_TOPOLOGY_KEYS, projectLiveTopology } from "./live-topology";
 
@@ -108,6 +107,16 @@ export function adoptPersistedModelDiscovery(
     baseline.modelDiscovery = structuredClone(persisted.modelDiscovery);
     baseline.disabledModels = structuredClone(persisted.disabledModels);
   }
+}
+
+/** Adopt the committed Advisor subtree without advancing unrelated pending live intent. */
+export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["advisor"]): void {
+  config.advisor = structuredClone(persisted);
+  const baseline = liveConfigBaseline.get(config);
+  // A known absent key remains rebaseable when a later disk edit adds it back.
+  if (baseline) baseline.advisor = structuredClone(persisted);
+  clearConfigTopLevelDeletionIntent(config, ["advisor"]);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
 }
 /**
  * The live config retains the address of the socket Bun actually opened, while
@@ -531,8 +540,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
-    const onDisk = readRawConfigJson();
-    sanitizeRemovedOpenCodeFreeForLoad(onDisk);
+    const onDisk = readRawConfigJson(true);
     const pauseBefore = snapshotAutoPauseFingerprints(config);
     const baseline = liveConfigBaseline.get(config);
     let diskDeletedKeys = new Set<string>();

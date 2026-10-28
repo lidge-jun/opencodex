@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
@@ -56,6 +57,25 @@ export function loadCodexAccountStore(): LegacyCodexAccountStore {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export function inspectLocalCodexCredentialSlots(raw: Record<string, unknown> | null): { count: number; sourcePaths: string[] } {
+  if (raw === null) return { count: 0, sourcePaths: [] };
+  let count = 0;
+  const sourcePaths: string[] = [];
+  for (const value of Object.values(raw)) {
+    let credential: CodexAccountCredentials | undefined;
+    if (isCredentialRecord(value)) {
+      credential = value.credential;
+      if (!credential && value.deletedAt === undefined) throw new Error("Unrecognized Codex credential record");
+    } else if (isCredential(value)) credential = value;
+    else throw new Error("Invalid Codex credential record");
+    if (credential) {
+      count += 1;
+      if (credential.sourceAuthPath) sourcePaths.push(credential.sourceAuthPath);
+    }
+  }
+  return { count, sourcePaths };
 }
 
 function isCredential(value: unknown): value is CodexAccountCredentials {
@@ -176,7 +196,7 @@ function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  publishCredentialSync(() => atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n"));
   notifyCodexStoreLoaded(store);
 }
 
@@ -1377,12 +1397,15 @@ async function resolveCodexToken(
     }
     const res = await fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
         client_id: CHATGPT_CLIENT_ID,
+        grant_type: "refresh_token",
         refresh_token: lockedCred.refreshToken,
-      }).toString(),
+      }),
       signal,
     });
     if (!res.ok) {
@@ -1393,7 +1416,10 @@ async function resolveCodexToken(
       noteChatgptRefreshFailure("pool", res.status, failure, poolAccountLogLabel(id));
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
-    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+    const data = (await res.json()) as { access_token?: unknown; refresh_token?: string; expires_in?: unknown };
+    if (!data || typeof data !== "object" || typeof data.access_token !== "string" || !data.access_token.trim()) {
+      throw new Error("Codex token refresh response missing access_token");
+    }
     // Guard against a missing/non-finite/negative expires_in (malformed upstream
     // response): a NaN expiry would never compare as expired, and a negative
     // duration would stamp an already-past expiry — both block refresh semantics.

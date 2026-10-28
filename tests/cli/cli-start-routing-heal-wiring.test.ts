@@ -46,7 +46,7 @@ describe("handleStart routing-healer wiring", () => {
     const stopAt = cleanup.indexOf("try { routingHealer?.stop(); } catch { /* best-effort */ }");
     expect(stopAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(cleanup.indexOf("revertSystemEnv()"));
-    expect(stopAt).toBeLessThan(cleanup.indexOf("restoreNativeCodex()"));
+    expect(stopAt).toBeLessThan(cleanup.indexOf("restoreNativeCodex({ withWriteGuard: restoreGuard.run })"));
     expect(stopAt).toBeLessThan(cleanup.indexOf("stripGrokConfig()"));
     expect(stopAt).toBeGreaterThan(cleanup.indexOf("cleaned = true;"));
   });

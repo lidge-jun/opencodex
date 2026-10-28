@@ -29,6 +29,8 @@ const FILENAME = "provider-account-quota-cache.json";
  */
 const DISK_MAX_AGE_MS = 6 * 60 * 60_000;
 const PERSIST_DEBOUNCE_MS = 250;
+/** Match the reset ledger's maximum deferral under sustained quota observations. */
+const MAX_PERSIST_DEFERRAL_MS = 1_000;
 
 type DiskFile = {
   version: 1;
@@ -38,6 +40,7 @@ type DiskFile = {
 };
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistStartedAt: number | null = null;
 
 /** Read the snapshot. Returns an empty map for a missing, corrupt or stale file. */
 export function readPersistedAccountQuotas(now = Date.now()): Map<string, ProviderQuota> {
@@ -86,14 +89,19 @@ export function readPersistedKiroVerdicts(now = Date.now()): Map<string, KiroPer
   return result;
 }
 
-/** Write the snapshot, debounced. Best-effort: a failed write is not an error. */
+/** Debounce snapshots without starving writes under load. Failures remain best-effort. */
 export function schedulePersistAccountQuotas(
   rows: () => Iterable<[string, ProviderQuota | KiroPersistedQuota]>,
   verdicts: () => Iterable<[string, KiroPersistedVerdict]> = () => [],
 ): void {
+  const now = performance.now();
+  persistStartedAt ??= now;
+  const delay = Math.max(0, Math.min(PERSIST_DEBOUNCE_MS,
+    MAX_PERSIST_DEFERRAL_MS - (now - persistStartedAt)));
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
+    persistStartedAt = null;
     try {
       const out: Record<string, ProviderQuota> = {};
       for (const [key, quota] of rows()) out[key] = quota;
@@ -106,12 +114,12 @@ export function schedulePersistAccountQuotas(
     } catch {
       // Best-effort persistence only.
     }
-  }, PERSIST_DEBOUNCE_MS);
+  }, delay);
 }
 
 /** Test seam: drop any pending write so a suite cannot leak one into the next file. */
 export function cancelPendingAccountQuotaPersist(): void {
-  if (!persistTimer) return;
-  clearTimeout(persistTimer);
+  if (persistTimer) clearTimeout(persistTimer);
   persistTimer = null;
+  persistStartedAt = null;
 }

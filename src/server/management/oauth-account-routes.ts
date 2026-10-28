@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -214,12 +215,12 @@ export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
   return true;
 }
 
-function canStartManagementOAuth(provider: string, principal: ManagementContext["principal"]): boolean {
-  return provider !== "meta-muse" || principal === "gui-session";
+function canStartManagementOAuth(provider: string, ctx: ManagementContext): boolean {
+  return provider !== "meta-muse" || hasHumanDashboardSession(ctx);
 }
 
-function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
-  if (canStartManagementOAuth(provider, principal)) return null;
+function metaMuseConsentRequired(provider: string, ctx: ManagementContext): Response | null {
+  if (canStartManagementOAuth(provider, ctx)) return null;
   return jsonResponse({
     error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
     code: "oauth_consent_required",
@@ -246,7 +247,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     // Discovery reflects this principal's admission; hiding a button is not the
     // consent boundary, which remains independently enforced on both POST routes.
-    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, principal)) });
+    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, ctx)) });
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.
@@ -273,7 +274,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // and reauth skip the import. All management login paths require the dashboard
     // principal before credential acquisition. A raw token proves administration,
     // not acknowledgement; caller-supplied headers are not consent evidence.
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
@@ -390,7 +391,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string; flowId?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);

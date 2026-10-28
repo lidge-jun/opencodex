@@ -28,8 +28,8 @@
  */
 import { writeFileSync } from "node:fs";
 import { loadConfig } from "../config";
+import { ClientPathError } from "../clients/client-path";
 import {
-  ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
   buildClientConfigText,
@@ -39,6 +39,7 @@ import {
   type ExportModel,
 } from "../clients/config-export";
 import { opencodeCatalogFromProxyRows, type OpencodeProxyModelRow } from "./opencode";
+import { integrationModelNames } from "./integration-input";
 import type { OcxConfig } from "../types";
 import {
   CliUsageError,
@@ -54,7 +55,7 @@ import {
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--json] [--out <path>] [--force]`;
+  ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--model-names <alias|routed>] [--json] [--out <path>] [--force]`;
 
 export interface ExportCommandDeps extends RuntimeApiDeps {
   /** Live config seam; tests inject a fixture instead of reading the user's config. */
@@ -94,6 +95,9 @@ export function exportModelsFromProxyRows(
     if (entry.maxTokens !== undefined) model.maxTokens = entry.maxTokens;
     if (entry.maxInputTokens !== undefined) model.maxInputTokens = entry.maxInputTokens;
     if (entry.reasoningEfforts !== undefined) model.reasoningEfforts = [...entry.reasoningEfforts];
+    if (entry.supportsThinkingToggle !== undefined) model.supportsThinkingToggle = entry.supportsThinkingToggle;
+    if (entry.supportsReasoningEffort !== undefined) model.supportsReasoningEffort = entry.supportsReasoningEffort;
+    if (entry.defaultThinkingEnabled !== undefined) model.defaultThinkingEnabled = entry.defaultThinkingEnabled;
     if (entry.defaultReasoningEffort) model.defaultReasoningEffort = entry.defaultReasoningEffort;
     if (entry.inputModalities && entry.inputModalities.length > 0) {
       model.inputModalities = [...entry.inputModalities];
@@ -161,6 +165,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
   return runCliAction(async () => {
     const args = [...argv];
     const client = parseClient(args);
+    const modelNames = integrationModelNames(args, client, "export", USAGE);
     const wantsJson = takeFlag(args, "--json");
     const force = takeFlag(args, "--force");
     const out = takeOption(args, "--out");
@@ -169,13 +174,15 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const spec = EXPORT_CLIENTS[client];
     const root = await runtimeBaseUrl(deps);
     let built: { document: unknown; text: string };
-    if (client === "raycast" || client === "droid" || client === "qoder") {
+    if (modelNames !== undefined || client === "t3code" || client === "raycast" || client === "droid" || client === "qoder" || client === "qoder-cn" || client === "workbuddy" || client === "workbuddy-ai") {
       // The dial address alone cannot distinguish a wildcard authenticated bind
       // from loopback. Let the live server resolve its admission/listener policy;
       // saved config can differ from the process serving this request.
+      const passive = client === "hermes" || client === "commandcode";
+      const query = `client=${client}${passive ? "&preview=1" : ""}${modelNames === undefined ? "" : `&modelNames=${modelNames}`}`;
       const exported = await runtimeRequest<{
         client: string; format: string; config: unknown; text: string;
-      }>(`/api/client-config?client=${client}`, {}, { ...deps, baseUrl: root });
+      }>(`/api/client-config?${query}`, {}, { ...deps, baseUrl: root });
       if (!exported || exported.client !== client || exported.format !== spec.format
         || typeof exported.text !== "string" || exported.config === undefined) {
         throw new RuntimeApiError(`Management API returned an unexpected ${client} export payload.`, 502, null);

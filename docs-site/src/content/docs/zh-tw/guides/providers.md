@@ -263,7 +263,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 105 個 preset：84 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 106 個 preset：85 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -348,7 +348,7 @@ Replay 需要明確的 `store: false`、完整輸入且僅含用戶端執行的�
 
 在標準 `opencode-zen` 提供者中，使用 API 金鑰驗證及官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 時，Gemini 會在預設 `googleMode: ai-studio` 下自動使用 Google 原生 API。Zen 模型 ID 維持不變，包括沒有 `-tiered` 後綴的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影響。載入已儲存的設定時，僅忽略這些原生模型符合條件的舊 Chat/Responses 覆寫設定，以及符合條件的 Responses 專用 `image_generation` 託管工具偏好。自訂提供者、非金鑰驗證路由及其他偏好維持不變。
 
-**已移除 `opencode-free` 支援。** OpenCode 上游免費層級的限制使所有模型都回傳 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。載入既有設定時，會在記憶體中停用相關項目與相依的模型參照，每個程序只警告一次，不修改檔案。如果它原為預設供應商，將以標準 OpenAI OAuth 路徑作為預設。請使用 `opencode-go`、需要 key 的 `opencode-zen` 或其他供應商。[OpenCode Zen 條款](https://opencode.ai/docs/zen/)。
+**已移除 `opencode-free` 支援。** OpenCode 上游免費層級的限制使所有模型都回傳 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。載入既有設定時，會在記憶體中停用相關項目與相依的模型參照，每個程序只警告一次，載入時不修改檔案。下次儲存設定時，這些項目及參照將從 config.json 中移除。儲存前，原始檔案會自動保留到同目錄的 `config.json.pre-opencode-free-removal.bak`；如果該名稱已被占用，則使用唯一的同層檔名。位元組完全相同的獨立副本僅在能夠驗證其僅限擁有者存取時才會重用，否則會在旁邊寫入新的受保護副本。既有檔案不會覆寫。首次載入重疊時，可能留下多個相同的受保護副本。警告會顯示復原副本的路徑。如需復原（例如降級後），請將該副本複製回 config.json 並覆寫。如果自動複製失敗，警告會提示立即複製 config.json。如果它原為預設供應商，將以標準 OpenAI OAuth 路徑作為預設。請使用 `opencode-go`、需要 key 的 `opencode-zen` 或其他供應商。[OpenCode Zen 條款](https://opencode.ai/docs/zen/)。 被動讀取只套用記憶體中的停用，不建立副本或顯示警告。
 
 保留正常的 Claude Desktop 指派與預設值。來源模型允許清單變空的規則會停用；注入模型遭移除時，也會停用原生子代理同步。後續儲存設定時不會還原已移除的參照，並會保留正常的同時編輯。
 
@@ -533,6 +533,9 @@ GPT-5.6 Sol/Terra/Luna 會預置在 provider fallback list 中，因此即使即
 | Codex 登入（Pool 或 Direct） | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` 加 `*-pro` | 922,000（922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` | 1,000,000 |
 
 原生 GPT-5.6 條目保留固定的上游 reasoning ladder，例如 Luna 有 `max` 但沒有 `ultra`。路由條目使用各
@@ -550,7 +553,7 @@ Antigravity／Cloud Code Assist 模式）、`azure` / `azure-openai`、`kiro`、
 key／subscription-token gateway。**Cloudflare AI Gateway** 需要在 URL 填入 account 與 gateway id。
 
 Copilot 的 catalog 混合多種 wire：模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、
-`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）會拒絕 agent traffic 的
+`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、 `gpt-6.1-sol`、 `gpt-6.1-terra`、 `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）會拒絕 agent traffic 的
 `/chat/completions`，因此 opencodex 會依內建預設把這些模型路由到 Responses API；其他 Copilot 模型
 仍使用 chat completions。優先順序為：hard wire pin → 你明確設定的
 [`modelAdapters`](/zh-tw/reference/configuration/providers/) → registry default → provider-wide adapter。

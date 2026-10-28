@@ -9,8 +9,14 @@ export const isChatRecord = (value: unknown): value is Rec =>
 
 const REASONING_CONTENT_FIELD_BYTES = Buffer.byteLength('"reasoning_content":', "utf8");
 
-const isDeepSeekThinkingModel = (modelId: string): boolean =>
+export const isDeepSeekThinkingModel = (modelId: string): boolean =>
   /(?:^|\/)deepseek-(?:v\d+(?:\.\d+)*-(?:flash|pro)|flash|pro)(?:$|[-_:])/i.test(modelId);
+
+export const isReflectionThinkingModel = (modelId: string): boolean =>
+  /(?:^|\/)(?:reflection|stealth)(?:$|[-_:/.])/i.test(modelId);
+
+export const isThinkingModelFamily = (modelId: string): boolean =>
+  isDeepSeekThinkingModel(modelId) || isReflectionThinkingModel(modelId);
 
 /** DeepSeek thinking tool replay is a model contract, independent of the gateway's name. */
 export function chatReasoningReplayPolicy(provider: OcxProviderConfig, modelId: string): {
@@ -19,7 +25,7 @@ export function chatReasoningReplayPolicy(provider: OcxProviderConfig, modelId: 
   // Match whole model-family tokens, including dotted versions, namespace and deployment suffixes.
   // Legacy chat/reasoner and distilled R1 models do not share the thinking tool-call contract.
   const preserve = provider.preserveReasoningContentModels === undefined
-    ? isDeepSeekThinkingModel(modelId)
+    ? isThinkingModelFamily(modelId)
     : modelInList(provider.preserveReasoningContentModels, modelId);
   return {
     preserve,
@@ -59,21 +65,26 @@ export function planNativeChatReasoningReplay(
   const plans: ReplayMessagePlan[] = [];
   let serializedBytes = 0;
   for (const message of messages) {
-    if (!isChatRecord(message) || message.role !== "assistant"
-        || (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0)) continue;
-    const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    // DeepSeek's tools contract covers all prior assistant turns, even plain answers.
-    // Those turns have no call id for original replay; only the configured fallback applies.
-    if (calls.length === 0 && !(hasTools && isDeepSeekThinkingModel(modelId))) continue;
-    const cached = new Set<string>();
-    for (const tool of calls) {
-      if (!isChatRecord(tool) || typeof tool.id !== "string") continue;
-      const text = peekReasoningForCall(tool.id, scope);
-      if (text) cached.add(text);
+    if (!isChatRecord(message) || message.role !== "assistant") continue;
+    if (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) continue;
+    let parts: string[];
+    if (typeof message.reasoning === "string" && message.reasoning.length > 0) {
+      parts = [message.reasoning];
+    } else {
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      // DeepSeek tools contract covers prior assistant turns when tools are present.
+      // Thinking models like reflection/beam require reasoning replay even without tools.
+      if (calls.length === 0 && !(hasTools && isDeepSeekThinkingModel(modelId)) && !isReflectionThinkingModel(modelId)) continue;
+      const cached = new Set<string>();
+      for (const tool of calls) {
+        if (!isChatRecord(tool) || typeof tool.id !== "string") continue;
+        const text = peekReasoningForCall(tool.id, scope);
+        if (text) cached.add(text);
+      }
+      parts = cached.size > 0
+        ? [...cached]
+        : policy.placeholder ? [" "] : [];
     }
-    const parts = cached.size > 0
-      ? [...cached]
-      : policy.placeholder ? [" "] : [];
     if (parts.length === 0) continue;
 
     // The envelope delta around the joined value is exact for the plain JSON the Chat

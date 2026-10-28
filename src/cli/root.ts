@@ -12,6 +12,7 @@ import { printFullUsage, printSubcommandUsage, printUsage, printVersion } from "
 import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
+import { parseSyncExpectation, SYNC_EXPECTATION_USAGE_EXIT } from "./sync-expectation";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
@@ -37,6 +38,8 @@ export interface CliHead {
 export function parseCliHead(argv: string[]): CliHead {
   const command = argv[0];
   const args = argv;
+  // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
+  if (command === "codex") return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }
@@ -141,6 +144,14 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       if (uninstallError) {
         console.error(uninstallError);
         process.exit(2);
+      }
+      // #7694: a malformed pinned sync is refused before any preflight reads or repairs anything.
+      if (head.command === "sync") {
+        const pinned = parseSyncExpectation(head.args.slice(1));
+        if (!pinned.ok) {
+          console.error(pinned.message);
+          process.exit(SYNC_EXPECTATION_USAGE_EXIT);
+        }
       }
       await maybeNoticeVersionSkew(head.command, head.args);
       maybeAutoRestoreCodexShim(head.command, head.args);

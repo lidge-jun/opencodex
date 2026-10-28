@@ -104,6 +104,10 @@ export interface CatalogModel {
   description?: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   /** Exact CCA family evidence, retained through the in-memory discovery cache. */
   antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high", string>>;
   /** Suppress only catalog synthesis of a missing max rung; provider-declared max survives. */
@@ -133,6 +137,8 @@ export interface CatalogModel {
   supportsServiceTier?: boolean;
   /** Captured eligible service-tier wire explicitly maps ultrafast to ultrafast. */
   supportsUltraFastTier?: boolean;
+  /** Explicitly verified exact Flex wire and foreign caller-tier forwarding on this route. */
+  supportsFlexTier?: boolean;
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
@@ -184,15 +190,11 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   "opencode-go/mimo-v2-omni",
   "opencode-go/mimo-v2-pro",
   /*
-   * DeepSeek retired `deepseek-v4-pro` on 2026-09-14 04:00 UTC and routes its requests to
-   * V4.1-Flash (api-docs.deepseek.com/news/news260910). Deleting the registry rows removes
-   * the model on providers that publish a static roster, but every provider below discovers
-   * its models live — there, a deleted row does not remove anything, it only strips the
-   * context window, the effort ladder and the text-only hint, so the retired model would
-   * keep appearing with its capabilities broken. Excluding the slug is what actually takes
-   * it out of the routed catalog.
+   * These third-party exclusions originated in the superseded V4 Pro retirement plan.
+   * First-party service continues (api-docs.deepseek.com/updates/); these gateway routes
+   * remain excluded pending provider-specific verification. Live discovery can reintroduce
+   * a model removed from a static registry, so these exclusions act on the routed catalog.
    */
-  "deepseek/deepseek-v4-pro",
   "opencode-go/deepseek-v4-pro",
   "command-code/deepseek-deepseek-v4-pro",
   "commandcode/deepseek-deepseek-v4-pro",

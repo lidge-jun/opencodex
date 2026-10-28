@@ -11,6 +11,16 @@ description: プロバイダー エントリ、認証、エンドポイント、
 
 この推定は既定で無効です。プロバイダーごとに `inferContextWindow: true` で有効にします。未設定の場合、ウィンドウがないモデルは有効な Context cap、次に 128k を使います。
 
+## GPT-6.1 Terra
+
+[GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) は GPT-5.6 Terra の後継として 2026年10月26日に公開されました。`gpt-6.1-terra` は `gpt-5.6-terra` と並行して利用でき、既定モデルやサブエージェントのモデル一覧は変更しません。GitHub Copilot では Responses を使用します。OpenRouter の ID は `openai/gpt-6.1-terra` で、コンテキストは 1,050,000、100万トークンあたり入力 $1.00、出力 $5.00 です。
+
+ネイティブ Codex：既定コンテキスト 500,000、長文コンテキスト上限 872,000、既定 effort は `low`。段階は `low`、`medium`、`high`、`xhigh`、`max`、`ultra` です。ネイティブの `ultra` は通信時に `max` として送信します。ネイティブ行の高速モードは Fast のみです。
+
+[OpenAI API](https://developers.openai.com/api/docs/models/gpt-6.1-terra)：コンテキスト 1,050,000、最大出力 128,000。入力はテキストと画像、出力はテキスト。知識カットオフは 2026-06-01 です。effort は `none`、`low`、`medium`（既定）、`high`、`xhigh`、`max`。エンドポイントは `v1/responses` と `v1/chat/completions` ですが、ツール呼び出しには Responses が必要です。
+
+100万トークンあたり入力 $1.00、キャッシュ入力 $0.05、キャッシュ書き込み $1.25（30分）、出力 $5.00。入力が 272,000 トークンを超える場合、リクエスト全体の入力・キャッシュは 2×、出力は 1.5× となり、それぞれ $2.00 / $0.10 / $2.50 / $7.50 です。Fast モードは 2× です。
+
 ## 初回登録時のモデル選択
 
 新しい非 OAuth 接続では、信頼できるモデル一覧の取得が完了するまでモデルの公開を保留します。Models タブの重複しないモデル行が20個以上なら、モデルのスイッチをすべて OFF にします。プロバイダー自体は ACTIVE のままです。実際の認証方式が OAuth または ChatGPT ログインなら既定値を維持します。
@@ -52,6 +62,8 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動ピンが劣化したとき、`hold` は警告を出して使い続け、`detour-new-threads` は新しいスレッドだけを別アカウントへ置きます。送信済みのターンは再送しません。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 受信する JSON 本文 1 件のデコード後のサイズを制限するバイト単位の設定です。省略または `0` でデフォルトの 256 MiB を維持し、設定値は 1〜512 MiB に制限されます。変更後は再起動が必要です。超過時はコード `inbound_body_too_large` のローカル HTTP 413 を返します。適用される上限が 256 MiB を超えると `maxConcurrentInboundBodyBytes` の共有ゲートも有効になり、リクエスト単位の上限だけを上げても共有予算は増えません。対象ルートと詳細は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | バイト単位の任意のトップレベル共有受け入れ予算です。適用される `maxInboundBodyBytes` が 256 MiB を超える場合にのみ有効です。省略、`0`、無効な値は従来のデフォルト 512 MiB を使います。有効な正の整数は使用時に 512 MiB〜2 GiB (`536870912`〜`2147483648`) に制限されます。再起動が必要で、同一プロセス内のすべてのリスナーが 1 つの予算を共有します。受け入れの計上用であり、メモリの事前割り当て、RSS 上限、RAM に応じた自動調整ではありません。2 GiB には運用者の明示的な選択が必要です。設定例、キューとレスポンスのライフサイクルに伴う制約、デフォルトで解析前の完全な 512 MiB アップロードが 1 件だけになる理由は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
@@ -126,7 +138,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `modelReasoningEfforts?` | `Record<string, string[]>` |モデルごとのラベル。空のリストは努力制御を非表示にします。 |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` |モデルを `false` に設定して、概要の広告を停止し、概要配信フィールドを削除します。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` |モデルごとの応答配信列挙型。既存の配信フィールドを書き換えます。 |
-| `modelAdapters?` | `Record<string, string>` | 混合配線ゲートウェイのモデルごとの `openai-chat` または `openai-responses` 配線オーバーライド。明示的なエントリはレジストリのデフォルトを破ります。DeepSeek のプリセットは `deepseek-v4-flash` のネイティブ Responses を選択でき、GitHub Copilot は モデル (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) を Responses 専用デフォルトとして宣言します。これらのモデルはエージェント トラフィックで `/chat/completions` を拒否するためです。`gpt-5.4-nano` のようなビルトイン デフォルトのないモデルはここでオプトインできます。単線アップストリーム ピンと正規の ChatGPT 転送はオーバーライドを拒否します。 |
+| `modelAdapters?` | `Record<string, string>` | 混合配線ゲートウェイのモデルごとの `openai-chat` または `openai-responses` 配線オーバーライド。明示的なエントリはレジストリのデフォルトを破ります。DeepSeek のプリセットは `deepseek-v4-flash` のネイティブ Responses を選択でき、GitHub Copilot は モデル (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) を Responses 専用デフォルトとして宣言します。これらのモデルはエージェント トラフィックで `/chat/completions` を拒否するためです。`gpt-5.4-nano` のようなビルトイン デフォルトのないモデルはここでオプトインできます。単線アップストリーム ピンと正規の ChatGPT 転送はオーバーライドを拒否します。 |
 | xAI Responses オプトイン（ダッシュボード） | スイッチ | `xai` のみで、`grok-4.5` と `grok-4.6` の `modelAdapters` エントリを原子的に設定または削除します。片方だけの場合は、次のスイッチ操作で両方が正規化されるまで混合状態を表示します。他のオーバーライドと tier 動作は変わりません。 Grok 4.7 は OAuth でレジストリの既定値により Responses を使用し、明示的な `modelAdapters["grok-4.7"] = "openai-chat"` で Chat に切り替えられます。 |
 | `xaiResponsesXSearch?` | `boolean` | デフォルトでは無効です。xAI Responses の宛先では、最終的なリクエスト正規化後もライブの `web_search` ツールが残っている場合にのみ、プロバイダーがホストする `x_search` 宣言を追加します。既存の宣言は重複させず、呼び出し元の `tool_choice` / `allowed_tools` セレクターの範囲を拡張することもありません。また、これは `search.xSearch` オプションを持つウェブ検索サイドカーとは別です。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace を予約する非 forward Responses gateway 向けの完全一致モデル opt-in。現在は `["image_generation"]` のみを受け付けます。一致したモデルは `openai-responses` wire を使い、その hosted tool をサポートする必要があります。競合するクライアント `image_gen` 宣言を除去し、呼び出し元の tool choice を維持するため selector も書き換えます。OpenAI API の仮想 `-pro` モデルでは、まず選択した公開 ID に一致させ、解決後のベース wire-model ID をフォールバックとして使用します。`modelAdapters` は公開 ID、次にベース ID の順に解決し、後者の結果が最終 wire を決めます。未設定のモデルは通常の alias 動作を維持します。 |

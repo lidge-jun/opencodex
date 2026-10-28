@@ -74,6 +74,9 @@ import {
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
+import {
+  assertClientSyncExpectation, ClientSyncExpectationError, isClientSyncLockBusy, type ClientSyncExpectation,
+} from "./sync-expectation";
 import { overlayHomeCodexSettings } from "../link/codex-settings";
 import {
   clearHomeCodexSettingsRecord,
@@ -840,6 +843,21 @@ export interface ConnectedSyncResult {
   appliedRecord?: HomeCodexSettingsRecord;
   /** The Home's settings were injected but their record could not be written (OCX-6). */
   applyRecordFailed?: true;
+  /**
+   * The connection this sync ran under, read inside its lock and compare-and-swapped on every
+   * write. Callers decide link-vs-hub wording and restart ownership from this, never from a read
+   * they made before the lock.
+   */
+  connection: OcxClientConnectionConfig;
+}
+
+export interface ConnectedSyncOptions {
+  restartCodex?: boolean;
+  /**
+   * #7694: refuse unless this is the connection found under the lock. A mismatch throws
+   * `ClientSyncExpectationError` before any request or write.
+   */
+  expect?: ClientSyncExpectation;
 }
 
 /**
@@ -848,18 +866,36 @@ export interface ConnectedSyncResult {
  * never interleaves with another apply, and its record names what its own injection wrote.
  */
 export async function syncConnectedClient(
-  options: { restartCodex?: boolean } = {},
+  options: ConnectedSyncOptions = {},
   deps: ClientConnectDeps = {},
 ): Promise<ConnectedSyncResult> {
-  return withLinkApply(() => syncConnectedClientUnlocked(options, deps), deps.linkApplyLockPath);
+  let checked = false;
+  try {
+    return await withLinkApply(() => syncConnectedClientUnlocked(options, deps, () => { checked = true; }), deps.linkApplyLockPath);
+  } catch (error) {
+    // #7694: a pinned sync that cannot take a lock its check needs (a link connect holds the apply
+    // lock across its network reads) is refused as pending, with nothing written; it never surfaces
+    // as a generic failure the caller cannot tell from a broken sync.
+    if (options.expect && !checked && isClientSyncLockBusy(error)) {
+      throw new ClientSyncExpectationError(options.expect, "pending_operation");
+    }
+    throw error;
+  }
 }
 
 async function syncConnectedClientUnlocked(
-  _options: { restartCodex?: boolean } = {},
+  options: ConnectedSyncOptions = {},
   deps: ClientConnectDeps = {},
+  markChecked: () => void = () => {},
 ): Promise<ConnectedSyncResult> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    // The expectation is checked by the read that selects this path; everything after is
+    // compare-and-swapped against the connection it passed (#7694).
+    if (options.expect) {
+      assertClientSyncExpectation(options.expect);
+      markChecked();
+    }
     assertNoClientDisconnectPending();
     const state = readClientConnectionState();
     if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("client_sync_unavailable");
@@ -949,6 +985,7 @@ async function syncConnectedClientUnlocked(
     ...(homeSettings ? { homeSettings } : {}),
     ...(appliedRecord ? { appliedRecord } : {}),
     ...(applyRecordFailed ? { applyRecordFailed } : {}),
+    connection: next,
   };
 }
 

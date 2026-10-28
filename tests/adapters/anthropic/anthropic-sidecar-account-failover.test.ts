@@ -24,6 +24,7 @@ let releaseSpendHome: (() => void) | undefined;
 let handleResponses: typeof import("../../../src/server/responses")["handleResponses"];
 let observedKeys: string[] = [];
 let sidecarMode = false;
+let restoreModuleMocks: (() => void) | undefined;
 
 function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
   return {
@@ -43,7 +44,13 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
 }
 
 beforeAll(async () => {
-  const actualResolver = await import("../../../src/server/adapter-resolve");
+  // Capture values: Bun's module namespaces are live and mock.restore() only restores spies.
+  const actualResolver = { ...await import("../../../src/server/adapter-resolve") };
+  const actualWebSearch = { ...await import("../../../src/web-search") };
+  restoreModuleMocks = () => {
+    mock.module("../../../src/server/adapter-resolve", () => actualResolver);
+    mock.module("../../../src/web-search", () => actualWebSearch);
+  };
   const actualResolveAdapter = actualResolver.resolveAdapter;
   mock.module("../../../src/server/adapter-resolve", () => ({
     ...actualResolver,
@@ -128,6 +135,7 @@ afterAll(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   mock.restore();
+  restoreModuleMocks?.();
 });
 
 test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooling is disabled", async () => {

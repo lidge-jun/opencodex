@@ -90,6 +90,10 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   kilo: "integrations.semantics.kilo",
   droid: "integrations.semantics.droid",
   qoder: "integrations.semantics.qoder",
+  "qoder-cn": "integrations.semantics.qoderCn",
+  "workbuddy": "integrations.semantics.workbuddy",
+  "workbuddy-ai": "integrations.semantics.workbuddyAi",
+  t3code: "integrations.semantics.t3code",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -113,6 +117,10 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   kilo: "integrations.tab.kilo",
   droid: "integrations.tab.droid",
   qoder: "integrations.tab.qoder",
+  "qoder-cn": "integrations.tab.qoderCn",
+  "workbuddy": "integrations.tab.workbuddy",
+  "workbuddy-ai": "integrations.tab.workbuddyAi",
+  t3code: "integrations.tab.t3code",
 };
 
 type FileIntegrationPageProps = {
@@ -121,10 +129,14 @@ type FileIntegrationPageProps = {
   active?: boolean;
   profileId?: number;
   profileLabel?: string;
+  /** A named Hermes profile (#7674); omitted for the default profile. */
+  hermesProfile?: string;
+  /** Called whenever this page re-reads its state, so a surrounding list can follow. */
+  onRefresh?: () => void;
 };
 
 export default function FileIntegrationPage(props: FileIntegrationPageProps) {
-  return <FileIntegrationControls key={JSON.stringify([props.apiBase, props.client, props.profileId])} {...props} />;
+  return <FileIntegrationControls key={JSON.stringify([props.apiBase, props.client, props.profileId, props.hermesProfile])} {...props} />;
 }
 
 function FileIntegrationControls({
@@ -133,9 +145,12 @@ function FileIntegrationControls({
   active = true,
   profileId,
   profileLabel,
+  hermesProfile,
+  onRefresh,
 }: FileIntegrationPageProps) {
   const t = useT();
-  const scopeKey = profileId === undefined ? client : `${client}:${profileId}`;
+  const scopeKey = profileId !== undefined ? `${client}:${profileId}`
+    : hermesProfile !== undefined ? `${client}/${hermesProfile}` : client;
   const [pending, setPending] = useState(false);
   const [droidReasoningDraft, setDroidReasoningDraft] = useState<{
     scopeKey: string;
@@ -161,17 +176,17 @@ function FileIntegrationControls({
   }, []);
 
   const fetchState = useCallback(
-    (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal, profileId),
-    [apiBase, client, profileId],
+    (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal, profileId, hermesProfile),
+    [apiBase, client, profileId, hermesProfile],
   );
   const fetchHistory = useCallback(
-    async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, client, signal, profileId)).operations,
-    [apiBase, client, profileId],
+    async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, client, signal, profileId, hermesProfile)).operations,
+    [apiBase, client, profileId, hermesProfile],
   );
 
   const stateResource = useDataSurface<IntegrationStatus>(
     `integration-state:${apiBase}:${scopeKey}`,
-    [apiBase, client, profileId],
+    [apiBase, client, profileId, hermesProfile],
     fetchState,
     {
       isEmpty: () => false,
@@ -181,7 +196,7 @@ function FileIntegrationControls({
   );
   const historyResource = useDataSurface<IntegrationJournalRow[]>(
     `integration-journal:${apiBase}:${scopeKey}`,
-    [apiBase, client, profileId],
+    [apiBase, client, profileId, hermesProfile],
     fetchHistory,
     {
       isEmpty: rows => rows.length === 0,
@@ -192,12 +207,14 @@ function FileIntegrationControls({
 
   const candidate = stateResource.state.data ?? null;
   const status = candidate && (profileId === undefined
-    || (candidate.profileId === profileId && typeof candidate.enabled === "boolean")) ? candidate : null;
+    || (candidate.profileId === profileId && typeof candidate.enabled === "boolean"))
+    && candidate.hermesProfile === hermesProfile ? candidate : null;
   const history = historyResource.state.data ?? [];
 
   const refresh = () => {
     void stateResource.refresh();
     void historyResource.refresh();
+    onRefresh?.();
   };
 
   const resetDroidDraft = () => {
@@ -222,7 +239,7 @@ function FileIntegrationControls({
     previewAbortRef.current = controller;
     setPlannedMutation({ operation, plan: null, loading: true, failure: null });
     try {
-      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId, defaultsSnapshot);
+      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId, defaultsSnapshot, hermesProfile);
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
       setPlannedMutation({ operation, plan, loading: false, failure: null, droidReasoningDefaults: defaultsSnapshot });
@@ -254,6 +271,7 @@ function FileIntegrationControls({
         enabled: plan.operation !== "disable",
         overwriteConflict: plan.operation === "overwrite",
         profileId,
+        hermesProfile,
         binding: bindingFor(plan),
         ...(plan.operation !== "disable" && plannedMutation?.droidReasoningDefaults !== undefined
           ? { droidReasoningDefaults: plannedMutation.droidReasoningDefaults }
@@ -322,7 +340,7 @@ function FileIntegrationControls({
         <IntegrationStateBadge
           state={status.state}
           installed={status.installed}
-          id={`integration-state-${client}${profileId === undefined ? "" : `-${profileId}`}`}
+          id={`integration-state-${client}${profileId === undefined ? "" : `-${profileId}`}${hermesProfile === undefined ? "" : `-${hermesProfile}`}`}
         />
         <Switch
           on={enabled}
@@ -439,6 +457,7 @@ function FileIntegrationControls({
           apiBase={apiBase}
           row={restoring}
           profileId={profileId}
+          hermesProfile={hermesProfile}
           onClose={() => setRestoring(null)}
           onRestored={() => { if (client === "droid") resetDroidDraft(); else refresh(); }}
           onReconcile={refresh}
@@ -457,7 +476,7 @@ function FileIntegrationControls({
           onClose={() => setDeleting(null)}
           onConfirm={async () => {
             try {
-              await deleteJournalEntry(apiBase, deleting.opId, undefined, profileId);
+              await deleteJournalEntry(apiBase, deleting.opId, undefined, profileId, hermesProfile);
             } catch (error) {
               // The requested end state is already true when another tab
               // removed this row. Reconcile the view instead of keeping a

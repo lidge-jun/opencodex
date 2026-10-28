@@ -2,17 +2,16 @@ import { getDefaultConfig } from "./proxy-env";
 import { DESKTOP_FAMILIES } from "../claude/desktop-profile";
 
 const REMOVED_PROVIDER = "opencode-free";
-let warned = false;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
 }
 
-/** Load-only projection, like the OpenCode wire upgrades: never rewrites config.json. */
-export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
+/** Load projection, like the OpenCode wire upgrades: the next configuration save persists it. */
+export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): boolean {
   const config = record(parsed);
-  if (!config) return;
+  if (!config) return false;
   const providers = record(config.providers);
   const retiredProviders = new Set([REMOVED_PROVIDER]);
   const retiredRoutes = new Set<string>();
@@ -95,6 +94,17 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
     delete config.syncCodexSubagentDefaults;
     delete config.injectionEffort;
   }
+  // These sidecars default on or inherit global settings when absent. Preserve the
+  // off switch at both supported owners before pruning their retired model target.
+  for (const owner of [config, record(config.claudeCode)]) {
+    for (const key of ["visionSidecar", "webSearchSidecar"]) {
+      const sidecar = record(owner?.[key]);
+      if (!sidecar || !retired(sidecar.model)) continue;
+      sidecar.enabled = false;
+      delete sidecar.model;
+      changed = true;
+    }
+  }
   for (const [key, value] of Object.entries(config)) {
     if (key === "providers" || !/model|provider|combo|routing|claudeCode|fallback|redirect|compaction|autoReview|advisor|tokenGuardian|images|codexRoleTiers|sidecar|shadowCallIntercept/i.test(key)) continue;
     const next = prune(value, key === "claudeCode");
@@ -128,8 +138,5 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
       if (depletedFallbacks.has(model) && Array.isArray(chain) && chain.length === 0) delete fallbacks[model];
     }
   }
-  if (changed && !warned) {
-    warned = true;
-    console.warn("opencode-free support was removed because every free model now returns 403 permission_denied under OpenCode's upstream free-tier gate (#7255); the entry and dependent references are disabled. Use opencode-go, or another provider such as opencode-zen or openrouter.");
-  }
+  return changed;
 }

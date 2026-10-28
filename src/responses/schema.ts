@@ -180,6 +180,7 @@ export const toolChoiceSchema = z.union([
 ]);
 
 export const reasoningConfigSchema = z.object({
+  enabled: z.boolean().optional(),
   effort: z.string().optional(),
   summary: z.enum(["auto", "concise", "detailed", "none"]).optional(),
 });

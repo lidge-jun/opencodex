@@ -17,7 +17,8 @@ import { localV2State, v2LocalSyncResult, type V2LocalSync } from "./v2-local-ou
 import { execFileSync } from "node:child_process";
 import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, setMultiAgentModeHintText, transitionMultiAgentV2 } from "../codex/features";
 
-import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
+import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
+import { validatedCodexExecInvocation } from "../codex/exec-boundary";
 import { deleteConfigTopLevelKey, loadConfig, saveConfig } from "../config";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 
@@ -33,8 +34,9 @@ export interface V2CliDeps {
 }
 
 export type CodexFeaturesInvocationDeps =
-  & Parameters<typeof commandInvocation>[3]
-  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">
+  & ResolveDeps
+  & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync"
+    | "readBundleIdentifier" | "macBundleTrustReason" | "executable" | "realpath">
   & { requireAvailable?: boolean };
 
 /**
@@ -58,12 +60,23 @@ export function codexFeaturesInvocation(
     execFileSync: deps.execFileSync,
     configDir: deps.configDir,
     readFileSync: deps.readFileSync,
+    readBundleIdentifier: deps.readBundleIdentifier,
+    macBundleTrustReason: deps.macBundleTrustReason,
+    executable: deps.executable,
+    realpath: deps.realpath,
   });
   if (deps.requireAvailable && resolved.runtime.source === "fallback" && resolved.runtime.version === null) {
     throw Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" });
   }
   const command = resolved.runtime.command || "codex";
-  return commandInvocation(command, ["features", action, feature], platform, deps);
+  return validatedCodexExecInvocation(command, ["features", action, feature], {
+    env: deps.env,
+    platform,
+    exists: deps.exists,
+    executable: deps.executable,
+    realpath: deps.realpath,
+    macBundleTrustReason: deps.macBundleTrustReason,
+  });
 }
 
 /**

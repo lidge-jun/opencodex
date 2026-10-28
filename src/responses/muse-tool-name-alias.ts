@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { wireToolInnerName } from "./tool-name-aliases";
 
 const MUSE_TOOL_NAME_MAX = 64;
@@ -53,7 +52,7 @@ function isPassThroughMuseToolName(name: string): boolean {
 
 function hashSuffix(originalName: string, salt: number): string {
   const hashInput = salt === 0 ? originalName : originalName + "#" + salt;
-  return createHash("sha256").update(hashInput).digest("hex").slice(0, MUSE_TOOL_NAME_HASH_LEN);
+  return Bun.SHA256.hash(hashInput, "hex").slice(0, MUSE_TOOL_NAME_HASH_LEN);
 }
 
 /**

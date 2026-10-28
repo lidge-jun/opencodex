@@ -6,7 +6,7 @@
  */
 import type { OcxConfig } from "../types";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readFileSync, existsSync } from "node:fs";
 import { acceptsPickerAuthority, pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath, publishedPickerCaSha256 } from "./intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa } from "./intercept/picker-trust";
@@ -222,7 +222,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     if (first) return refuse(first);
     if (options.persist) {
       try {
-        if (!deps.persistPreference(true)) return refuse("mode_not_committed");
+        if (!await withConfigDirHardeningSettled(deps.configDir, () => deps.persistPreference(true))) return refuse("mode_not_committed");
       } catch { return refuse("mode_not_committed"); }
     }
     const second = check(deps.readConfig(), true);
@@ -237,12 +237,12 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     try {
       const ca = deps.persistentAuthority
         ? await preparePersistentPickerAuthority({ configDir: deps.configDir, store: deps.persistentAuthority.store, security: deps.security, platform })
-        : ensurePickerCa(deps.configDir);
+        : await withConfigDirHardeningSettled(deps.configDir, () => ensurePickerCa(deps.configDir));
       // The CLI path gates trust on the same profile check; a published root whose bytes do not
       // match the profile this process mints must not reach the keychain through the server
       // path either, even when a live peer published it.
       if (!acceptsPickerAuthority(ca.certPem)) return refuse("ca_unverified");
-      issuePickerLeaf(ca, deps.configDir);
+      await withConfigDirHardeningSettled(deps.configDir, () => issuePickerLeaf(ca, deps.configDir));
       caPath = pickerCaCertPath(deps.configDir);
       caSha1 = pickerCaFingerprints(ca.certPem).sha1;
       let trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
@@ -268,7 +268,10 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
         const compensationFailed = (trustedByAttempt || options.callerAddedTrust === true) && !(await compensateTrust(true));
         return withTrustFailure({ ...runtimeStatus(trust), reason: "proxy_unavailable" }, compensationFailed);
       }
-      const applied = applyProfile({ ...profileOptions(deps), proxyPort });
+      const applied = await withConfigDirHardeningSettled(deps.configDir, () =>
+        check(deps.readConfig(), true) || deps.proxyPort() !== proxyPort
+          ? { ok: false as const, reason: "write_failed" }
+          : applyProfile({ ...profileOptions(deps), proxyPort }));
       if (!applied.ok) {
         const compensationFailed = (trustedByAttempt || options.callerAddedTrust === true) && !(await compensateTrust(true));
         return withTrustFailure({ ...runtimeStatus(trust), reason: "profile_failed", residual: ["profile"] }, compensationFailed);
@@ -288,11 +291,11 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     const residual: string[] = [];
     try { deps.runtime.disarm(); } catch { residual.push("runtime"); }
     if (options.persist) {
-      try { if (!deps.persistPreference(false)) residual.push("preference"); }
+      try { if (!await withConfigDirHardeningSettled(deps.configDir, () => deps.persistPreference(false))) residual.push("preference"); }
       catch { residual.push("preference"); }
     }
     try {
-      const removed = removeProfile(profileOptions(deps));
+      const removed = await withConfigDirHardeningSettled(deps.configDir, () => removeProfile(profileOptions(deps)));
       if (!removed.ok) residual.push("profile");
     } catch { residual.push("profile"); }
     // Trust goes only once Desktop no longer selects the picker profile: a selected profile without
@@ -332,7 +335,7 @@ export async function removeDesktopPickerArtifacts(options: { configDir?: string
   const platform = options.platform ?? process.platform;
   const residual: string[] = [];
   try {
-    const removed = removeDesktopPickerProfile({ configDir, ...(platform ? { platform } : {}) });
+    const removed = await withConfigDirHardeningSettled(configDir, () => removeDesktopPickerProfile({ configDir, ...(platform ? { platform } : {}) }));
     if (!removed.ok) residual.push("profile");
   } catch { residual.push("profile"); }
   let released = false;

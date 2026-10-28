@@ -3,6 +3,9 @@ import { parseAsideProfileStatus, parseAsideProfileOutcomes, type AsideProfileOu
 
 export const FILE_INTEGRATION_CLIENTS = [
   "qoder",
+  "qoder-cn",
+  "workbuddy",
+  "workbuddy-ai",
   "opencode",
   "pi",
   "omp",
@@ -22,6 +25,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "kilo",
   "droid",
   "gentle-shell",
+  "t3code",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -93,6 +97,10 @@ export interface IntegrationStatus {
   /** Aside's explicit account-backed profile scope and desired sync state. */
   profileId?: number;
   enabled?: boolean;
+  /** The Hermes profile a profile-scoped read describes (#7674). */
+  hermesProfile?: string;
+  /** Why a listed Hermes profile cannot be changed safely. */
+  error?: string;
   raycast?: RaycastInstall;
   droidReasoning?: DroidReasoningStatus;
 }
@@ -194,6 +202,8 @@ export interface ToggleIntegrationOptions {
   profileId?: number;
   binding?: IntegrationPlanBinding;
   droidReasoningDefaults?: Record<string, string>;
+  /** A named Hermes profile; omitted for the default profile. */
+  hermesProfile?: string;
 }
 
 export interface RestoreIntegrationOptions {
@@ -202,6 +212,7 @@ export interface RestoreIntegrationOptions {
   signal?: AbortSignal;
   profileId?: number;
   binding: IntegrationPlanBinding;
+  hermesProfile?: string;
 }
 
 export type IntegrationRefusalCode =
@@ -274,11 +285,13 @@ const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
+  "*", // A WorkBuddy legacy document is a top-level model array.
   "provider.opencodex",
   "providers.opencodex",
   "models.providers.opencodex",
   "models.*",
   "modelConfigs.customModels.*",
+  "providerInstances.opencodex",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
   "providers.[id=opencodex]",
@@ -462,6 +475,24 @@ function clientPath(client: FileIntegrationClientId, profileId?: number): string
   return client === "aside" ? "/api/client-integrations/aside/profiles" : `/api/client-integrations/${encodeURIComponent(client)}`;
 }
 
+/**
+ * The query that scopes a request to a named Hermes profile. Shared paths also name the client,
+ * which the server requires before it reads `profile` as a Hermes name rather than an Aside id.
+ */
+function hermesScope(hermesProfile: string | undefined, sharedPath: boolean): string {
+  if (hermesProfile === undefined) return "";
+  const profile = `profile=${encodeURIComponent(hermesProfile)}`;
+  return sharedPath ? `client=hermes&${profile}` : profile;
+}
+
+function withQuery(path: string, query: string): string {
+  return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
+}
+
+function invalidHermesResponse(): IntegrationApiError {
+  return new IntegrationApiError(502, { code: "invalid_hermes_profile_response" });
+}
+
 export async function loadIntegrationStates(apiBase: string, signal?: AbortSignal) {
   return readResponse<IntegrationStateListEnvelope>(
     await fetch(`${apiBase}/api/client-integrations`, { signal }),
@@ -473,10 +504,12 @@ export async function loadIntegrationState(
   client: FileIntegrationClientId,
   signal?: AbortSignal,
   profileId?: number,
+  hermesProfile?: string,
 ) {
   const result = await readResponse<IntegrationStatus>(
-    await fetch(`${apiBase}${clientPath(client, profileId)}`, { signal }),
+    await fetch(`${apiBase}${withQuery(clientPath(client, profileId), hermesScope(hermesProfile, false))}`, { signal }),
   );
+  if (hermesProfile !== undefined && (client !== "hermes" || result.hermesProfile !== hermesProfile)) throw invalidHermesResponse();
   if (profileId !== undefined) {
     const parsed = parseAsideProfileStatus(result);
     if (!parsed || parsed.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
@@ -490,10 +523,12 @@ export async function loadIntegrationJournal(
   client?: FileIntegrationClientId,
   signal?: AbortSignal,
   profileId?: number,
+  hermesProfile?: string,
 ) {
   if (profileId !== undefined && client !== "aside") throw new IntegrationApiError(400, { code: "invalid_aside_profile" });
+  if (hermesProfile !== undefined && client !== "hermes") throw new IntegrationApiError(400, { code: "invalid_hermes_profile" });
   const path = client === "aside" ? `${clientPath(client, profileId)}/journal`
-    : `/api/client-integrations/journal${client ? `?client=${encodeURIComponent(client)}` : ""}`;
+    : withQuery(`/api/client-integrations/journal${client ? `?client=${encodeURIComponent(client)}` : ""}`, hermesScope(hermesProfile, false));
   const result = await readResponse<IntegrationJournalEnvelope>(
     await fetch(`${apiBase}${path}`, { signal }),
   );
@@ -509,8 +544,11 @@ export async function previewIntegrationMutation(
   signal?: AbortSignal,
   profileId?: number,
   droidReasoningDefaults?: Record<string, string>,
+  hermesProfile?: string,
 ) {
-  const path = profileId === undefined ? "/api/client-integrations/preview" : `${profilePath(profileId)}/preview`;
+  const path = profileId === undefined
+    ? withQuery("/api/client-integrations/preview", hermesScope(hermesProfile, true))
+    : `${profilePath(profileId)}/preview`;
   const requestBody = {
     ...(profileId === undefined ? { clientId: client } : {}),
     operation,
@@ -529,8 +567,11 @@ export async function previewIntegrationRestore(
   confirmDrift = false,
   signal?: AbortSignal,
   profileId?: number,
+  hermesProfile?: string,
 ) {
-  const path = profileId === undefined ? "/api/client-integrations/restore/preview" : `${profilePath(profileId)}/preview`;
+  const path = profileId === undefined
+    ? withQuery("/api/client-integrations/restore/preview", hermesScope(hermesProfile, true))
+    : `${profilePath(profileId)}/preview`;
   const body = profileId === undefined ? { opId, confirmDrift } : { operation: "restore", opId, confirmDrift };
   const plan = parseIntegrationMutationPlan(await readResponse<unknown>(await fetch(`${apiBase}${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
@@ -540,11 +581,12 @@ export async function previewIntegrationRestore(
 }
 
 export async function toggleIntegration(apiBase: string, client: FileIntegrationClientId, options: ToggleIntegrationOptions) {
-  const { enabled, signal, overwriteConflict, profileId, binding, droidReasoningDefaults } = options;
+  const { enabled, signal, overwriteConflict, profileId, binding, droidReasoningDefaults, hermesProfile } = options;
+  if (hermesProfile !== undefined && client !== "hermes") throw new IntegrationApiError(400, { code: "invalid_hermes_profile" });
   const expectedOperation: IntegrationPlanOperation = enabled ? (overwriteConflict ? "overwrite" : "apply") : "disable";
   let result: IntegrationToggleResult | { ok: false; message?: string; results?: unknown };
   try {
-    result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(await fetch(`${apiBase}${clientPath(client, profileId)}`, {
+    result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(await fetch(`${apiBase}${withQuery(clientPath(client, profileId), hermesScope(hermesProfile, false))}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding,
@@ -574,10 +616,10 @@ export async function restoreIntegration(
   apiBase: string,
   options: RestoreIntegrationOptions,
 ) {
-  const { opId, confirmDrift = false, signal, profileId, binding } = options;
+  const { opId, confirmDrift = false, signal, profileId, binding, hermesProfile } = options;
   let result: IntegrationRestoreResult;
   try {
-    result = await readResponse<IntegrationRestoreResult>(await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/restore" : `${profilePath(profileId)}/restore`}`, {
+    result = await readResponse<IntegrationRestoreResult>(await fetch(`${apiBase}${profileId === undefined ? withQuery("/api/client-integrations/restore", hermesScope(hermesProfile, true)) : `${profilePath(profileId)}/restore`}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ opId, confirmDrift, ...binding }),
@@ -604,6 +646,7 @@ export async function deleteJournalEntry(
   opId: string,
   signal?: AbortSignal,
   profileId?: number,
+  hermesProfile?: string,
 ) {
   const result = await readResponse<{
     ok: true;
@@ -612,7 +655,7 @@ export async function deleteJournalEntry(
     snapshotRemoved: boolean;
     profileId?: number;
   }>(
-    await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/journal" : `${profilePath(profileId)}/journal`}?opId=${encodeURIComponent(opId)}`, {
+    await fetch(`${apiBase}${withQuery(profileId === undefined ? "/api/client-integrations/journal" : `${profilePath(profileId)}/journal`, hermesScope(hermesProfile, true))}${hermesProfile === undefined ? "?" : "&"}opId=${encodeURIComponent(opId)}`, {
       method: "DELETE",
       signal,
     }),

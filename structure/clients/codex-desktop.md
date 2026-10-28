@@ -24,6 +24,10 @@ Under the test preload's `OCX_TEST_HOME_GUARD=1`,
 `src/codex/desktop-app-restart.ts` skips real restart without an injected executor.
 `src/cli/restart-scope.ts` reports that skip. `NODE_ENV=test` alone does not control
 this boundary. `tests/clients/desktop-app-restart.test.ts` covers the contract.
+The same function refuses with the `selection_mutation_busy` skipped reason while a cli-update
+worker holds admission through installer termination and readback: refusal precedes the restart lock, discovery, any app
+quit and the handoff, and a lock-acquisition throw still releases the shared gate. See the
+[update commit window](../codex-cli-update.md#worker-realm-and-the-selection-commit-window).
 
 ## Windows launch context
 
@@ -83,9 +87,21 @@ in-process, and the helper's cmdlet-free script on every platform.
 `src/server/management/desktop-compatibility-routes.ts` exposes the authenticated
 `/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
 it does not decrypt a key, create a file, acquire a lease or register trust. POST
-requires a GUI-session principal on trusted loopback ingress and explicit confirmation.
+uses `src/server/management/desktop-compatibility-authorization.ts` to require an
+operator-paired GUI session on trusted loopback ingress and explicit confirmation.
 Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
-substitute browser provenance; this does not protect against arbitrary same-user code.
+substitute the pairing ceremony, and automatically issued loopback sessions cannot mutate trust.
+The certificate response carries request-specific `mutationAuthorized` metadata. The local
+dashboard reuses `gui/src/connect-pairing.tsx` with a machine-plane handoff, validates that
+authority through a read-only certificate request, and commits the session before refreshing
+or enabling actions. Pairing never submits a certificate/runtime mutation or changes auto-start.
+Machine-session changes discard pending consent and disable actions until fresh authority is read.
+The startup-setting child synchronously aborts its own in-flight operation on a machine-session
+change and rejects late completions by generation. An interrupted preference operation stays
+uncertain until a fresh settings GET, independently of refreshed certificate authorization.
+`gui/tests/desktop-compatibility-panel.test.tsx`, `gui/tests/local-link-pairing.test.ts` and
+`tests/server/management-desktop-compatibility-routes.test.ts` cover the UI, credential plane
+and real loopback-versus-paired session boundary.
 
 `src/codex/desktop-compatibility/certificate-service.ts` serializes setup and refuses
 busy operations. Only prepare may generate a key. Trust/removal load existing validated
@@ -183,13 +199,27 @@ table do not invalidate the routing snapshot. Desktop refreshes that tool-transp
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the assessed installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
-the Windows adapter's discovery parser, coalesces concurrent probes without caching a positive
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses a
+compatibility-only current-user package query that reads the registered manifest's actual App and
+fixed ChatGPT.exe entry in the installed package's app directory, binds its publisher/name/version to the exact official family,
+and refuses missing/reparse executable facts. It coalesces concurrent probes without caching a positive
 result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
 unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
 every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
 disarm Apply. Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
+The package proof's manifest digest and canonical executable metadata stay private. An observed
+identity change or failed proof invalidates trial generation, prior exhaustion and outputs before
+another correction; a supported-version A-to-B-to-A transition cannot revive old consent. Later
+success requires a new original exhaustion and explicit account-wide consent with the unchanged
+maximum three-minute trial. Stop/start replaces the observation context, and old probe completions
+cannot affect its replacement. Identical observed registration/file metadata cannot detect every
+same-version reinstall; this is not continuous file/process or signature attestation.
+Every volume-root-to-file ancestor is checked for reparse points before manifest/file consumption
+and rechecked before proof publication. FullName is lexical and is not a held-handle canonical-path
+proof; the bounded before/after metadata walk does not exclude a transient replace-and-restore
+between observations. Such unobserved replacement remains outside this observation contract. The launcher,
+exact version allowlist, GET/SSE surface and default-off behavior remain unchanged.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never
@@ -209,7 +239,7 @@ registration occurs only after successful startup. Cleanup stops owned listeners
 a failed cleanup retains ownership and reports `cleanup-required`, never a false `off` state.
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
-local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
+operator-paired local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
 separate account-wide consent for apply. No setting, login, quota, automatic startup or
 dashboard preference is changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.

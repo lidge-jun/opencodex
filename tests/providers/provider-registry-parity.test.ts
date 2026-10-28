@@ -1,4 +1,3 @@
-import { configuredReasoningEfforts } from "../../src/reasoning-effort";
 import { describe, expect, spyOn, test } from "bun:test";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { CURSOR_NO_VISION_MODELS } from "../../src/adapters/cursor/discovery";
@@ -42,15 +41,9 @@ function nativeTemplate(): Record<string, unknown> {
   };
 }
 
-const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "packycode", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "jev", "baseten", "commandcode", "sambanova", "nebius", "crusoe", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
-  "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
-  "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
-  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
-];
+const EXPECTED_KEY_PROVIDER_IDS = PROVIDER_REGISTRY
+  .filter(entry => entry.authKind === "key" && !entry.deprecated)
+  .map(entry => entry.id);
 
 describe("provider registry parity", () => {
   test("CodeBuddy static catalogs cover every official CLI-agent model in the bundled 2.143.0 manifest", () => {
@@ -201,7 +194,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS).toEqual(deriveKeyLoginMap());
     expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
-    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3");
+    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3.1-Flash");
     expect(KEY_LOGIN_PROVIDERS.umans).toMatchObject({
       label: "Umans AI Coding Plan",
       adapter: "anthropic",
@@ -330,7 +323,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"]);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-6-astra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxInputTokens?.["gpt-6-astra"]).toBe(922_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxOutputTokens?.["gpt-6-astra"]).toBe(128_000);
@@ -372,13 +365,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-sol"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
-    // Retired from the first-party API on 2026-09-14; the vendor-hosted rosters keep it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.models).not.toContain("deepseek-v4-pro");
+    // The official retirement plan was withdrawn; Pro remains a separate text-only model.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-flash");
-    // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
-    // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
-    // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
-    // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
+    // The current Thinking Mode guide declares low/high/max; aliases stay in the wire map.
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.low).toBe("low");
@@ -387,14 +379,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
-    // The retired deepseek-v4-pro stays OUT of `models` (line 357) but inside the preserve
-    // list: it still routes to a thinking-mode model, so a saved config that carries it
-    // must get reasoning replay rather than a guaranteed 400 (#5421).
+    // Pro and Flash both retain reasoning on tool-call continuations (#5421).
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
       .toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
     // #4436: first-party Flash accepts images; unprobed compatibility aliases keep the sidecar.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro",
     ]);
   });
 
@@ -510,7 +500,7 @@ describe("provider registry parity", () => {
     });
 
     const minimaxModels = [
-      "MiniMax-M3.1-Flash-Preview",
+      "MiniMax-M3.1-Flash",
       "MiniMax-M3",
       "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
       "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
@@ -522,16 +512,16 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.adapter).toBe("openai-chat");
       expect(entry?.baseUrl).toBe(providerId === "minimax" ? "https://api.minimax.io/v1" : "https://api.minimaxi.com/v1");
-      expect(entry?.defaultModel).toBe("MiniMax-M3");
+      expect(entry?.defaultModel).toBe("MiniMax-M3.1-Flash");
       expect(entry?.models).toEqual(minimaxModels);
       expect(entry?.modelContextWindows?.["MiniMax-M3"]).toBe(1_000_000);
-      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash-Preview"]).toBe(1_000_000);
+      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash"]).toBe(1_000_000);
       expect(entry?.modelReasoningEfforts?.["MiniMax-M3"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
-      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
       expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3"]).toBe("medium");
-      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toBe("max");
+      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash"]).toBe("max");
       expect(entry?.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({ low: "disabled", medium: "adaptive", high: "adaptive" });
-      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash-Preview"]).toBeUndefined();
+      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash"]).toBeUndefined();
       expect(entry?.preserveReasoningContentModels).toEqual(minimaxModels);
       expect(entry?.reasoningSplitModels).toEqual(splitModels);
       expect(entry?.reasoningDetailsModels).toEqual(splitModels);

@@ -38,7 +38,7 @@ interface CursorJwtPayload {
   exp?: unknown;
 }
 
-function decodeCursorJwtPayload(token: string): CursorJwtPayload | undefined {
+export function decodeCursorJwtPayload(token: string): CursorJwtPayload | undefined {
   const parts = token.split(".");
   const payload = parts[1];
   if (parts.length !== 3 || !payload) return undefined;
@@ -230,11 +230,17 @@ export async function refreshCursorToken(refresh: string, signal?: AbortSignal):
       continue;
     }
     if (response.ok) {
-      const data = (await response.json()) as { accessToken?: string; refreshToken?: string };
+      const data = (await response.json()) as { accessToken?: string; refreshToken?: string; shouldLogout?: boolean };
+      if (data.shouldLogout === true) {
+        throw new Error("Cursor token refresh failed: session logged out (invalid_grant)");
+      }
       if (!data.accessToken) throw new Error("Cursor refresh response missing access token");
       return credentialsFromCursorTokens(data.accessToken, data.refreshToken || refresh);
     }
     if (!isRetryableRefreshStatus(response.status) || attempt === REFRESH_ATTEMPTS - 1) {
+      if (response.status === 400 || response.status === 401 || response.status === 403) {
+        throw new Error(`Cursor token refresh failed: ${response.status} (invalid_grant)`);
+      }
       throw new Error(`Cursor token refresh failed: ${response.status}`);
     }
     lastError = new Error(`Cursor token refresh failed: ${response.status}`);

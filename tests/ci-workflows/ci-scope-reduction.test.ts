@@ -54,7 +54,7 @@ const MACOS_JOBS = ["platform-macos", "widget"] as const;
 /** The two smoke jobs whose matrix legs shrink with the event and native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
-type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string };
+type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
   const text = source.trim();
@@ -72,6 +72,7 @@ function term(source: string, inputs: SelectionInputs): string | boolean {
     if (output[1] === "ci") return inputs.ci;
     if (output[1] === "native") return inputs.native;
     if (output[1] === "desktop") return inputs.desktop ?? "false";
+    if (output[1] === "docker") return inputs.docker ?? "false";
   }
   throw new Error(`unsupported expression term: ${text}`);
 }
@@ -247,6 +248,7 @@ type GateInputs = {
   lane: string;
   docker?: string;
   keyring?: string;
+  fast?: string;
 };
 
 const PR_WITHOUT_NATIVE: GateInputs = {
@@ -272,6 +274,7 @@ function gateEnvironment(inputs: GateInputs, results: Record<string, string>): R
     CHANGES_STRUCTURE: inputs.structure,
     CHANGES_DOCKER: inputs.docker ?? "false",
     CHANGES_KEYRING: inputs.keyring ?? "false",
+    ...(inputs.fast === undefined ? {} : { CHANGES_FAST: inputs.fast }),
     LANE: inputs.lane,
     // `needs` serializes as an object per job, and the gate reads
     // `.value.result` out of it. Passing a flat name-to-string map makes jq
@@ -312,6 +315,22 @@ describe("the push trigger", () => {
     // qualify, so removing either breaks publication. dev is deliberately absent
     // (CI policy): cross-platform legs run on dev only by manual dispatch.
     expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["main", "preview"]);
+  });
+});
+
+describe("Docker PR selection", () => {
+  test("selects only its Ubuntu smoke for matching inputs without widening event policy", () => {
+    const job = jobs["docker-smoke"]!;
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    for (const ci of ["true", "false"]) {
+      for (const docker of ["true", "false"]) {
+        expect(evaluate(job.if!, { event_name: "pull_request", ci, docker, native: "false" }))
+          .toBe(ci === "true" && docker === "true");
+      }
+    }
+    for (const event_name of ["push", "workflow_dispatch", "schedule"]) {
+      expect(evaluate(job.if!, { event_name, ci: "false", docker: "false", native: "false" })).toBe(true);
+    }
   });
 });
 
@@ -470,6 +489,34 @@ describe("the aggregate gate", () => {
       .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
     const { bad } = runGate(PR_WITHOUT_NATIVE, consistent);
     expect(bad).toBe("");
+  });
+
+  test.skipIf(cannotRunGate)("swaps the full shards for test changed only on a fast-lane pull request", () => {
+    const fast = runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, {}).expectations;
+    expect([fast.test, fast["test-changed"]]).toEqual(["not-requested", "requested"]);
+    for (const name of ["storage-policy", "api-usage", "gates"]) {
+      expect(`${name}:${fast[name]}`).toBe(`${name}:requested`);
+    }
+    // A full-lane pull request, and every other event, keeps the shards and never runs test changed.
+    for (const inputs of [
+      { ...PR_WITHOUT_NATIVE, fast: "false" },
+      PR_WITHOUT_NATIVE,
+      { ...PR_WITHOUT_NATIVE, eventName: "push", fast: "true" },
+      { ...PR_WITHOUT_NATIVE, eventName: "workflow_dispatch", fast: "true" },
+    ]) {
+      const other = runGate(inputs, {}).expectations;
+      expect(`${inputs.eventName}/${inputs.fast}:${other.test}:${other["test-changed"]}`)
+        .toBe(`${inputs.eventName}/${inputs.fast}:requested:not-requested`);
+    }
+    // An out-of-scope pull request requests neither, even if fast were set.
+    const outOfScope = runGate({ ...PR_WITHOUT_NATIVE, ci: "false", fast: "true" }, {}).expectations;
+    expect([outOfScope.test, outOfScope["test-changed"]]).toEqual(["not-requested", "not-requested"]);
+    // Results consistent with the fast lane pass; a shard that ran anyway fails by name.
+    const consistent = Object.fromEntries(Object.keys(jobs)
+      .filter(name => name !== "ci")
+      .map(name => [name, fast[name] === "requested" ? "success" : "skipped"]));
+    expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, consistent).bad).toBe("");
+    expect(runGate({ ...PR_WITHOUT_NATIVE, fast: "true" }, { ...consistent, test: "success" }).bad).toContain("test was not requested");
   });
 
   test.skipIf(cannotRunGate)("never requests macOS on a native pull request, but still requests desktop-shell", () => {

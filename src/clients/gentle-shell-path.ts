@@ -1,8 +1,8 @@
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
-import { ClientPathError, piAgentDir } from "./client-path";
+import { ClientPathError, isAbsoluteClientPath, piAgentDir } from "./client-path";
 
 interface BootstrapIO {
   readText(path: string): { kind: "text"; text: string } | { kind: "missing" } | { kind: "failed" };
@@ -10,7 +10,7 @@ interface BootstrapIO {
 
 function absolute(raw: string, label: string): string {
   // Unlike Pi's resolver, the Shell launcher does not expand a literal '~'.
-  if (!isAbsolute(raw)) throw new ClientPathError(`${label} must be an absolute path; the proxy cannot infer the launcher's working directory.`);
+  if (!isAbsoluteClientPath(raw)) throw new ClientPathError(`${label} must be an absolute path (a drive letter or UNC share on Windows); the proxy cannot infer the launcher's working directory or current drive.`);
   return resolve(raw);
 }
 

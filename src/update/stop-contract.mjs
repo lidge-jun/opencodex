@@ -32,3 +32,17 @@ export const STOP_HISTORY_INCOMPLETE_EXIT_CODE = 79;
  * dispatcher already emit.
  */
 export const STOP_HISTORY_DEFERRED_EXIT_CODE = 80;
+
+/**
+ * The exit code `ocx stop` uses to say "the proxy is down and its shared teardown was
+ * handed to the proxy this update is about to start" (#7423).
+ *
+ * Only an update that will restart the proxy asks for this. Restoring native Codex here
+ * replaced the routed catalog with the pristine one, and a Codex process that loaded it
+ * before the new proxy's first publication kept treating routed models as unknown until
+ * it was restarted. Like 80, the receipt stays outstanding, and the stop proved before
+ * choosing this code that it is the only obligation left; unlike 80, nothing refused the
+ * restore. The replacement discharges the receipt after it publishes, and a stop finishes
+ * it if no replacement ever starts.
+ */
+export const STOP_TEARDOWN_HANDED_OVER_EXIT_CODE = 81;

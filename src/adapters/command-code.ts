@@ -7,6 +7,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { clearableDeadline } from "../lib/abort";
 import { debugDroppedFrame } from "../lib/debug";
 import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
@@ -609,19 +610,17 @@ function requestModelId(request: AdapterRequest): string | undefined {
 }
 
 async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContext | undefined, executor: typeof globalThis.fetch): Promise<Response> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
-  const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
+  const deadline = clearableDeadline(ctx?.timeoutMs ?? 200_000, ctx?.abortSignal);
   try {
     return await executor(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
       redirect: "manual",
-      signal: AbortSignal.any([callerSignal, timeout.signal]),
+      signal: deadline.signal,
     });
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
   }
 }
 

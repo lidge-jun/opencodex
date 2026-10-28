@@ -15,6 +15,7 @@
  */
 import { join } from "node:path";
 import type { OcxConfig } from "../../types";
+import { withConfigDirHardeningSettled } from "../../config/paths";
 import type { ClaudeDesktopMode } from "../desktop-first-party";
 import { supportsDesktopPicker } from "../desktop-picker-platform";
 import type { TunnelDecision } from "./connect-proxy";
@@ -170,8 +171,8 @@ export function createPickerRuntime(options: CreatePickerRuntimeOptions): Picker
     if (!ca || !leaf || !caSha1) {
       ca = options.persistentAuthority
         ? await preparePersistentPickerAuthority({ configDir: options.configDir, store: options.persistentAuthority.store, security: options.security, platform })
-        : ensurePickerCa(options.configDir);
-      leaf = issuePickerLeaf(ca, options.configDir);
+        : await withConfigDirHardeningSettled(options.configDir, () => ensurePickerCa(options.configDir));
+      leaf = await withConfigDirHardeningSettled(options.configDir, () => issuePickerLeaf(ca!, options.configDir));
       caSha1 = pickerCaFingerprints(ca.certPem).sha1;
     }
     return { ca, leaf, sha1: caSha1 };
