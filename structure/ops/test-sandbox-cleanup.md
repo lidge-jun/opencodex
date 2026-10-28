@@ -136,9 +136,14 @@ flights/reaps before normal exit. Child work deadlines remain separate from oute
 which reserve time for termination and teardown. The shared warm-up regressions exercise a live
 interval after work completes and a descendant retaining stdout after its parent exits.
 
-The completed-drain fixture in `tests/server/system-restart-ownership.test.ts` registers each
-fixture PID before loading the runner. Its watchdog stops the live parent tree, and teardown
-observes registered descendant exits before removing the home; a cleanup failure retains it.
+The completed-drain fixture in `tests/server/system-restart-ownership.test.ts` uses
+`tests/helpers/restart-fixture-processes.ts` before loading the runner. On Windows each entry
+joins a private Job before spawning; descendants inherit membership, including detached
+replacements. Teardown kills through the held Job handle and requires zero active members.
+The PID journal is diagnostic only. On POSIX a private stop file requests self-termination;
+recorded creation identities are used only to observe exit, never to signal journaled PIDs.
+The spawned parent's handle and captured output are joined before home removal; cleanup
+failure retains the home. A controlled foreign process injected at a stale journal PID survives.
 `tests/fixtures/restart-parent-ownership-runner.ts` journals process phases and captures the
 fence probe's output continuously. Failure assertions include that evidence and the replacement
 handoff log, including when the parent is terminated before its probe returns.

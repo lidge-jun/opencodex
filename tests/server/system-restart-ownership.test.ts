@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
-import { fixturePath, repoRoot } from "../helpers/repo-root";
+import { fixturePath, helperPath, repoRoot } from "../helpers/repo-root";
+import { ownRestartFixture } from "../helpers/restart-fixture-processes";
 import {
   getPidPath, getRuntimePortPath, readPidFileValue, readRuntimePort, writePid, writeRuntimePort,
 } from "../../src/config/process-state";
@@ -9,7 +10,7 @@ import { inspectOwnershipMutationLease } from "../../src/service/ownership-mutat
 import { serviceStatePaths } from "../../src/service/state";
 import { retireRestartParentOwnership } from "../../src/server/restart-parent-ownership";
 import { observeProxyLiveness } from "../../src/server/proxy-liveness";
-import { isProcessAlive, killProxy } from "../../src/lib/process-control";
+import { isProcessAlive } from "../../src/lib/process-control";
 
 let home: TempHome | undefined;
 let settleProcesses: (() => Promise<void>) | undefined;
@@ -72,15 +73,53 @@ test("a genuinely exited parent remains an ordinary absent-owner control", async
   expect(readRuntimePort()?.pid).toBe(dead.pid); // Observation never retires records itself.
 });
 
-test("completed drain hands off to a healthy child while the real parent is still alive", async () => {
+test("completed drain hands off to a healthy child while the real parent is still alive", () => completedDrain(), 25_000);
+test("cleanup refuses an exited fixture PID reused by a foreign live process", () => completedDrain(true), 25_000);
+
+test("cleanup joins an admitted detached descendant after its parent exits", async () => {
+  const owned = fixture(), pidsPath = owned.path("fixture-pids"), stopPath = owned.path("fixture-stop");
+  const ready = owned.path("descendant-ready"), entry = owned.path("owned-role.ts");
+  writeFileSync(entry, `import { spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { enterRestartFixture } from ${JSON.stringify(helperPath("restart-fixture-processes.ts"))};
+await enterRestartFixture(${JSON.stringify(pidsPath)}, ${JSON.stringify(stopPath)});
+setTimeout(() => process.exit(97), 20_000).unref();
+if (process.argv.includes("descendant")) {
+  writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+  setInterval(() => {}, 1000);
+} else {
+  spawn(process.execPath, [process.argv[1], "descendant"], { detached: true, stdio: "ignore", env: process.env }).unref();
+  for (let i = 0; i < 100 && !existsSync(${JSON.stringify(ready)}); i++) await Bun.sleep(25);
+  process.exit(existsSync(${JSON.stringify(ready)}) ? 0 : 2);
+}
+`);
+  const processes = await ownRestartFixture(pidsPath, stopPath);
+  let child: ReturnType<typeof Bun.spawn> | undefined, cleanup: Promise<void> | undefined;
+  settleProcesses = () => cleanup ??= (async () => {
+    if (child?.exitCode === null) child.kill();
+    await processes.stop();
+    await child?.exited;
+  })();
+  child = Bun.spawn([process.execPath, entry], { env: { ...process.env, ...processes.env }, stdout: "ignore", stderr: "ignore" });
+  try {
+    expect(await child.exited).toBe(0);
+    const descendantPid = Number(readFileSync(ready, "utf8"));
+    expect(isProcessAlive(descendantPid)).toBe(true);
+    await settleProcesses();
+    expect(isProcessAlive(descendantPid)).toBe(false);
+  } finally { await settleProcesses(); }
+}, 25_000);
+
+async function completedDrain(injectReusedPid = false): Promise<void> {
   const owned = fixture();
   mkdirSync(owned.codexHome);
   const entry = owned.path("src", "cli", "index.ts");
   mkdirSync(owned.path("src", "cli"), { recursive: true });
   // The real process identity verifier recognizes this source-launch path.
   const pidsPath = owned.path("fixture-pids");
-  writeFileSync(entry, `import { appendFileSync } from "node:fs";
-appendFileSync(${JSON.stringify(pidsPath)}, process.pid + "\\n");
+  const stopPath = owned.path("fixture-stop");
+  writeFileSync(entry, `import { enterRestartFixture } from ${JSON.stringify(helperPath("restart-fixture-processes.ts"))};
+await enterRestartFixture(${JSON.stringify(pidsPath)}, ${JSON.stringify(stopPath)});
 console.error("[restart-fixture " + process.pid + "] loading runner");
 await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))});\n`);
   // Resolve/transpile this same product graph once. Three cold source imports on Windows
@@ -89,28 +128,27 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
   const built = await Bun.build({ entrypoints: [entry], target: "bun" });
   if (!built.success) throw new AggregateError(built.logs, "restart fixture bundle failed");
   await Bun.write(entry, built.outputs[0]!);
-  const child = Bun.spawn([process.execPath, entry, "start", "parent"], {
-    cwd: repoRoot(), env: { ...process.env, HOME: owned.root, USERPROFILE: owned.root,
+  const processes = await ownRestartFixture(pidsPath, stopPath);
+  let cleanup: Promise<void> | undefined;
+  // Install cleanup before spawn so even a failed CreateProcess releases the Job.
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  let output: Promise<[number, string, string]> | undefined;
+  settleProcesses = () => cleanup ??= (async () => {
+    // The retained parent handle covers failure before its entry joins the Job.
+    // Descendants can only be spawned after admission and inherit Job membership.
+    if (child?.exitCode === null) child.kill();
+    await processes.stop();
+    await output;
+  })();
+  const parent = child = Bun.spawn([process.execPath, entry, "start", "parent"], {
+    cwd: repoRoot(), env: { ...process.env, ...processes.env, HOME: owned.root, USERPROFILE: owned.root,
       OPENCODEX_HOME: owned.configDir, CODEX_HOME: owned.codexHome,
       OCX_OWNER_REGISTRY_DIR: owned.path("registry"), XDG_RUNTIME_DIR: owned.root },
     stdout: "pipe", stderr: "pipe",
   });
-  const output = Promise.all([
-    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  output = Promise.all([
+    parent.exited, new Response(parent.stdout).text(), new Response(parent.stderr).text(),
   ]);
-  let cleanup: Promise<void> | undefined;
-  settleProcesses = () => cleanup ??= (async () => {
-    // Stop the live parent tree first, including descendants still loading their entry.
-    // The test runner is outside that tree. Then join every registered fixture PID,
-    // including a detached replacement whose parent has already exited normally.
-    if (child.exitCode === null && isProcessAlive(child.pid)) killProxy(child.pid);
-    const pids = existsSync(pidsPath) ? readFileSync(pidsPath, "utf8").trim().split("\n").map(Number) : [];
-    for (const pid of pids) {
-      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) throw new Error("invalid fixture PID");
-      if (isProcessAlive(pid)) killProxy(pid);
-    }
-    await output;
-  })();
   const watchdog = setTimeout(() => {
     void settleProcesses!().catch(error => console.error("restart fixture cleanup failed", error));
   }, 18_000);
@@ -129,9 +167,9 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
     for (let i = 0; i < 100 && !existsSync(resultPath); i++) await Bun.sleep(50);
     expect(existsSync(resultPath)).toBe(true);
     const result = JSON.parse(readFileSync(resultPath, "utf8"));
-    expect(result).toMatchObject({ parentPid: child.pid, parentAliveBeforeRecovery: true,
+    expect(result).toMatchObject({ parentPid: parent.pid, parentAliveBeforeRecovery: true,
       observed: "absent", parentExited: true });
-    expect(result.parentResult).toMatchObject({ code: 0, pid: child.pid,
+    expect(result.parentResult).toMatchObject({ code: 0, pid: parent.pid,
       beforeHandoff: { refused: true, pidUnchanged: true },
       successorPid: result.pid, successorRuntime: { pid: result.pid, port: result.port } });
     expect(readFileSync(owned.path("restart-handoff.log"), "utf8")).toContain("is serving port");
@@ -142,6 +180,20 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
     throw error;
   } finally {
     clearTimeout(watchdog);
-    await settleProcesses();
+    if (injectReusedPid) {
+      // This child belongs to the regression, outside the restart fixture tree. Model an
+      // exited role's journal PID now naming a live foreign process; never rely on OS reuse.
+      const foreign = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+        stdout: "ignore", stderr: "ignore",
+      });
+      try {
+        appendFileSync(pidsPath, foreign.pid + "\n");
+        await settleProcesses();
+        expect(isProcessAlive(foreign.pid)).toBe(true);
+      } finally {
+        foreign.kill();
+        await foreign.exited;
+      }
+    } else await settleProcesses();
   }
-}, 25_000);
+}
