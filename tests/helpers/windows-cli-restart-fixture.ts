@@ -1,0 +1,59 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { trackBackgroundWork } from "../../src/lib/background-work";
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
+import { helperPath } from "./repo-root";
+import type { WindowsRecoveryProbe } from "./windows-cli-recovery-state";
+
+// The hosted case exceeded its 30s poll; a delayed native guardian proved safe
+// recovery at 44.23s after stop. Allow twice that measured window, rounded up,
+// for cold PowerShell/Add-Type startup, receipt flush and fresh ACL probes.
+export const WINDOWS_RECOVERY_PROOF_MS = 90_000;
+export const WINDOWS_RESTART_FIXTURE_MS = 300_000;
+
+export async function waitForWindowsRecovery(probe: () => WindowsRecoveryProbe) {
+  const deadline = performance.now() + WINDOWS_RECOVERY_PROOF_MS;
+  let last: WindowsRecoveryProbe;
+  do {
+    last = probe();
+    if (last.entered) {
+      const guardian = "guardian" in last.recovery ? last.recovery.guardian : undefined;
+      if (!guardian || ["absent", "reused", "exited"].includes(guardian.state)) return last;
+    }
+    if (performance.now() >= deadline) throw new Error("native_recovery_proof_timeout: " + JSON.stringify(last));
+    await Bun.sleep(50);
+  } while (true);
+}
+
+/** Failure cleanup must prove recovery too; a failed drain stays tracked. */
+export async function withWindowsRestartRecoveryFixture<T>(descendant: boolean,
+  body: (fixture: { root: string; config: string; alias: string; owner: Bun.Subprocess<"ignore", "pipe", "pipe">;
+    probe: (home?: string) => WindowsRecoveryProbe }) => Promise<T>): Promise<T> {
+  const root = createCodexCliTestRoot("ocx-windows-restart-");
+  await hardenSecretDirAsync(root, { required: true });
+  const config = join(root, "config"), alias = join(root, "home-alias");
+  const helper = helperPath("windows-cli-restart-recovery.ts"), env = { ...process.env, OPENCODEX_HOME: config };
+  const owner = Bun.spawn([process.execPath, helper, descendant ? "owner-descendant" : "owner", root], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  let settled!: () => void;
+  trackBackgroundWork("native restart recovery fixture", new Promise<void>(resolve => { settled = resolve; }));
+  const probe = (home = config): WindowsRecoveryProbe => {
+    const result = Bun.spawnSync([process.execPath, helper, "probe", root], {
+      env: { ...env, OPENCODEX_HOME: home }, timeout: 30_000,
+    });
+    if (result.exitCode !== 0) throw new Error("fixture_probe_failed: " + result.stderr.toString());
+    return JSON.parse(result.stdout.toString());
+  };
+  try { return await body({ root, config, alias, owner, probe }); }
+  finally {
+    writeFileSync(join(root, "stop"), "stop");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([owner.exited, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("fixture_owner_exit_timeout")), WINDOWS_RECOVERY_PROOF_MS);
+      })]);
+    } finally { clearTimeout(timer); }
+    await waitForWindowsRecovery(() => probe());
+    settled(); // Actual Job/receipt proof even when the test body throws.
+  }
+}

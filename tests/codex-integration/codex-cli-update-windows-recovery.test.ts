@@ -3,8 +3,9 @@ import { expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, toNamespacedPath } from "node:path";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
-import { helperPath } from "../helpers/repo-root";
-import { trackBackgroundWork } from "../../src/lib/background-work";
+import { pendingBackgroundWork } from "../../src/lib/background-work";
+import { waitForWindowsRecovery, withWindowsRestartRecoveryFixture, WINDOWS_RESTART_FIXTURE_MS } from "../helpers/windows-cli-restart-fixture";
+import type { WindowsRecoveryProbe } from "../helpers/windows-cli-recovery-state";
 import { startWindowsCliChild } from "../../src/codex/windows-cli-child";
 import { startWindowsCliChildWithNative } from "../../src/codex/windows-cli-child";
 import { WindowsChildNative } from "../../src/codex/windows-cli-child-native";
@@ -191,41 +192,48 @@ for (const acquired of [true, false]) native(`Windows apply seals close before a
   }
 }, 60000);
 for (const descendant of [false, true]) native(`restarted Windows admission fences the surviving native ${descendant ? "descendant" : "installer"} Job, including home aliases`, async () => {
-  const root = createCodexCliTestRoot("ocx-windows-restart-");
-  await hardenSecretDirAsync(root, { required: true });
-  const config = join(root, "config"), alias = join(root, "home-alias");
-  const helper = helperPath("windows-cli-restart-recovery.ts");
-  const env = { ...process.env, OPENCODEX_HOME: config };
-  let settled!: () => void;
-  trackBackgroundWork("native restart recovery fixture", new Promise<void>(resolve => { settled = resolve; }));
-  const owner = Bun.spawn([process.execPath, helper, descendant ? "owner-descendant" : "owner", root], { env, stdout: "pipe", stderr: "pipe" });
-  try {
-  const error = await new Response(owner.stderr).text();
-  expect({ exit: await owner.exited, error }).toEqual({ exit: 0, error: "" });
-  expect(existsSync(join(root, "identity.json"))).toBe(true);
-  const identity = JSON.parse(readFileSync(join(root, "identity.json"), "utf8"));
-  const store = join(config, "codex-cli-update-recovery");
-  const records = readdirSync(store).filter(name => name.endsWith(".json")); expect(records).toHaveLength(1);
-  const record = JSON.parse(readFileSync(join(store, records[0]!), "utf8"));
-  expect(record).toMatchObject({ phase: "child", pgid: identity.pid, windows: { creationTime: identity.creationTime } });
-  expect(record.windows.jobName).toMatch(/^Global\\ocx-cli-/);
-  symlinkSync(config, alias, "junction");
-  const probe = (home = config) => {
-    const result = Bun.spawnSync([process.execPath, helper, "probe", root], { env: { ...env, OPENCODEX_HOME: home } });
-    expect(result.exitCode, result.stderr.toString()).toBe(0);
-    return JSON.parse(result.stdout.toString()).entered as boolean;
-  };
+  await withWindowsRestartRecoveryFixture(descendant, async ({ root, config, alias, owner, probe: observe }) => {
+    const error = await new Response(owner.stderr).text();
+    expect({ exit: await owner.exited, error }).toEqual({ exit: 0, error: "" });
+    expect(existsSync(join(root, "identity.json"))).toBe(true);
+    const identity = JSON.parse(readFileSync(join(root, "identity.json"), "utf8"));
+    const store = join(config, "codex-cli-update-recovery");
+    const records = readdirSync(store).filter(name => name.endsWith(".json")); expect(records).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(store, records[0]!), "utf8"));
+    expect(record).toMatchObject({ phase: "child", pgid: identity.pid, windows: { creationTime: identity.creationTime } });
+    expect(record.windows.jobName).toMatch(/^Global\\ocx-cli-/);
+    symlinkSync(config, alias, "junction");
+    const probe = (home = config) => observe(home).entered;
     writeFileSync(join(root, "ping"), "ping"); await until(() => existsSync(join(root, "pong")));
     expect(probe()).toBe(false);
     expect(probe(alias)).toBe(false);
     writeFileSync(join(root, "stop"), "stop");
-  await until(() => probe());
-  expect(probe(alias)).toBe(true);
-  const proofPath = join(store, record.token + ".proof"), proof = readFileSync(proofPath, "utf8");
-  const foreign = JSON.parse(proof); foreign.windows.jobName = `Global\\ocx-cli-${crypto.randomUUID()}`;
-  writeFileSync(proofPath, JSON.stringify(foreign)); expect(probe()).toBe(false);
-  writeFileSync(proofPath, "{"); expect(probe(alias)).toBe(false);
-  writeFileSync(proofPath, proof); expect(probe()).toBe(true);
-  settled(); // Actual Job/receipt proof, not owner-process exit alone.
-  } finally { writeFileSync(join(root, "stop"), "stop"); }
-}, 90000);
+    const recovered = await waitForWindowsRecovery(() => observe());
+    expect(recovered.entered).toBe(true);
+    expect(["absent", "reused", "exited"]).toContain("guardian" in recovered.recovery ? recovered.recovery.guardian.state : null);
+    expect(recovered.recovery).toMatchObject({ receipt: { token: record.token, phase: "terminal", pgid: null,
+      parentPid: record.parentPid, windows: { jobName: record.windows.jobName } } });
+    expect(probe(alias)).toBe(true);
+    const proofPath = join(store, record.token + ".proof"), proof = readFileSync(proofPath, "utf8");
+    try {
+      const foreign = JSON.parse(proof); foreign.windows.jobName = `Global\\ocx-cli-${crypto.randomUUID()}`;
+      writeFileSync(proofPath, JSON.stringify(foreign)); expect(probe()).toBe(false);
+      writeFileSync(proofPath, "{"); expect(probe(alias)).toBe(false);
+      writeFileSync(proofPath, proof); expect(probe()).toBe(true);
+    } finally { writeFileSync(proofPath, proof); }
+  });
+}, WINDOWS_RESTART_FIXTURE_MS);
+
+native("restart recovery drains the native Job and guardian when the test body fails", async () => {
+  const failure = new Error("deliberate_fixture_body_failure");
+  let recovered: (() => WindowsRecoveryProbe) | undefined;
+  await expect(withWindowsRestartRecoveryFixture(false, async ({ owner, probe }) => {
+    expect(await owner.exited).toBe(0);
+    expect(probe().entered).toBe(false);
+    recovered = probe;
+    throw failure;
+  })).rejects.toBe(failure);
+  expect(recovered!().entered).toBe(true);
+  expect(recovered!().recovery).toMatchObject({ receipt: { phase: "terminal" } });
+  expect(pendingBackgroundWork()).not.toContain("native restart recovery fixture");
+}, WINDOWS_RESTART_FIXTURE_MS);
