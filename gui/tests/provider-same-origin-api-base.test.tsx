@@ -8,9 +8,9 @@ import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { acceptActionDialog } from "./helpers/action-dialog";
 
-// The packaged dashboard is served by the proxy itself and talks to it same-origin, so every
-// page receives apiBase "" (App.tsx: VITE_API_BASE || ""). An empty base is a real server,
-// not a missing one: the provider probes and settings reads must use root-relative URLs.
+// The packaged dashboard is served by the proxy itself and, unless it discovers another
+// target, talks to it same-origin with apiBase "" (App.tsx: VITE_API_BASE || ""). An empty
+// base is a real server, not a missing one: probes and settings reads use root-relative URLs.
 
 const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, unknown>;
@@ -71,6 +71,8 @@ test("same-origin overview shows both provider probes and sends root-relative re
     "/api/providers/test?name=local%20vendor",
     "/api/providers/test-completion?name=local%20vendor",
   ]);
+  expect(requests[1]!.init?.method).toBe("POST");
+  expect(JSON.parse(String(requests[1]!.init?.body))).toEqual({ model: "configured", confirm: true });
 });
 
 test("overview without any api base renders no probes and sends nothing", async () => {
