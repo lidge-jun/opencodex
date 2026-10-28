@@ -337,6 +337,7 @@ can remain resident until separately authorized recovery. A crash still loses in
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
 Authority disposal is proved only after identity/token-fenced lock removal, absent staging and
 an empty pin set. Its `resourcesReleased` evidence is separate from release's ACL diagnostic.
+Only `ENOENT` proves namespace absence; an unreadable lock namespace remains unproved.
 Apply preserves that diagnostic in cleanup errors, but releases the execution token once staging,
 toolchain and authority disposal are all proved, including during terminal recovery.
 A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips

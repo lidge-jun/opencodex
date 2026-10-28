@@ -106,6 +106,23 @@ native("ACL-only release failure deletes only its owned lock and permits a later
   } finally { expect(await next.release()).toBe(true); }
 }, 60000);
 
+native("an unreadable lock namespace never proves apply authority disposal", async () => {
+  const f = await authorityFixture(), guard = await f.acquire();
+  const realStat = fs.lstatSync;
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+    if (path === guard.lock) throw Object.assign(new Error("fixture namespace unreadable"), { code: "EACCES" });
+    return Reflect.apply(realStat, fs, [path, ...args]);
+  }) as typeof fs.lstatSync);
+  acl.setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
+  try {
+    expect(await guard.release()).toBe(false);
+    expect(guard.resourcesReleased).toBe(false);
+  } finally { stat.mockRestore(); acl.setWindowsOwnerAclAsyncRunnerForTests(null); }
+  // This fixture created no child/staging, and restores the observation before teardown.
+  expect(f.owners[0]!.releaseIfClean()).toBe(true);
+  expect(fs.existsSync(guard.lock)).toBe(false);
+}, 60000);
+
 for (const when of ["before ACL", "during ACL"] as const) native(`identity failure ${when} preserves lock and closes pins`, async () => {
   const f = await authorityFixture(), guard = await f.acquire();
   const ctx = f.owners[0]!.resources as { kernel: Parameters<WindowsApplyAuthorityPins["release"]>[1] };

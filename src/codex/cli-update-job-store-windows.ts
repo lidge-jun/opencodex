@@ -55,7 +55,7 @@
  * empirical cross-user proof.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, toNamespacedPath } from "node:path";
 import type { Library, Symbols } from "bun:ffi";
 import * as recoveryFfi from "bun:ffi";
@@ -856,7 +856,12 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
           if (held) releaseLock(ctx, held);
         }
         finally { ctx.pins.closeAll(kernel); }
-        resourcesReleased = pins.remaining === 0 && !stage && (!acquire || !existsSync(lock));
+        let lockAbsent = !acquire;
+        if (acquire) {
+          try { lstatSync(lock); }
+          catch (error) { lockAbsent = (error as NodeJS.ErrnoException).code === "ENOENT"; }
+        }
+        resourcesReleased = pins.remaining === 0 && !stage && lockAbsent;
         return aclVerified && resourcesReleased;
       },
     };
