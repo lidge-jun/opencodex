@@ -16,15 +16,33 @@
  * that same user, and a same-uid process could call `kill` directly. A token here would
  * protect nothing and would imply a boundary that does not exist.
  */
-const USAGE = "Usage: ocx internal desktop-restart-handoff --plan <path> | chatgpt-app-server-filter [--self-test]";
+import type { CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
+
+const USAGE = "Usage: ocx internal desktop-restart-handoff --plan <path> | chatgpt-app-server-filter [--self-test] | codex-exec-target -- <path>";
 
 function optionValue(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-export async function handleInternalCommand(args: readonly string[]): Promise<number> {
+export async function handleInternalCommand(args: readonly string[], execBoundary: CodexExecBoundaryAsyncDeps = {}): Promise<number> {
   const sub = args[0];
+  if (sub === "codex-exec-target") {
+    if (args.length !== 3 || args[1] !== "--" || !args[2] || /[\r\n]/.test(args[2])) {
+      console.error(USAGE);
+      return 2;
+    }
+    try {
+      const { assertCodexExecTargetTrustedAsync } = await import("../codex/exec-boundary");
+      const target = await assertCodexExecTargetTrustedAsync(args[2], execBoundary);
+      if (!target || /[\r\n]/.test(target)) throw new Error("invalid executable path");
+      console.log(target);
+      return 0;
+    } catch (error) {
+      console.error(`OpenCodex refused the app-server executable: ${error instanceof Error ? error.message : "verification failed"}`);
+      return 1;
+    }
+  }
   if (sub === "chatgpt-app-server-filter") {
     if (args.length > 2 || (args[1] !== undefined && args[1] !== "--self-test")) {
       console.error(USAGE);

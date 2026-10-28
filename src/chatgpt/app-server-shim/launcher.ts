@@ -47,24 +47,40 @@ function shellQuote(value: string): string {
 }
 
 /**
- * A failed precondition or a failed self-test runs the original binary with untouched stdout.
+ * A failed filter self-test runs the verified binary with untouched stdout.
+ * Executable verification is required on every invocation, including passthrough and respawns.
  * A filter that passes the self-test and then dies mid-session closes the pipe.
  * Expected (not yet validated against the bundled app-server): the server gets SIGPIPE or a
  * write error and Desktop respawns it through the same launcher.
  */
-export function buildChatgptShimLauncher(argv: readonly string[], real = CHATGPT_APP_CODEX_BINARY): string {
+export function buildChatgptShimLauncher(
+  argv: readonly string[],
+  real = CHATGPT_APP_CODEX_BINARY,
+  validator: readonly string[] = [process.execPath, ...selfLaunchArgv(["internal", "codex-exec-target"])],
+): string {
   return `#!/bin/bash
 # opencodex (experimental): ChatGPT app-server stdout passes through the quota-gate filter.
 REAL=${shellQuote(real)}
 FILTER=(${argv.map(shellQuote).join(" ")})
+VALIDATE=(${validator.map(shellQuote).join(" ")})
 if [ ! -x "$REAL" ]; then
   echo "opencodex (experimental): the bundled app-server is no longer at $REAL; run 'ocx chatgpt launch' again or 'ocx chatgpt restore'." >&2
   exit 127
 fi
+validate_real() {
+  local target
+  if [ ! -x "\${VALIDATE[0]}" ] || ! target=$("\${VALIDATE[@]}" -- "$REAL") || [ -z "$target" ]; then
+    echo "opencodex: app-server execution verification failed; run 'ocx chatgpt launch' again or 'ocx chatgpt restore'." >&2
+    return 126
+  fi
+  REAL="$target"
+}
 if [ "$(uname -s)" = "Darwin" ] && [ -x "\${FILTER[0]}" ] \\
    && "\${FILTER[@]}" --self-test >/dev/null 2>&1; then
+  validate_real || exit 126
   exec "$REAL" "$@" > >(exec "\${FILTER[@]}")
 fi
+validate_real || exit 126
 exec "$REAL" "$@"
 `;
 }

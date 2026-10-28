@@ -586,6 +586,8 @@
   "codex-exec-invocation.test.ts": "codex-integration",
   "exec-trust-boundary.test.ts": "codex-integration",
   "exec-boundary-launch.test.ts": "codex-integration",
+  "exec-launcher-boundary.test.ts": "codex-integration",
+  "desktop-app-server-exec-boundary.test.ts": "clients",
   "exec-known-app-bundles.test.ts": "codex-integration",
   "messaging-local-discovery.test.ts": "codex-integration",
   "messaging-local-cli.test.ts": "codex-integration",
