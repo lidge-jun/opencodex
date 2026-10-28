@@ -91,7 +91,7 @@ test("Windows T3CODE_HOME refuses a tilde expanded against a drive-less home", (
 
 test("POSIX T3CODE_HOME keeps rooted paths and tilde expansion", () => {
   expect(t3codeHomeDir({ T3CODE_HOME: "/shared/t3" }, "/home/test", "linux")).toBe("/shared/t3");
-  expect(t3codeHomeDir({ T3CODE_HOME: "~/t3" }, "/home/test", "linux")).toBe(join("/home/test", "t3"));
+  expect(t3codeHomeDir({ T3CODE_HOME: "~/t3" }, "/home/test", "linux")).toBe("/home/test/t3");
   expect(() => t3codeHomeDir({ T3CODE_HOME: "relative/t3" }, "/home/test", "linux")).toThrow(ClientPathError);
 });
 

@@ -17,7 +17,7 @@ import { normalizeExportModels, singleFragment } from "./model-metadata";
 export function t3codeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
   const override = env.T3CODE_HOME?.trim();
   if (!override) return join(home, ".t3");
-  if (platform !== "win32") return absoluteClientPath(override, home, "T3CODE_HOME");
+  if (platform !== "win32") return absoluteClientPath(override, home, "T3CODE_HOME", platform);
   const expanded = override === "~" ? home
     : override.startsWith("~/") || override.startsWith("~\\") ? win32.join(home, override.slice(2)) : override;
   // isAbsolute also accepts \rooted paths, which still depend on the current drive.
