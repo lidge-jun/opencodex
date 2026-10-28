@@ -3,6 +3,7 @@ import { cancelKiroDeviceLogin, kiroDeviceFlowCountForTests, selectKiroDevicePro
 import { listKiroIamProfiles, parseKiroIamOptions } from "../../../src/oauth/kiro-iam-identity-center";
 import { getAccountSet } from "../../../src/oauth/store";
 import { authorization, kiroDeviceFixture, profileArn, response } from "../../helpers/kiro-device-fixture";
+import { STORE_BUDGET_MS } from "../../helpers/test-budget";
 
 let fixture: ReturnType<typeof kiroDeviceFixture> | undefined;
 afterEach(async () => { await fixture?.close(); fixture = undefined; });
@@ -127,7 +128,7 @@ test("flow-table pressure preserves live IAM profile selection and the active-fl
   await expect(startKiroDeviceLogin("builder-id", "gui-session")).rejects.toThrow("Too many Kiro device logins");
   for (const flow of pending) expect((await statusKiroDeviceLogin(flow.flowId, "gui-session"))?.state).toBe("pending");
   expect((await selectKiroDeviceProfile(choosing.started.flowId, "gui-session", second.arn))?.state).toBe("done");
-});
+}, STORE_BUDGET_MS);
 
 test("cancel and expiry while choosing a profile retain no credential", async () => {
   transport("first@example.test", [profile, second]);
