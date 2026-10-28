@@ -111,9 +111,9 @@ Add a provider first, then connect the tool you already use:
 
 | Tool | How to connect |
 |---|---|
-| Codex | Run `ocx init` and accept the Codex prompt. On a local listener this points Codex's built-in provider at the proxy; then run `codex` as usual. Already set up? The Codex switch on the dashboard's **Connect** page turns routing on or off. |
+| Codex | Turn on the Codex switch on the dashboard's **Connect** page, then run `codex` as usual. On a local listener this points Codex's built-in provider at the proxy. From the terminal, run `ocx init` before adding providers in the dashboard and accept its Codex prompt. |
 | Claude Code | With the `claude` CLI installed, run `ocx claude`. It starts the proxy if needed and launches Claude Code through it. |
-| Claude Desktop | Run `ocx claude desktop`. By default it installs the gateway profile for the whole app; see the [Claude Code guide](https://opencodex.me/guides/claude-code/) for the first-party mode. |
+| Claude Desktop | Run `ocx claude desktop`. On a new install it sets up the gateway profile for the whole app; an existing first-party setup is kept, and `ocx claude desktop apply --gateway` switches explicitly. See the [Claude Code guide](https://opencodex.me/guides/claude-code/). |
 | Grok Build | On a local listener, `ocx start` registers the models when `~/.grok` exists; pick an `ocx-*` model in Grok Build. Remote setups: see the [Grok Build guide](https://opencodex.me/guides/grok-build/). |
 | Tools with a managed integration | Use the dashboard **Connect** page, or `ocx integration client enable --client <id>`. |
 | Any other tool | Set a custom OpenAI-compatible base URL of `http://localhost:10100/v1`, or an Anthropic base URL of `http://localhost:10100`. |

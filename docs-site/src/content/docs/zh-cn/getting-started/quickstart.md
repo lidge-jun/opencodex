@@ -59,7 +59,7 @@ ocx gui       # open the dashboard on the live port
 
 ### Codex
 
-如果你在第 1 步中接受了 Codex 提示，Codex 现在会透明地通过 opencodex 通信。如果因为已有配置而跳过了设置，请使用仪表盘 **Connect** 页面上的 Codex 开关；[Codex 集成](/zh-cn/guides/codex-integration/)说明了它会修改什么以及如何恢复。
+如果你在第 1 步中接受了 Codex 提示，Codex 现在会透明地通过 opencodex 通信。如果你拒绝了该提示，或因为已有配置而跳过了设置，请在运行 Codex 之前打开仪表盘 **Connect** 页面上的 Codex 开关；[Codex 集成](/zh-cn/guides/codex-integration/)说明了它会修改什么以及如何恢复。
 
 ```bash
 codex "Refactor this function for readability"
@@ -88,7 +88,7 @@ ocx claude
 ocx claude desktop
 ```
 
-默认会为整个应用安装网关配置。first-party 模式会让 Desktop 继续使用 claude.ai，只路由其 Code 标签页，详见 [Claude Code](/zh-cn/guides/claude-code/) 中的 Claude Desktop 模式一节。
+全新安装时会为整个应用设置网关配置；已经使用 first-party 模式的安装会保持原模式，可运行 `ocx claude desktop apply --gateway` 明确切换。first-party 模式会让 Desktop 继续使用 claude.ai，只路由其 Code 标签页，详见 [Claude Code](/zh-cn/guides/claude-code/) 中的 Claude Desktop 模式一节。
 
 ### Grok Build
 

@@ -112,9 +112,10 @@ providers and models.
 
 ### Codex
 
-If you accepted the Codex prompt in step 1, Codex now talks to opencodex transparently. If setup
-exited because a config already existed, use the Codex switch on the dashboard's **Connect** page;
-[Codex Integration](/guides/codex-integration/) explains what it changes and how to restore.
+If you accepted the Codex prompt in step 1, Codex now talks to opencodex transparently. If you
+declined it, or setup exited because a config already existed, turn on the Codex switch on the
+dashboard's **Connect** page before running Codex. [Codex Integration](/guides/codex-integration/)
+explains what it changes and how to restore.
 
 ```bash
 codex "Refactor this function for readability"
@@ -145,8 +146,9 @@ tier defaults, other launchers and how to opt out.
 ocx claude desktop
 ```
 
-By default this installs the gateway profile for the whole app. The first-party mode, which keeps
-Desktop on claude.ai and routes only its Code tab, is described under
+On a new install this sets up the gateway profile for the whole app. An install that already uses
+the first-party mode keeps it; run `ocx claude desktop apply --gateway` to switch explicitly. The
+first-party mode, which keeps Desktop on claude.ai and routes only its Code tab, is described under
 [Claude Desktop modes](/guides/claude-code/#claude-desktop-modes-gateway-default-and-first-party).
 
 ### Grok Build
