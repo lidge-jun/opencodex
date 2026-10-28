@@ -35,7 +35,6 @@ import {
 } from "../responses/citation-markers";
 import { declaresCodeModeExec, normalizeDeclaredToolName } from "../types";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "../web-search/sources";
-import { closeOpenMarkdownBlocks } from "../responses/markdown-block-repair";
 import {
   isTranslatorBudgetExceededError,
   releaseTranslatedEvent,
@@ -46,6 +45,7 @@ import {
 import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
+import { createMaxOutputCompletion, type MaxOutputCompletionOptions } from "./max-output-completion";
 
 /** Build a buffered Responses result within a caller-owned or temporary translator budget. */
 export function buildResponseJSON(
@@ -85,7 +85,7 @@ export function buildResponseJSON(
 function buildResponseJSONWithBudget(
   events: AdapterEvent[],
   modelId: string,
-  options?: {
+  options?: MaxOutputCompletionOptions & {
     hideThinkingSummary?: boolean;
     /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
     chatRawReasoningVisible?: boolean;
@@ -118,7 +118,6 @@ function buildResponseJSONWithBudget(
      * so a block that fit live delivery could otherwise overflow here and lose the cache write.
      */
     omitHiddenReasoningEnvelope?: boolean;
-    completeOnMaxOutputTokens?: boolean;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -204,6 +203,7 @@ function buildResponseJSONWithBudget(
   // which is only true for a `done` without a stop reason. A buffered turn whose adapter simply
   // stopped emitting has no terminal at all, and must not be reported as a success.
   let sawTerminal = false;
+  const maxOutputCompletion = createMaxOutputCompletion(options);
   let batchCompaction = emptyChunks();
   let compactionEncryptedContent: string | undefined;
 
@@ -373,6 +373,7 @@ function buildResponseJSONWithBudget(
   };
 
   for (const e of events) {
+    maxOutputCompletion.observe(e);
     if (errorEvent) {
       // Match streaming: once the turn fails, later parallel calls must not become executable
       // completed output. Still release every retained event in order and preserve terminal usage.
@@ -572,6 +573,7 @@ function buildResponseJSONWithBudget(
         break;
       case "incomplete":
         incompleteEvent = e;
+        usage = e.usage ?? usage;
         sawTerminal = true;
         endTurn = e.endTurn;
         if (e.providerState) options?.onProviderState?.(e.providerState);
@@ -621,47 +623,31 @@ function buildResponseJSONWithBudget(
     batchKiroRedacted = undefined;
     batchKiroRedactedBytes = 0;
   }
-  const gracefulComplete = Boolean(options?.completeOnMaxOutputTokens)
-    && (stopReason === "max_tokens" || (incompleteEvent && (truncationReasonFor(incompleteEvent.reason) === "max_output_tokens" || incompleteEvent.reason === "max_output_tokens")));
-
   // A truncated turn must never be installed as replacement history: emit the
   // compaction item only when the turn actually completed (#422).
   if (
     options?.compaction
     && !errorEvent
-    && (!incompleteEvent || gracefulComplete)
+    && !incompleteEvent
     // A stream that stopped without any terminal did not complete either. The original guard
     // could only see explicit failure events, so an adapter EOF slipped past it and installed a
     // truncated summary as replacement history — the exact #422 hazard, reached by a route that
     // did not exist when the guard was written.
     && sawTerminal
-    && (!isTruncatedStopReason(rawStopReason) || gracefulComplete)
+    && !isTruncatedStopReason(rawStopReason)
   ) {
-    const summary = joinChunks(batchCompaction);
-    const fallbackSummary = summary.trim().length > 0 ? summary : "[earlier conversation was compacted]";
-    const item = {
+   const item = {
       type: "compaction", id: `cmp_${uuid()}`,
-      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(fallbackSummary) ?? encodeCompactionSummary(fallbackSummary)),
+      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(batchCompaction)) ?? encodeCompactionSummary(joinChunks(batchCompaction))),
     };
     pushOutput(item, compactionEncryptedContent ? 0 : batchCompaction.bytes);
   }
 
-  if (gracefulComplete) {
-    for (const item of output) {
-      if (typeof item === "object" && item !== null && (item as any).type === "message" && Array.isArray((item as any).content)) {
-        for (const part of (item as any).content) {
-          if (typeof part === "object" && part !== null && part.type === "output_text" && typeof part.text === "string") {
-            part.text = closeOpenMarkdownBlocks(part.text);
-          }
-        }
-      }
-    }
-  }
-
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;
+  const gracefulComplete = maxOutputCompletion.completed && !errorEvent;
   const status = errorEvent
     ? "failed"
-    : ((incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter") && !gracefulComplete)
+    : !gracefulComplete && (incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter")
       ? "incomplete"
       : sawTerminal
         ? "completed"
@@ -687,7 +673,7 @@ function buildResponseJSONWithBudget(
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },
-    } : (!gracefulComplete && stopReason === "max_tokens") ? {
+    } : !gracefulComplete && stopReason === "max_tokens" ? {
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {
       incomplete_details: { reason: "content_filter" },

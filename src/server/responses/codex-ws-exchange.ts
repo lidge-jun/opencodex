@@ -6,8 +6,6 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { isSafeResponseHeader } from "../safe-response-headers";
 import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-ws-request";
-import { encodeCompactionSummary } from "../../responses/compaction";
-import { randomUUID } from "node:crypto";
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
@@ -38,25 +36,12 @@ interface ExchangeOptions {
    * control exchanges and on transports without the metadata channel.
    */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
-  completeOnMaxOutputTokens?: boolean;
 }
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]+$/i;
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isCompactionWsRequest(prepared: PreparedCodexWsRequest): boolean {
-  try {
-    const parsed = JSON.parse(prepared.frameText);
-    const body = record(parsed.payload) ? parsed.payload : parsed;
-    if (body.compaction_trigger !== undefined) return true;
-    if (Array.isArray(body.input) && body.input.some((i: unknown) => record(i) && i.type === "compaction_trigger")) return true;
-    return false;
-  } catch {
-    return false;
-  }
 }
 
 /** Rebuild only permitted metadata: upstream framing describes a different body. */
@@ -132,7 +117,7 @@ function refusalErrorBody(source: unknown): Record<string, string> {
 /** The sole SSE exchange state machine for both one-shot and retained sockets. */
 export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
   const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, bunVersion, nativeControl, beforeContinuation,
-    preOutputRefusalHold, completeOnMaxOutputTokens } = options;
+    preOutputRefusalHold } = options;
   const { frameText, headers } = prepared;
   const signal = init.signal ?? undefined;
   return new Promise<Response>((resolve, reject) => {
@@ -144,9 +129,6 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     let received = false;
     let responseCommitted = false;
     let terminal = false;
-    const isCompaction = isCompactionWsRequest(prepared);
-    let sawCompactionOutput = false;
-    let maxOutputIndex = 0;
     // #4191: the counters behind the failure classification. A user whose long
     // thread died here could not tell an unanswered socket from one that carried
     // only quota frames, because both arrived as the same one-line message.
@@ -633,7 +615,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       }
       const normalized = normalizeResponsesWsRelayEvent(text);
       if (!normalized) return;
-      let { type } = normalized;
+      const { type } = normalized;
       let relayText = normalized.text;
       let controlFrame = false;
       if (metadata) {
@@ -653,59 +635,6 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (encodedText.byteLength > MAX_CODEX_WS_FRAME_BYTES) {
         failStream("codex websocket frame exceeds the response size limit");
         return;
-      }
-      if (record(normalized.payload)) {
-        const item = normalized.payload.item;
-        if (record(item) && item.type === "compaction") {
-          sawCompactionOutput = true;
-        }
-        const idx = normalized.payload.output_index;
-        if (typeof idx === "number" && idx >= maxOutputIndex) {
-          maxOutputIndex = idx + 1;
-        }
-      }
-      if (type === "response.incomplete" && completeOnMaxOutputTokens) {
-        const resp = record(normalized.payload.response) ? normalized.payload.response : null;
-        const details = resp && record(resp.incomplete_details) ? resp.incomplete_details : null;
-        if (details?.reason === "max_output_tokens") {
-          if (isCompaction && !sawCompactionOutput) {
-            const summary = "[earlier conversation was compacted]";
-            const cmpItem = {
-              type: "compaction",
-              id: `cmp_${randomUUID()}`,
-              status: "completed",
-              encrypted_content: encodeCompactionSummary(summary),
-            };
-            const cmpDone = {
-              type: "response.output_item.done",
-              output_index: maxOutputIndex++,
-              item: cmpItem,
-            };
-            const cmpDoneText = encoder.encode(JSON.stringify(cmpDone));
-            const cmpPrefix = encoder.encode("event: response.output_item.done\ndata: ");
-            const cmpSuffix = encoder.encode("\n\n");
-            const cmpFrame = new Uint8Array(cmpPrefix.byteLength + cmpDoneText.byteLength + cmpSuffix.byteLength);
-            cmpFrame.set(cmpPrefix);
-            cmpFrame.set(cmpDoneText, cmpPrefix.byteLength);
-            cmpFrame.set(cmpSuffix, cmpPrefix.byteLength + cmpDoneText.byteLength);
-            controller.enqueue(cmpFrame);
-            sawCompactionOutput = true;
-          }
-          const completedResp: Record<string, unknown> = {
-            ...resp,
-            status: "completed",
-          };
-          delete completedResp.incomplete_details;
-          const completedPayload = {
-            ...normalized.payload,
-            type: "response.completed",
-            response: completedResp,
-          };
-          relayText = JSON.stringify(completedPayload);
-          normalized.text = relayText;
-          normalized.payload = completedPayload;
-          type = "response.completed";
-        }
       }
       if (!controlFrame && !type.startsWith("response.") && type !== "error") return;
       let steeringEnded = false;

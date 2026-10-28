@@ -16,7 +16,6 @@ import type { NativeResponseControl } from "./native-response-control";
 // (passthrough relay, adapter parsers, usage sniffing) is unchanged.
 
 import { codexWsReuseAcrossTurnsEnabled } from "../../config/codex-ws-reuse-setting";
-import { loadConfig } from "../../config";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
 import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
@@ -253,6 +252,5 @@ export async function codexWsUpstreamFetch(
     beforeContinuation, onPhysicalDispatch,
     preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
-    completeOnMaxOutputTokens: loadConfig().completeOnMaxOutputTokens ?? false,
   });
 }
