@@ -57,7 +57,7 @@ linked sources after the quota await to reject revoked or rotated captures.
 
 ## Compact desktop usage
 
-The standalone `/#/tray` GUI route presents local usage and account limits without the
+The standalone `/#/tray` GUI route presents local usage and account limits without the Advisor settings in `src/server/management/advisor-routes.ts` apply the [config admission contract](config.md) before candidate derivation, live publication and activation. A refused deadline returns the existing `write_failed` response; successful response shapes are unchanged.
 full dashboard navigation. It reuses the existing API session and fetch wrapper; it
 has no Tauri IPC capability. Companion settings control its sections and chart. Account
 limits use account-level management reads rather than attributing aggregate provider
