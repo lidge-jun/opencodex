@@ -93,7 +93,7 @@ test.skipIf(process.platform === "win32")("messaging SSH consumers pass hostile 
     expect(captured[1]!.argv).toEqual(buildFingerprintArgv(probePath));
     expect(control.argv).toEqual(buildExecArgv({ alias: ssh, knownHostsFile: pinnedPath(control.argv),
       argv: remoteOcxArgv(["message", "_control"]) }));
-    expect(probe.argv.slice(-3)).toEqual(["--", ssh, "true"]);
+    expect(probe.argv.slice(-3)).toEqual(["--", ssh, "echo ocx-link-probe"]);
     expect(control.argv.slice(-3, -1)).toEqual(["--", ssh]);
     expect(control.argv.at(-1)).toStartWith("sh '-c' '");
     expect(control.argv.at(-1)).toEndWith("'ocx' 'message' '_control'");

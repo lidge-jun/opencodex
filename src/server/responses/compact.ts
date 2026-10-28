@@ -1,6 +1,7 @@
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { createPhysicalSendReporter, rebindPhysicalSend } from "../../lib/request-execution-budget";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { createInferenceSendBudget } from "../inference/context";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
@@ -80,6 +81,7 @@ import {
 } from "../../codex/auth-context";
 import {
   forceRefreshMainAccountToken,
+  mainAccountTokenQuotaWriter,
   type NativeMainRefreshDependencies,
 } from "../../codex/main-account";
 import {
@@ -179,7 +181,7 @@ import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregi
 import type { AdmissionLease } from "../../lib/admission";
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { supportedLadderFor } from "../effort-policy";
@@ -371,6 +373,7 @@ async function refreshNativeMainCompactContext(args: {
       ...authCtx,
       accessToken: refreshed.accessToken,
       chatgptAccountId: refreshed.chatgptAccountId,
+      mainQuotaWriter: mainAccountTokenQuotaWriter(refreshed) ?? authCtx.mainQuotaWriter,
     };
     const refreshedProvider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(provider),
@@ -1051,7 +1054,7 @@ export async function handleResponsesCompact(
       }
       compactHostAdmissionLease = null;
     };
-    const connectMs = config.connectTimeoutMs ?? 200_000;
+    const connectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(compactUrl) });
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -1172,7 +1175,9 @@ export async function handleResponsesCompact(
           body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }),
         }, upstreamRecovery),
         req.signal,
-        connectMs,
+        // Keyed sends can refresh their destination after pacing. Their physical send below
+        // owns the header clock; the outer wrapper owns pacing and client cancellation only.
+        sendProvider.authMode !== "forward" && sendProvider.apiKey ? 0 : connectMs(),
         false,
         providerFetch(sendProvider, undefined, {
           providerName: route.providerName,
@@ -1216,10 +1221,12 @@ export async function handleResponsesCompact(
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(safeHostLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
-              return sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), compactUrl,
+              const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
+                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), String(input),
+                physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
+              return fetchWithHeaderTimeout(compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
-                { providerName: route.providerName, provider: sendProvider });
+                init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
           ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),
         }),
@@ -1739,7 +1746,7 @@ export async function handleResponsesCompact(
     }
     if (!response.ok) return response;
     let json: { output?: unknown[]; status?: unknown; error?: unknown };
-    if (response.headers.get("content-type")?.includes("text/event-stream")) {
+    if (hasResponseMediaType(response.headers, "text/event-stream")) {
       if (!response.body) {
         return formatErrorResponse(502, "server_error", "compaction turn returned an empty event stream");
       }

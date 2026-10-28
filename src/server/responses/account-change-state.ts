@@ -199,6 +199,13 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
     delete record.conversation;
     changed = true;
   }
+  if (record.client_metadata && typeof record.client_metadata === "object" && !Array.isArray(record.client_metadata)) {
+    const cm = record.client_metadata as Record<string, unknown>;
+    if ("x-codex-turn-state" in cm) {
+      delete cm["x-codex-turn-state"];
+      changed = true;
+    }
+  }
   // Encrypted reasoning and compaction ciphertext are deliberately NOT touched here. #2247
   // already strips them when a pooled thread moves accounts, and in a specific shape: the
   // reasoning item keeps its readable summary with an emptied content array, and the compaction
@@ -230,6 +237,7 @@ export function rememberServingConversationStateIssuer(
 
 export interface ApplyAccountChangeConversationStateScrubArgs {
   body: unknown;
+  headers?: Headers;
   bindingKey: string;
   servingAccountId: string;
   /** Account this request body was prepared for, when this is an in-request move. */
@@ -257,9 +265,13 @@ export function applyAccountChangeConversationStateScrub(
   // The issuer record can outlive the serving-route cache. Even a retained ciphertext cannot
   // make its reasoning item id resolvable in the new account's store.
   if (parsed) parsed._dropForeignReasoningItemIds = true;
-  if (canPortConversationState(collectConversationStateCarriers(body)).portable) return false;
+  let headerScrubbed = false;
+  if (args.headers?.has("x-codex-turn-state")) {
+    args.headers.delete("x-codex-turn-state");
+    headerScrubbed = true;
+  }
   const scrubbed = scrubUnportableConversationStateInPlace(body);
-  if (!scrubbed) return false;
+  if (!scrubbed && !headerScrubbed) return false;
   if (parsed) {
     delete parsed.previousResponseId;
     parsed._stripNativeCompactionEncryptedContent = true;

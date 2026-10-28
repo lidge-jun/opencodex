@@ -4,6 +4,7 @@ import type { ProviderFetch } from "../server/responses/fetch-helpers";
 
 /** One iteration's cumulative header budget; only local pacing admission pauses its clock. */
 export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
+  const disabled = timeoutMs <= 0;
   const controller = new AbortController();
   const signal = AbortSignal.any([parent, controller.signal]);
   let remainingMs = timeoutMs;
@@ -18,7 +19,7 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
   current.signal.addEventListener("abort", relayExpiry, { once: true });
 
   const pause = () => {
-    if (cleared || pacingWaits++ > 0) return;
+    if (disabled || cleared || pacingWaits++ > 0) return;
     remainingMs = Math.max(0, remainingMs - (performance.now() - armedAt));
     current.clear();
     current.signal.removeEventListener("abort", relayExpiry);
@@ -26,7 +27,7 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
     if (remainingMs === 0 && !signal.aborted) controller.abort(timeoutReason);
   };
   const resume = () => {
-    if (cleared || --pacingWaits > 0 || signal.aborted) return;
+    if (disabled || cleared || --pacingWaits > 0 || signal.aborted) return;
     armedAt = performance.now();
     current = clearableDeadline(remainingMs, parent);
     current.signal.addEventListener("abort", relayExpiry, { once: true });

@@ -11,6 +11,16 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 该推断默认关闭，需要按渠道设置 `inferContextWindow: true` 开启。未开启时，缺少窗口的模型使用已启用的 Context cap，否则回退到 128k。
 
+## GPT-6.1 Terra
+
+[GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) 于 2026年10月26日发布，是 GPT-5.6 Terra 的后继型号。`gpt-6.1-terra` 与 `gpt-5.6-terra` 并列提供，不修改默认模型或子代理列表。GitHub Copilot 使用 Responses；OpenRouter ID 为 `openai/gpt-6.1-terra`，上下文为 1,050,000，每百万 token 输入 $1.00、输出 $5.00。
+
+原生 Codex：默认上下文 500,000，长上下文上限 872,000，默认 effort 为 `low`，级别为 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。原生 `ultra` 在传输时映射为 `max`。原生条目仅提供 Fast 高速模式。
+
+[OpenAI API](https://developers.openai.com/api/docs/models/gpt-6.1-terra)：上下文 1,050,000，最大输出 128,000；支持文本和图像输入、文本输出；知识截止日期为 2026-06-01。effort 为 `none`、`low`、`medium`（默认）、`high`、`xhigh`、`max`。端点为 `v1/responses` 和 `v1/chat/completions`；工具调用必须使用 Responses。
+
+每百万 token：输入 $1.00、缓存输入 $0.05、缓存写入 $1.25（30分钟）、输出 $5.00。输入超过 272,000 token 时，整个请求按输入和缓存 2×、输出 1.5×计费，依次为 $2.00 / $0.10 / $2.50 / $7.50。Fast 模式价格为 2×。
+
 ## 首次注册时的模型选择
 
 新的非 OAuth 连接会等待可靠的模型列表，再公开模型。如果 Models 标签页中去重后的模型行达到20个，所有模型开关初始为 OFF，但提供者本身保持 ACTIVE。实际认证方式为 OAuth 或 ChatGPT 登录的连接保留默认设置。
@@ -52,6 +62,8 @@ ocx models provider openrouter on
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手动固定的账号降级时，`hold` 继续使用并记录警告；`detour-new-threads` 只把新线程放到其他账号。不会改派进行中的请求，也不会在已发送后重发。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 单个入站 JSON 请求体解码后大小的字节上限。省略或设为 `0` 会保留 256 MiB 默认值；配置值限制在 1 至 512 MiB。修改后需要重启。超限会返回本地 HTTP 413，错误代码为 `inbound_body_too_large`。生效上限大于 256 MiB 时，还会启用 `maxConcurrentInboundBodyBytes` 共享门槛；仅提高单请求上限不会提高共享预算。受约束的路径与详情见[入站请求体准入](/zh-cn/reference/inbound-body-admission/)。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | 可选的顶层共享准入预算，单位为字节，仅在生效的 `maxInboundBodyBytes` 大于 256 MiB 时启用。省略、`0` 或无效值均使用不变的 512 MiB 默认值。有效的正整数在使用时限制在 512 MiB 至 2 GiB（`536870912` 至 `2147483648`）范围内。修改后需要重启；同一进程内的所有监听器共享一个预算。这是准入计量，并非预先分配的内存、RSS 上限或按 RAM 自动调整的容量。2 GiB 必须由运营者明确选择。配置示例、队列及响应生命周期的取舍，以及默认预算为何在解析前只允许一个完整 512 MiB 上传，见[入站请求体准入](/zh-cn/reference/inbound-body-admission/)。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端点：`"long"`；其他 Anthropic 兼容端点：`"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。未设置时，发往 `api.anthropic.com`（API 密钥或 OAuth 账号池）的请求使用 1 小时 TTL，兼容网关和厂商端点保持 5 分钟 TTL。显式设置的值始终优先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
@@ -128,7 +140,7 @@ selector，而不是分配一个新名称。
 | `modelReasoningEfforts?` | `Record<string, string[]>` | 按模型设置的标签。空列表会隐藏 effort 控件。 |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 将某个模型设为 `false`，即可停止暴露摘要并移除摘要交付字段。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 按模型设置的 Responses 交付枚举；会重写现有的 delivery 字段。 |
-| `modelAdapters?` | `Record<string, string>` | 按模型设置的 `openai-chat` 或 `openai-responses` 线协议覆盖项，用于混合线协议网关。显式条目优先于注册表默认值；DeepSeek 预设可以为 `deepseek-v4-flash` 选择原生 Responses，GitHub Copilot 则为 模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）声明了 Responses 专用默认值，因为这些模型在代理流量下会拒绝 `/chat/completions`。没有内置默认值的模型（例如 `gpt-5.4-nano`）可以在此手动启用。单一线协议上游固定项和规范 ChatGPT forward 会拒绝覆盖。 |
+| `modelAdapters?` | `Record<string, string>` | 按模型设置的 `openai-chat` 或 `openai-responses` 线协议覆盖项，用于混合线协议网关。显式条目优先于注册表默认值；DeepSeek 预设可以为 `deepseek-v4-flash` 选择原生 Responses，GitHub Copilot 则为 模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）声明了 Responses 专用默认值，因为这些模型在代理流量下会拒绝 `/chat/completions`。没有内置默认值的模型（例如 `gpt-5.4-nano`）可以在此手动启用。单一线协议上游固定项和规范 ChatGPT forward 会拒绝覆盖。 |
 | xAI Responses 启用项（仪表板） | 开关 | 仅用于 `xai`，以原子方式设置或清除 `grok-4.5` 和 `grok-4.6` 的 `modelAdapters` 条目。若只存在一个条目，则显示混合状态，直到下次开关写入将两者统一。其他覆盖项和层级行为不变。 Grok 4.7 在 OAuth 上通过注册表线协议默认使用 Responses，也可通过显式的 `modelAdapters["grok-4.7"] = "openai-chat"` 条目切换到 Chat。 |
 | `xaiResponsesXSearch?` | `boolean` | 默认禁用。在 xAI Responses 目标上，仅当有效的 `web_search` 工具在最终请求规范化后仍保留时，才附加由提供方托管的 `x_search` 声明。不会重复已有声明，绝不会扩大调用方的 `tool_choice`/`allowed_tools` 选择范围，并且此项独立于网络搜索辅助服务的 `search.xSearch` 选项。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | 非 forward Responses gateway 的精确模型 ID opt-in，用于上游预留 hosted tool namespace 的情况。目前只支持 `["image_generation"]`；匹配模型必须使用 `openai-responses` wire 且支持该 hosted 工具。它会移除冲突的客户端 `image_gen` 声明，并改写其 selector 以保持调用方的 tool choice。对于 OpenAI API 的虚拟 `-pro` 模型，先匹配所选公开 ID，未命中时才使用解析出的基础 wire-model ID 作为回退。`modelAdapters` 会先按公开 ID、再按基础 ID 解析；后一次结果决定最终 wire。未配置模型保持普通 alias 行为。 |

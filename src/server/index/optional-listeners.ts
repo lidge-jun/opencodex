@@ -103,6 +103,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     start(ctx) {
       activeConfig = ctx.config;
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
+        connectionGeneration: linkId => supervisor.connectionGeneration?.(linkId),
         keyFingerprints: apiKeyId => {
           const entry = activeConfig?.apiKeys?.find(candidate => candidate.id === apiKeyId);
           if (!entry?.key) return [];

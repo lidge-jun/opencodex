@@ -10,8 +10,9 @@ const MAX_TOTAL_CHARS = 8000;
 /** Bound for a batched error status so every query's status line stays small. */
 const MAX_BATCH_ERROR_CHARS = 300;
 
+/** Truncate to at most `max` UTF-16 units without splitting a surrogate pair, then mark the cut. */
 function clamp(s: string, max: number): string {
-  return s.length <= max ? s : `${s.slice(0, max)}\n…[truncated]`;
+  return s.length <= max ? s : `${safePrefix(s, max)}\n…[truncated]`;
 }
 
 /** A prefix of at most `max` UTF-16 units that never ends on half of a surrogate pair. */
@@ -25,7 +26,7 @@ function safePrefix(s: string, max: number): string {
 
 /** Clamp and sanitize a query string for display in the tool result boundary. */
 function safeQuery(q: string): string {
-  const clamped = q.length <= 200 ? q : `${q.slice(0, 200)}…`;
+  const clamped = q.length <= 200 ? q : `${safePrefix(q, 200)}…`;
   // Strip angle brackets so the query can't close/open XML-ish boundary tags.
   return clamped.replace(/[<>]/g, "");
 }

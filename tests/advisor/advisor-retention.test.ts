@@ -30,6 +30,29 @@ async function run(firstEvents: AsyncIterable<AdapterEvent>, budget?: Translator
   return { events, requests, questions };
 }
 
+test("an explicitly unfinished advisor call cannot execute or trigger a continuation", async () => {
+  const result = await run(stream([
+    { type: "tool_call_start", id: "unfinished", name: "advisor" },
+    { type: "tool_call_delta", arguments: '{"question":"fixture"}' },
+    { type: "tool_call_end", incomplete: true },
+    { type: "incomplete", reason: "max_output_tokens" },
+  ]));
+  expect(result.questions).toEqual([]);
+  expect(result.requests).toEqual([]);
+  expect(result.events.at(-1)).toMatchObject({ type: "incomplete", reason: "max_output_tokens" });
+});
+
+test("an unfinished sibling prevents replaying a completed advisor call", async () => {
+  const result = await run(stream([
+    ...call("completed", '{"question":"fixture"}'),
+    { type: "tool_call_start", id: "unfinished", name: "advisor" },
+    { type: "tool_call_delta", arguments: "{}" },
+    { type: "tool_call_end", incomplete: true }, done,
+  ]));
+  expect(result.questions).toEqual([]);
+  expect(result.requests).toEqual([]);
+});
+
 test("parser call release cannot free the Advisor's retained argument copies", async () => {
   const budget = createTranslatorBudget({ maxTurnBytes: 2_048 });
   let closed = 0;

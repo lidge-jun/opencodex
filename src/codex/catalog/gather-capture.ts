@@ -39,6 +39,7 @@ import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, mo
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { applyRegistryCapabilitySeedFill } from "./model-hints";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -360,6 +361,8 @@ export function captureProviderGather(
 ): CapturedProviderGather {
   const metadataConfigDir = getConfigDir();
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
+  // Bound seed windows while the clone still distinguishes operator settings from defaults.
+  applyRegistryCapabilitySeedFill(name, enriched);
   enrichProviderFromRegistry(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
   const registryEntry = registryTransportMatch ? getProviderRegistryEntry(name) : undefined;
@@ -552,6 +555,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     maxOut: prov.modelMaxOutputTokens ?? null,
     autoCompact: prov.modelAutoCompactTokenLimits ?? null,
     inMod: prov.modelInputModalities ?? null,
+    inModAll: prov.inputModalities ?? null,
     capabilities: prov.modelCapabilities ?? null,
     re: prov.modelReasoningEfforts ?? null,
     suppressMax: prov.modelSuppressSyntheticMax ?? null,

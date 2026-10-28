@@ -40,6 +40,7 @@ import type {
   OpencodeV2ProviderBlock,
 } from "../clients/config-export";
 import type { EffectiveModelExportMetadata } from "../clients/config-export/contracts";
+import { resolveExportReasoningAxes } from "../clients/config-export/reasoning-metadata";
 import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { configuredAdminToken, opencodeCatalogToken } from "../lib/admin-secrets";
@@ -91,6 +92,11 @@ export interface OpencodeRoutedModel {
   displayName?: string;
   /** Declared effort ladder; exported as opencode model variants when present. */
   reasoningEfforts?: readonly string[];
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
+  defaultReasoningEffort?: string;
 }
 
 /** Row shape from authenticated GET /api/models on the running proxy. */
@@ -120,6 +126,9 @@ export interface OpencodeProxyModelRow {
   inputModalities?: string[];
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
   reasoningEfforts?: string[];
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   /** Declared default effort from `/api/models`. */
   defaultReasoningEffort?: string;
   /**
@@ -180,9 +189,14 @@ function opencodeLaunchCatalog(
       id: model.id,
       contextWindow: model.contextWindow,
       displayName: model.displayName,
-      ...(model.reasoningEfforts && model.reasoningEfforts.length > 0
+      ...(model.reasoningEfforts !== undefined
         ? { reasoningEfforts: [...model.reasoningEfforts] }
         : {}),
+      ...(model.supportsReasoning !== undefined ? { supportsReasoning: model.supportsReasoning } : {}),
+      ...(model.supportsThinkingToggle !== undefined ? { supportsThinkingToggle: model.supportsThinkingToggle } : {}),
+      ...(model.supportsReasoningEffort !== undefined ? { supportsReasoningEffort: model.supportsReasoningEffort } : {}),
+      ...(model.defaultThinkingEnabled !== undefined ? { defaultThinkingEnabled: model.defaultThinkingEnabled } : {}),
+      ...(model.defaultReasoningEffort !== undefined ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
     })),
   ];
 }
@@ -372,14 +386,8 @@ export function opencodeCatalogFromProxyRows(
     const maxTokens = effective?.maxTokens ?? row.maxOutputTokens;
     const maxInputTokens = effective?.maxInputTokens ?? row.maxInputTokens;
     const inputModalities = effective?.inputModalities ?? row.inputModalities;
-    const reasoningEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
-    // The projection is the authority on the default: when it exists, an absent default means
-    // NO declared default, and falling back to the row would reintroduce the picker's
-    // synthetic medium/low value. Rows without one (older hubs, hand-built rows) keep the
-    // row's own value.
-    const defaultReasoningEffort = effective !== undefined
-      ? effective.defaultReasoningEffort
-      : row.defaultReasoningEffort;
+    const { supportsThinkingToggle, supportsReasoningEffort, defaultThinkingEnabled,
+      reasoningEfforts, defaultReasoningEffort } = resolveExportReasoningAxes(effective, row);
     const supportsTools = effective?.supportsTools ?? row.supportsTools;
     const supportsReasoning = effective?.supportsReasoning ?? row.supportsReasoning;
     const supportsReasoningSummaries = effective?.supportsReasoningSummaries ?? row.supportsReasoningSummaries;
@@ -398,6 +406,9 @@ export function opencodeCatalogFromProxyRows(
       ...(typeof row.fastRowAvailable === "boolean" ? { fastRowAvailable: row.fastRowAvailable } : {}),
       // `[]` is a declaration, not an absence: an explicit no-rungs ladder stays empty here.
       ...(Array.isArray(reasoningEfforts) ? { reasoningEfforts: [...reasoningEfforts] } : {}),
+      ...(typeof supportsThinkingToggle === "boolean" ? { supportsThinkingToggle } : {}),
+      ...(typeof supportsReasoningEffort === "boolean" ? { supportsReasoningEffort } : {}),
+      ...(typeof defaultThinkingEnabled === "boolean" ? { defaultThinkingEnabled } : {}),
       ...(typeof defaultReasoningEffort === "string" && defaultReasoningEffort.length > 0
         ? { defaultReasoningEffort }
         : {}),

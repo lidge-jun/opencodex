@@ -446,6 +446,155 @@ test("quota diagnostics normalize and clear on recovery or management failure", 
   expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBeUndefined();
 });
 
+test("a paused account without cached quota does not fail a successful account refresh", async () => {
+  const accounts = [
+    { id: "active", active: true, paused: false, quotaMode: "probe", quota: reading, quotaUnavailable: false },
+    { id: "paused", active: false, paused: true, quotaMode: "probe", quota: null, quotaUnavailable: true },
+  ];
+  respond = async url => Response.json({
+    activeAccountId: "active",
+    accounts: url.includes("quota=1") ? accounts : accounts.map(({ id, active, paused, quotaMode }) => ({ id, active, paused, quotaMode })),
+  });
+  await act(async () => {
+    expect(await pools.fetchAccountSets(["google-antigravity"], true)).toBe(true);
+  });
+  expect(pools.accountSets["google-antigravity"].accounts.find(row => row.id === "paused"))
+    .toMatchObject({ paused: true, quota: null, quotaUnavailable: true });
+});
+
+test("a refresh with only paused accounts does not report a quota failure", async () => {
+  const accounts = [{ id: "paused", active: true, paused: true, quotaMode: "probe", quota: null, quotaUnavailable: true }];
+  respond = async url => Response.json({
+    activeAccountId: "paused",
+    accounts: url.includes("quota=1") ? accounts : accounts.map(({ id, active, paused, quotaMode }) => ({ id, active, paused, quotaMode })),
+  });
+  await act(async () => {
+    expect(await pools.fetchAccountSets(["google-antigravity"], true)).toBe(true);
+  });
+});
+
+test("an unavailable unpaused account still fails beside a skipped paused account", async () => {
+  const accounts = [
+    { id: "active", active: true, paused: false, quotaMode: "probe", quota: reading, quotaUnavailable: true },
+    { id: "paused", active: false, paused: true, quotaMode: "probe", quota: null, quotaUnavailable: true },
+  ];
+  respond = async url => Response.json({
+    activeAccountId: "active",
+    accounts: url.includes("quota=1") ? accounts : accounts.map(({ id, active, paused, quotaMode }) => ({ id, active, paused, quotaMode })),
+  });
+  await act(async () => {
+    expect(await pools.fetchAccountSets(["google-antigravity"], true)).toBe(false);
+  });
+});
+
+for (const scenario of [
+  { name: "a paused key is unavailable", enabledUnavailable: false, unsupportedUnavailable: false, allPaused: false, expected: true },
+  { name: "an enabled key is unavailable", enabledUnavailable: true, unsupportedUnavailable: false, allPaused: false, expected: false },
+  { name: "an unsupported key has unavailable quota", enabledUnavailable: false, unsupportedUnavailable: true, allPaused: false, expected: true },
+  { name: "every key is paused", enabledUnavailable: false, unsupportedUnavailable: false, allPaused: true, expected: true },
+]) {
+  test(`API-key quota refresh result is scoped correctly when ${scenario.name}`, async () => {
+    const keys = scenario.allPaused
+      ? [{ id: "paused", masked: "paused", active: false, disabled: true, quotaMode: "probe", quota: null, quotaUnavailable: true }]
+      : [
+        { id: "enabled", masked: "enabled", active: true, disabled: false, quotaMode: "probe", quota: scenario.enabledUnavailable ? null : reading, quotaUnavailable: scenario.enabledUnavailable },
+        { id: "paused", masked: "paused", active: false, disabled: true, quotaMode: "probe", quota: null, quotaUnavailable: true },
+        ...(scenario.unsupportedUnavailable ? [{ id: "unsupported", masked: "unsupported", active: false, disabled: false, quotaMode: "unsupported", quotaUnavailable: true }] : []),
+      ];
+    respond = async url => Response.json({
+      activeId: scenario.allPaused ? null : "enabled",
+      keys: url.includes("quota=1") ? keys : keys.map(({ id, active, disabled, quotaMode }) => ({ id, active, disabled, quotaMode })),
+    });
+    await act(async () => {
+      expect(await pools.fetchKeyPools(["fixture"], true)).toBe(scenario.expected);
+    });
+    expect(pools.keyPools.fixture.find(row => row.id === "paused"))
+      .toMatchObject({ disabled: true, quota: null, quotaUnavailable: true });
+  });
+}
+
+test.each([
+  { desc: "returns 503", error: () => new Response(null, { status: 503 }) },
+  { desc: "throws", error: () => { throw new Error("quota network error"); } },
+])("OAuth quota-request rejection ($desc) marks unpaused account unavailable without touching paused account", async ({ error }) => {
+  const accounts = [
+    { id: "active", active: true, paused: false, quotaMode: "probe" as const, quota: reading },
+    { id: "paused", active: false, paused: true, quotaMode: "probe" as const, quota: reading },
+  ];
+  respond = async url => {
+    if (url.includes("quota=1")) return error();
+    return Response.json({ activeAccountId: "active", accounts });
+  };
+  await act(async () => {
+    expect(await pools.fetchAccountSets(["google-antigravity"], true)).toBe(false);
+  });
+  const current = pools.accountSets["google-antigravity"].accounts;
+  expect(current.find(row => row.id === "active")).toMatchObject({ quota: reading, quotaUnavailable: true, quotaPending: false });
+  expect(current.find(row => row.id === "paused")).toMatchObject({ quota: reading, quotaUnavailable: false });
+});
+
+test.each([
+  { desc: "returns 503", error: () => new Response(null, { status: 503 }) },
+  { desc: "throws", error: () => { throw new Error("quota network error"); } },
+])("OAuth quota-request rejection ($desc) when all accounts are paused returns false without marking paused accounts unavailable", async ({ error }) => {
+  const accounts = [
+    { id: "paused-a", active: false, paused: true, quotaMode: "probe" as const, quota: reading },
+    { id: "paused-b", active: false, paused: true, quotaMode: "probe" as const },
+  ];
+  respond = async url => {
+    if (url.includes("quota=1")) return error();
+    return Response.json({ activeAccountId: null, accounts });
+  };
+  await act(async () => {
+    expect(await pools.fetchAccountSets(["google-antigravity"], true)).toBe(false);
+  });
+  const current = pools.accountSets["google-antigravity"].accounts;
+  expect(current.find(row => row.id === "paused-a")).toMatchObject({ quota: reading, quotaUnavailable: false });
+  expect(current.find(row => row.id === "paused-b")?.quotaUnavailable).toBe(false);
+});
+
+test.each([
+  { desc: "returns 503", error: () => new Response(null, { status: 503 }) },
+  { desc: "throws", error: () => { throw new Error("key quota network error"); } },
+])("API-key quota-request rejection ($desc) marks enabled key unavailable without touching disabled key", async ({ error }) => {
+  const keys = [
+    { id: "enabled", masked: "enabled", active: true, disabled: false, quotaMode: "probe" as const, quota: reading },
+    { id: "disabled", masked: "disabled", active: false, disabled: true, quotaMode: "probe" as const, quota: reading },
+  ];
+  respond = async url => {
+    if (url.includes("quota=1")) return error();
+    return Response.json({ activeId: "enabled", keys });
+  };
+  await act(async () => {
+    expect(await pools.fetchKeyPools(["fixture"], true)).toBe(false);
+  });
+  const current = pools.keyPools.fixture;
+  expect(current.find(row => row.id === "enabled")).toMatchObject({ quota: reading, quotaUnavailable: true, quotaPending: false });
+  expect(current.find(row => row.id === "disabled")).toMatchObject({ quota: reading, quotaUnavailable: false });
+});
+
+test.each([
+  { desc: "returns 503", error: () => new Response(null, { status: 503 }) },
+  { desc: "throws", error: () => { throw new Error("key quota network error"); } },
+])("API-key quota-request rejection ($desc) when all probe keys are disabled returns true without marking keys unavailable", async ({ error }) => {
+  const keys = [
+    { id: "disabled-a", masked: "d-a", active: false, disabled: true, quotaMode: "probe" as const, quota: reading },
+    { id: "disabled-b", masked: "d-b", active: false, disabled: true, quotaMode: "probe" as const },
+    { id: "unsupported", masked: "u", active: true, disabled: false, quotaMode: "unsupported" as const },
+  ];
+  respond = async url => {
+    if (url.includes("quota=1")) return error();
+    return Response.json({ activeId: "unsupported", keys });
+  };
+  await act(async () => {
+    expect(await pools.fetchKeyPools(["fixture"], true)).toBe(true);
+  });
+  const current = pools.keyPools.fixture;
+  expect(current.find(row => row.id === "disabled-a")?.quotaUnavailable).toBe(false);
+  expect(current.find(row => row.id === "disabled-b")?.quotaUnavailable).toBe(false);
+  expect(current.find(row => row.id === "unsupported")?.quotaUnavailable).toBe(false);
+});
+
 test("initial roster failure clears a settled diagnosis while retaining bars", async () => {
   await act(async () => {
     pools.setAccountSets({ fixture: { activeAccountId: "a", accounts: [

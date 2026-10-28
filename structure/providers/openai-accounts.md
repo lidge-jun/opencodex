@@ -68,11 +68,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
-  2026-09-30 from openai/codex models.json). None of them is gated, and all seven are native-main
+  2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
-  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 Sol rows and Luna do not feed it yet.
+  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 and GPT-6.1 rows do not feed it yet.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
@@ -304,20 +304,20 @@ grant rather than rotating the existing grant and keeps its pre-publication fenc
 
 ## Native-main refresh ownership
 
-`src/codex/native-main-refresh-mode.ts` decides who refreshes the native main
-login (#2999). `nativeMainRefresh: "codex"`, the default whenever the Codex
-runtime resolved by `src/codex/runtime.ts` is 0.130.0 or newer, starts a
-short-lived `codex -c model_provider="openai" app-server` under the same
-CODEX_HOME and calls `getAuthStatus` with `includeToken` and `refreshToken`.
-OpenCodex uses the returned `authToken` for the request and writes nothing; it
-does not read auth.json again afterwards, because Codex in keyring mode deletes
-the file. A `chatgpt` method with a null token is the only permanent-failure
-signal on the wire and marks the grant rejected (reauth). An unreachable binary,
-a non-ChatGPT method, or the same or an expired bearer is transient. The
-exchange runs on the refresh timeout alone, under the same claim and grant lock
-as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
-guarded writer above. While the test home guard is armed, auto resolution
-never spawns Codex. `ocx doctor` prints the active mode and its reason.
+`src/codex/native-main-refresh-mode.ts` selects the refresh owner. Auto uses Codex 0.130.0 or newer, resolved by `src/codex/runtime.ts`.
+Codex mode starts a short-lived `codex -c model_provider="openai" app-server` and calls `getAuthStatus` with `includeToken` and `refreshToken`.
+OpenCodex uses the returned bearer for that request, writes nothing and does not reread auth.json after refresh: keyring mode deletes it.
+
+With no file credential, every lookup reads the current login with `refreshToken: false`; an expiring or explicitly rejected bearer requests refresh.
+Only home-scoped expiry metadata survives the lookup. Logout, account switches and unavailable reads cannot reuse an earlier bearer; a weak association gives the exact immutable RPC result its owned quota writer, home and credential generation without retaining the result or token.
+Each keyring RPC answer is authoritative for its lookup: a withheld token makes that materialization unavailable, while a later answer can use even the same bearer. No keyring refusal registry, bearer fingerprint history or permanent refusal survives; already-materialized requests can finish without a physical-send recheck. File-backed grant rejection stays unchanged.
+An unreachable binary, unchanged rejected bearer or expired bearer is transient. A non-ChatGPT or missing login answers an ordinary lookup as an observed absence, while a rejected-token or file-locked refresh still reports it transiently. Read-only lookups honor caller cancellation.
+Actual refresh runs on its independent 30-second timeout so Codex can save its grant. Both paths pin CODEX_HOME and hold its exclusive claim; home and identity-generation changes reject a delayed observation.
+Only file-backed refresh has a local grant fingerprint lock; keyring claim deadlines are transient. `"opencodex"`, missing or old Codex keeps the guarded writer.
+
+Fileless Pool and stored-Direct requests discover the current identity before selection or quota policy, even when prior expiry metadata is usable or the previous account is hard-locked; the selected token is revalidated before dispatch.
+A discovery failure is retained as the request's own classified cause for an empty candidacy and for the exact `__main__` selector alike, rather than degrading to a blanket unavailability refusal. It stays evidence only while the credential remains unverifiable: a credential recovered while model-entitlement resolution is in flight is re-checked live, so an already-healthy login answers with the current selection outcome instead of the stale probe error. `src/codex/account-lifecycle.ts` applies the same identity transition to a validated owned RPC as to an owned file read: a changed account purges prior runtime/quota state and retires its writers, while unchanged or ambiguous identity preserves its quota policy and ambiguous identity cannot clear reauth quarantine. On the first owned observation after restart, `src/codex/quota.ts` discards legacy main quota only when a valid retained policy tag proves a different account; matching, missing or invalid tags retain their restrictions, and other accounts remain untouched. Startup, drain, caller-owned credential and Pool manual-pause fences remain; async stored-Direct materialization, including audio, uses the same resolver, while synchronous readers remain file-only.
+Account-card metadata, initial Pool quota priming and idle main-quota recovery also use the owned keyring login. `src/codex/auth-api/main-account-probe.ts` obtains an absent-file credential under the runtime lease before taking WHAM's shared claim; recovery reuses its exact prepared result. The handoff must still match the current home, identity writer, bearer HMAC and credential generation, and auth.json must remain absent. Copies, credential ABA, a changed home, a later file credential and stale responses cannot publish quota or reset-recovery proof; an invalid handoff cannot overwrite current credential presence. Verified RPC identity is retained instead of erased by a missing-file reconciliation. A confirmed current-home logout/refusal reports credential absence, while transport uncertainty preserves the prior observation; request error classification is unchanged. Passive preparation and WHAM reads preserve traffic quarantine and manual pause; explicit refresh retains its existing recovery meaning. `tests/codex-integration/main-account-credit-renewal.test.ts` and `tests/codex-integration/native-main-refresh-mode.test.ts` cover these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason.
 
 ## Preserve signed-in quota
 
@@ -536,7 +536,7 @@ No requests means no new polling. For this reason only, stale observation proof 
 quota-cache freshness after the existing attempt backoff. Main refresh keeps its owned lease and
 passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
 retain their existing cache rules except the independently scheduled [pool credit renewal](pool-credit-renewal.md). The split config schema degrades malformed optional values to
-false. Exact-account and Direct routes are unchanged.
+false. Priority failback leaves exact-account and Direct routes unchanged; explicitly bound Direct stored accounts remain eligible for the separate credit-renewal sweep.
 
 ## Main-account policy observations
 

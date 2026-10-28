@@ -166,6 +166,97 @@ afterEach(async () => {
 });
 
 describe("start and ensure journal ownership (#1230)", () => {
+  for (const scenario of ["start", "ensure", "service", "supervised", "sibling", "restart-parent"] as const) {
+    test(`a missed first owner probe preserves shared state for ${scenario} (#7827)`, async () => {
+      const fx = fixture();
+      const { injected } = arrangeRecoverableJournal(fx);
+      writeFileSync(fx.pidPath, "4242");
+      const journal = readFileSync(fx.journalPath, "utf8");
+      const cli = readFileSync(cliPath, "utf8");
+      // Same command-body injection seam as the ensure integration tests. Only IO is
+      // supplied; both command ordering and real journal restoration execute in the child.
+      const bodies = cli.slice(cli.indexOf("async function findProxyOwnerBeforeJournalRecovery("), cli.indexOf("function detachedStartEnvironment("))
+        + cli.slice(cli.indexOf("async function handleEnsure("), cli.indexOf("async function handleTrayProxyStart("));
+      const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
+      const recheck = recovery.slice(recovery.indexOf("export async function recoverStartJournalAfterOwnerRecheck("), recovery.indexOf("/** Hold ownership stable"));
+      const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(bodies + recheck.replace("export ", ""));
+      const script = join(fx.root, "missed-owner.ts");
+      writeFileSync(script, `
+        import { reconcileStartupJournal } from ${JSON.stringify(repoPath("src/cli/cross-home-owner.ts"))};
+        import { recoverStartStateUnderOwnershipLease } from ${JSON.stringify(repoPath("src/cli/start-owner-fence.ts"))};
+        import { decideStartWithLiveOwner } from ${JSON.stringify(repoPath("src/cli/dispatch.ts"))};
+        import { START_OWNERSHIP_LIVENESS } from ${JSON.stringify(repoPath("src/server/proxy-liveness.ts"))};
+        import { readFileSync, existsSync, unlinkSync } from "node:fs";
+        const events = [];
+        const scenario = ${JSON.stringify(scenario)};
+        let probes = 0, leased = false, sibling = false;
+        const live = { pid: 4242, port: 10100, hostname: "127.0.0.1" };
+        class StartCommandExit extends Error { constructor(readonly exitCode) { super("exit"); } }
+        const fakeProcess = { env: { OCX_SERVICE: ["service", "supervised"].includes(scenario) ? "1" : undefined },
+          exitCode: 0, exit(code) { throw new StartCommandExit(code); } };
+        const deps = {
+          process: fakeProcess, console: { log() {}, warn() {}, error() {} }, StartCommandExit,
+          START_OWNERSHIP_LIVENESS, decideStartWithLiveOwner, recoverStartStateUnderOwnershipLease,
+          findLiveProxy: async budget => {
+            if (budget !== START_OWNERSHIP_LIVENESS) throw new Error("changed liveness budget");
+            events.push("probe:" + (++probes) + ":" + leased);
+            return probes === 1 ? null : live;
+          },
+          observeProxyLiveness: async budget => {
+            if (budget !== START_OWNERSHIP_LIVENESS) throw new Error("changed liveness budget");
+            events.push("probe:" + (++probes) + ":" + leased);
+            return { kind: "live", live };
+          },
+          readPidFileValue: () => existsSync(${JSON.stringify(fx.pidPath)}) ? Number(readFileSync(${JSON.stringify(fx.pidPath)}, "utf8")) : null,
+          readRuntimePort: () => ({ pid: 4242, port: 10100 }),
+          removePidIfValueIs: pid => { events.push("pid-remove"); if (pid === 4242) unlinkSync(${JSON.stringify(fx.pidPath)}); },
+          acquireOwnershipMutationLease: () => { leased = true; events.push("lease"); return { release() { leased = false; events.push("release"); } }; },
+          serviceStatePaths: () => ({}),
+          serviceChildOwnershipDecisionForClassifiedChild: () => ({ kind: "proceed" }),
+          isSupervisedServiceChild: () => scenario === "supervised", serviceStayOutExitCode: () => 0,
+          forgetUpdateTeardownHandover() {}, updateRestartChild: null,
+          startupDataPlaneToken: () => null, isApiAuthRequired: () => false, loadConfig: () => ({}),
+          parseStartCliOptions: () => ({ port: scenario === "sibling" ? 10101 : undefined }),
+          honorSiblingMarker: () => null, consumeSiblingHandoff() {},
+          takeRestartHandoffMarkers: () => scenario === "restart-parent" ? 4242 : null,
+          probeOwnerPastRestartParent: probe => probe(),
+          duplicateRuntimeMessage: () => "Proxy already running",
+          markSiblingStart: () => { sibling = true; events.push("sibling"); },
+          markCrossHomeSibling: async () => { events.push("cross-home"); return false; },
+          markLiveHomeSibling: async () => { events.push("live-home"); return false; },
+          reconcileStartupJournal: () => { events.push("recover"); reconcileStartupJournal(); },
+          readClientConnectionState: () => ({ kind: "disconnected" }), inspectClientRotationRecoveryGate: () => ({}),
+          deferServiceChildToNewerRuntime: async () => null, packageVersion: () => "test", currentServingCommand: () => [],
+          maybeShowUpdatePrompt: async () => {},
+          bindAndPublishStartOwnership: async deps => deps.bind(),
+          chooseListenPort: () => { throw new Error("sibling reached bind"); },
+          codexAutoStartEnabled: () => false,
+        };
+        const commands = new Function(...Object.keys(deps), ${JSON.stringify(executable)} + "; return { handleStart, handleEnsure };")(...Object.values(deps));
+        try { await (scenario === "ensure" ? commands.handleEnsure() : commands.handleStart({ block: false })); }
+        catch (error) {
+          if (error instanceof StartCommandExit) fakeProcess.exitCode = error.exitCode;
+          else if (error.message !== "sibling reached bind") throw error;
+        }
+        console.log(JSON.stringify({ events, probes, sibling, exitCode: fakeProcess.exitCode }));
+      `);
+      const child = Bun.spawn([process.execPath, script], { env: fx.env, stdout: "pipe", stderr: "pipe" });
+      children.push(child);
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exitCode, stderr).toBe(0);
+      const result = JSON.parse(stdout) as { events: string[]; probes: number; sibling: boolean; exitCode: number };
+      expect(readFileSync(fx.configPath, "utf8"), JSON.stringify(result)).toBe(injected);
+      expect(existsSync(fx.journalPath)).toBe(true);
+      expect(readFileSync(fx.journalPath, "utf8")).toBe(journal);
+      expect(readFileSync(fx.pidPath, "utf8")).toBe("4242");
+      expect(result.events).not.toContain("recover");
+      expect(result.events).not.toContain("pid-remove");
+      expect(result.events.slice(0, 4)).toEqual(["probe:1:false", "lease", "probe:2:true", "release"]);
+      expect(result.exitCode).toBe(["start", "restart-parent"].includes(scenario) ? 1 : 0);
+      expect(result.sibling).toBe(scenario === "sibling");
+    }, JOURNAL_OWNERSHIP_BUDGET_MS);
+  }
+
   test("startup preserves only a client journal matching the final committed api key id", async () => {
     for (const matches of [true, false]) {
       const fx = fixture();

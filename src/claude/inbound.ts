@@ -631,9 +631,10 @@ function applyAnthropicSettings(
     // think by default, omission means thinking is ON, sharing the caller's max_tokens (#545).
     // `none` is the effort disable sentinel. It is not a valid OpenAI summary
     // value, so do not attach the similarly named internal catalog sentinel.
-    body.reasoning = { effort: "none" };
+    body.reasoning = { effort: "none", enabled: false };
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
     const reasoning: Rec = { summary: isRec(thinking) && thinking.display === "omitted" ? "none" : "auto" };
+    if (isRec(thinking) && thinking.type === "enabled") reasoning.enabled = true;
     if (outputConfigEffort !== undefined) {
       // Adaptive wire: /effort arrives as output_config.effort (devlog 080).
       reasoning.effort = outputConfigEffort;

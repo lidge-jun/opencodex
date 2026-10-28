@@ -29,10 +29,10 @@ const context: ExportContext = {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
 
-function fixture() {
+function fixture(clientId: "qoder" | "qoder-cn" = "qoder") {
   const home = mkdtempSync(join(tmpdir(), "ocx-qoder-test-"));
   roots.push(home);
-  const path = qoderConfigPath({}, home);
+  const path = INTEGRATION_CLIENTS[clientId].configPath({}, home);
   mkdirSync(dirname(path), { recursive: true });
   const original = {
     theme: "dark", providers: { other: { type: "custom" } },
@@ -41,7 +41,7 @@ function fixture() {
   const before = JSON.stringify(original, null, 4) + "\n";
   writeFileSync(path, before);
   const input: IntegrationWriteInput = {
-    clientId: "qoder", config, port: 10100, models: context.models,
+    clientId, config, port: 10100, models: context.models,
     home, env: {}, store: createIntegrationStateStore(join(home, "store")),
   };
   return { path, original, before, input, read: () => JSON.parse(readFileSync(path, "utf8")) };
@@ -225,37 +225,39 @@ describe("Qoder client integration", () => {
     }
   });
 
-  const unowned = { provider: "opencodex", model: "mock/a", apiKey: "user-placeholder", displayName: "mine" };
+  for (const clientId of ["qoder", "qoder-cn"] as const) {
+    const unowned = { provider: "opencodex", model: "mock/a", apiKey: "user-placeholder", displayName: "mine" };
 
-  test.each([false, true])("an unowned opencodex row for an exported model refuses before writing (recorded=%s)", recorded => {
-    const f = fixture();
-    if (recorded) expect(applyIntegration(f.input).ok).toBe(true);
-    const document = f.read();
-    document.modelConfigs.customModels.push(unowned);
-    const before = JSON.stringify(document, null, 2);
-    writeFileSync(f.path, before);
-    const records = JSON.stringify(f.input.store!.readRecords());
-    expect(readIntegrationState(f.input)).toMatchObject({ state: "conflict", reason: "unowned-key" });
-    for (const operation of ["apply", "overwrite", "disable"] as const) {
-      expect(previewIntegration(f.input, { operation })).toMatchObject({ canApply: false, refusalReason: "conflict" });
-    }
-    const writes = recorded
-      ? [refreshIntegration(f.input), applyIntegration(f.input), overwriteIntegration(f.input), disableIntegration(f.input)]
-      : [applyIntegration(f.input), overwriteIntegration(f.input)];
-    for (const result of writes) expect(result).toMatchObject({ ok: false, reason: "conflict", message: expect.stringContaining("modelConfigs.customModels") });
-    expect(readFileSync(f.path, "utf8")).toBe(before);
-    expect(JSON.stringify(f.input.store!.readRecords())).toBe(records);
-  });
+    test.each([false, true])(`${clientId}: an unowned opencodex row for an exported model refuses before writing (recorded=%s)`, recorded => {
+      const f = fixture(clientId);
+      if (recorded) expect(applyIntegration(f.input).ok).toBe(true);
+      const document = f.read();
+      document.modelConfigs.customModels.push(unowned);
+      const before = JSON.stringify(document, null, 2);
+      writeFileSync(f.path, before);
+      const records = JSON.stringify(f.input.store!.readRecords());
+      expect(readIntegrationState(f.input)).toMatchObject({ state: "conflict", reason: "unowned-key" });
+      for (const operation of ["apply", "overwrite", "disable"] as const) {
+        expect(previewIntegration(f.input, { operation })).toMatchObject({ canApply: false, refusalReason: "conflict" });
+      }
+      const writes = recorded
+        ? [refreshIntegration(f.input), applyIntegration(f.input), overwriteIntegration(f.input), disableIntegration(f.input)]
+        : [applyIntegration(f.input), overwriteIntegration(f.input)];
+      for (const result of writes) expect(result).toMatchObject({ ok: false, reason: "conflict", message: expect.stringContaining("modelConfigs.customModels") });
+      expect(readFileSync(f.path, "utf8")).toBe(before);
+      expect(JSON.stringify(f.input.store!.readRecords())).toBe(records);
+    });
 
-  test("opencodex rows for other models and other providers' rows for exported models do not conflict", () => {
-    const f = fixture();
-    const document = f.read();
-    document.modelConfigs.customModels.push({ ...unowned, model: "mock/z" }, { ...unowned, provider: "elsewhere" });
-    writeFileSync(f.path, JSON.stringify(document));
-    expect(readIntegrationState(f.input)).toMatchObject({ state: "absent" });
-    expect(applyIntegration(f.input)).toMatchObject({ ok: true, state: "current" });
-    expect(f.read().modelConfigs.customModels).toEqual(document.modelConfigs.customModels);
-    expect(disableIntegration(f.input).ok).toBe(true);
-    expect(f.read()).toEqual(document);
-  });
+    test(`${clientId}: opencodex rows for other models and other providers' rows for exported models do not conflict`, () => {
+      const f = fixture(clientId);
+      const document = f.read();
+      document.modelConfigs.customModels.push({ ...unowned, model: "mock/z" }, { ...unowned, provider: "elsewhere" });
+      writeFileSync(f.path, JSON.stringify(document));
+      expect(readIntegrationState(f.input)).toMatchObject({ state: "absent" });
+      expect(applyIntegration(f.input)).toMatchObject({ ok: true, state: "current" });
+      expect(f.read().modelConfigs.customModels).toEqual(document.modelConfigs.customModels);
+      expect(disableIntegration(f.input).ok).toBe(true);
+      expect(f.read()).toEqual(document);
+    });
+  }
 });

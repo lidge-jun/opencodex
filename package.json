@@ -1,6 +1,6 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.93.0",
+  "version": "2.94.0",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -48,7 +48,8 @@
     "start": "bun run src/cli/index.ts start",
     "test": "bun scripts/test.ts",
     "test:changed": "bun scripts/test.ts --changed=dev",
-    "typecheck": "bun x tsc --noEmit",
+    "typecheck": "bun check --no-script --noEmit",
+    "typecheck:tsc": "bun x tsc --noEmit",
     "typecheck:gui:if-changed": "bun scripts/typecheck-gui-if-changed.ts",
     "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
     "privacy:scan": "bun scripts/privacy-scan.ts",
@@ -67,7 +68,7 @@
     "test:macos": "swift run --package-path app MenuBarCoreTests",
     "prepare:package": "bun scripts/prepare-package.ts",
     "prepack": "bun run prepare:package",
-    "prepublishOnly": "bun run audit:high && bun run typecheck && bun run build:gui",
+    "prepublishOnly": "bun run audit:high && bun run typecheck:tsc && bun run build:gui",
     "release": "bun scripts/release.ts",
     "release:watch": "bun scripts/release.ts watch",
     "prepush": "bun run typecheck && bun run typecheck:gui:if-changed && bun run lint:gui:if-changed && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
@@ -86,7 +87,7 @@
     "zod": "4.6.6"
   },
   "devDependencies": {
-    "@types/bun": "1.4.0",
+    "@types/bun": "1.4.4",
     "typescript": "7.0.2"
   },
   "optionalDependencies": {

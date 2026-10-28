@@ -1,6 +1,13 @@
 import type { IncomingMeta } from "../base";
 import type { OcxProviderConfig } from "../../types";
-import { CODEX_RESPONSES_LITE_HEADER } from "../../codex/forward-transport-headers";
+import {
+  CODEX_ATTESTATION_HEADER,
+  CODEX_INSTALLATION_ID_HEADER,
+  CODEX_RESPONSES_LITE_HEADER,
+  CODEX_TURN_METADATA_HEADER,
+  deriveCodexAccountInstallationId,
+  rewriteTurnMetadataInstallationId,
+} from "../../codex/forward-transport-headers";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers-destination";
 import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
 import { AGENT_ASSERTION_HEADER } from "../../lib/authorization-scheme";
@@ -11,7 +18,7 @@ export const FORWARD_HEADERS = [
   "authorization", "chatgpt-account-id", "openai-beta", "originator", "session_id", "session-id",
   "thread-id", "x-client-request-id", "x-codex-beta-features", "x-codex-installation-id",
   "x-codex-parent-thread-id", "x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id",
-  "x-oai-attestation", "x-openai-subagent", "x-responsesapi-include-timing-metrics", CODEX_RESPONSES_LITE_HEADER,
+  "x-oai-attestation", "x-openai-subagent", "x-responsesapi-include-timing-metrics", "version", CODEX_RESPONSES_LITE_HEADER,
 ];
 
 /** Carry permitted client metadata across an internal compact handoff, never credentials. */
@@ -70,6 +77,17 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
     if (override && mayForwardCallerCredentials) {
       headers.authorization = `Bearer ${override.accessToken}`;
       headers["chatgpt-account-id"] = override.chatgptAccountId;
+      delete headers[CODEX_ATTESTATION_HEADER];
+      if (override.chatgptAccountId?.trim()) {
+        const installId = headers[CODEX_INSTALLATION_ID_HEADER];
+        if (installId && installId.trim()) {
+          headers[CODEX_INSTALLATION_ID_HEADER] = deriveCodexAccountInstallationId(override.chatgptAccountId, installId);
+        }
+        const turnMeta = headers[CODEX_TURN_METADATA_HEADER];
+        if (turnMeta) {
+          headers[CODEX_TURN_METADATA_HEADER] = rewriteTurnMetadataInstallationId(turnMeta, override.chatgptAccountId);
+        }
+      }
     } else if (mayForwardCallerCredentials) {
       // dual_header runtime assertion: first-party Direct only, beside the caller's own Bearer.
       // A pool override above never carries it, and non-canonical transports never see it.

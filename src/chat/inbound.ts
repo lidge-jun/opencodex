@@ -436,6 +436,18 @@ function resolveReasoningSummary(raw: Rec): string | undefined {
   return undefined;
 }
 
+function resolveThinkingEnabled(raw: Rec): boolean | undefined {
+  return isRec(raw.reasoning) && typeof raw.reasoning.enabled === "boolean" ? raw.reasoning.enabled
+    : isRec(raw.thinking) && ["enabled", "disabled"].includes(String(raw.thinking.type)) ? raw.thinking.type === "enabled" : undefined;
+}
+
+/** Client delivery only: never put this default in the upstream body or parsed options. */
+export function chatRawReasoningVisible(raw: Rec): boolean {
+  if (resolveReasoningSummary(raw) === "none") return false;
+  const enabled = resolveThinkingEnabled(raw);
+  return enabled ?? resolveReasoningEffort(raw) !== "none";
+}
+
 /**
  * Translate an OpenAI Chat Completions request body into a /v1/responses request body.
  * Throws ChatCompletionsRequestError (-> 400) on malformed input.
@@ -672,9 +684,11 @@ function applyChatSettings(raw: ChatCompletionsRoutingBody, body: Rec): void {
 
   const effort = resolveReasoningEffort(raw);
   const summary = resolveReasoningSummary(raw);
-  if (effort || summary !== undefined) {
+  const enabled = resolveThinkingEnabled(raw);
+  if (effort || summary !== undefined || enabled !== undefined) {
     body.reasoning = {
       ...(effort ? { effort } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
       summary: summary ?? "auto",
     };
   }

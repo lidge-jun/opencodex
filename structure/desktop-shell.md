@@ -235,7 +235,11 @@ stops answering Quit.
 
 ## Keeping the runtime alive
 
-`desktop/src-tauri/src/supervisor.rs` brings back a runtime that went away without the app asking.
+`desktop/src-tauri/src/supervisor.rs` brings back a runtime that went away without the app asking; [native recovery evidence](desktop-recovery.md) preserves this supervision across the child-free backoff.
+The recovery listener credits an actual startup, confirmed owned runtime or scheduled recovery,
+not the exit coordinator's generic desire for a runtime. A terminal ordinary launch failure and
+guest attachment alone do not grant that credit; the existing watchdog can still schedule a later
+recovery. Generation-bound activity and reservations preserve the handoff into the next run.
 The startup sequence used to run only at launch and from the failure page's retry, so a runtime that
 exited later — a crash, a terminal `ocx stop`, or a restart the runtime carried out by handing the
 port to a detached grandchild the app could not see — left the port refusing connections until the
@@ -300,134 +304,15 @@ decision is appended to
 
 ## Runtime ownership, from the app's side
 
-`desktop/src-tauri/src/identity.rs` holds this installation's own install id: an opaque value minted
-once into the app's config directory and never rewritten, exclusively so two launches racing each
-other answer to the same one. It exists because the recorded claim names the owning *installation*,
-so the app needs a value of its own to compare against; an id kept only in the shared record would
-be whoever wrote it last, and a reinstalled app could not tell its own prior consent from another
-installation's. The cost is that a reinstall which keeps the directory keeps its consent and one
-that loses it asks again.
-
-`desktop/src-tauri/src/ownership.rs` mirrors the claim, the three answers a read can give and the
-comparison, all of which are defined by
-[background-service runtime ownership](runtime.md#background-service-runtime-ownership) and not
-here. The shell does not read the record: resolving a claim means reading every state path and
-failing closed on an unreadable one, on a corrupt anchor and on paths that disagree, and a second
-weaker implementation of a question core already answers is the mistake this tree has made before.
-The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`.
-It also answers how the live runtime's version compares to the bundled CLI's
-(`versionSkew.relation`; future relation strings read as unknown without discarding the live answer), and the shell acts on the direction instead of reparsing the
-warning: `proxy-newer` makes a supported takeover a downgrade, so the run attaches as a
-guest with the versions, downgrade risk and verbatim CLI warning rather than asking consent to it. Every other guest path — held
-consent, an unreadable owner, a blocked takeover, a declined prompt, a recovery — appends
-the CLI's warning to its phase detail, and the consent panel shows it beside the subject.
-Unknown ownership never means "nobody owns it". A supported offer shows the endpoint, home
-and owner. After consent, the shell resolves again and refuses a changed answer without
-invoking stop. It passes the approved token, endpoint and PID to the CLI's opt-in guarded stop.
-That command checks the evidence and manager-to-PID binding under its ownership mutation lease
-before action; it stops the manager or approved PID, waits within a bounded deadline for PID
-exit and endpoint silence, and only then requires definitive manager inactivity. A manager
-that remains active or becomes unreadable produces terminal `manager-still-active`, not a stop
-receipt. The shell also treats `approval-changed`, unreadable output and child timeout as
-terminal before its own silence wait or claim. Only parsed `stopped` or validated exit-79
-`history-incomplete` proceeds to the refused-probe receipt and `ocx service claim`, which
-rechecks the approved subject and compatibility. Declining attaches as a guest; a failed claim
-does not pretend a stopped runtime was restored.
-
-Live supervision is a third independent fact, alongside liveness and durable ownership.
-On macOS and Linux, the read-only probe verifies that the runtime's direct parent is
-`opencodex-desktop` and the child executable is that app's sibling `ocx`; two complete
-process snapshots must agree. The target runtime PID, `ocx.pid`, and the PID in
-`runtime-port.json` must agree wherever present; mismatches make supervision unknown.
-The attestation secret is never included in supervision evidence. On Windows, `ocx.pid` and `runtime-port.json` must both name the runtime PID; its direct parent must be a live `opencodex-desktop.exe`; both images must have drive-qualified paths, with the runtime matching the Desktop image's sibling `ocx.exe` case-insensitively; parent and child must share a session; and the parent must have been created strictly before the child.
-Two snapshots must agree, with one bounded PowerShell `Win32_Process` read per snapshot and a six-second budget for the inspection. Inconclusive evidence is `unknown`, retaining `desktopSeen` when a Desktop image was observed. Windows Start at Login is not verified, so live supervision never grants startup protection there.
-
-Command guards use this live evidence independently of login registration and durable ownership.
-Each guarded service command, Node/Bun update run and dashboard restart decision uses one
-`createSupervisionLatch()` from `src/service/desktop-supervision.mjs`: `desktop` or
-`unknown` with `desktopSeen: true` blocks; only a later positive `none` clears it. A later
-plain `unknown` or `unsupported` cannot clear a prior block. Without a prior block, plain
-unknown and unsupported preserve the existing durable-owner and liveness decisions.
-Service install, repair, start and restart refuse before mutation, including registration staging.
-Update gates re-read supervision before stop, package replacement, restoration and recovery;
-they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
-Desktop before updating the CLI install. Service stop and uninstall remain available.
-These decisions follow [runtime ownership](runtime.md#background-service-runtime-ownership).
-
-The bypass ledger classifies these guards as **early warning**, not enforcement:
-
-| Guard | Surface / tier | Known limit and residual risk | Pass-through assertion |
-| --- | --- | --- | --- |
-| Service install/repair/start/restart | CLI before mutation / E3 | Older PATH CLIs or inconclusive evidence without Desktop seen can allow a second supervisor. | With no prior block, none/unsupported preserve ordinary command behavior. |
-| Node/Bun update, including pre-stop and recovery | CLI / E3 | Same limits; Desktop can start after the last check inside the stop window, leaving a short race. | None preserves the ordinary update decision. |
-| Dashboard restart veto | Server route / E3 | Older runtimes lack this guard. | None preserves the ordinary restart decision. |
-| Stop guidance | Notice only / E1 | Desktop may restart the stopped proxy. | `stop --json` neither probes nor emits the notice. |
-
-When ownership is `none`, `src/service/desktop-startup.ts` can report
-`supervisor: { supervisorPid, runtimePid, app }` with `owned: false`. Restart safety
-credits this live supervision only when that same app's Start at Login registration is
-verified, the proxy is running, and the diagnostic is fresh and viable. This evidence
-never creates or changes an ownership claim; unknown ownership and CLI-owned claims do
-not enter the unowned diagnostic branch. Unverified login registration produces Desktop
-recovery guidance with no recommended shell command.
-
-Older runtimes cannot report this evidence. When an attested live startup verdict has
-no desktop diagnostic but a local probe verifies Desktop supervision of that live PID,
-status and doctor use the shared selector's local verdict; status JSON records
-`startupSource: "local-supervision-override"`. The service summary uses that selected
-verdict too. On Windows, the local reading may be owned or unowned but must bind to the same runtime and supervisor PIDs; macOS and Linux require an unowned local reading. A live verdict that already carries desktop diagnostics remains authoritative.
+Durable ownership reads, takeover consent and live-supervision evidence — including
+the Windows probe's trusted system-directory acquisition and the shared
+`createSupervisionLatch` blocking contract — are owned by
+[Desktop supervision](ops/desktop-supervision.md#runtime-ownership-from-the-apps-side).
 
 ### Desktop runtime ownership acceptance
 
-The consent surface labels the exact ownership subject it is about to record. A relaunch of the
-same desktop installation reuses consent when the recorded `owner` and app-local `installId`
-still match; the generation is deliberately not part of that comparison, because the recorded
-claim this app holds is its own consent, not a freshness token.
-Package update and service repair also preserve that grant and its generation ceiling through
-`preservedConsent`; they do not perform a new subject comparison. The write path is stricter than the relaunch
-path: a different `owner`, different `installId`, moved `consentGeneration` or unreadable ownership record is not reuse
-there — a pending approval is revalidated against the full
-subject, so a grant, a release or a re-grant that moved the generation between the prompt and
-the write cannot be claimed by the stale approval. On relaunch the same list narrows to the
-comparison itself: a different `owner` or `installId` makes the app ask again, and an
-unreadable record refuses closed rather than reading as unowned.
-Uninstall or an explicit handback releases only the live claim and keeps the generation
-ceiling, so a later grant cannot be mistaken for the old one. A runtime still attached to an
-old package-owned registration is only attachable as a guest until an ownership-aware CLI
-records protocol support; the shell must not treat that attachment as durable takeover consent.
-
-`desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
-before the tray is built so its checkbox reads the resulting state. A menu bar app
-that is not running has no menu bar item, so leaving autostart off by default left an
-installed app absent after a reboot. The marker in the app config directory is written
-before the login item is touched and is never removed, so a user who turns the setting
-off keeps it off; writing it afterwards would let a failed enable retry on every launch.
-The behaviour is not macOS-only. The autostart plugin implements the macOS and Linux
-registrations and reads or disables the current-user Windows Run entry. Shell enables
-on Windows write a quoted executable path followed by `--autostart`, preserving the
-plugin's registration name and Task Manager explicit-enable semantics. A Windows-specific
-launch-origin migration marker revisits older registrations once, only when already
-enabled; entries disabled in the tray or Task Manager stay disabled.
-
-The macOS tray item and the macOS side of this migration judge the login item the way Startup
-safety does; see [Desktop Start at Login](desktop-start-at-login.md).
-
-The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
-would supply on its own, and SwiftPM has no such target: `@main` on
-`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
-`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
-in `app/Package.swift`. Any one missing yields a widget that never appears: without
-`@main` the linker drops the bundle and the extension registers with nothing to offer, and
-without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
-distinguishes these from a working widget, because the bundle still builds, signs and
-registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
-an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
-extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
-
-`desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
-Bun targets and prepares the external binary plus dashboard resources used by
-Tauri. Generated files under desktop/src-tauri/binaries/ and
-desktop/src-tauri/resources/ remain ignored.
+Consent subject comparison, generation ceilings and relaunch reuse are described in
+[Desktop supervision](ops/desktop-supervision.md#desktop-runtime-ownership-acceptance).
 
 ### Packaged native keyring binding
 
@@ -441,6 +326,11 @@ searches the launch working directory. Source and npm installs retain ordinary p
 resolution and never probe beside the shared Bun or Node executable. Compiled installs derive
 their asset root from the executable's canonical real path, so a symlinked launcher still finds
 the addon shipped with the real binary.
+
+`desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
+Bun targets and prepares the external binary plus dashboard resources used by
+Tauri. Generated files under desktop/src-tauri/binaries/ and
+desktop/src-tauri/resources/ remain ignored.
 
 The macOS bundle verifier launches the signed sidecar from a disposable unrelated directory and
 requires its bounded, load-only keyring probe to expose both native constructors. It does not read
@@ -553,6 +443,18 @@ The macOS desktop shell writes the WidgetKit snapshot to
 The schema version is `1`; the Rust writer refreshes it every five minutes after an
 immediate first write. The WidgetKit appex reads this privacy-safe file and performs no
 network access.
+
+The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
+would supply on its own, and SwiftPM has no such target: `@main` on
+`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
+`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
+in `app/Package.swift`. Any one missing yields a widget that never appears: without
+`@main` the linker drops the bundle and the extension registers with nothing to offer, and
+without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
+distinguishes these from a working widget, because the bundle still builds, signs and
+registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
+an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
+extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
 
 ## The tray icon opens a usage popup
 

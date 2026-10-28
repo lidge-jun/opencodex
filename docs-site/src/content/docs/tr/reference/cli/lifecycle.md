@@ -54,6 +54,10 @@ ocx start --socks5-off
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
 
+Bağlı bir hub istemcisinde `ocx stop`, API üzerinden başarılı durdurma dahil, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur; `ocx start` bunları yeniden sunar. Remote Link Child açıkça durdurulduğunda ise paylaşılan geri yükleme başarılıysa yerel Codex yönlendirmesi, katalog ve yedeklenmiş oturum sürdürme geçmişi meta verileri geri yüklenir, yönetilen Grok yapılandırması kaldırılır. Kayıtlı Home bağlantısı korunur; `ocx disconnect` ile kaldırılır.
+
+Geri yüklemeden sonra Codex'ten Home'u yeniden kullanmak için `ocx start` (servis kuruluysa `ocx service start`), ardından `ocx sync --restart-codex` çalıştırın. Yalnızca başlatmak yönlendirmeyi yeniden uygulamaz; sync Grok bloğunu yeniden oluşturmaz. Servis durdurulmadan önce bağlantı sahipliği doğrulanamıyorsa durdurma API'si HTTP 409 ve `sharedTeardown: "refused"` döndürür; proxy ve servis yöneticisi çalışmaya devam eder. Devam eden bağlanma veya bağlantıyı kesme işlemi bitince yeniden deneyin.
+
 ### `ocx restart`
 
 Bir proxy çalışırken bu tam onaylanmış PID ve porttan yerinde yeniden
@@ -515,7 +519,7 @@ Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimd�
 
 ### `ocx gui`
 
-Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
+Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://127.0.0.1:<port>`
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme

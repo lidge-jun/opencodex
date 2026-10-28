@@ -183,6 +183,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
       // held from the output; real calls pass through untouched.
       let holdingCurrent = false;
       let hasRealToolCall = false;
+      let hasIncompleteToolCall = false;
       let terminalConsumed = false;
       let terminalEvent: Extract<AdapterEvent, { type: "done" }> | undefined;
 
@@ -214,9 +215,10 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
           }
           if (holdingCurrent) continue;
         } else if (event.type === "tool_call_end") {
+          hasIncompleteToolCall ||= event.incomplete === true;
           if (pending) {
             retention.retain(event);
-            pending.closed = true;
+            pending.closed = !event.incomplete;
             if (pending.name === ADVISOR_TOOL_NAME) held.push(pending);
             pending = null;
           }
@@ -260,7 +262,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
         && terminalEvent?.stopReason !== "max_tokens"
         && terminalEvent?.stopReason !== "content_filter"
         && advisorCalls.length > 0
-        && !hasRealToolCall;
+        && !hasRealToolCall && !hasIncompleteToolCall;
 
       if (!shouldIntercept) {
         // Plain leg: surface the terminal with merged usage from any earlier intercepted legs.

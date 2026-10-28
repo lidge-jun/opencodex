@@ -18,7 +18,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 105 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 106 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -153,6 +153,12 @@ OpenCodex could not safely decide whether another proxy owns the shared client s
 It stops before publishing a new runtime or changing those settings. Retry startup after
 local connectivity recovers; an installed background service retries through its service manager.
 A timeout does not permanently turn the new process into a secondary instance.
+
+`Proxy ownership is unverified; startup refused` means the local owner check was
+inconclusive. OpenCodex preserves the PID record, recovery journal and shared client
+settings. Retry after the owner responds or exits; a failed health probe alone does
+not authorize crash recovery. A dead recorded process with no listener still recovers
+automatically.
 
 IPv6 does not need to be enabled on loopback. Startup checks whether each loopback
 address can be bound locally and skips an unavailable family. Timeouts on an available

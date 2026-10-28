@@ -9,6 +9,7 @@ import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readR
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import { exportDefaultReasoningEffort, exportReasoningEfforts } from "../../clients/config-export/reasoning-metadata";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts, type CodexReasoningLevel } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
@@ -139,6 +140,13 @@ export const ROUTED_REASONING_LEVELS = [...CODEX_REASONING_LEVELS];
 
 export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel): void {
   if (!model) return;
+  applyClientReasoningCapabilities(entry, model);
+  if (model.supportsThinkingToggle === true && model.supportsReasoningEffort === false
+    && Array.isArray(entry.supported_reasoning_levels)) {
+    entry.supported_reasoning_levels = entry.supported_reasoning_levels.map(level => ({
+      ...level, description: level.effort === "none" ? "Thinking off" : "Thinking on",
+    }));
+  }
   // This marker survives strict catalog normalization and lets sync distinguish a stale
   // bare combo alias from a genuine native model row.
   if (model.provider === COMBO_NAMESPACE) entry.owned_by = model.owned_by ?? COMBO_NAMESPACE;
@@ -184,6 +192,8 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const eligibleRoutedFlex = model.supportsFlexTier === true
+      && model.provider !== COMBO_NAMESPACE && model.nativeAlias !== true;
     const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
       ? entry.service_tiers.find(tier => tier?.id === "priority")
       : undefined;
@@ -192,8 +202,12 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
       id: "priority",
       name: "Fast",
       description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
-    }];
-    entry.additional_speed_tiers = ["fast"];
+    }, ...(eligibleRoutedFlex ? [{
+      id: "flex",
+      name: "Flex",
+      description: "Capacity-dependent processing; availability and latency may vary",
+    }] : [])];
+    entry.additional_speed_tiers = eligibleRoutedFlex ? ["fast", "flex"] : ["fast"];
   }
   stampCapabilityProvenance(entry, model);
 }
@@ -246,6 +260,26 @@ function stampCapabilityProvenance(entry: RawEntry, model: CatalogModel): void {
       ? { capabilities: [...model.capabilities] }
       : {}),
   };
+}
+
+/** Project explicit independent capabilities only at Codex's effort-enum boundary. */
+function applyClientReasoningCapabilities(entry: RawEntry, model: CatalogModel): void {
+  // Positive effort support can be inferred from a legacy ladder. It does not classify
+  // independent controls or opt that model out of the existing max/ultra synthesis.
+  if (model.supportsThinkingToggle === undefined && model.supportsReasoningEffort !== false
+    && model.supportsReasoning !== false) return;
+  const efforts = exportReasoningEfforts(model);
+  if (efforts === undefined && model.supportsReasoningEffort === undefined) {
+    // A negative toggle declaration says nothing about an unknown effort capability.
+    const legacy = catalogEntryEfforts(entry).filter(effort => effort !== "none");
+    applyReasoningLevels(entry, legacy, typeof entry.default_reasoning_level === "string" ? entry.default_reasoning_level : undefined, true);
+    return;
+  }
+  const declaredDefault = exportDefaultReasoningEffort(model);
+  applyReasoningLevels(entry, efforts ?? [], declaredDefault, true);
+  if (model.supportsThinkingToggle === true && declaredDefault === undefined) {
+    delete entry.default_reasoning_level;
+  }
 }
 
 export function applyReasoningLevels(

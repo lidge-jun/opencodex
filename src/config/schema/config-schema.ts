@@ -1,6 +1,7 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
+import { isAppendOnlyToolLoadingModels } from "../../claude/inbound-tool-loading";
 import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
@@ -31,6 +32,7 @@ import {
   apiKeyEntrySchema,
   asideProfileSyncSchema,
   clientIntegrationsSchema,
+  opencodeClientExportSchema,
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
@@ -177,6 +179,13 @@ export const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Match the per-body load/degrade contract: malformed hand edits retain providers.
+  // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
+  // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  maxConcurrentInboundBodyBytes: z.number().int()
+    .min(0)
+    .optional()
+    .catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)
@@ -266,6 +275,9 @@ export const configSchema = z.object({
   // value degrades to undefined, which simply raises the notice again.
   multiAgentSurfaceAdvisoryVersion: z.number().int().nonnegative().optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
+  // Opt-in opencode-side export timeouts; a malformed block degrades to undefined so opencode
+  // keeps its native waits rather than failing the parse and hiding valid providers/accounts.
+  opencodeClientExport: opencodeClientExportSchema.optional().catch(undefined),
   // A malformed profile policy must not fall back to legacy all-profile activation.
   asideProfileSync: asideProfileSyncSchema.optional().catch({ allProfiles: false }),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
@@ -408,7 +420,10 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
+    if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
+    }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
     }
