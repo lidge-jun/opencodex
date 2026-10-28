@@ -20,7 +20,7 @@ import {
  * known-Codex-bundle classifier, and — when the lexical or canonical path sits
  * inside a ChatGPT.app or Codex.app bundle at any location — checked by the shared
  * signature/ownership policy before the same canonical target is returned for
- * execution. CLI handoffs additionally classify any enclosing canonical .app,
+ * execution. CLI handoffs additionally classify any enclosing lexical or canonical .app,
  * independent of bundle name or identifier. Other callers retain the known-app
  * policy; non-bundle executables pass through to the shared launcher unchanged.
  *
@@ -129,16 +129,24 @@ function darwinBundleTarget(resolved: string, deps: CodexExecBoundaryDeps): { bu
     throw new CodexExecTrustError("the recorded app bundle must be an absolute path");
   }
   const binary = realpath(resolved);
-  // Use the outer canonical app for nested layouts, protecting its signature too.
-  // A lexical app whose target cannot be canonicalized still enters the refusal path.
-  const enclosing = deps.verifyAnyAppBundle ? /^(.*?\/[^/]*\.app)(?:\/|$)/i.exec(binary ?? resolved)?.[1] : undefined;
-  const bundle = deps.expectedBundleRoot ?? enclosing ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
+  const enclosingApp = (path: string) => /^(.*?\/[^/]*\.app)(?:\/|$)/i.exec(path)?.[1];
+  const lexicalBundle = deps.verifyAnyAppBundle && deps.expectedBundleRoot === undefined ? enclosingApp(resolved) : undefined;
+  // Verify the outer canonical app for nested layouts, but retain lexical containment.
+  const enclosing = deps.verifyAnyAppBundle && binary !== null ? enclosingApp(binary) : undefined;
+  const bundle = deps.expectedBundleRoot ?? enclosing ?? lexicalBundle ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
   if (!bundle) return null;
   if (binary === null) throw new CodexExecTrustError("cannot canonicalize the app-bundle exec target");
   const canonicalBundle = realpath(bundle);
   if (canonicalBundle === null) throw new CodexExecTrustError("cannot canonicalize the app bundle");
   if (!binary.startsWith(canonicalBundle + "/Contents/")) {
     throw new CodexExecTrustError("the app-bundle exec target is outside bundle Contents");
+  }
+  if (lexicalBundle && lexicalBundle !== bundle) {
+    const canonicalLexicalBundle = realpath(lexicalBundle);
+    if (canonicalLexicalBundle === null) throw new CodexExecTrustError("cannot canonicalize the app bundle");
+    if (!binary.startsWith(canonicalLexicalBundle + "/Contents/")) {
+      throw new CodexExecTrustError("the app-bundle exec target is outside bundle Contents");
+    }
   }
   return { bundle: canonicalBundle, binary };
 }
