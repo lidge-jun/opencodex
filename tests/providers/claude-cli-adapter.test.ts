@@ -1128,16 +1128,16 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
-  test("6a. call-ID negative: tool result id that never started is ignored", async () => {
-    const written: Uint8Array[] = [];
-    const child = fakeChild([enc.encode('{"type":"result","subtype":"success","is_error":false}\n')], { exitCode: 0 });
+  test("6a. call-ID negative: orphaned tool-result ID is replayed by adapter", async () => {
+    const child = fakeChild([
+      systemInit,
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ], { exitCode: 0 });
     const adapter = createClaudeCliAdapter(provider(), {
       spawn: () => child as unknown as ChildProcess,
       which: () => "/opt/homebrew/bin/claude",
       killGraceMs: 20,
     });
-    const writeSpy = child.write;
-    child.write = (chunk: any) => { written.push(chunk as Uint8Array); return writeSpy.call(child, chunk); };
     const events = await run(adapter, claudeCliToolRequest({
       context: {
         messages: [
@@ -1148,8 +1148,9 @@ describe("Issue #6469 — offline fixtures", () => {
       },
     }));
     expect(events.filter(e => e.type === "tool_call_start")).toEqual([]);
-    const writtenText = written.map(w => w.toString()).join("");
-    expect(writtenText).not.toContain("nonexistent-id");
+    const writtenText = child.written.map(w => w.toString()).join("");
+    expect(writtenText).toContain("nonexistent-id");
+    expect(events.some(e => e.type === "done")).toBe(true);
   });
 
   test("6b. call-ID negative: mismatched tool-result identifier stays intact", async () => {
