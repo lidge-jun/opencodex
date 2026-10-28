@@ -46,6 +46,10 @@ const escapes: Array<{ name: string; links: Link[] }> = [
   { name: "outside Contents", links: [[member, `${root}/MacOS/codex`]] },
   { name: "unresolvable lexical root", links: [[member, "/opt/Other.app/Contents/Resources/codex"], [root, null]] },
   { name: "aliased root with an escaped member", links: [[member, "/outside/codex"], [root, "/real/Bundle"]] },
+  { name: "aliased inner root escaped within the outer app", links: [
+    [member, "/real/Outer.app/Contents/Resources/codex"],
+    [root, "/real/Outer.app/Contents/Resources/Inner.app"],
+  ] },
 ];
 
 for (const backing of [false, true]) for (const scenario of escapes) {
@@ -74,6 +78,22 @@ for (const backing of [false, true]) for (const canonicalRoot of ["/real/Bundle"
   });
 }
 
+for (const backing of [false, true]) for (const from of [member, `${root}/Contents/Resources`]) {
+  test(`CLI validates an in-bundle member alias: ${from}, backing=${backing}`, async () => {
+    const target = from === member ? `${root}/Contents/MacOS/codex` : `${root}/Contents/MacOS`;
+    const links: Link[] = [[from, target]];
+    const canonical = `${root}/Contents/MacOS/codex`;
+    const trusted = harness(member, backing, links);
+    expect(await spawnCodex(["--version"], {}, trusted.deps)).toBe(0);
+    expect(trusted.checks).toEqual([[root, canonical]]);
+    expect(trusted.spawns).toEqual([canonical]);
+    const rejected = harness(member, backing, links, "signature revoked");
+    expect(await spawnCodex(["--version"], {}, rejected.deps)).toBe(1);
+    expect(rejected.checks).toEqual([[root, canonical]]);
+    expect(rejected.spawns).toEqual([]);
+  });
+}
+
 for (const suffix of ["app", "APP", "ApP"]) {
   test(`CLI retains lexical .${suffix} classification when the canonical member escapes`, async () => {
     const binary = `/opt/Unrelated.${suffix}/Contents/Resources/codex`;
@@ -81,6 +101,29 @@ for (const suffix of ["app", "APP", "ApP"]) {
     expect(await spawnCodex(["app-server"], {}, h.deps)).toBe(1);
     expect(h.checks).toEqual([]);
     expect(h.spawns).toEqual([]);
+  });
+}
+
+for (const backing of [false, true]) {
+  test(`CLI spawns the captured canonical member after lexical alias replacement, backing=${backing}`, async () => {
+    const canonical = `${root}/Contents/MacOS/codex`;
+    const links: Link[] = [[member, canonical]];
+    const h = harness(member, backing, links);
+    let entered!: () => void, release!: () => void;
+    const checking = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    h.deps.execBoundary!.macBundleTrustReasonAsync = async (bundle, binary) => {
+      h.checks.push([bundle, binary]); entered();
+      await pending;
+      return null;
+    };
+    const launch = spawnCodex(["--help"], {}, h.deps);
+    await checking;
+    links[0] = [member, "/outside/replaced-codex"];
+    release();
+    expect(await launch).toBe(0);
+    expect(h.checks).toEqual([[root, canonical]]);
+    expect(h.spawns).toEqual([canonical]);
   });
 }
 
