@@ -63,6 +63,8 @@ replay flag.
 Trusted custom Responses relays may opt into `preserveResponsesInputItemIds` and `preserveResponsesMessageMetadata` for launcher replay (#6220). Ordinary destinations still strip IDs when `store: false` and private `internal_chat_message_metadata_passthrough`; xAI custom-call ID repair remains active.
 Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
 
+Exact xAI Responses destinations (including the US regional API) omit only `output.encrypted_content` from `include`; other entries and non-xAI destinations remain unchanged. See [xAI request compatibility](../providers/xai-grok.md#responses-request-compatibility).
+
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their

@@ -56,6 +56,16 @@ describe("xAI Responses include compatibility", () => {
     expect(body).not.toHaveProperty("include");
   });
 
+  test("strips the rejected include entry for the US regional endpoint", () => {
+    const provider = xaiOauthResponses({ baseUrl: "https://us.api.x.ai/v1", authMode: "api-key" });
+    const body = buildBody(provider, {
+      include: ["output.encrypted_content", "reasoning.encrypted_content"], input: [],
+    });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(buildBody(provider, { include: ["output.encrypted_content"], input: [] }))
+      .not.toHaveProperty("include");
+  });
+
   test("leaves another Responses destination's include untouched", () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-responses",

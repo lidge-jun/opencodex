@@ -109,6 +109,12 @@ identity for five minutes. Only the refused opaque payloads are suppressed when 
 identified; newly issued thinking remains replayable. Plaintext history remains available; a failed or cancelled retry does
 not disable thinking replay on later requests.
 
+## xAI Responses includes
+
+For xAI Responses requests, OpenCodex removes the unsupported `output.encrypted_content` entry
+from `include`, including on the [US regional endpoint](https://docs.x.ai/developers/advanced-api-usage/regions).
+Other include entries are preserved; an empty result omits the field. Other providers are unaffected.
+
 ## Auth modes
 
 Provider configs accept three `authMode` values (`key` is the default). The built-in registry also
