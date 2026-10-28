@@ -157,7 +157,7 @@ type LivenessFetch = (
 export interface LiveProxy {
   pid: number | null;
   port: number;
-  /** Original bind scope from the successful runtime/config candidate; never a probe alias. */
+  /** Candidate bind scope, with the default loopback made explicit; never a probe alias. */
   hostname?: string;
   /** Successful recovery probe address, when discovery checked both loopback families. */
   probeHostname?: string;
@@ -521,10 +521,12 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     deadlineAt !== undefined && nowFn() >= deadlineAt;
   const expired = (): null => { observer?.endpoint("unknown"); return null; };
   const probe = async (port: number, opts: { hostname?: string; expectedPid?: number }) => {
+    // Missing/blank means an actual loopback bind, not a later config's bind scope.
+    const bindHostname = opts.hostname?.trim() || "127.0.0.1";
     const hostname = normalizeBindHostname(opts.hostname);
     if (!observer || (!isLoopbackHostname(hostname) && !isWildcardHostname(hostname))) {
       const identity = await proxyIdentityAtObserved(port, opts, probeIo, observer?.endpoint);
-      return identity ? { ...identity, hostname: opts.hostname,
+      return identity ? { ...identity, hostname: bindHostname,
         ...(observer ? { probeHostname: probeHostname(opts.hostname) } : {}) } : null;
     }
     // Parallel families share the existing per-probe attempts/timeout and absolute
@@ -533,7 +535,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
       (io.loopbackAvailabilityFn ?? loopbackFamilyAvailability)(host) !== "unavailable");
     const identities = await Promise.all(hosts.map(async hostname => {
       const identity = await proxyIdentityAtObserved(port, { ...opts, hostname }, probeIo, observer.endpoint);
-      return identity ? { ...identity, hostname: opts.hostname, probeHostname: hostname } : null;
+      return identity ? { ...identity, hostname: bindHostname, probeHostname: hostname } : null;
     }));
     return identities.find(identity => identity !== null) ?? null;
   };
