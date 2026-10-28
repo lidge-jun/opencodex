@@ -3,6 +3,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { isPlainObject } from "./internal";
 import { peekBridgeSearchReplay } from "../../responses/bridge-search-replay-cache";
 import { externalTaskInputResponsesContent } from "../../responses/task-input";
+import { isHistoricalItem, markHistoricalItem } from "../../responses/item-provenance";
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 
@@ -336,7 +337,7 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
       if (memo && !occupiedCallIds.has(memo.callId)) {
         changed = true;
         occupiedCallIds.add(memo.callId);
-        restored.push({
+        const fnCall: Record<string, unknown> = {
           type: "function_call",
           ...(memo.sourceItemId ? { id: memo.sourceItemId } : {}),
           call_id: memo.callId,
@@ -344,8 +345,18 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
           // The bridge records the complete arguments text from the call's own done frame; the
           // empty-object fallback matches what a continuation leg would have sent.
           arguments: memo.argumentsText.length > 0 ? memo.argumentsText : "{}",
-        });
-        restored.push({ type: "function_call_output", call_id: memo.callId, output: memo.output });
+        };
+        const fnOutput: Record<string, unknown> = {
+          type: "function_call_output",
+          call_id: memo.callId,
+          output: memo.output,
+        };
+        if (isHistoricalItem(item)) {
+          markHistoricalItem(fnCall);
+          markHistoricalItem(fnOutput);
+        }
+        restored.push(fnCall);
+        restored.push(fnOutput);
         continue;
       }
     }
@@ -409,11 +420,15 @@ export function repairOrphanedInputItems(
       const knownNullOutput = callId.length > 0 && item.output == null;
       if (repairOrphanOutputs && !paired && (knownNullOutput || usableOutput)) {
         changed = true;
-        repaired.push({
+        const msg: Record<string, unknown> = {
           type: "message",
           role: "user",
           content: orphanedToolOutputContent(item.output, callId),
-        });
+        };
+        if (isHistoricalItem(item)) {
+          markHistoricalItem(msg);
+        }
+        repaired.push(msg);
         continue;
       }
     }
@@ -429,9 +444,13 @@ export function repairOrphanedInputItems(
           const name = typeof item.name === "string" && item.name.length > 0 ? item.name : callId;
           const text = `[ocx] no tool result was recorded for "${name}"; execution status unknown — do not treat this as success, failure, or user-provided input.`;
           syntheticKeys.add(`${isFnCall ? "function" : "custom"}:${callId}`);
-          pendingSyntheticOutputs.push(isFnCall
+          const synthetic: Record<string, unknown> = isFnCall
             ? { type: "function_call_output", call_id: callId, output: text }
-            : { type: "custom_tool_call_output", call_id: callId, output: text });
+            : { type: "custom_tool_call_output", call_id: callId, output: text };
+          if (isHistoricalItem(item)) {
+            markHistoricalItem(synthetic);
+          }
+          pendingSyntheticOutputs.push(synthetic);
         }
       }
       continue;

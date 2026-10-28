@@ -48,6 +48,7 @@ import { usageFromResponsesPayload } from "./usage";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
 import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
 import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
+import { computeReplayPrefixLength, tagHistoricalInputItems } from "../../responses/item-provenance";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -214,6 +215,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // stores conversations for 30 days and documents previous_response_id. So it carries the
       // pairing capability instead, which reuses the orphan-call placeholder without touching
       // store or previous_response_id.
+      let replayPrefixLen = parsed._replayPrefixLen;
+      if (
+        typeof replayPrefixLen === "number"
+        && replayPrefixLen > 0
+        && isPlainObject(outBody)
+        && Array.isArray(outBody.input)
+      ) {
+        outBody = {
+          ...outBody,
+          input: tagHistoricalInputItems(outBody.input, replayPrefixLen),
+        };
+      }
       if (provider.annotateEmptyToolOutputs === true) {
         outBody = annotateEmptyResponsesToolOutputs(outBody, true);
       }
@@ -228,23 +241,21 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           synthesizeMissingCallOutputs,
           repairOrphanOutputs,
         );
-      }
-      let replayPrefixLen = parsed._replayPrefixLen;
-      if (provider.dropResponsesReasoningItems === true) {
-        if (
-          typeof replayPrefixLen === "number"
-          && replayPrefixLen > 0
-          && isPlainObject(outBody)
-          && Array.isArray(outBody.input)
-        ) {
-          const prefixItems = outBody.input.slice(0, Math.min(outBody.input.length, Math.trunc(replayPrefixLen)));
-          const droppedInPrefix = prefixItems.filter(item => isPlainObject(item) && item.type === "reasoning").length;
-          replayPrefixLen = Math.max(0, replayPrefixLen - droppedInPrefix);
+        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
+          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
         }
+      }
+      if (provider.dropResponsesReasoningItems === true) {
         outBody = dropResponsesReasoningInputItems(outBody);
+        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
+          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
+        }
       }
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
+        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
+          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
+        }
       }
       const hostedToolSubstitutions: NonNullable<AdapterRequest["hostedToolSubstitutions"]>[number][] = [];
       if (forward) {
@@ -317,19 +328,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (!isOpenAiOperatedResponsesDestination(provider)) {
           if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
-          if (
-            typeof replayPrefixLen === "number"
-            && replayPrefixLen > 0
-            && isPlainObject(outBody)
-            && Array.isArray(outBody.input)
-          ) {
-            const prefixItems = outBody.input.slice(0, Math.min(outBody.input.length, Math.trunc(replayPrefixLen)));
-            const droppedInPrefix = prefixItems.filter(isCanonicalOnlyInputItem).length;
-            replayPrefixLen = Math.max(0, replayPrefixLen - droppedInPrefix);
-          }
           outBody = stripCanonicalOnlyInputItems(outBody);
+          if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
+            replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
+          }
         }
-        outBody = promoteClientLoadedTools(outBody);
+        outBody = promoteClientLoadedTools(outBody, replayPrefixLen);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(
@@ -351,7 +355,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
         // gateways accept only flat tool variants. Run after custom/tool-search lowering so
         // namespace children already carry their final public kind before they are promoted.
-        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody, convertedRoutedCustomToolNames);
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody, convertedRoutedCustomToolNames, replayPrefixLen);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the

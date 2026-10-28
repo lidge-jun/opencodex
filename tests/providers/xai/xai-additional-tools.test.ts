@@ -247,4 +247,83 @@ describe("xAI Responses additional_tools promotion", () => {
     expect(body.tools).toBeArray();
     expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
   });
+test("Finding 1: historical declarations do not deduplicate current declarations before promotion", () => {
+    const xaiProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      headers: { authorization: "Bearer xai-key" },
+    };
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "additional_tools", tools: [lookup] },
+        { type: "message", role: "user", content: "hello" },
+        { type: "additional_tools", tools: [lookup] },
+      ],
+    };
+    const { body } = build(xaiProvider, raw, 2);
+    expect(body.tools).toBeArray();
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("Finding 1: historical namespaced declarations do not deduplicate current namespaced declarations before promotion", () => {
+    const xaiProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      headers: { authorization: "Bearer xai-key" },
+    };
+    const namespacedLookup = {
+      type: "namespace",
+      name: "functions",
+      tools: [lookup],
+    };
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "additional_tools", tools: [namespacedLookup] },
+        { type: "message", role: "user", content: "hello" },
+        { type: "additional_tools", tools: [namespacedLookup] },
+      ],
+    };
+    const { body } = build(xaiProvider, raw, 2);
+    expect(body.tools).toBeArray();
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("Finding 2: newly loaded search tools survive when first additional_tools wrapper is historical", () => {
+    const xaiProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      headers: { authorization: "Bearer xai-key" },
+    };
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "additional_tools", tools: [{ type: "function", name: "old_tool" }] },
+        { type: "tool_search_output", tools: [lookup] },
+      ],
+    };
+    const { body } = build(xaiProvider, raw, 1);
+    expect(body.tools).toBeArray();
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("Finding 3: synthesizing missing historical tool output does not reactivate retired tools", () => {
+    const pWithPairing: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      requiresPairedResponsesToolResults: true,
+      headers: { authorization: "Bearer xai-key" },
+    };
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "function_call", call_id: "c1", name: "some_call" },
+        { type: "additional_tools", tools: [{ type: "function", name: "retired_tool" }] },
+      ],
+    };
+    const { body } = build(pWithPairing, raw, 2);
+    const retired = (body.tools as any[] ?? []).find(t => t.name === "retired_tool");
+    expect(retired).toBeUndefined();
+  });
 });

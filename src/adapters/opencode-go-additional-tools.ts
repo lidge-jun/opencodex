@@ -1,3 +1,5 @@
+import { isHistoricalItem } from "../responses/item-provenance";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -55,13 +57,15 @@ export function promoteResponsesAdditionalTools(
   const currentTurnStart = Number.isFinite(replayPrefixLength)
     ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength)))
     : 0;
+  const hasProvenance = body.input.some(isHistoricalItem);
   let changed = false;
   for (const [index, item] of body.input.entries()) {
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
       changed = true;
       // Replayed wrappers are conversation history, not authority for the current request.
       // Gateways cannot accept the wrapper itself, so remove it without promoting its catalog.
-      if (index < currentTurnStart) continue;
+      const isHistorical = hasProvenance ? isHistoricalItem(item) : (index < currentTurnStart);
+      if (isHistorical) continue;
       // Custom/search/namespace lowering already owns identity and deduplication. This pass
       // only moves declarations, including hosted tools that intentionally have no name.
       for (const tool of item.tools) promoted.push(tool);

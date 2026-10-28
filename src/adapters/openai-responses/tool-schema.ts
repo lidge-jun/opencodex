@@ -8,6 +8,7 @@ import {
   XaiToolSchemaCompatibilityError,
 } from "../xai-tool-schema";
 import { isPlainObject } from "./internal";
+import { isHistoricalItem } from "../../responses/item-provenance";
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
@@ -195,7 +196,7 @@ function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unk
  * serializing the raw request, so activate those returned definitions for upstreams that do not
  * implement the native deferred-loading handshake themselves.
  */
-export function promoteClientLoadedTools(body: unknown): unknown {
+export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: number): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const loadedTools = body.input.flatMap(item =>
@@ -210,17 +211,26 @@ export function promoteClientLoadedTools(body: unknown): unknown {
     return tools === body.tools ? body : { ...body, tools };
   }
 
-  const additionalToolsIndex = body.input.findIndex(item =>
-    isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
-  );
-  if (additionalToolsIndex < 0) return { ...body, tools: mergeLoadedTools([], loadedTools) };
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = body.input.some(isHistoricalItem);
 
-  const additionalTools = body.input[additionalToolsIndex];
+  const currentAdditionalToolsIndex = body.input.findIndex((item, index) => {
+    const isHistorical = hasProvenance ? isHistoricalItem(item) : (index < currentTurnStart);
+    return !isHistorical && isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools);
+  });
+
+  if (currentAdditionalToolsIndex < 0) {
+    return { ...body, tools: mergeLoadedTools([], loadedTools) };
+  }
+
+  const additionalTools = body.input[currentAdditionalToolsIndex];
   if (!isPlainObject(additionalTools) || !Array.isArray(additionalTools.tools)) return body;
   const tools = mergeLoadedTools(additionalTools.tools, loadedTools);
   if (tools === additionalTools.tools) return body;
   const input = [...body.input];
-  input[additionalToolsIndex] = { ...additionalTools, tools };
+  input[currentAdditionalToolsIndex] = { ...additionalTools, tools };
   return { ...body, input };
 }
 

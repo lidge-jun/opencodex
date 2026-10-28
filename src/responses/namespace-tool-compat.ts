@@ -1,6 +1,7 @@
 import { dottedToolName, namespacedToolName } from "../types";
 import { collectResponsesToolGroups } from "./tool-groups";
 import { collectAmbiguousDottedAliases, dottedAliasIsUnambiguous } from "./tool-name-aliases";
+import { isHistoricalItem } from "./item-provenance";
 
 export interface RoutedNamespaceToolIdentity {
   namespace: string;
@@ -344,6 +345,7 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
 export function rewriteRoutedNamespaceToolsForUpstream(
   body: unknown,
   convertedCustomToolNames?: ReadonlySet<string>,
+  replayPrefixLength?: number,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
@@ -351,6 +353,11 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   if (!isPlainObject(body)) return { body, aliases: new Map() };
   const groups = collectResponsesToolGroups(body);
   const plan = buildRewritePlan(groups);
+
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = Array.isArray(body.input) && body.input.some(isHistoricalItem);
 
   // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
   // replay call items carrying a private `namespace`.
@@ -360,8 +367,13 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   let input = body.input;
   if (Array.isArray(body.input)) {
     let inputChanged = false;
-    const rewrittenInput = body.input.map(item => {
-      const next = rewriteInputItem(item, plan, emitted);
+    const historicalEmitted = new Set<string>();
+    const rewrittenInput = body.input.map((item, index) => {
+      const isHistorical = hasProvenance ? isHistoricalItem(item) : (index < currentTurnStart);
+      const itemEmitted = (isHistorical && isPlainObject(item) && item.type === "additional_tools")
+        ? historicalEmitted
+        : emitted;
+      const next = rewriteInputItem(item, plan, itemEmitted);
       if (next !== item) inputChanged = true;
       return next;
     });
