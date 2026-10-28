@@ -316,6 +316,13 @@
       ]
     },
     {
+      "path": "transports/response-citations.md",
+      "tier": 3,
+      "title": "Response Citation Projection",
+      "scope": "OpenAI-operated outbound citation repair and generated JSON/SSE annotation titles.",
+      "documents": ["src/adapters/openai-responses/", "src/bridge/"]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
