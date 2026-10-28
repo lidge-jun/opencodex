@@ -49,7 +49,7 @@ for (const identity of scenario.startsWith("F3") || scenario.startsWith("F5") ? 
       import { writeFileSync } from "node:fs";
       import { observeProxyLiveness as observe, START_OWNERSHIP_LIVENESS } from ${JSON.stringify(repoPath("src/server/proxy-liveness.ts"))};
       import { recoverStartJournalAfterOwnerRecheck as actual, recoverStartStateUnderOwnershipLease } from ${JSON.stringify(repoPath("src/cli/start-owner-fence.ts"))};
-      import { readPidFileValue, removePidIfValueIs, readProcessCommandLine, verifyPidIdentity,
+      import { readPidFileValue, removePidIfValueIs, readProcessCommandLine, verifyPidIdentity, setOcxStartProcessCacheForTests,
         setProcessCommandLineExecForTests, setProcessCommandLinePlatformForTests } from ${JSON.stringify(repoPath("src/config/process-state.ts"))};
       import { markCrossHomeSibling, reconcileStartupJournal } from ${JSON.stringify(repoPath("src/cli/cross-home-owner.ts"))};
       const scenario = ${JSON.stringify(scenario)}, dotted = scenario.startsWith("F5"), dual = scenario.startsWith("F3") || dotted;
@@ -103,6 +103,9 @@ for (const identity of scenario.startsWith("F3") || scenario.startsWith("F5") ? 
             (identity === "unreadable" ? commandLine !== undefined : commandLine !== fixtureCommandLine)) {
           throw new Error("Native identity fixture precondition failed: " + JSON.stringify(evidence));
         }
+        // The precondition warmed the identity cache; recovery must read the controlled command line itself.
+        setOcxStartProcessCacheForTests([]);
+        const readsBeforeRecovery = probeReads;
         const owner = { live: null, pidSnapshot: readPidFileValue() }, events = [];
         let refusal;
         try { await recoverStartStateUnderOwnershipLease({ supervised: false,
@@ -110,8 +113,9 @@ for (const identity of scenario.startsWith("F3") || scenario.startsWith("F5") ? 
           decide: () => ({ kind: "proceed" }), stayOut: () => { throw new Error("unexpected stay-out"); },
           recover: () => run(owner) }); }
         catch (error) { refusal = error.message; }
+        const recoveryReads = probeReads - readsBeforeRecovery;
         const ownerStillLive = dual ? await fetch("http://" + (hostname === "::1" ? "[::1]" : hostname) + ":" + port + "/healthz").then(r => r.json()) : undefined;
-        console.log(JSON.stringify({ pid, refusal, live: owner.live, events, verified, ownerStillLive, evidence,
+        console.log(JSON.stringify({ pid, refusal, live: owner.live, events, verified, ownerStillLive, evidence, recoveryReads,
           commandLineReadable: typeof commandLine === "string" && commandLine.length > 0,
           foreignAlive: foreign ? foreign.exitCode === null : undefined }));
       } finally {
@@ -145,6 +149,7 @@ for (const identity of scenario.startsWith("F3") || scenario.startsWith("F5") ? 
         expect(result.live?.source).toBe("runtime");
         expect(result.live?.hostname).toBe(scenario === "F3 ipv6-owner" ? "[::1]" : "127.0.0.1");
         expect(result.ownerStillLive).toEqual({ service: "opencodex", pid: result.evidence.evidencePid });
+        expect(result.recoveryReads, diagnostics).toBeGreaterThan(0);
         if (identity === "verified") {
           expect(result.commandLineReadable, diagnostics).toBe(true);
           expect(result.verified, diagnostics).toBe(result.evidence.evidencePid);
