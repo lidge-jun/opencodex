@@ -147,7 +147,8 @@ for (const identity of scenario.startsWith("F3") || scenario.startsWith("F5") ? 
       } else {
         expect(result.refusal).toBeUndefined();
         expect(result.live?.source).toBe("runtime");
-        expect(result.live?.hostname).toBe(scenario === "F3 ipv6-owner" ? "[::1]" : "127.0.0.1");
+        expect(result.live?.hostname).toBe(scenario.startsWith("F5") ? "localhost." : "localhost");
+        expect(result.live?.probeHostname).toBe(scenario === "F3 ipv6-owner" ? "[::1]" : "127.0.0.1");
         expect(result.ownerStillLive).toEqual({ service: "opencodex", pid: result.evidence.evidencePid });
         expect(result.recoveryReads, diagnostics).toBeGreaterThan(0);
         if (identity === "verified") {

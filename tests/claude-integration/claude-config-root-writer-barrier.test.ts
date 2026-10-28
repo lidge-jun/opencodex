@@ -13,6 +13,7 @@ import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDeskt
 import { resolveDesktop3pConfigLibraryPath } from "../../src/claude/desktop-3p-library";
 import { resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath, type IcaclsResult } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { setWindowsOwnerAclRunnerForTests } from "../../src/lib/windows-owner-acl";
 import { writeServiceApiTokenFile } from "../../src/lib/service-secrets";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -44,6 +45,9 @@ beforeEach(() => {
   setPlatformForTests("win32");
   setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
   setIcaclsRunnerForTests(() => success);
+  // icacls is mocked, so the real PowerShell owner check must not decide hardening:
+  // a cold probe can exhaust the 1s ACL budget and refuse before the mocked icacls runs.
+  setWindowsOwnerAclRunnerForTests(() => ({ success: false, timedOut: false, stdout: "" }));
 });
 afterEach(async () => {
   await paths.flushConfigDirHardeningAndReaps(root);
@@ -53,6 +57,7 @@ afterEach(async () => {
   setAsyncIcaclsBeltSchedulerForTests(null);
   setNowForTests(null);
   setIcaclsRunnerForTests(null);
+  setWindowsOwnerAclRunnerForTests(null);
   setLocalCaWindowsAclRunnerForTests(null);
   setPlatformForTests(null);
   setSyntheticWindowsPrincipalForTests(null);

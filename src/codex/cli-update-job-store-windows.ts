@@ -55,7 +55,7 @@
  * empirical cross-user proof.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, toNamespacedPath } from "node:path";
 import type { Library, Symbols } from "bun:ffi";
 import * as recoveryFfi from "bun:ffi";
@@ -656,7 +656,8 @@ async function acquireLock(ctx: Ctx, prepared: Prepared): Promise<HeldLock> {
  * while its pin shows this call's identity. A replaced owner or lock survives,
  * which keeps admission fail-closed on the leftover.
  */
-function releaseLock(ctx: Ctx, held: HeldLock): void {
+function releaseLock(ctx: Ctx, held: HeldLock): boolean {
+  let ownerDeleted = false, dirDeleted = false;
   try {
     const now = inspect(ctx, held.owner, false);
     if (sameIdentity(now, held.ownerIdentity) && now.links === 1
@@ -664,13 +665,18 @@ function releaseLock(ctx: Ctx, held: HeldLock): void {
       && now.size <= 1024
       && readAll(ctx, held.owner, now.size).equals(Buffer.from(held.record))) {
       markDelete(ctx, held.owner);
+      ownerDeleted = true;
     }
   } catch { /* fail closed; a leftover owner keeps the lock alive */ }
   ctx.pins.release(held.owner, ctx.kernel);
   try {
-    if (sameIdentity(inspect(ctx, held.dir, true), held.dirIdentity)) markDelete(ctx, held.dir);
+    if (sameIdentity(inspect(ctx, held.dir, true), held.dirIdentity)) {
+      markDelete(ctx, held.dir);
+      dirDeleted = true;
+    }
   } catch { /* fail closed; a leftover lock blocks later admission */ }
   ctx.pins.release(held.dir, ctx.kernel);
+  return ownerDeleted && dirDeleted;
 }
 
 export interface WindowsCliRecoveryIo {
@@ -779,6 +785,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
   let held: HeldLock | undefined;
   let transferred = false;
   let closed = false;
+  let resourcesReleased = false;
   try {
     // Publish the context before the first pin/open or async verification can fail.
     // The caller already holds its Worker token; failed cleanup remains rooted there.
@@ -820,6 +827,8 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
     return {
       lock,
       verify,
+      /** Disposal proof is independent of the ACL diagnostic returned by release(). */
+      get resourcesReleased() { return resourcesReleased; },
       verifyIdentitySync() { if (closed) throw unsafe(); verifyIdentitySync(); },
       async createStaging(): Promise<string> {
         if (closed || !held || stage) throw unsafe();
@@ -847,9 +856,20 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
       async release(): Promise<boolean> {
         if (closed) return false;
         closed = true;
-        try { await verifyHeld(); if (held) releaseLock(ctx, held); }
+        let aclVerified = true;
+        let lockDeleted = !acquire;
+        try {
+          verifyIdentitySync();
+          // An ACL lookup failure must not strand a lock whose original pins
+          // still prove ownership. It remains a failed release verdict, even
+          // when the independently token/identity-fenced deletion succeeds.
+          try { await verifyAcl(entries); } catch { aclVerified = false; }
+          verifyIdentitySync();
+          if (held) lockDeleted = releaseLock(ctx, held);
+        }
         finally { ctx.pins.closeAll(kernel); }
-        return pins.remaining === 0 && (!acquire || !existsSync(lock));
+        resourcesReleased = pins.remaining === 0 && !stage && lockDeleted;
+        return aclVerified && resourcesReleased;
       },
     };
   } finally { if (!transferred) ctx.pins.closeAll(kernel); }

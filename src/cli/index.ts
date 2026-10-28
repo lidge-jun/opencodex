@@ -854,13 +854,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
       const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
       if (siblingOfLivePort() === null) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
       if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
-      // Refresh the Grok Build fence too (same contract as start). live.hostname is the
-      // hostname the running proxy actually bound — config.hostname may have drifted.
-      // The reconciler re-reads immediately before each client-file mutation; only
-      // the live proxy's observed bind host is safe to carry across this boundary.
+      // Refresh the Grok Build fence too (same contract as start). Keep the observed
+      // bind scope for admission and its responding address for the destination.
+      // The reconciler re-reads immediately before each client-file mutation;
+      // config.hostname may have drifted from the running proxy's bind scope.
       if (siblingOfLivePort() === null) await reconcileEnsureDesiredIntegrations(
         live.port,
-        { kind: "live", hostname: live.hostname },
+        { kind: "live", hostname: live.hostname, probeHostname: live.probeHostname },
       );
       console.log(`✅ Proxy running on port ${live.port}`);
       return true;

@@ -106,7 +106,8 @@ for (const ownerHost of ["127.0.0.1", "::1"]) {
       expect(observation.kind).toBe("live");
       expect(observation.live?.pid).toBe(process.pid);
       expect(observation.live?.port).toBe(owner.port!);
-      expect(observation.live?.hostname).toBe(ownerHost === "::1" ? "[::1]" : "127.0.0.1");
+      expect(observation.live?.hostname).toBe(hostname);
+      expect(observation.live?.probeHostname).toBe(ownerHost === "::1" ? "[::1]" : "127.0.0.1");
     } finally {
       await foreign?.stop(true);
       await owner.stop(true);
@@ -175,7 +176,7 @@ test("F3 family probes run concurrently and stop retrying at the shared deadline
   expect(calls).toBe(2);
 });
 
-test("F3 a live family wins over an uncertain peer and preserves its concrete hostname", async () => {
+test("F3 a live family retains its probe address separately from bind scope", async () => {
   const result = await observeProxyLiveness({ ...base, configFn: () => ({ port: 10100, hostname: "localhost" }),
     loopbackAvailabilityFn: () => "available", verifyPidFn: pid => pid,
     fetchFn: (async (url: string) => {
@@ -183,7 +184,9 @@ test("F3 a live family wins over an uncertain peer and preserves its concrete ho
       throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
     }) as typeof fetch,
   });
-  expect(result).toEqual({ kind: "live", live: { pid: 4242, port: 10100, hostname: "[::1]", source: "config" } });
+  expect(result).toEqual({ kind: "live", live: {
+    pid: 4242, port: 10100, hostname: "localhost", probeHostname: "[::1]", source: "config",
+  } });
 });
 
 test("F4 confirmed foreign PID does not erase endpoint uncertainty or an elapsed identity deadline", async () => {

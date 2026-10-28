@@ -1,5 +1,8 @@
 {
   "codex-cli-windows-child.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-install.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-outcomes.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-shared.test.ts": "codex-integration",
   "codex-cli-update-windows-layout.test.ts": "codex-integration",
   "codex-cli-windows-plan.test.ts": "codex-integration",
   "codex-launcher-diagnostics.test.ts": "codex-integration",
