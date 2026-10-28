@@ -130,6 +130,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) | Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots. |
 | [`clients/hermes.md`](clients/hermes.md) | Hermes profile discovery, per-profile selection, ownership stores, and boundaries. |
 | [`clients/qoder.md`](clients/qoder.md) | Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules. |
+| [`clients/client-support-matrix.md`](clients/client-support-matrix.md) | Generated client support page: registry sources, curated protocol and test claims, drift checks. |
 | [`clients/t3code.md`](clients/t3code.md) | T3 Code settings.json Claude provider-instance ownership, proxy environment, custom models and loopback marker rules. |
 | [`companion.md`](companion.md) | Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts. |
 | [`codex-account-controls.md`](codex-account-controls.md) | Account selection order, custom usage thresholds, and stable account-card editing. |
@@ -186,12 +187,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/src-tauri/src/tray_login.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
-| `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `docs-site/` | [`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
 | `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 | `scripts/test-run-lock.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
@@ -239,7 +240,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
-| `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
+| `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/clients/config-export/` | [`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
@@ -300,7 +301,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/grok/` | [`runtime.md`](runtime.md) |
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
-| `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
+| `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/abort.ts` | [`transports/timeouts.md`](transports/timeouts.md) |

@@ -979,6 +979,18 @@
       ]
     },
     {
+      "path": "clients/client-support-matrix.md",
+      "tier": 5,
+      "title": "Client Support Matrix",
+      "scope": "Generated client support page: registry sources, curated protocol and test claims, drift checks.",
+      "documents": [
+        "scripts/",
+        "docs-site/",
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
       "path": "clients/t3code.md",
       "tier": 5,
       "title": "T3 Code Client Integration",
