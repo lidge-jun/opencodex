@@ -86,6 +86,31 @@ function snapshot(): Record<string, string> {
 }
 
 describe("POST /api/codex-agent-roles/auto-assign", () => {
+  test.each([false, true])("disabled benchmarks retain proposals and report unavailability (Artificial Analysis configured: %s)", async withAnalysis => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | globalThis.Request) => {
+      requests.push(String(input));
+      return new Response("fixture failure", { status: 401 });
+    }, { preconnect: originalFetch.preconnect }) as typeof fetch;
+    try {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+        new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+        { ...config, codexRoleCapability: withAnalysis ? { artificialAnalysis: { apiKey: "route-consent-fixture" } } : undefined },
+        { ...deps, loadCodexRoleCapability: undefined },
+      );
+      expect(response!.status).toBe(200);
+      const body = await response!.json();
+      expect(requests).toEqual(withAnalysis ? ["https://artificialanalysis.ai/api/v2/data/llms/models"] : []);
+      expect(body.capability.error).toContain("benchmark data was unavailable");
+      expect(body.capability.domains).toEqual({});
+      expect(body.proposals.find((row: { role: string }) => row.role === "explorer")).toMatchObject({ status: "proposed", proposedModel: "stub/small" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("proposes a model and effort per role through one sizing call and writes nothing", async () => {
     const before = snapshot();
     const result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" });

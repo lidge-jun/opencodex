@@ -979,7 +979,7 @@ then picks the cheapest model from your picker list that reaches the tier:
 - When two or more of the other models have a published score in the role's domain, those models are
   tiered by that score, and unscored models are left out. Scores come from the
   [LMArena leaderboard dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset)
-  (CC BY 4.0), or from [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
+  (CC BY 4.0) when explicitly enabled, or from [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
   (below). The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
@@ -989,13 +989,25 @@ To use Artificial Analysis, create a free API key at [artificialanalysis.ai](htt
 and set it as a literal, an `${ENV}` reference or a keychain reference:
 
 ```json
-{ "codexRoleCapability": { "artificialAnalysis": { "apiKey": "${ARTIFICIAL_ANALYSIS_API_KEY}" } } }
+{
+  "codexRoleCapability": {
+    "artificialAnalysis": { "apiKey": "${ARTIFICIAL_ANALYSIS_API_KEY}" },
+    "huggingFace": { "enabled": false }
+  }
+}
 ```
 
 opencodex reads it once per day, which stays inside the free tier's daily request limit. Its terms allow
 using the data for your own decisions and forbid passing it on, so auto-assign keeps the scores
 internal: the response carries the tier each model got and the attribution, without the scores. If
-the read fails, the LMArena dataset is used and `capability.error` says so.
+the read fails, the LMArena dataset is used only when `codexRoleCapability.huggingFace.enabled` is `true`,
+and `capability.error` says so.
+
+Hugging Face benchmark downloads are **off by default**. Set `codexRoleCapability.huggingFace.enabled`
+to `true` to allow reading the LMArena dataset once per clock hour, either as the primary source without
+an Artificial Analysis key or as its fallback. When off, neither path makes a Hugging Face request:
+auto-assign continues with configured tiers and price signals, and `capability.error` reports that
+benchmark data was unavailable. Artificial Analysis can still supply measured scores with its key.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and

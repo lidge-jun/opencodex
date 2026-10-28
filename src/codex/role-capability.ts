@@ -6,7 +6,7 @@
  *   their own API key. Its terms allow that user's internal use with attribution and forbid
  *   redistributing the raw data, so its scores never leave this process.
  * - The LMArena leaderboard dataset, https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset,
- *   published under CC BY 4.0, otherwise, and whenever Artificial Analysis cannot be read.
+ *   published under CC BY 4.0, only when explicitly enabled, as a primary or fallback source.
  *
  * Each domain maps to one published index or table. Both sources name a model by display name
  * with one row per reasoning setting ("Claude Opus 5.5 (High)"); capabilityModelKey drops the
@@ -203,17 +203,28 @@ const artificialAnalysisCache = periodCache();
 
 /**
  * Artificial Analysis when the user's key resolves, read once per UTC day to stay inside the
- * free tier's daily request quota; LMArena once per clock hour otherwise, or when Artificial
- * Analysis fails.
+ * free tier's daily request quota; explicitly enabled LMArena once per clock hour otherwise,
+ * or when Artificial Analysis fails. Without that opt-in, no Hugging Face request is made.
  */
 export const loadCapabilityTable: LoadCapability = async config => {
   const now = new Date().toISOString();
-  const arena = () => arenaCache(now.slice(0, 13), () => fetchCapabilityTable());
+  const arena = (): Promise<CapabilityTable> => config.codexRoleCapability?.huggingFace?.enabled === true
+    ? arenaCache(now.slice(0, 13), () => fetchCapabilityTable())
+    : Promise.resolve({
+      source: ARENA_SOURCE,
+      publishedAt: null,
+      domains: {},
+      fallbackReason: "benchmark data was unavailable: Hugging Face downloads are disabled",
+    });
   const apiKey = resolveProviderApiKey(config.codexRoleCapability?.artificialAnalysis?.apiKey)?.trim();
   if (!apiKey) return arena();
   try {
     return await artificialAnalysisCache(`${now.slice(0, 10)} ${apiKey}`, () => fetchArtificialAnalysisTable(apiKey));
   } catch {
-    return { ...await arena(), fallbackReason: "Artificial Analysis could not be read" };
+    const fallback = await arena();
+    return {
+      ...fallback,
+      fallbackReason: ["Artificial Analysis could not be read", fallback.fallbackReason].filter(Boolean).join("; "),
+    };
   }
 };

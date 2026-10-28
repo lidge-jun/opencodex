@@ -152,7 +152,7 @@ and proposes the cheapest sufficient model and an effort from the list the picke
 reasoning and the signals that would move it up or down. Nothing changes until you choose
 **Use this**, which saves exactly like picking the model and effort by hand. Tiers come from
 `codexRoleTiers` or price, as in [role auto-assign](/guides/integrations/#auto-assign), without the
-measured scores role auto-assign also reads.
+measured scores role auto-assign can read from configured sources.
 
 `multiAgentGuidanceEnabled` defaults to on and is the master switch for opencodex-authored guidance
 on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
