@@ -36,6 +36,17 @@ identical at this layer and are checked differently.
 | Upstream ChatGPT plan window | The account quota section shows a 5-hour or weekly window at or near its limit while the lock reports `ready` or `off`. | Wait for the window to reset, inspect any reset option ChatGPT offers ([banked reset rules](https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work), [plan windows](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)), or serve the request on another account with `ocx account use openai <id>`. For explicitly authorized paid-credit use after the limit, see [account credit policy](/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent). The credit-balance rediscovery defect in [#6845](https://github.com/lidge-jun/opencodex/issues/6845) was fixed by [#6886](https://github.com/lidge-jun/opencodex/pull/6886). |
 | Provider incident or transport failure | Quota stays low, the lock stays released, and `ocx doctor` reports transport or ChatGPT reachability problems. | Retry after the incident clears or reroute through an existing combo. Changing lock or threshold policy is not a cure for a transport failure. |
 
+A proxy-generated `upstream_reset_replay_refused` response also uses status 429:
+upstream execution is unknown, so OCX refuses an automatic resend. Its log cause
+is `transport-ambiguous`, not provider rate limiting. This applies to direct provider
+routes and combo child failures on client HTTP and WebSocket ingress independently
+of `upstreamWebsocket`. Synthetic refusals do not cool combo targets or count as
+account rate limits; genuine upstream 429s retain their rate-limit handling. Older builds can
+misrecord a WebSocket or combo refusal as `rate-limit` / `rate_limit_exceeded`;
+that combination alone does not establish exhausted quota. `headers-only` is a
+response-progress stage, not proof that the provider returned headers. Correct
+attribution does not diagnose or repair the original connection reset.
+
 A locked main credential closes request admission; it does not reserve the
 account's remaining quota, and a predicted reset never releases the block on
 its own. The thresholds (by default `short` 90, `long` 98) are visible in the
@@ -47,6 +58,60 @@ retry. The suggested retry time is the main account's reset or, for a request
 that the account pool routed to the main account, the earliest known time another
 pool account recovers, whichever comes first (never sooner than one minute).
 Resume the Goal after that time; routing then picks an account from fresh state.
+
+## Stored-account credit metadata retries
+
+An explicitly selected stored account can reach its included usage limit while its last
+credit balance observation is older than five minutes. If credit spending is enabled for
+that account and the evidence is stale, missing or incomplete, its local 429 advises retrying
+after the 300-second base metadata cadence (or at the included reset if sooner). A later known upstream
+cooldown for the selected quota scope, including account-wide holds, still takes precedence; when
+both apply, the later deadline wins. Unrelated
+model-group holds are not imported. The original included-window reset remains attached to the
+internal refusal as `resetAt`; the shorter hint is a metadata recheck opportunity, not a new quota reset.
+
+The request remains refused until fresh spendable credit evidence is available. This hint
+does not perform a refresh, bypass metadata-query pacing, guarantee recovery, change account
+selection, or enable credit spending. Direct account bindings retain their identity. Explicit
+credit opt-out, an older cached null without provenance, a known spending veto or a finite empty
+balance without unlimited entitlement retain the included-reset advice. A newly observed missing
+or malformed credit summary retracts spending authority but permits the short metadata retry;
+an explicit spending veto still wins. Unlimited credits with a zero balance require fresh evidence
+just like other credits. Ordinary upstream 429 delays keep the existing parser ceiling of 24 hours
+for numeric and HTTP-date Retry-After values.
+
+## Triage: `idle timeout waiting for SSE`
+
+Codex ends a stream that has sent no event for its `stream_idle_timeout_ms`
+(300 seconds by default) and retries the turn. The report alone does not say
+why the stream went quiet. On the native ChatGPT upstream WebSocket, one
+possible cause is a path that failed silently after the response started: a VPN
+or tunnel restart, a Wi-Fi rejoin or an expired NAT mapping can drop it without
+a FIN or RST reaching the proxy.
+
+On the canonical ChatGPT Codex endpoint
+(`https://chatgpt.com/backend-api/codex/responses`, the exchange with the
+metadata channel), the proxy pings the upstream for the whole exchange. Once the
+response has started, a peer that has answered at least one ping on that
+exchange and then delivers no frame and no pong for two ping intervals ends the
+stream with a retryable failure. Codex then reconnects 30 to 45 seconds after
+the last frame or pong instead of after 300 seconds, and the reconnect row names
+the cause:
+
+```text
+Reconnecting... 1/5 (stream disconnected before completion: Upstream stream terminated unexpectedly: codex websocket stopped answering after the response started [cause=after-response-started ...])
+```
+
+When a ping reaches a path that a restarted tunnel resets, the same row reports
+`codex websocket closed before a Responses terminal event (close 1006)`
+instead, within about one ping interval. An `idle timeout waiting for SSE` that
+still arrives after the full timeout comes from a peer that kept answering pings
+while sending no events, a peer that never answered a ping, or an exchange
+without the metadata channel, such as the OpenAI API Responses WebSocket, which
+sends no pings. All three keep the client's idle deadline on purpose.
+`ocx logs get <request-id> --json` shows the attempt's `codexWsStage` with its
+`pings` and `pongs` counts, which tell the three apart. Raising
+`stream_idle_timeout_ms` only makes them wait longer.
 
 ## Why the first reconnect row can be absent
 

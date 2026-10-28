@@ -15,7 +15,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `emptyCompletionRetry?` | `boolean` | `false` | テキストもツール呼び出しもない Responses ターンを、ターミナルイベント前にストリームが終了した場合も含め、同一リクエストで 1 回再試行するよう明示的に有効化します。再試行は課金対象になる場合があります。`OCX_EMPTY_COMPLETION_RETRY=0` で設定を変更せず無効化できます。combo と routed-compaction turn は対象外です。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Codex Responses パススルーから Codex の safety-buffering ヒントを除去します。対象は `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 応答ヘッダー、`safety_buffering` 型の `response.metadata` SSE イベント、およびその他の SSE イベントにある `safety_buffering` フィールドです。Codex TUI はこれらを、既定の操作でセッションをより弱いモデルに切り替える「より高速なモデルで再試行」プロンプトとして表示します。その他の `x-codex-*` ヘッダーと SSE イベントの内容は、そのフィールドの除去を除いて変更せずに転送されます。既定ではオフです。 |
 | `stallTimeoutSec?` | `number` | `300`（public）/ 無効（local） | ストリームが遮断されるまでの、有効な上流進捗がない秒数（Responses とネイティブ Chat）。未設定では**ローカル**上流（loopback・プライベート・`.local`/`.lan` 名）は無効が既定、public 上流は 300 秒。正の値は両方に適用（最小 1 秒）、`0` で無通信 watchdog を全面無効化。canonical ChatGPT SSE を非ストリーミング JSON にまとめる Responses リクエストには、watchdog が無効でも独立した 15 分の全体上限が残る。`/v1/responses/compact` の保留ボディ読み取りもこの予算を共有するが、ローカル上流でも既定は 300 秒。明示値（`0` を含む）が優先される。 |
-| `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
+| `connectTimeoutMs?` | `number` | `200000`（public）/ 無効（local） | リクエスト送信から上流が最初の応答ヘッダーを返すまでの試行ごとの期限（DNS/TCP/TLS とヘッダー待ち）。本体生成の前に終了し、本体ストリームを制御する `stallTimeoutSec` とは無関係です。未設定では**ローカル**上流（loopback・プライベート・`.local`/`.lan` 名）は無効が既定、public 上流は 200 秒。正の値は両方に適用、`0`（または任意の非正値）でヘッダー期限を全面無効化します。無効にすることで、ローカルモデルが大きなプロンプトで数分の prompt prefill を行っても、最初のヘッダーのタイマーが健全なリクエストを切断しません。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
 | `websockets?` | `boolean` | `false` | クライアント向け Responses WebSocket パスを広告して許可します。false の場合クライアントは HTTP/SSE を使いますが、対象となる canonical ChatGPT upstream WS 最適化は無効にしません。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 追加の正確な CORS origin。ループバック origin は常に許可します。`chrome-extension://<extension-id>` など authority ベースのブラウザー拡張 origin に対応し、`*` はワイルドカードではありません。Firefox と Safari は拡張 UUID を（インストール/ブラウザー起動ごとに）再生成するため、origin が変わったらエントリを更新してください。 |
@@ -26,6 +26,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | バックグラウンドサービス向けのオプトイン復旧。小さな監視プロセスが `/healthz` を確認し、プロキシが生きたまま連続プローブに約 1 分間まったく応答しない場合に終了させ、サービスマネージャー（タスク スケジューラ、launchd、systemd、WinSW）に再起動させます。管理対象サービスの子プロセスでのみ起動し、停止したプロセスが保持していたリクエストは再送しません。1 時間あたり最大 3 回。再起動が必要です。自動復旧には数値のバインドアドレス（または既定の localhost/ワイルドカード マッピング）が必要です。DNS バインド名は監視されません。記録されたアドレスまたはポートが変更されると監視が停止します。 |
 | `codexAutoStart?` | `boolean` | `true` | Codex を起動する前に、Codex シムで `ocx ensure` を実行させます。 False を指定すると、操作が行われないことが保証されます。 |
 | `codexShimAutoRestore?` | `boolean` | `true` |完了した外部 Codex アップデートによってインストールされたシムが置き換えられた後、インストールされているシムを復元します。環境オプトアウト: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
+| `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | `CODEX_HOME` 内のネイティブ メイン ChatGPT ログインを更新する主体を選択します。キーリングの応答はその照会だけに適用されます。トークンがなければその認証情報の準備は失敗しますが、次の照会が同じトークンを返しても利用できます。永続的な拒否状態は保持せず、準備済みのリクエストは完了できます。ファイルベースの動作は変わりません。自動選択を含む動作の詳細は[英語版 Server fields](/reference/configuration/server/#server-fields)を参照してください。 |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 履歴の互換性を元に戻すことができます。元のメタデータは `ocx stop` / `ocx restore` によってバックアップおよび復元されます。 |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` |オフ |認識された Codex ヘルパー/シャドウ呼び出しを、リクエストに設定された推論エフォートを維持したまま選択したモデルにリダイレクトします。デフォルトのソースプレフィックスは `gpt-6-luna`, `gpt-5.6-luna` です。0.144.x 以前のクライアントでは `gpt-5.4-mini` が使われており、`sourceModels` で復元できます。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` |使用可能な場合はオン | Web 検索サイドカー オプション。 |
@@ -245,3 +246,11 @@ CLI 内部の再試行・ツールターンは要求全体の送信回数上限�
 完全だが不正な記録（最終行の `null` も含む）は上限付きの受け入れを拒否します。圧縮は有効な残高を保持して続行し、
 実行中の拒否はクリーンなジャーナルを再起動で読み直すまで残ります。途中で切れた最終 JSON 行は従来の復旧規則に従います。
 詳しい境界とエラーは[英語の正本](/reference/configuration/server/#historical-pool-continuity)を参照してください。
+
+## ローカル upstream のタイムアウト分類
+
+この分類はタイムアウト方針であり、ネットワークアクセスの許可ではありません。DNS を参照せず HTTP(S) の宛先を分類します。正確な `localhost`（大文字小文字と末尾のドットを許容）、`0.0.0.0`、IPv4 loopback (127/8)、RFC 1918 private、link-local (169.254/16)、IPv6 loopback、link-local (fe80::/10)、unique-local (fc00::/7)、IPv4-mapped アドレス、`.local`/`.lan` 名がローカルです。他の DNS 名は loopback に解決されても公開向けの期限を維持します。不正な宛先、非対応スキーム、`localhost.example` も同様です。
+
+ヘッダー期限を無効にしてもクライアントのキャンセルと上位の全体期限は維持されます。明示的な正の `stallTimeoutSec` はローカル本文の無応答を制限します。ローカルの header/stall が未設定なら、ヘッダー到着前の自動期限はありません。ネイティブ Chat/Messages のローカル JSON 読み取りは stall 予算を使用し、公開 JSON 読み取りは従来の `max(connectTimeoutMs ?? 200000, 5000)` を維持します。Compact 本文の既定 300 秒と画像・検索 sidecar の予算は変わりません。
+
+任意の `opencodeClientExport` は `headerTimeoutMs`、`chunkTimeoutMs`、`timeoutMs` に正のミリ秒または無効化する `false` を指定できます。省略時は OpenCode の既定値を維持し、不正なフィールドは出力しません。V1 options と V2 settings の provider 全体に適用します。[遅いローカルモデル](/guides/opencode/#slow-local-models-prefill-timeouts)を参照してください。

@@ -29,6 +29,12 @@ import {
 import { configuredPort } from "../server/auth-cors";
 import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
 import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
+import {
+  ADVISOR_ADMISSION_SCOPE_HEADER,
+  AdvisorAdmissionScopeEncodedBoundExceeded,
+  encodeAdvisorAdmissionScope,
+} from "../server/advisor-admission-scope";
+import type { AdmissionModelScope } from "../server/admission-model-scope";
 
 /**
  * The header the advisor presents on its own loopback request. Its VALUE is this process's
@@ -116,6 +122,7 @@ export async function consultAdvisor(
   timeoutMs: number,
   abortSignal?: AbortSignal,
   baseUrlOverride?: string,
+  admissionScope?: AdmissionModelScope,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
   const headers: Record<string, string> = {
@@ -127,6 +134,21 @@ export async function consultAdvisor(
   // require no token simply omit it.
   const admission = localAdmissionToken(config);
   if (admission) headers["x-opencodex-api-key"] = admission;
+  // Always send the caller's resolved snapshot, including the unrestricted empty form: an
+  // omitted header would be re-resolved against the host admission token above, and a
+  // restricted host key would then narrow a caller whose own scope allows the destination.
+  // Empty lists decode as a defined-but-unrestricted scope, so the capability fence and the
+  // malformed-header refusal are unchanged.
+  try {
+    headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope ?? { providers: [], models: [] });
+  } catch (error) {
+    if (error instanceof AdvisorAdmissionScopeEncodedBoundExceeded) {
+      // Controlled failure before fetch: an over-bound scope must never reach the peer —
+      // it would be rejected mid-request — and must never be narrowed silently either.
+      return { ok: false, advice: "", advisorModel: input.advisorModel, error: error.message, durationMs: Date.now() - t0 };
+    }
+    throw error;
+  }
 
   const requestBody = {
     model: input.advisorModel,

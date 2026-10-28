@@ -470,6 +470,30 @@ than a promise that a route is eligible; explicit rollout opt-outs still apply.
 
 The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.
 
+### Durable session affinity
+
+`src/oauth/anthropic-session-affinity-store.ts` lazily hydrates a versioned `anthropic-affinity-<instance-digest>.json`
+under the current config home before affinity selection. Each row contains only a domain-separated SHA-256
+session digest, opaque account ID, last-use timestamp and hashed persistent login identity. Legacy accounts
+without `loginId` retain runtime-only affinity. Token refresh preserves the fence; replacement login,
+removal/re-add, pause and reauthentication invalidate it. Invalid, oversized, future and expired rows are ignored;
+the newest 2,000 entries survive, with a 24-hour idle lifetime. A restored binding precedes the startup active
+preference; an explicit runtime selection clears bindings and persists the reset.
+
+Temporary throttle and model-route/family detours retain a valid original binding and refresh its idle timestamp.
+Commit preserves a binding excluded by the route, an active admission pause or family rejection, or a transient
+pause recorded within `ANTHROPIC_DETOUR_GRACE_MS` (five minutes), even if that pause expired during preparation.
+Measured shared or model-specific exhaustion rebinds to the committed replacement; shared-quota and entitlement
+refusals explicitly invalidate bindings. Hydration and pause, selection, removal and reconciliation events validate
+rows against one auth snapshot, deriving each account's login fence once. Hot reads and writes validate only the
+touched row; ordinary publication does not reread auth or revalidate every binding. Structural writes use the config
+ACL settlement barrier and private no-follow atomic publisher; bounded hydration rejects final-entry symlinks,
+junctions and non-regular files with identifier-free warnings. Aliases above the config root remain supported.
+Memory and pending writes belong to the resolved config home; reset or an observed home change retires that scope.
+Timestamp-only updates coalesce for at most one second, with a best-effort shutdown flush. Failures emit identifier-free warnings
+and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
+`tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.
+
 ## JEV advisory publication
 
 While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer

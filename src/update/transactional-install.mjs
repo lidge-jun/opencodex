@@ -1,3 +1,4 @@
+import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
 /**
  * Transactional npm self-update: stage -> verify -> swap -> rollback (#1942 / #1849).
  *
@@ -21,9 +22,9 @@
  * proves provenance only while this process owns the fresh path, not after another local
  * process could have replaced it. Other neighbouring entries are likewise left alone (#5624).
  */
-import { spawnSync } from "node:child_process";
+import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 /**
@@ -195,7 +196,7 @@ function createOwnedStage(scopeDir, pkgName, deps = {}) {
     if (process.platform !== "win32") mkdir(join(stageRoot, "lib"));
   } catch (error) {
     // Created by this call and not yet handed to npm: remove it rather than leave a partial stage.
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* reported by the caller */ }
+    try { ownedArtifactRm(stageRoot, { recursive: true, force: true }); } catch { /* reported by the caller */ }
     throw error;
   }
   return stageRoot;
@@ -221,7 +222,7 @@ function readOwnedStageMarker(dir, pkgName) {
 function removeWithRetry(rm, target, attempts = 3) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      rm(target, { recursive: true, force: true });
+      ownedArtifactRm(target, { recursive: true, force: true }, rm);
       return null;
     } catch (error) {
       const code = typeof error?.code === "string" ? error.code : "EUNKNOWN";
@@ -238,7 +239,7 @@ function removeWithRetry(rm, target, attempts = 3) {
  * provably ours and the next update can finish the job.
  */
 export function removeOwnedStage(stageRoot, deps = {}) {
-  const rm = deps.rm ?? rmSync;
+  const rm = deps.rm;
   let names;
   try {
     names = readdirSync(stageRoot);
@@ -305,7 +306,7 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
 
 /** Whether the launcher that ran this npm update can still drive service/tray recovery. */
 export function launcherUsableAfterNpmUpdate(tx) {
-  return Boolean(tx?.ok || tx?.rolledBack === true || ["stage", "verify", "swap-backup"].includes(tx?.phase));
+  return Boolean(tx?.ok || tx?.rolledBack === true || ["stage", "verify", "authorize", "swap-backup"].includes(tx?.phase));
 }
 
 /** Largest regular file under a directory tree (bounded depth) — locates the Bun binary. */
@@ -328,10 +329,10 @@ function findLargestFile(root, depth = 3) {
 }
 
 /** Bounded Windows-class rename retry: EPERM/EBUSY/EACCES from AV/indexers clears in ms. */
-function renameWithRetry(rename, from, to, attempts = 5) {
+function renameWithRetry(rename, from, to, authorize = () => true, attempts = 5) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      rename(from, to);
+      guardedRenameSync(authorize, from, to, rename);
       return;
     } catch (error) {
       const code = error?.code;
@@ -350,7 +351,7 @@ function recoveryMarkerPath(scopeDir) {
 
 /** Startup probe: restore a backup when the live tree is broken (D4 power-loss rows). */
 export function bootRestoreProbe(packageDir, deps = {}) {
-  const rename = deps.rename ?? renameSync;
+  const rename = deps.rename;
   const scopeDir = dirname(packageDir);
   let backups = [];
   try {
@@ -365,15 +366,15 @@ export function bootRestoreProbe(packageDir, deps = {}) {
   if (liveOk) {
     // Live is healthy: the backups are leftovers from a completed swap. Reap them.
     for (const name of backups) {
-      try { rmSync(join(scopeDir, name), { recursive: true, force: true }); } catch { /* keep */ }
+      try { ownedArtifactRm(join(scopeDir, name), { recursive: true, force: true }); } catch { /* keep */ }
     }
-    try { rmSync(recoveryMarkerPath(scopeDir), { force: true }); } catch { /* keep */ }
+    try { ownedArtifactRm(recoveryMarkerPath(scopeDir), { force: true }); } catch { /* keep */ }
     return { action: "reaped", count: backups.length };
   }
   if (!existsSync(join(newestBackup, "package.json"))) return { action: "none" };
   try {
-    try { rmSync(packageDir, { recursive: true, force: true }); } catch { /* may not exist */ }
-    rename(newestBackup, packageDir);
+    try { ownedArtifactRm(packageDir, { recursive: true, force: true }); } catch { /* may not exist */ }
+    guardedRenameSync(() => true, newestBackup, packageDir, rename);
     return { action: "restored", from: newestBackup };
   } catch (error) {
     return { action: "failed", error: error?.message ?? String(error) };
@@ -384,17 +385,17 @@ export function bootRestoreProbe(packageDir, deps = {}) {
  * Run the transactional update. `runNpm(args, opts)` is injected so the caller keeps
  * its hardened npm resolution (npm-invocation.mjs) and logging.
  */
-export function transactionalNpmUpdate({
+function* npmUpdateTransaction({
   packageDir,
   pkgName,
   targetVersion,
   tag,
-  runNpm,
   cachePath,
+  mayReplacePackage = () => true,
   log = () => {},
   deps = {},
 }) {
-  const rename = deps.rename ?? renameSync;
+  const rename = deps.rename;
   const scopeDir = dirname(packageDir);
   // Leftovers from earlier attempts are only reported; fresh unique stages step around them. This never fails.
   try { sweepUpdateLeftovers({ packageDir, pkgName, log, deps }); } catch { /* report-only */ }
@@ -437,13 +438,18 @@ export function transactionalNpmUpdate({
   // operator's global npmrc would be dropped and npm would fall back to its default root. Pin
   // the cache the pre-flight resolved and checked, so staging uses that exact root (#6288).
   const cacheArgs = typeof cachePath === "string" && cachePath.length > 0 ? ["--cache", cachePath] : [];
-  const install = runNpm([
+  const install = yield [
     "install", "-g", "--prefix", stageRoot, ...cacheArgs,
     "--allow-scripts=bun", "--no-audit", "--no-fund", spec,
-  ]);
-  if (install.status !== 0) {
-    discardStage();
-    return { ok: false, phase: "stage", error: "npm staging install failed (" + (install.status ?? "?") + ")" };
+  ];
+  if (install.status !== 0 || install.error || install.processTreeExited === false) {
+    if (install.processTreeExited === false) {
+      log("Left this update's staging directory in place: process-tree exit was not confirmed; stop the installer before removing " + basename(stageRoot));
+    } else discardStage();
+    const detail = install.error
+      ? [install.error.code, install.error.message].filter(Boolean).join(": ")
+      : install.signal ?? install.status ?? "?";
+    return { ok: false, phase: "stage", error: "npm staging install failed (" + detail + ")" };
   }
   const stagedPackage = stagedCandidatesIn(stageRoot).find(dir => existsSync(join(dir, "package.json")));
   if (!stagedPackage) {
@@ -458,6 +464,14 @@ export function transactionalNpmUpdate({
     return { ok: false, phase: "verify", error: "staged tree failed verification: " + staged.failures.join("; ") };
   }
 
+  // The installer may have awaited a supervisor. Only a synchronous true authorizes
+  // the live swap; errors, promises and refusals leave live untouched.
+  let authorized = false;
+  try { authorized = mayReplacePackage() === true; } catch { /* fail closed */ }
+  if (!authorized) {
+    discardStage();
+    return { ok: false, phase: "authorize", error: "package replacement authority changed; rerun from the beginning" };
+  }
   // D3: swap. live -> backup, stage -> live, re-verify live, rollback on failure.
   const backupRoot = join(scopeDir, stampedName(".ocx-backup"));
   const backupPackage = join(backupRoot, "opencodex");
@@ -468,11 +482,11 @@ export function transactionalNpmUpdate({
     return { ok: false, phase: "swap-backup", error: "could not create backup directory: " + (error?.message ?? String(error)) };
   }
   try {
-    renameWithRetry(rename, packageDir, backupPackage);
+    renameWithRetry(rename, packageDir, backupPackage, () => mayReplacePackage() === true);
   } catch (error) {
     discardStage();
-    try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
-    return { ok: false, phase: "swap-backup", error: "could not move live tree aside: " + (error?.message ?? String(error)) };
+    try { ownedArtifactRm(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    return { ok: false, phase: error?.code === "EUPDATEAUTHORITY" ? "authorize" : "swap-backup", error: "could not move live tree aside: " + (error?.message ?? String(error)) };
   }
   try {
     renameWithRetry(rename, stagedPackage, packageDir);
@@ -481,7 +495,7 @@ export function transactionalNpmUpdate({
     try {
       renameWithRetry(rename, backupPackage, packageDir);
       discardStage();
-      try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { ownedArtifactRm(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
       return { ok: false, phase: "swap-live", rolledBack: true, error: "could not place staged tree: " + (error?.message ?? String(error)) };
     } catch (rollbackError) {
       writeFileSync(recoveryMarkerPath(scopeDir), JSON.stringify({
@@ -504,7 +518,7 @@ export function transactionalNpmUpdate({
       renameWithRetry(rename, packageDir, join(stageRoot, "rejected"));
       renameWithRetry(rename, backupPackage, packageDir);
       discardStage();
-      try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { ownedArtifactRm(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
       return { ok: false, phase: "post-verify", rolledBack: true, error: "live tree failed post-swap verification: " + liveCheck.failures.join("; ") };
     } catch (rollbackError) {
       writeFileSync(recoveryMarkerPath(scopeDir), JSON.stringify({
@@ -523,4 +537,26 @@ export function transactionalNpmUpdate({
   // still hold the old cwd.
   discardStage();
   return { ok: true, phase: "done", backup: backupPackage };
+}
+
+/** Keep synchronous callers while the Node launcher awaits the install/exit barrier. */
+export function transactionalNpmUpdate(options) {
+  const transaction = npmUpdateTransaction(options);
+  const step = transaction.next();
+  if (step.done) return step.value;
+  // Preserve the legacy status-only transaction on POSIX and for existing callers.
+  const install = options.runNpm(step.value);
+  return transaction.next({ status: install.status }).value;
+}
+
+export async function transactionalNpmUpdateAsync(options) {
+  const transaction = npmUpdateTransaction(options);
+  const step = transaction.next();
+  if (step.done) return step.value;
+  let install;
+  try { install = await options.runNpm(step.value); }
+  catch (error) { install = { status: null, error, processTreeExited: false }; }
+  if (install.processTreeExited !== true) install = { ...install, status: null, processTreeExited: false,
+    error: install.error ?? { code: "EINSTALLJOIN", message: "npm process-tree exit was not confirmed" } };
+  return transaction.next(install).value;
 }

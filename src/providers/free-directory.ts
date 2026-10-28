@@ -12,7 +12,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
     "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
     "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
-    "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "sambanova", "sparkdesk", "t3-web", "uncloseai",
+    "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
   ],
   "recurring-uncapped": [
     "agnes", "ainative", "aion", "baidu", "glm", "glm-cn", "kilo-gateway", "opencode-zen", "requesty",
@@ -119,6 +119,14 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   ovhcloud: openAi("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", "https://console.ovhcloud.com", { keyOptional: true, modelsUrl: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models" }),
   pollinations: openAi("https://gen.pollinations.ai/v1", "https://pollinations.ai", { keyOptional: true }),
   reka: openAi("https://api.reka.ai/v1", "https://platform.reka.ai"),
+  // Checked 2026-10-27. Free terms: https://www.runcrate.ai/inference/free covers six named open
+  // models only, one allowance per GitHub account at least 30 days old, limited per session and per
+  // week and shared by the workspace; a workspace with credit continues as paid traffic once the
+  // allowance is used or free capacity is busy. Endpoint: https://www.runcrate.ai/docs/models/chat-completions.
+  // Operator: Aeonmind LLC (https://www.runcrate.ai/terms). GET /v1/models is public and returned
+  // 193 rows (text, image, video, audio, embeddings), all with paid list prices; six carry free_tier: true.
+  // Discovery is hybrid: the six free ids are seeded, and live discovery still lists the full paid catalog.
+  runcrate: openAi("https://api.runcrate.ai/v1", "https://www.runcrate.ai/dashboard/api-keys", { verification: "official", documentationUrl: "https://www.runcrate.ai/docs/models/chat-completions", modelsUrl: "https://api.runcrate.ai/v1/models", lastVerified: "2026-10-27", discovery: "hybrid", models: ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4.1-Flash-1017", "zai-org/GLM-5.3-Flash", "zai-org/GLM-5.3", "openai/gpt-oss-120b", "Qwen/Qwen3.8-Flash"], note: "Only the six listed open models have a free allowance: one per GitHub account at least 30 days old, limited per session and per week, and shared by the workspace. Every other discovered model is paid; chat inference uses published per-token rates. When the allowance is used up or free capacity is busy, a workspace with credit continues as paid traffic; without credit, requests stop until the allowance resets or capacity frees up. Terms: https://www.runcrate.ai/inference/free" }),
   sambanova: openAi("https://api.sambanova.ai/v1", "https://cloud.sambanova.ai/apis", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.sambanova.ai/docs/en/get-started/api-keys-urls", modelsUrl: "https://api.sambanova.ai/v1/models", lastVerified: "2026-08-02" }),
   sparkdesk: openAi("https://spark-api-open.xf-yun.com/v1", "https://console.xfyun.cn", { verification: "official", documentationUrl: "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html" }),
   agnes: openAi("https://apihub.agnes-ai.com/v1", "https://agnes-ai.com"),
@@ -202,7 +210,7 @@ const LABELS: Record<string, string> = {
   ai21: "AI21", baichuan: "Baichuan", crusoe: "Crusoe", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
   "freemodel-dev": "FreeModel.dev", sambanova: "SambaNova Cloud", nebius: "Nebius Token Factory",
   novita: "Novita", nscale: "Nscale", nvidia: "NVIDIA NIM",
-  publicai: "PublicAI", qoder: "Qoder", "qoder-cn": "Qoder CN", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",
+  publicai: "PublicAI", qoder: "Qoder", "qoder-cn": "Qoder CN", runcrate: "Runcrate", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",
 };
 
 const referenceNote = "Reference entry only: no safe documented API integration is enabled. Configure it manually only with provider documentation; consumer-web cookies and anti-bot bypasses are intentionally unsupported.";

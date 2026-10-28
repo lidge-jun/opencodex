@@ -21,6 +21,8 @@ import { cursorFastIdFor } from "../adapters/cursor/catalog";
 import { desktop3pAlias } from "./desktop-3p";
 import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, UNPAIRED_AUTO_CONTEXT, type AutoContextMode } from "./context-windows";
 import { isAnthropicClaudeRoute } from "./long-context";
+import { configuredModelDisplayName } from "../codex/catalog/model-hints";
+import type { OcxConfig } from "../types";
 
 const MODEL_INFO_CREATED_AT = "2026-01-01T00:00:00Z";
 const ANTHROPIC_EFFORT_RUNGS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -45,8 +47,23 @@ function effortCapability(ladder: readonly string[]) {
   };
 }
 
-function modelCapabilities(ladder: readonly string[], imageInput: boolean) {
-  const reasons = ladder.length > 0;
+function modelCapabilities(
+  ladder: readonly string[],
+  imageInput: boolean,
+  thinkingCapabilities?: Pick<CatalogModel, "supportsReasoning" | "supportsThinkingToggle" | "supportsReasoningEffort">,
+) {
+  const reasoningSupported = thinkingCapabilities?.supportsReasoning !== false;
+  const discoveredEffort = effortCapability(ladder);
+  const effort = reasoningSupported && thinkingCapabilities?.supportsReasoningEffort !== false
+    ? discoveredEffort
+    : effortCapability([]);
+  // Keep the old ladder projection only while the relevant axis is unknown. An explicit
+  // toggle proves `enabled`; a usable effort rung proves `adaptive`; neither implies the other.
+  // This lets clients select MiMo's enabled-only switch without inventing effort.
+  const adaptive = effort.supported;
+  const enabled = reasoningSupported && (thinkingCapabilities?.supportsThinkingToggle === true
+    || (thinkingCapabilities?.supportsThinkingToggle === undefined && effort.supported));
+  const thinkingSupported = thinkingCapabilities?.supportsReasoning ?? (adaptive || enabled);
   return {
     batch: cap(false),
     citations: cap(false),
@@ -57,12 +74,12 @@ function modelCapabilities(ladder: readonly string[], imageInput: boolean) {
       clear_tool_uses_20250919: null,
       compact_20260112: null,
     },
-    effort: effortCapability(ladder),
+    effort,
     image_input: cap(imageInput),
     pdf_input: cap(false),
     structured_outputs: cap(false),
-    thinking: reasons
-      ? { supported: true, types: { adaptive: cap(true), enabled: cap(true) } }
+    thinking: thinkingSupported
+      ? { supported: true, types: { adaptive: cap(adaptive), enabled: cap(enabled) } }
       : { supported: false, types: { adaptive: cap(false), enabled: cap(false) } },
   };
 }
@@ -88,16 +105,37 @@ export interface AnthropicModelInfo {
   description?: string;
 }
 
-function modelInfo(id: string, displayName: string, ladder: readonly string[], imageInput: boolean, contextWindow?: number, description?: string): AnthropicModelInfo {
+function modelInfo(
+  id: string,
+  displayName: string,
+  ladder: readonly string[],
+  imageInput: boolean,
+  contextWindow?: number,
+  description?: string,
+  thinkingCapabilities?: Pick<CatalogModel, "supportsReasoning" | "supportsThinkingToggle" | "supportsReasoningEffort">,
+): AnthropicModelInfo {
   return {
     id,
     display_name: displayName,
     type: "model",
     created_at: MODEL_INFO_CREATED_AT,
-    capabilities: modelCapabilities(ladder, imageInput),
+    capabilities: modelCapabilities(ladder, imageInput, thinkingCapabilities),
     max_input_tokens: typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : null,
     max_tokens: null,
     ...(description === undefined ? {} : { description }),
+  };
+}
+
+/**
+ * Routed-row label resolver for `buildAnthropicModelInfos`: the provider's exact
+ * `modelDisplayNames` entry, nothing else. `CatalogModel.displayName` is not used because it
+ * also carries Codex-only names (a model alias as `<provider>/<alias>`, catalog metadata), and a
+ * row without an operator label must keep its `<model id> (<provider>)` label.
+ */
+export function configuredRoutedDisplayName(config: Pick<OcxConfig, "providers">): (model: CatalogModel) => string | undefined {
+  return model => {
+    const provider = config.providers[model.provider];
+    return provider ? configuredModelDisplayName(provider, model.id) : undefined;
   };
 }
 
@@ -122,6 +160,9 @@ export function buildAnthropicModelInfos(
   // default install publishes nothing. The predicate answers ELIGIBILITY, not enablement.
   fastRows?: (model: CatalogModel | { provider: string; id: string }) => boolean,
   ordering?: { modelPickerOrder?: readonly string[]; featured?: readonly string[] },
+  // Operator label for a routed row (`providers.<p>.modelDisplayNames`); undefined keeps the
+  // raw-id label. Native rows never consult it, so a configured name cannot rename a native.
+  routedDisplayName?: (model: CatalogModel) => string | undefined,
 ): AnthropicModelInfo[] {
   const out: AnthropicModelInfo[] = [];
   const seen = new Set<string>();
@@ -191,13 +232,15 @@ export function buildAnthropicModelInfos(
     // A real model always wins its own id, whatever the iteration order.
     if (realDiscoveryIds.has(id) || seen.has(id)) return;
     seen.add(id);
-    out.push({
+    const fast = {
       ...base,
       id,
       display_name: `${base.display_name} · Fast`,
       // Fast picks a different tier/variant, so the picker line says so like the name does.
       ...(base.description === undefined ? {} : { description: `${base.description} · Fast` }),
-    });
+    };
+    out.push(fast);
+    return fast;
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
@@ -213,7 +256,10 @@ export function buildAnthropicModelInfos(
     push1mVariant(info, nativeWindow, nativeMaxInput);
     // Natives too, not only routed rows: gpt-5.6-sol is the flagship Fast model, and
     // omitting it would leave this surface without the model the feature exists for.
-    if (fastRows?.({ provider: "native", id: slug }) === true) pushFastVariant(info);
+    if (fastRows?.({ provider: "native", id: slug }) === true) {
+      const fast = pushFastVariant(info);
+      if (fast) push1mVariant(fast, nativeWindow, nativeMaxInput);
+    }
   }
   const nativeEnd = out.length;
   const routedGroups = new Map<CatalogModel, AnthropicModelInfo[]>();
@@ -242,7 +288,9 @@ export function buildAnthropicModelInfos(
         : m.maxInputTokens)
       : undefined;
     const description = idStyle === "readable" ? `Routed by OpenCodex to ${m.provider}/${listedModelId}` : undefined;
-    const info = modelInfo(id, `${listedModelId} (${m.provider})`, ladder, imageInput, routedMaxInput ?? m.contextWindow, description);
+    // The label is keyed by the raw id, so a fastMode-rewritten Cursor row keeps its listed id.
+    const label = (fastModelId === undefined ? routedDisplayName?.(m) : undefined) ?? listedModelId;
+    const info = modelInfo(id, `${label} (${m.provider})`, ladder, imageInput, routedMaxInput ?? m.contextWindow, description, m);
     out.push(info);
     // Anthropic passthrough guard (audit 021 #3): never auto-widen canonical claude
     // routes — only a genuine >=1M window earns the variant row there.

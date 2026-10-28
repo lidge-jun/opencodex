@@ -72,15 +72,14 @@ describe("CLI Remote Link enrollment", () => {
       expect(h.calls).toHaveLength(stage === "probe" ? 1 : stage === "confirm" ? 2 : 3);
     } finally { h.restore(); }
   });
-  test("a Windows Child is refused at the probe with a Hub-mode pointer and no further request", async () => {
+  test("an unsupported remote shell reports an upgrade action without a second request", async () => {
     const h = harness([{ error: { code: "remote_platform_unsupported", message: "ignored server text" } }], 409); try {
       expect(await runLinkCommand(["add", "mini", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
       expect(h.calls.map(x => new URL(x.url).pathname)).toEqual(["/api/link/probe"]);
       const message = h.err.join("\n");
-      expect(message).toContain("mini is a Windows computer.");
-      expect(message).toContain("no link key was issued and no tunnel was started");
-      expect(message).toContain("'ocx hub invite'");
-      expect(message).toContain("'ocx connect'");
+      expect(message).toContain("Update OpenCodex on Home");
+      expect(message).toContain("PowerShell on the Child");
+      expect(message).not.toContain("ocx hub invite");
       expect(h.out).toEqual([]);
     } finally { h.restore(); }
   });

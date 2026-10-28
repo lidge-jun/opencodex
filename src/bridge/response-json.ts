@@ -86,6 +86,8 @@ function buildResponseJSONWithBudget(
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
+    /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
+    chatRawReasoningVisible?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
@@ -297,7 +299,7 @@ function buildResponseJSONWithBudget(
     const rawText = joinChunks(currentRawReasoning);
     if (!rawText) return;
     rawReasoningForNextToolCall = rawText;
-    if (options?.hideThinkingSummary === true || options?.hideRawReasoning === true) {
+    if (!(options?.chatRawReasoningVisible ?? !options?.hideThinkingSummary) || options?.hideRawReasoning === true) {
       if (options?.omitHiddenReasoningEnvelope === true) {
         budget?.releaseRetained(currentRawReasoning.bytes, { kind: "reasoning" });
         currentRawReasoning = emptyChunks();
@@ -514,6 +516,7 @@ function buildResponseJSONWithBudget(
         }
         break;
       case "tool_call_end":
+        if (e.incomplete) { flushToolCall("incomplete"); break; }
         if (!toolCallArgumentsUsable(currentToolCallArgs) && currentToolCallId) {
           // Mirror the streaming path: refuse to complete unusable arguments.
           const mapped = options?.toolNsMap?.get(currentToolCallName);

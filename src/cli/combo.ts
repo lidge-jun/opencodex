@@ -24,6 +24,7 @@ const USAGE = `Usage:
   ocx combo show <id> [--json]
   ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->]
       [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->]
+      [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
       [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
@@ -114,6 +115,16 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
     throw new CliUsageError("--sticky must be an integer from 1 to 100, or -", USAGE);
   }
   if (stickyLimit !== undefined && stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);
+  const reprobe = takeOption(args, "--cooldown-reprobe");
+  const reprobeInterval = takeOption(args, "--cooldown-reprobe-interval");
+  if (reprobe !== undefined && reprobe !== "on" && reprobe !== "off") {
+    throw new CliUsageError("--cooldown-reprobe must be on or off", USAGE);
+  }
+  const reprobeIntervalMs = reprobeInterval === undefined ? undefined : Number(reprobeInterval);
+  if (reprobeIntervalMs !== undefined && (!Number.isSafeInteger(reprobeIntervalMs)
+    || reprobeIntervalMs < 1000 || reprobeIntervalMs > 86_400_000)) {
+    throw new CliUsageError("--cooldown-reprobe-interval must be an integer from 1000 to 86400000 ms", USAGE);
+  }
   const effort = takeOption(args, "--effort");
   const effortMode = takeOption(args, "--effort-mode");
   if (effortMode !== undefined && effortMode !== "fallback" && effortMode !== "force" && effortMode !== "-") {
@@ -180,6 +191,13 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const combo: Record<string, unknown> = existing
     ? Object.fromEntries(Object.entries(existing).filter(([, value]) => value !== null))
     : { strategy, stickyLimit: stickyLimit ?? 1 };
+  if (reprobe !== undefined || reprobeIntervalMs !== undefined) {
+    const previous = (combo.cooldownReprobe ?? {}) as { enabled?: boolean; intervalMs?: number };
+    combo.cooldownReprobe = { ...previous,
+      enabled: reprobe === undefined ? previous.enabled === true : reprobe === "on",
+      ...(reprobeIntervalMs !== undefined ? { intervalMs: reprobeIntervalMs } : {}),
+    };
+  }
   delete combo.id;
   delete combo.model;
   if (replacingTargets) combo.targets = additional.targets ?? parsedTargets;

@@ -3,6 +3,9 @@ import { parseAsideProfileStatus, parseAsideProfileOutcomes, type AsideProfileOu
 
 export const FILE_INTEGRATION_CLIENTS = [
   "qoder",
+  "qoder-cn",
+  "workbuddy",
+  "workbuddy-ai",
   "opencode",
   "pi",
   "omp",
@@ -22,6 +25,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "kilo",
   "droid",
   "gentle-shell",
+  "t3code",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -281,11 +285,13 @@ const MISSING_STORE_DOCUMENT = /^[\x20-\x7e]{1,64}$/;
 const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
 const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
 const PLAN_SCHEMA_PATHS = new Set([
+  "*", // A WorkBuddy legacy document is a top-level model array.
   "provider.opencodex",
   "providers.opencodex",
   "models.providers.opencodex",
   "models.*",
   "modelConfigs.customModels.*",
+  "providerInstances.opencodex",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
   "providers.[id=opencodex]",

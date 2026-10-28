@@ -35,7 +35,9 @@ import { decodeOverlayState } from "../shim-state-file";
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
-import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
+import { isSpawnableCodexCandidate } from "../exec-invocation";
+import { validatedCodexExecInvocation, validatedCodexExecInvocationAsync } from "../exec-boundary";
+import { isPlainObject } from "../../lib/plain-data";
 import {
   parsePersistedCodexRuntime,
   peekCodexRuntimeProcessCache,
@@ -193,6 +195,14 @@ export interface BundledCatalogDeps {
   platform?: NodeJS.Platform;
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: "utf8") => string;
+  /** Exec-boundary bundle trust for sync drivers (resolve + debug exec). */
+  macBundleTrustReason?: (bundleRoot: string, binary: string) => string | null;
+  /** Exec-boundary bundle trust for async drivers; injected checks bypass the runtime memo. */
+  macBundleTrustReasonAsync?: (bundleRoot: string, binary: string, signal?: AbortSignal) => Promise<string | null>;
+  /** Exec-boundary spawnability predicate (regular file + X_OK). */
+  executable?: (path: string) => boolean;
+  /** Exec-boundary canonicalizer; returns null when the path cannot be resolved. */
+  realpath?: (path: string) => string | null;
   now?: () => number;
   discoverAlternatives?: boolean;
 }
@@ -246,12 +256,43 @@ export function codexShimCommandCandidates(): string[] {
 export function runCodexDebugModels<T>(
   command: string,
   execFile: (...args: Parameters<ExecFile>) => T,
-  deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync"> = {},
+  deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync" | "executable" | "realpath" | "macBundleTrustReason"> = {},
 ): T {
   const args = ["debug", "models", "--bundled"];
-  const invocation = codexExecInvocation(command, args, deps.platform ?? process.platform, {
+  const invocation = validatedCodexExecInvocation(command, args, {
     env: deps.env,
+    platform: deps.platform,
     exists: deps.existsSync,
+    executable: deps.executable,
+    realpath: deps.realpath,
+    macBundleTrustReason: deps.macBundleTrustReason,
+  });
+  return execFile(invocation.file, invocation.args, {
+    encoding: "utf8" as const,
+    stdio: ["ignore", "pipe", "ignore"] as ["ignore", "pipe", "ignore"],
+    timeout: 10_000,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+    ...invocation.options,
+  });
+}
+
+/** Async twin of runCodexDebugModels: same args/options, bundle trust checked off the event loop. */
+export async function runCodexDebugModelsAsync<T>(
+  command: string,
+  execFile: (...args: Parameters<ExecFile>) => Promise<T>,
+  deps: Pick<BundledCatalogDeps, "env" | "platform" | "existsSync" | "executable" | "realpath" | "macBundleTrustReasonAsync"> = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  const args = ["debug", "models", "--bundled"];
+  const invocation = await validatedCodexExecInvocationAsync(command, args, {
+    env: deps.env,
+    platform: deps.platform,
+    exists: deps.existsSync,
+    executable: deps.executable,
+    realpath: deps.realpath,
+    macBundleTrustReasonAsync: deps.macBundleTrustReasonAsync,
+    signal,
   });
   return execFile(invocation.file, invocation.args, {
     encoding: "utf8" as const,
@@ -275,6 +316,12 @@ function bundledRuntimeDeps(deps: BundledCatalogDeps) {
       platform: deps.platform,
       existsSync: deps.existsSync,
       readFileSync: deps.readFileSync,
+      // Exec-boundary trust deps forwarded so the runtime's own --version probes
+      // use the same injected checks as the catalog exec below.
+      ...(deps.macBundleTrustReason ? { macBundleTrustReason: deps.macBundleTrustReason } : {}),
+      ...(deps.macBundleTrustReasonAsync ? { macBundleTrustReasonAsync: deps.macBundleTrustReasonAsync } : {}),
+      ...(deps.executable ? { executable: deps.executable } : {}),
+      ...(deps.realpath ? { realpath: deps.realpath } : {}),
       now: deps.now,
       // Catalog loading only consumes `resolved.runtime.command`, never `newerAvailable`.
       // Full PATH discovery probes every candidate launcher (100+ on a dev machine, ~1.2s),
@@ -406,8 +453,9 @@ export function loadBundledCodexCatalogAsync(
     let step = steps.next();
     while (!step.done) {
       let output: string | null = null;
-      try { output = await runCodexDebugModels(step.value,
-        (file, args, options) => (deps.execFile ?? execCodexFileAsync)(file, args, { ...options, signal: controller.signal }), deps); }
+      try { output = await runCodexDebugModelsAsync(step.value,
+        (file, args, options) => (deps.execFile ?? execCodexFileAsync)(file, args, { ...options, signal: controller.signal }),
+        deps, controller.signal); }
       catch { /* preserve last confirmed evidence on failure */ }
       step = steps.next(output);
     }
@@ -681,11 +729,13 @@ export function readCurrentCodexModelsCache(): RawCatalog | null {
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
   const bundled = bundledCodexCatalogSnapshot();
+  const fromRows = (catalog: RawCatalog | null) => findSupportedNativeTemplate(catalog
+    ? { ...catalog, models: (catalog.models ?? []).filter(isPlainObject) } : null);
   // Template inheritance only. The validity gates in this file keep `findNativeTemplate`
   // so a catalog carrying only a newly launched native row stays valid (#2813).
-  const native = findSupportedNativeTemplate(readCatalog(catalogPath))
-    ?? findSupportedNativeTemplate(readCatalogBackup(catalogPath))
-    ?? findSupportedNativeTemplate(readCatalog(activeCodexModelsCachePath()))
-    ?? findSupportedNativeTemplate(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
+  const native = fromRows(readCatalog(catalogPath))
+    ?? fromRows(readCatalogBackup(catalogPath))
+    ?? fromRows(readCatalog(activeCodexModelsCachePath()))
+    ?? fromRows(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
   return native ? JSON.parse(JSON.stringify(native)) : null;
 }

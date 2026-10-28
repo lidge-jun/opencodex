@@ -32,6 +32,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import { pinnedNativeModelRows } from "./pinned-models";
+import { isPlainObject } from "../../lib/plain-data";
 
 
 import type { RawEntry } from "./parsing";
@@ -44,12 +45,14 @@ import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_CONTEXT,
   NATIVE_GPT61_SOL_CONTEXT,
+  NATIVE_GPT61_TERRA_CONTEXT,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
+  NATIVE_GPT61_TERRA_MODEL,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -76,6 +79,7 @@ export {
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
+  NATIVE_GPT61_TERRA_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -97,6 +101,8 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
   // GPT-6.1 Sol needs client_version >= 0.153.0 upstream; older installed catalogs lack it.
   NATIVE_GPT61_SOL_MODEL,
+  // Terra's pinned row has the same client floor and backfills older installed catalogs too.
+  NATIVE_GPT61_TERRA_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -207,6 +213,7 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // GPT-6.1 Sol's row (openai/codex models.json after #49318) ships 272,000 / 872,000, but OpenAI
   // raised its Codex & Work default to 500,000 on 2026-10-11; the 872,000 ceiling is unchanged.
   [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
+  [NATIVE_GPT61_TERRA_MODEL]: { ...NATIVE_GPT61_TERRA_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },
@@ -852,11 +859,11 @@ export function observedAccountBoundNativeEntries(
  */
 export function accountBoundNativeOpenAiSlugs(
   observedEntries: readonly RawEntry[] = [
-    ...(readCurrentCodexModelsCache()?.models ?? []),
+    ...(readCurrentCodexModelsCache()?.models ?? []).filter(isPlainObject),
     // Existing generated rows are also safe to reuse after a process starts without a cache
     // invalidation pass; bare user-authored catalog rows are intentionally not trusted here.
     ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
-      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+      isPlainObject(entry) && trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ],
 ): string[] {
   const observed = observedEntries.flatMap(entry => {
@@ -877,9 +884,9 @@ export function accountBoundNativeOpenAiSlugs(
 export function accountBoundNativeOpenAiSlugsBySelector(
   config: AccountSelectorConfig,
   observedEntries: readonly RawEntry[] = [
-    ...(readCurrentCodexModelsCache()?.models ?? []),
+    ...(readCurrentCodexModelsCache()?.models ?? []).filter(isPlainObject),
     ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
-      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+      isPlainObject(entry) && trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ],
 ): ReadonlyMap<string, readonly string[]> {
   const selectors = visibleCodexAccountSelectors(config);
@@ -920,7 +927,7 @@ export function observedAccountBoundNativeOpenAiSlugs(
 
 function catalogNativeSlugs(): string[] {
   const cat = readCurrentCatalogOrCache();
-  const models = cat?.models ?? [];
+  const models = (cat?.models ?? []).filter(isPlainObject);
   const live = models.flatMap(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
     return !slug.includes("/") && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];

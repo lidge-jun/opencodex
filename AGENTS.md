@@ -195,7 +195,7 @@ it binds you regardless of which mechanism is within reach.
 
 ```bash
 bun install
-bun run typecheck      # bun x tsc --noEmit (strict)
+bun run typecheck      # bun check --no-script --noEmit (strict)
 bun run test:changed   # import-graph tests against the resolved `dev` merge base
 bun run test           # full tests/ suite (default before review)
 bun run lint:gui       # GUI eslint
@@ -367,9 +367,28 @@ than nudged.
 
 ## CI policy (maintainer decision — do not change)
 
-- Pull requests run **only the fast Ubuntu subset**.
+- Pull requests run **only the fast Ubuntu subset**. By default that is `gates` plus
+  `test changed` (import-graph tests for the diff); the four full Ubuntu shards run on a
+  pull request only with the `ci:full` label or a CI/harness/toolchain/dependency change.
+  Merged pull requests are verified in batches by a manual `dev` dispatch
+  (`MAINTAINERS.md`, "Batched merges"). Because `test changed` follows the module graph,
+  add `ci:full` for changes it cannot see (subprocesses, files read as data, generated output).
 - Full cross-platform (macOS/Windows) CI runs **only** via manual
   `workflow_dispatch` and on push to `main`/`preview` (release lines).
+- A manual `lane=all` dispatch is a **batch check on `dev`**, never a per-PR gate.
+  One run is about 30 jobs (11 Windows, 5 macOS, 15 Linux) and six runner-hours, and the
+  account has only five macOS slots, so per-PR dispatches starve every other check. On
+  2026-10-27, parallel agent lanes dispatched 48 of them in twelve hours (about 13,000
+  runner-minutes). The queue passed 200 runs, and ordinary PR checks waited hours to start.
+  - Merge a pull request, including a Windows- or macOS-sensitive one, on its green PR
+    CI. After a batch of merges, run one `gh workflow run ci.yml --ref dev` as described
+    under "Batched merges". If it is red, stop merging and fix `dev` from that batch.
+  - Do not dispatch `lane=all` for a PR branch unless a maintainer explicitly asks for it
+    on that PR. Even then, run it once, on the exact head about to merge. Never re-dispatch
+    because the head moved (an `origin/dev` merge or a review fix), and never rerun to
+    green. Cancel your own superseded dispatches with `gh run cancel`.
+  - Every description edit or label change starts three event-gate workflows. Batch those
+    edits, and keep the number of agents working pull requests in parallel small.
 - **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
   jobs, to any workflow. PRs that change this policy will be closed.
 

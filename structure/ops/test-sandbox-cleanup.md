@@ -21,6 +21,35 @@ Token, SID allocation and DLL cleanup finish before the Worker posts its result 
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.
 
+## Bun test lock generations
+
+`scripts/test-run-lock.ts` serializes updated runners' authoritative acquire, stale
+retirement, same-run/inherited member registration and owner release through
+`scripts/test-run-lock-gate.ts`. A synchronous `BEGIN IMMEDIATE` holds the gate
+through liveness checks and filesystem changes; polling and callbacks run outside.
+The gate is the permanent `${lockPath}.gate.sqlite` sibling. It is never renamed,
+unlinked or PID/mtime-reclaimed. The existing effective-user runtime/ACL boundary
+protects it; redirected and hardlinked gate paths are refused. SQLite owns its
+file descriptors, with no separate filesystem open/close of the gate inode.
+
+Acquire retries SQLite busy within its existing bounded wait. Synchronous owner
+release retries the gate in bounded slices under a ten-second elapsed deadline,
+then fails without deleting the canonical lock. Process death releases the
+gate's OS lock. The next runner applies
+the existing conservative process-start/PID/member evidence to directory state.
+Owner publication probes before exposing a new directory; failed publication
+never recursively deletes through the current canonical path. Retirement checks
+directory identity and owner contents before and after quarantine rename. An
+unexpected displaced object is preserved rather than restored over another owner.
+Only the original owner capability releases a generation; joined release is a no-op.
+
+The canonical name, version 1 owner records, member names and legacy live-PID veto
+remain compatible. This does not stop an old in-flight executable that ignores the
+gate and already decided to rename/delete a previous generation. Finish pre-update
+test runners before upgrading; metadata compatibility is not mixed-version race
+freedom. `tests/ci-workflows/test-run-lock-generation.test.ts` exercises private
+paths, delayed generation transitions, member/release ordering and gate-holder death.
+
 ## Sandbox lifecycle
 
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
@@ -106,3 +135,18 @@ are complete allowlists. Catalog tick children drain their config ACL
 flights/reaps before normal exit. Child work deadlines remain separate from outer test budgets,
 which reserve time for termination and teardown. The shared warm-up regressions exercise a live
 interval after work completes and a descendant retaining stdout after its parent exits.
+
+The completed-drain fixture in `tests/server/system-restart-ownership.test.ts` uses
+`tests/helpers/restart-fixture-processes.ts` before loading the runner. On Windows each entry
+joins a private Job before spawning; descendants inherit membership, including detached
+replacements. Teardown kills through the held Job handle and requires zero active members.
+The PID journal is diagnostic only. On POSIX a private stop file requests self-termination;
+recorded creation identities are used only to observe exit, never to signal journaled PIDs.
+The spawned parent's handle and captured output are joined before home removal; cleanup
+failure retains the home. A controlled foreign process injected at a stale journal PID survives.
+`tests/fixtures/restart-parent-ownership-runner.ts` journals process phases and captures the
+fence probe's output continuously. Failure assertions include that evidence and the replacement
+handoff log, including when the parent is terminated before its probe returns.
+The fixture bundles the product graph once into the recognized source-launch entry before
+spawning. Cold module resolution and transpilation count as setup, not handoff work. The
+18-second handoff watchdog starts after spawn; bundling counts against the outer test budget.

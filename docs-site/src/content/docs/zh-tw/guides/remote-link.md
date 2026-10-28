@@ -10,10 +10,10 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 - Home 可以使用 OpenSSH 金鑰登入 Child。
 - 對於由 Child 發起的連結，Child 必須能使用 OpenSSH 金鑰登入 Home（不支援密碼登入）。
 - Child 已安裝 OpenCodex 2.66.0 或更新版本（由 Child 發起的連結也要求 Home 符合）。
-- 兩台電腦執行 macOS 或 Linux。
+- 兩台電腦可執行 macOS、Linux 或 Windows x64。Windows 需要 OpenSSH Server 和 Windows PowerShell，不需要 Git Bash 或 curl。
 - 從 Home 新增 Child 的儀表板需在 Home 上開啟，或使用已配對的 Hub 工作階段。將目前電腦轉換為 Child 需要由操作者配對的儀表板工作階段；未經憑證簽發的本機工作階段不能提交這項路由變更。
 
-密碼 SSH 和 Windows 不在目前流程中。連結可以從任一端發起：依下文從 Home 發起，或依「將這台電腦連線為 Child」一節從 Child 發起。
+不支援密碼 SSH。可從 Home 或 Child 發起連結。Windows 透過相同固定主機金鑰的 OpenSSH 連線執行 PowerShell。
 
 ## 從 `#remote` 新增 Child
 

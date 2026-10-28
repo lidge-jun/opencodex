@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import {
   stopQuotaResetPoller,
 } from "../../src/quota/reset-poller";
 import { resetQuotaResetNotifyCacheForTests } from "../../src/quota/reset-notify-config";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 
 const ACCOUNT = "acct_reset_observation";
 const HOUR = 60 * 60_000;
@@ -325,6 +326,11 @@ describe("idle poller", () => {
 });
 
 describe("observation ordering under a burst", () => {
+  beforeAll(async () => {
+    // Compile in a separate process; the assertion still starts with a fresh module registry.
+    await warmModuleGraph({ graph: "quota-reset/cold-burst", entry:
+      fileURLToPath(new URL("../helpers/quota-reset-burst-child.ts", import.meta.url)) });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
   test("a rising-usage burst in a COLD process fires nothing", async () => {
     // The regression this pins: the seam awaited two import() calls before swapping the
     // baseline, and Bun does not resolve concurrent dynamic imports in call order. A burst of

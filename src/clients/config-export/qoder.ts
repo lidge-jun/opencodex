@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
-import { ClientPathError } from "../config-export";
+import { absoluteClientPath } from "../client-path";
 import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { LOOPBACK_API_KEY_PLACEHOLDER, OPENCODE_PROVIDER_ID } from "./constants";
 import { authoritativeContextWindow, normalizeExportModels } from "./model-metadata";
@@ -14,15 +14,7 @@ import { authoritativeContextWindow, normalizeExportModels } from "./model-metad
 export function qoderHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   const override = env.QODER_CONFIG_DIR?.trim();
   if (!override) return join(home, ".qoder");
-  if (override === "~") return home;
-  if (override.startsWith("~/") || override.startsWith("~\\")) return join(home, override.slice(2));
-  if (!isAbsolute(override)) {
-    throw new ClientPathError(
-      `QODER_CONFIG_DIR must be an absolute path or start with ~; "${override}" depends on the working directory, `
-      + "so opencodex and Qoder would disagree about which file it names.",
-    );
-  }
-  return override;
+  return absoluteClientPath(override, home, "QODER_CONFIG_DIR");
 }
 
 export function qoderConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {

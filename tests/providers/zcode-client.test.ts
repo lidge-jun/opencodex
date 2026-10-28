@@ -108,7 +108,7 @@ describe("ZCode client config", () => {
   test("resolves the data-dir override and the documented v2 destination", () => {
     expect(zcodeHomeDir({}, "/home/u")).toBe(join("/home/u", ".zcode"));
     expect(zcodeConfigPath({}, "/home/u")).toBe(join("/home/u", ".zcode", "v2", "config.json"));
-    expect(zcodeConfigPath({ ZCODE_DATA_DIR: "/elsewhere" }, "/home/u")).toBe(join("/elsewhere", "v2", "config.json"));
+    expect(zcodeConfigPath({ ZCODE_DATA_DIR: join(tmpdir(), "elsewhere") }, "/home/u")).toBe(join(join(tmpdir(), "elsewhere"), "v2", "config.json"));
     expect(() => zcodeConfigPath({ ZCODE_DATA_DIR: "relative" }, "/home/u")).toThrow(ClientPathError);
   });
 });

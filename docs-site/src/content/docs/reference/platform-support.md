@@ -86,6 +86,10 @@ destinations keep their existing tool-selection behavior.
 
 ## Windows notes
 
+The Node launcher's npm self-update requires Windows 10 or later with Job List
+process-creation attributes. If atomic process supervision is unavailable, it
+reports `EINSTALLJOIN` and does not start npm; update Windows before retrying.
+
 The Windows service can run under Task Scheduler or as a native WinSW service,
 and those are mutually exclusive. `ocx service repair` refuses to proceed when
 it finds state for both, because guessing which one you meant is how a machine

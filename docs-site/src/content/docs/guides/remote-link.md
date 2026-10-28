@@ -10,10 +10,10 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 - The Home computer can log in to the Child with an OpenSSH key.
 - For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
 - OpenCodex 2.66.0 or later is installed on the Child computer, and on Home for a Child-initiated link.
-- Both computers run macOS or Linux.
+- Both computers run macOS, Linux, or Windows x64. Windows requires OpenSSH Server and Windows PowerShell; Git Bash and curl are not required.
 - The dashboard that adds a Child from Home is opened on Home itself or through a paired Hub session. Turning the current computer into a Child requires an operator-paired dashboard session; a credentialless local dashboard session cannot commit that routing change.
 
-Password SSH and Windows are outside the current flow. A link can be started from either side: from the Home, as described next, or from the Child, as described in [Connect this computer as a Child](#connect-this-computer-as-a-child).
+Password SSH is not supported. Links can be started from Home or Child. Windows execution uses PowerShell over the same pinned OpenSSH connection.
 
 ## Add a Child from `#remote`
 
@@ -26,6 +26,8 @@ Password SSH and Windows are outside the current flow. A link can be started fro
 The dashboard does not ask you to enter a token. It probes the host first, and it cannot apply the link until you explicitly confirm the fingerprint.
 
 The Add Child sheet explains that the Child uses this Home's providers over SSH and lists the prerequisites above. Host aliases come from `~/.ssh/config` on the Home running OpenCodex, not necessarily the computer displaying the browser. If discovery succeeds with no hosts, add a `Host` entry like this, then choose **Rescan hosts**. You can also enter an existing alias manually; selecting or entering an alias enables **Test connection**. The sheet links to this guide.
+
+Host discovery also follows top-level `Include` directives. Parentheses and braces in an included filename stay literal when combined with wildcards: for example, `Include conf.d/*(1).conf` finds `backup(1).conf`, and `Include conf.d/shard-{1..3}-*.conf` looks for filenames containing `{1..3}`. An `Include` inside a `Host` or `Match` block is conditional and is not used for discovery.
 
 ```sshconfig
 Host devbox
@@ -49,7 +51,11 @@ Connecting restarts OpenCodex on this computer. Codex turns that are already run
 
 The Child waits for its configured port while the old process releases it. If a CLI-managed restart still fails, run `ocx start` on the Child and check `~/.opencodex/restart-handoff.log`. In the desktop app, the app starts and supervises the replacement automatically.
 
-`ocx stop` on a Child stops its proxy and leaves Codex routing, the catalog and the Grok config in place, so `ocx start` (or `ocx service start`) brings the Child back unchanged. If `ocx status` on the Child reports that Codex routing is native, run `ocx sync --restart-codex`; `ocx start` does not rewrite a Child's Codex routing.
+An explicit `ocx stop` on a Remote Link Child stops its proxy and, when shared restoration succeeds, restores native Codex routing, its catalog and backed-up resume-history metadata and removes the managed Grok configuration. The saved Home connection is kept; use `ocx disconnect` to remove that connection.
+
+If a hub connection takes ownership while stopping, its routing and configuration are preserved. A connection still being created or disconnected can refuse restoration; let that operation finish, then retry `ocx stop`. The dashboard stop API returns HTTP 409 with `sharedTeardown: "refused"` when ownership cannot be confirmed and keeps the listener running. Signal cleanup also preserves configuration when ownership cannot be confirmed.
+
+To use Home from Codex again after restoration, start the Child with `ocx start` (or `ocx service start` for an installed service), then run `ocx sync --restart-codex`. Starting the runtime does not reapply a Child's Codex routing. Sync reapplies Codex settings when Codex is enabled for the saved connection, and the flag restarts Codex to load them; it does not recreate the Grok block. This is the explicit Link Child stop/start workflow; hub-client ownership and the separate restart, recycling, service-exit and sibling rules are unchanged.
 
 If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
 
@@ -167,7 +173,7 @@ The version a Child reports is its own claim, bound to its link key. OpenCodex u
 
 The existing `ocx gui pair --origin <local-origin>` command works while OpenCodex runs as a background service. Run it under the account that owns the service's private OpenCodex home, then enter the returned one-use code in the local dashboard. No server terminal, additional password, Windows Hello or hardware key is required. The CLI and server must use the same current version and configuration home; restart an older server after updating. Mixed-version Hub invitations also require updating the CLI and server together. Pairing refuses a symlinked configuration home or intent directory; use the actual protected directory as `OPENCODEX_HOME`.
 
-Internally, the CLI creates a short-lived authorization commitment and attempts to remove it after use or failure. Reading runtime information alone does not authorize pairing, and the verifier is not stored on disk. This is a private-home write-access boundary, not biometric or human-presence authentication: a program with full access to that user's files is still trusted. Existing Hub invitation authorization is unchanged. If a pairing request fails, run a fresh command after resolving the reported problem. This does not add Windows SSH Remote Link support.
+Internally, the CLI creates a short-lived authorization commitment and attempts to remove it after use or failure. Reading runtime information alone does not authorize pairing, and the verifier is not stored on disk. This is a private-home write-access boundary, not biometric or human-presence authentication: a program with full access to that user's files is still trusted. Existing Hub invitation authorization is unchanged. If a pairing request fails, run a fresh command after resolving the reported problem. SSH Remote Link on Windows uses the separate PowerShell execution path described above.
 
 If a process is interrupted during pairing, rerun the command to obtain a new authorization. Do not manually remove pairing state while the service or a pairing command is running.
 
@@ -179,13 +185,13 @@ The check covers the intent folder and record. It does not protect against repla
 
 On the Home, run `ocx link probe child-a --json` to inspect the offered SSH fingerprint, key type and OpenCodex version. Verify the fingerprint through a trusted source. Then run `ocx link add child-a --expect-fingerprint SHA256:… --json`. The command probes again and refuses a mismatch before storing trust or issuing a key. Without the fingerprint flag, it requires an interactive terminal and an explicit `yes` after showing the fingerprint. It never prints the link key.
 
-Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port, expose bound restart support, and have curl installed. Update or disconnect a Child that fails this preflight. Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows Children remain unsupported.
+Home-initiated connections now restart the Child after saving its connection, including capable older Child installations. The Child must already serve standalone OpenCodex on its configured port and expose bound restart support. POSIX Children need curl; Windows uses a bounded loopback HTTP request through .NET. Update or disconnect a Child that fails this preflight. Desktop and system OpenCodex installations take precedence over generic PATH shims; broken candidates are skipped. Windows x64 Children use encoded PowerShell commands without consuming key stdin.
 
 ### Windows computers
 
-`ocx link add` and the dashboard refuse a Windows computer during the probe or host confirmation, before any link key is issued or tunnel started. The refusal covers Windows OpenSSH with Git Bash, MSYS2 or Cygwin as its shell (`uname -s` reports MINGW, MSYS or CYGWIN) and with cmd or PowerShell as its shell. Connect a Windows computer in Hub mode instead: run `ocx hub invite` on a Hub and run the printed `ocx connect` command on the Windows computer.
+A Windows x64 Child needs OpenSSH Server, Windows PowerShell and the standalone `ocx.exe`. Home recognizes Windows during the probe, records it with the link, and runs every Child command through PowerShell over the same pinned SSH connection, whether the SSH default shell is cmd or PowerShell. The link key still travels only on standard input. Closing the SSH connection ends the remote `ocx` command. If Windows PowerShell on the Child cannot load the helper that ties `ocx.exe` to the connection, for example under Constrained Language Mode, the command is refused and nothing runs. If Home cannot tell which platform the Child runs, it stops before issuing a link key.
 
-A Windows Child linked by an older release keeps its link. Run `ocx link cleanup` on the Home to find such links; add `--link-id <id>` to check one, or `--json` for a machine-readable report. It asks each Home-initiated Child for its platform over the link's pinned SSH trust and changes nothing. For each Windows Child it prints the recovery order: run `ocx disconnect` and `ocx restart` on the Windows computer, then `ocx link revoke --link-id <id> --force --yes` on the Home, then connect it in Hub mode. A plain revoke fails on these Children because its remote disconnect runs a POSIX command that Windows refuses.
+Run `ocx link cleanup` on Home to inspect recorded Child platforms without changing them. Current Home releases disconnect Windows Children through PowerShell. If a remote disconnect fails, resolve the reported shell or installation error and retry; **Remove here only** remains an explicit recovery action that can leave the Child needing a local disconnect.
 
 Restart waits for running turns and may take several minutes. Success requires the restarted Child to serve the client role and relay a fresh complete catalog to this Home. SSH setup has a bounded allowance derived from measured latency; relay verification starts after restart with its own 15-second window. Errors name the failing phase. If an error reports residual Child configuration, run `ocx disconnect` and `ocx restart` on that Child before retrying. Home cleanup alone does not restore Child configuration. A CLI timeout reports an uncertain outcome; inspect Home `ocx link status` and Child `ocx connect status` first.
 

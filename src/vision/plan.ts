@@ -121,7 +121,7 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
  */
 export function requiresVisionPreprocessing(
   config: Pick<OcxConfig, "providers"> & { customModels?: OcxConfig["customModels"] },
-  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "modelCapabilities">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "inputModalities" | "modelCapabilities">,
   modelId: string,
   providerName?: string,
 ): boolean {
@@ -145,7 +145,7 @@ export function requiresVisionPreprocessing(
   // the attachment to a model that cannot read it.
   if (customDeclared !== undefined) return !customDeclared.includes("image");
   if (isModelTextOnly(provider, modelId)) return true;
-  const runtimeModalities = modelRecordValue(provider.modelInputModalities, modelId);
+  const runtimeModalities = modelRecordValue(provider.modelInputModalities, modelId) ?? provider.inputModalities;
   if (Array.isArray(runtimeModalities) && runtimeModalities.length > 0) {
     return !runtimeModalities.includes("image");
   }

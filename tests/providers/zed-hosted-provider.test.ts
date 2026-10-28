@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { constants, createHash, createPublicKey, publicEncrypt } from "node:crypto";
 import { createZedAdapter, zedEventStream, type ZedProvider } from "../../src/adapters/zed";
+import { translateZedOpenAiStream } from "../../src/adapters/zed-openai-stream";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { releaseCompactionCiphertextLease } from "../../src/responses/compaction";
 import { setIcaclsRunnerForTests, resetHardenedStateForTests } from "../../src/lib/windows-secret-acl";
 import { getValidAccessTokenSnapshot } from "../../src/oauth";
 import { saveCredential } from "../../src/oauth/store";
@@ -359,6 +362,464 @@ describe("Zed OpenAI tool selection after filtering", () => {
     expect(body.input[0]).toMatchObject({ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] });
     expect(body.tools).toEqual(expectedTools);
     expect(body.tool_choice).toEqual(expectedChoice);
+  });
+});
+
+describe("Zed OpenAI tool relay", () => {
+  const provider: OcxProviderConfig = {
+    adapter: "zed",
+    baseUrl: "https://cloud.zed.dev",
+    authMode: "oauth",
+    apiKey: "access-token",
+  };
+
+  function catalogFetch(): void {
+    const responses = [
+      jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }),
+      jsonResponse({ models: [{ id: "gpt-6.1-sol", provider: "open_ai" }] }),
+    ];
+    globalThis.fetch = (async () => {
+      const response = responses.shift();
+      if (!response) throw new Error("unexpected Zed catalog fetch");
+      return response;
+    }) as typeof globalThis.fetch;
+  }
+
+  test("promotes the current turn's additional_tools and drops replayed wrappers", async () => {
+    catalogFetch();
+    const already = { type: "function", name: "already", parameters: { type: "object", properties: {} } };
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      input: [
+        { type: "additional_tools", tools: [{ type: "function", name: "old_tool", parameters: { type: "object", properties: {} } }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+        { type: "additional_tools", tools: [
+          { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+          { type: "web_search" },
+          already,
+        ] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+      ],
+      tools: [already],
+      stream: true,
+    });
+    parsed._zedAuthContext = { userId: "user-1" };
+    parsed._replayPrefixLen = 2;
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(body.input.map((item: { type: string }) => item.type)).toEqual(["message", "message"]);
+    expect(JSON.stringify(body.input)).not.toContain("old_tool");
+    expect(JSON.stringify(body.input)).not.toContain("additional_tools");
+    expect(body.tools).toEqual([
+      already,
+      { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+    ]);
+  });
+
+  test("promotes the current turn when replay repair drops a reasoning item", async () => {
+    catalogFetch();
+    const shell = { type: "function", name: "shell", parameters: { type: "object", properties: {} } };
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      previous_response_id: "resp_replay",
+      input: [
+        { type: "reasoning", id: "rs_1", summary: [] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+        { type: "additional_tools", tools: [shell] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+      ],
+      stream: true,
+    });
+    parsed._zedAuthContext = { userId: "user-1" };
+    parsed._replayPrefixLen = 2;
+    const rawBefore = JSON.stringify(parsed._rawBody);
+    const adapter = withTestTranslatorBudget(createZedAdapter({ ...provider, statelessResponses: true }));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(body.tools).toEqual([shell]);
+    expect(JSON.stringify(body.input)).not.toContain("additional_tools");
+    expect(JSON.stringify(body.input)).not.toContain("reasoning");
+    expect(JSON.stringify(parsed._rawBody)).toBe(rawBefore);
+    expect(rawBefore).toContain("additional_tools");
+    expect(rawBefore).toContain("reasoning");
+  });
+
+  async function relay(frames: unknown[]): Promise<unknown[]> {
+    catalogFetch();
+    const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello", stream: true });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    await adapter.buildRequest(parsed);
+    const ndjson = frames.map(frame => JSON.stringify(frame)).join("\n") + "\n";
+    const events = [];
+    for await (const event of adapter.parseStream(new Response(ndjson))) events.push(event);
+    return events;
+  }
+
+  test("relays commentary text, function-call deltas, and usage across the synthetic completion", async () => {
+    const events = await relay([
+      { event: { type: "response.output_item.added", item: { id: "msg_1", type: "message", role: "assistant", phase: "commentary", content: [] } } },
+      { event: { type: "response.output_text.delta", item_id: "msg_1", delta: "Looking." } },
+      { event: { type: "response.output_item.added", item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "shell", arguments: "" } } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: "{\"cmd\":" } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: "\"ls\"}" } },
+      { event: { type: "response.function_call_arguments.done", item_id: "fc_1", arguments: "{\"cmd\":\"ls\"}" } },
+      { event: { type: "response.completed", response: {
+        output: [
+          { type: "message", id: "msg_1", phase: "commentary", content: [{ type: "output_text", text: "Looking." }] },
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell", arguments: "{\"cmd\":\"ls\"}" },
+        ],
+        usage: { input_tokens: 11, output_tokens: 6 },
+      } } },
+      { status: "stream_ended" },
+    ]);
+    expect(events).toEqual([
+      { type: "text_delta", text: "Looking.", phase: "commentary" },
+      { type: "tool_call_start", id: "call_1", name: "shell" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":" },
+      { type: "tool_call_delta", arguments: "\"ls\"}" },
+      { type: "tool_call_end" },
+      { type: "done", usage: { inputTokens: 11, outputTokens: 6 } },
+    ]);
+  });
+
+  test("relays a custom tool that arrives only in the completed output without repeating text", async () => {
+    const events = await relay([
+      { event: { type: "response.output_text.delta", delta: "hi" } },
+      { event: { type: "response.completed", response: {
+        output: [
+          { type: "message", id: "msg_1", phase: "commentary", content: [{ type: "output_text", text: "hi" }] },
+          { type: "custom_tool_call", id: "ctc_1", call_id: "call_c", name: "apply_patch", input: "patch body" },
+        ],
+        usage: { input_tokens: 3, output_tokens: 2 },
+      } } },
+      { status: "stream_ended" },
+    ]);
+    expect(events).toEqual([
+      { type: "text_delta", text: "hi" },
+      { type: "tool_call_start", id: "call_c", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: "patch body" },
+      { type: "tool_call_end" },
+      { type: "done", usage: { inputTokens: 3, outputTokens: 2 } },
+    ]);
+  });
+
+  test("does not repeat an earlier message when completed replays every output item", async () => {
+    const events = await relay([
+      { event: { type: "response.output_text.delta", item_id: "msg_1", delta: "A" } },
+      { event: { type: "response.output_text.delta", item_id: "msg_2", delta: "B" } },
+      { event: { type: "response.completed", response: {
+        output: [
+          { type: "message", id: "msg_1", content: [{ type: "output_text", text: "A" }] },
+          { type: "message", id: "msg_2", content: [{ type: "output_text", text: "B" }] },
+        ],
+        usage: { input_tokens: 1, output_tokens: 2 },
+      } } },
+      { status: "stream_ended" },
+    ]);
+    expect(events).toEqual([
+      { type: "text_delta", text: "A" },
+      { type: "text_delta", text: "B" },
+      { type: "done", usage: { inputTokens: 1, outputTokens: 2 } },
+    ]);
+  });
+
+  test("still emits each completed message when nothing was streamed", async () => {
+    const events = await relay([
+      { event: { type: "response.completed", response: {
+        output: [
+          { type: "message", id: "msg_1", content: [{ type: "output_text", text: "A" }] },
+          { type: "message", id: "msg_2", content: [{ type: "output_text", text: "B" }] },
+        ],
+      } } },
+      { status: "stream_ended" },
+    ]);
+    expect(events).toEqual([
+      { type: "text_delta", text: "A" },
+      { type: "text_delta", text: "B" },
+      { type: "done" },
+    ]);
+  });
+
+  test("keeps usage on an incomplete Zed OpenAI response", async () => {
+    const events = await relay([
+      { event: { type: "response.output_text.delta", item_id: "msg_1", delta: "partial" } },
+      { event: { type: "response.incomplete", response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: { input_tokens: 4, output_tokens: 9 },
+      } } },
+      { status: "stream_ended" },
+    ]);
+    expect(events).toEqual([
+      { type: "text_delta", text: "partial" },
+      { type: "incomplete", reason: "max_output_tokens", usage: { inputTokens: 4, outputTokens: 9 } },
+    ]);
+  });
+
+  test("keeps interleaved function-call deltas until each call closes", async () => {
+    const events = await relay([
+      { event: { type: "response.output_item.added", item: { id: "call_a", type: "function_call", call_id: "call_a", name: "a", arguments: "" } } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "call_a", delta: "{\"x\":" } },
+      { event: { type: "response.output_item.added", item: { id: "call_b", type: "function_call", call_id: "call_b", name: "b", arguments: "" } } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "call_b", delta: "{\"y\":2}" } },
+      { event: { type: "response.function_call_arguments.done", item_id: "call_b", arguments: "{\"y\":2}" } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "call_a", delta: "1}" } },
+      { event: { type: "response.function_call_arguments.done", item_id: "call_a", arguments: "{\"x\":1}" } },
+      { event: { type: "response.completed", response: { output: [
+        { type: "function_call", id: "call_a", call_id: "call_a", name: "a", arguments: "{\"x\":1}" },
+        { type: "function_call", id: "call_b", call_id: "call_b", name: "b", arguments: "{\"y\":2}" },
+      ] } } },
+    ]);
+    expect(events).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "a" },
+      { type: "tool_call_delta", arguments: "{\"x\":" },
+      { type: "heartbeat" },
+      { type: "tool_call_delta", arguments: "1}" },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_b", name: "b" },
+      { type: "tool_call_delta", arguments: "{\"y\":2}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]);
+  });
+
+  test("keeps interleaved custom-tool input until each call closes", async () => {
+    const events = await relay([
+      { event: { type: "response.output_item.added", item: { id: "ctc_a", type: "custom_tool_call", call_id: "call_a", name: "apply_patch", input: "" } } },
+      { event: { type: "response.custom_tool_call_input.delta", item_id: "ctc_a", delta: "left" } },
+      { event: { type: "response.output_item.added", item: { id: "ctc_b", type: "custom_tool_call", call_id: "call_b", name: "apply_patch", input: "" } } },
+      { event: { type: "response.custom_tool_call_input.delta", item_id: "ctc_b", delta: "right" } },
+      { event: { type: "response.custom_tool_call_input.done", item_id: "ctc_b", input: "right" } },
+      { event: { type: "response.custom_tool_call_input.delta", item_id: "ctc_a", delta: " side" } },
+      { event: { type: "response.custom_tool_call_input.done", item_id: "ctc_a", input: "left side" } },
+      { event: { type: "response.completed", response: { output: [] } } },
+    ]);
+    expect(events).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: "left" },
+      { type: "heartbeat" },
+      { type: "tool_call_delta", arguments: " side" },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_b", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: "right" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]);
+  });
+
+  test("an incomplete response does not invent tool arguments from a later full item", async () => {
+    const events = await relay([
+      { event: { type: "response.output_item.added", item: { id: "call_a", type: "function_call", call_id: "call_a", name: "a", arguments: "{\"x\":1}" } } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "call_a", delta: "{\"x\":" } },
+      { event: { type: "response.output_item.added", item: { id: "call_b", type: "function_call", call_id: "call_b", name: "b", arguments: "" } } },
+      { event: { type: "response.function_call_arguments.delta", item_id: "call_b", delta: "{\"y\":" } },
+      { event: { type: "response.function_call_arguments.done", item_id: "call_b", arguments: "{\"y\":2}" } },
+      { event: { type: "response.incomplete", response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          { type: "function_call", id: "call_a", call_id: "call_a", name: "a", arguments: "{\"x\":1}" },
+          { type: "function_call", id: "call_b", call_id: "call_b", name: "b", arguments: "{\"y\":2}" },
+        ],
+      } } },
+    ]);
+    expect(events).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "a" },
+      { type: "tool_call_delta", arguments: "{\"x\":" },
+      { type: "heartbeat" },
+      { type: "tool_call_end", incomplete: true },
+      { type: "tool_call_start", id: "call_b", name: "b" },
+      { type: "tool_call_delta", arguments: "{\"y\":2}" },
+      { type: "tool_call_end", incomplete: true },
+      { type: "incomplete", reason: "max_output_tokens" },
+    ]);
+  });
+
+  test("EOF flushes received arguments and ignores a full arguments field that never completed", async () => {
+    const budget = createTranslatorBudget();
+    const frames = [
+      { type: "response.output_item.added", item: { id: "fc_a", type: "function_call", call_id: "call_a", name: "a", arguments: "{\"x\":1}" } },
+      { type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "{\"x\":" },
+    ];
+    const sse = frames.map(event => "data: " + JSON.stringify(event) + "\n\n").join("");
+    const events = [];
+    try {
+      for await (const event of translateZedOpenAiStream(new Response(sse).body, budget)) events.push(event);
+    } finally {
+      budget.dispose();
+    }
+    expect(events).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "a" },
+      { type: "tool_call_delta", arguments: "{\"x\":" },
+      { type: "tool_call_end", incomplete: true },
+      { type: "incomplete", reason: "adapter_eof" },
+    ]);
+  });
+
+  function sse(frames: unknown[]): string {
+    return frames.map(frame => "data: " + JSON.stringify(frame) + "\n\n").join("");
+  }
+
+  const compactionFrame = { type: "response.completed", response: {
+    output: [{ type: "compaction", encrypted_content: "fixture-ciphertext" }],
+  } };
+
+  test("carries a completed compaction ciphertext on done and transfers its lease", async () => {
+    const budget = createTranslatorBudget();
+    const events: { type: string; compactionEncryptedContent?: string }[] = [];
+    try {
+      for await (const event of translateZedOpenAiStream(new Response(sse([compactionFrame])).body, budget)) {
+        events.push(event as { type: string; compactionEncryptedContent?: string });
+      }
+      const done = events.at(-1)!;
+      expect(done.type).toBe("done");
+      expect(done.compactionEncryptedContent).toBe("fixture-ciphertext");
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength("fixture-ciphertext"));
+      releaseCompactionCiphertextLease(done, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("a failure after retention releases the ciphertext without a done owner", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const events = [];
+      for await (const event of translateZedOpenAiStream(
+        new Response(sse([compactionFrame, { type: "response.failed", response: { error: { message: "boom" } } }])).body,
+        budget,
+      )) events.push(event);
+      expect(events).toEqual([{ type: "error", message: "boom" }]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("an incomplete response after retention releases the ciphertext", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const events = [];
+      for await (const event of translateZedOpenAiStream(
+        new Response(sse([compactionFrame, { type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } }])).body,
+        budget,
+      )) events.push(event);
+      expect(events).toEqual([{ type: "incomplete", reason: "max_output_tokens" }]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("a consumer that stops before done releases the retained ciphertext", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const iterator = translateZedOpenAiStream(
+        new Response(sse([compactionFrame, { type: "response.output_text.delta", delta: "x" }])).body,
+        budget,
+      );
+      expect(await iterator.next()).toEqual({ done: false, value: { type: "text_delta", text: "x" } });
+      // The decoder also holds the chunk it is suspended in, so only the lower bound is stable.
+      expect(budget.snapshot().currentBytes).toBeGreaterThanOrEqual(Buffer.byteLength("fixture-ciphertext"));
+      await iterator.return(undefined);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("charged stream buffers are released when the turn ends", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const events = [];
+      for await (const event of translateZedOpenAiStream(new Response(sse([
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "hello" },
+        { type: "response.output_item.added", item: { id: "fc_a", type: "function_call", call_id: "call_a", name: "a", arguments: "" } },
+        { type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "{\"x\":1}" },
+        { type: "response.function_call_arguments.done", item_id: "fc_a", arguments: "{\"x\":1}" },
+        { type: "response.completed", response: { output: [] } },
+      ])).body, budget)) events.push(event);
+      expect(events).toHaveLength(5);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      expect(budget.snapshot().activeCalls).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("accumulated streamed text counts against the turn ceiling", async () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 600 });
+    const frames = Array.from({ length: 14 }, () => ({ type: "response.output_text.delta", item_id: "msg_1", delta: "x".repeat(50) }));
+    const encoder = new TextEncoder();
+    let index = 0;
+    // One frame per chunk keeps each transient chunk charge small, so only the accumulated
+    // text can exceed the ceiling.
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (index >= frames.length) { controller.close(); return; }
+        controller.enqueue(encoder.encode("data: " + JSON.stringify(frames[index++]) + "\n\n"));
+      },
+    });
+    try {
+      const iterator = translateZedOpenAiStream(body, budget);
+      const seen = [];
+      await expect((async () => {
+        for await (const event of iterator) seen.push(event);
+      })()).rejects.toMatchObject({ code: "translation_buffer_limit" });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.length).toBeLessThan(frames.length);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("a completed item replay does not re-charge a closed call's arguments", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const events = [];
+      for await (const event of translateZedOpenAiStream(new Response(sse([
+        { type: "response.output_item.added", item: { id: "fc_a", type: "function_call", call_id: "call_a", name: "a", arguments: "" } },
+        { type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "{\"x\":1}" },
+        { type: "response.function_call_arguments.done", item_id: "fc_a", arguments: "{\"x\":1}" },
+        { type: "response.completed", response: { output: [
+          { type: "function_call", id: "fc_a", call_id: "call_a", name: "a", arguments: "{\"x\":1}" },
+        ] } },
+      ])).body, budget)) events.push(event);
+      expect(events).toEqual([
+        { type: "tool_call_start", id: "call_a", name: "a" },
+        { type: "tool_call_delta", arguments: "{\"x\":1}" },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ]);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("a consumer that stops while calls are open releases their buffered arguments", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      const iterator = translateZedOpenAiStream(new Response(sse([
+        { type: "response.output_item.added", item: { id: "fc_a", type: "function_call", call_id: "call_a", name: "a", arguments: "" } },
+        { type: "response.output_item.added", item: { id: "fc_b", type: "function_call", call_id: "call_b", name: "b", arguments: "" } },
+        { type: "response.function_call_arguments.delta", item_id: "fc_b", delta: "{\"y\":2}" },
+        { type: "response.function_call_arguments.delta", item_id: "fc_a", delta: "{\"x\":1}" },
+        { type: "response.function_call_arguments.done", item_id: "fc_a", arguments: "{\"x\":1}" },
+      ])).body, budget);
+      let step = await iterator.next();
+      while (!step.done && step.value.type !== "tool_call_delta") step = await iterator.next();
+      expect(step.done).toBe(false);
+      // Both calls are still open: a is mid-stream and b's arguments are buffered behind it.
+      expect(budget.snapshot().activeCalls).toBeGreaterThan(0);
+      await iterator.return(undefined);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+    } finally {
+      budget.dispose();
+    }
   });
 });
 

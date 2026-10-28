@@ -61,6 +61,7 @@ import {
   isDesktopSupervised,
 } from "../../lib/system-restart-contract";
 import { spawnReplacementStart } from "../restart-replacement";
+import { retireRestartParentOwnership } from "../restart-parent-ownership";
 
 export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
 export { waitForReplacementReady, type ReplacementReadinessIo } from "../restart-replacement";
@@ -170,13 +171,31 @@ function waitForBoundedSettlement(
 }
 
 /**
- * Set when an operator-initiated shutdown (signal or management stop) begins. An automatic
- * restart that is already draining cannot tell its own listener stop from an independent one,
- * so it consults this instead and never hands off after the process was asked to stop.
+ * Accepted stops and signals permanently veto automatic handoff. Management requests carry
+ * separate temporary intents while teardown awaits, so a refusal can release its own intent
+ * without clearing another pending stop, an accepted stop, or a signal.
  */
 let explicitShutdownRequested = false;
+const pendingShutdownIntents = new Set<object>();
+const shutdownIntentWaiters = new Set<() => void>();
+function shutdownIntentChanged(): void {
+  const waiters = [...shutdownIntentWaiters];
+  shutdownIntentWaiters.clear();
+  for (const resolve of waiters) resolve();
+}
+function nextShutdownIntentChange(): Promise<void> {
+  return new Promise(resolve => { shutdownIntentWaiters.add(resolve); });
+}
 export function noteExplicitShutdownRequested(): void {
   explicitShutdownRequested = true;
+  shutdownIntentChanged();
+}
+
+/** Veto automatic handoff while a stop is pending; release only this caller's intent. */
+export function acquireExplicitShutdownIntent(): () => void {
+  const intent = {};
+  pendingShutdownIntents.add(intent);
+  return () => { if (pendingShutdownIntents.delete(intent)) shutdownIntentChanged(); };
 }
 
 /** Test seam — reset between tests. */
@@ -185,6 +204,8 @@ export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   restartAccepted = false;
   acceptedDrainGraceMs = MEMORY_DRAIN_RESTART_MS;
   explicitShutdownRequested = false;
+  pendingShutdownIntents.clear();
+  shutdownIntentChanged();
 }
 
 /** The port this process is listening on, or undefined when that cannot be established. */
@@ -269,6 +290,9 @@ function spawnDetachedStart(
   let env: NodeJS.ProcessEnv;
   try {
     env = replacementStartEnvironment(waitForHealthBeforeParentExit);
+    // Prepare the sibling handoff while its runtime record still exists. Only completed
+    // drain + listener stop may release parent ownership before waiting for child health.
+    if (waitForHealthBeforeParentExit) retireRestartParentOwnership(port);
   } catch (err) {
     return Promise.reject(err);
   }
@@ -281,7 +305,9 @@ async function completeDeferredParentExitHandoff(
   port: number | undefined,
   phase: "deadline" | "listener-stop fallback",
   canHandoff: () => boolean = () => true,
+  automatic = false,
 ): Promise<void> {
+  while (automatic && pendingShutdownIntents.size > 0 && !explicitShutdownRequested) await nextShutdownIntentChange();
   if (!canHandoff()) return;
   try {
     await (io.spawnStart ?? spawnDetachedStart)(port, false);
@@ -304,7 +330,9 @@ async function completeDeadlineRestartHandoff(
   port: number | undefined,
   scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
   canHandoff: () => boolean = () => true,
+  automatic = false,
 ): Promise<void> {
+  while (automatic && pendingShutdownIntents.size > 0 && !explicitShutdownRequested) await nextShutdownIntentChange();
   if (!canHandoff()) return;
   if (handOffToDesktop(io, exitProcess)) return;
   const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
@@ -330,7 +358,7 @@ async function completeDeadlineRestartHandoff(
   }
   // The ordinary child must survive parent exit: a failed/pending socket close
   // or overdue cleanup is completed by process teardown, without a hidden mode.
-  await completeDeferredParentExitHandoff(io, exitProcess, port, "deadline", canHandoff);
+  await completeDeferredParentExitHandoff(io, exitProcess, port, "deadline", canHandoff, automatic);
 }
 
 /**
@@ -378,6 +406,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       pending = false;
       vetoed = true;
       releasePending();
+      shutdownIntentChanged();
     });
     const now = io.now ?? Date.now;
     const acceptedAtMs = now();
@@ -403,11 +432,14 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
     }
     schedule(async () => {
       if (vetoed) return;
+      // Keep the one admitted restart queued until every temporary stop intent settles.
+      while (automatic && pendingShutdownIntents.size > 0 && !explicitShutdownRequested && !vetoed) await nextShutdownIntentChange();
+      if (vetoed) return;
       pending = false;
       const canHandoff = () => {
         // Only admission-bound (automatic) restarts yield to an explicit stop; manual restart
         // requests keep their existing semantics.
-        if (admission.onAccepted && explicitShutdownRequested) return false;
+        if (admission.onAccepted && (explicitShutdownRequested || pendingShutdownIntents.size > 0)) return false;
         try { return admission.beforeScheduledDrain?.() ?? true; }
         catch { return false; } // Unknown ownership is not authority to restart.
       };
@@ -426,12 +458,14 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       const drainPromise = Promise.resolve().then(
         () => drain(undefined, Math.max(0, drainDeadlineMs - now())),
       );
-      const drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
+      let drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
+      while (automatic && pendingShutdownIntents.size > 0 && !explicitShutdownRequested) await nextShutdownIntentChange();
       if (!canHandoff()) return;
+      if (automatic && now() >= restartDeadlineMs) drainOutcome = "deadline";
       const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
       if (drainOutcome === "deadline") {
         console.warn("Drain-and-restart deadline expired; forcing terminal restart handoff");
-        await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline, canHandoff);
+        await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline, canHandoff, automatic);
         return;
       }
       if (drainOutcome === "failed" || drainOutcome === "rejected") {
@@ -457,11 +491,17 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
           restartPort,
           "listener-stop fallback",
           canHandoff,
+          automatic,
         );
         return;
       }
       try {
+        while (automatic && pendingShutdownIntents.size > 0 && !explicitShutdownRequested) await nextShutdownIntentChange();
         if (!canHandoff()) return;
+        if (automatic && now() >= restartDeadlineMs) {
+          await completeDeferredParentExitHandoff(io, exitProcess, restartPort, "deadline", canHandoff, automatic);
+          return;
+        }
         // A rejected drain has uncertain cleanup ownership, so it uses the same
         // parent-exit handoff as a deadline. Only a fully completed drain waits
         // for replacement health in the old process.

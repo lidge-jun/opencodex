@@ -13,6 +13,7 @@ import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
 import { formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
+import { CAPABILITIES, capabilityInvocation } from "../../src/cli/capabilities";
 import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -583,6 +584,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/keys/rotate/commit", "ocx access key rotate commit"],
       ["/api/machine", "ocx connect/status/sync/disconnect"],
       ["/api/session/logout", "(none — GUI current-session logout)"],
+      ["/api/session/remember", "(none — GUI remembered-device exchange; the CLI holds no browser cookie jar)"],
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
@@ -638,6 +640,20 @@ describe("headless GUI parity CLI", () => {
       ["/api/v2", "ocx v2/agent"],
       ["/api/windows-tray", "ocx tray"],
     ];
+    // These commands share local owners with the GUI routes; declaring HTTP routes
+    // on the capabilities would falsely claim the CLI sends management requests.
+    // Resolve real capability declarations and require their documented counterpart.
+    for (const [resource, verb, mutates] of [
+      ["/api/codex/cli-update/plan", "plan", false],
+      ["/api/codex/cli-update/apply", "apply", true],
+      ["/api/codex/cli-update/jobs", "status", false],
+    ] as const) {
+      const capability = CAPABILITIES.find(cap => cap.command.join(" ") === `system codex-cli-update ${verb}`);
+      expect(capability, resource).toBeDefined();
+      expect(capability!.mutates).toBe(mutates);
+      expect(capability!.details?.some(detail => detail.includes(resource)), resource).toBe(true);
+      coverage.push([resource, capabilityInvocation(capability!)]);
+    }
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);
   });

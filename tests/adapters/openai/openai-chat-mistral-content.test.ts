@@ -3,6 +3,9 @@ import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
 import { buildResponseJSON } from "../../../src/bridge";
 import { createTranslatorBudget, releaseTranslatedEvent, type TranslatorBudget } from "../../../src/lib/translator-budget";
 import { parseRequest } from "../../../src/responses/parser";
+import { messagesToChatFormat, openAIChatSerializesThinking } from "../../../src/adapters/openai-chat/messages";
+import { rememberReasoningForCall, clearReasoningReplayCacheForTests } from "../../../src/responses/reasoning-replay-cache";
+import type { OcxReasoningReplayScopeRef } from "../../../src/types";
 import type { AdapterEvent } from "../../../src/types";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -193,6 +196,78 @@ describe("Mistral typed response content", () => {
     ] }));
     expect(wire.messages).toContainEqual(expect.objectContaining({ role: "tool", tool_call_id: "call_read", content: "fixture result" }));
     expect(joined(events, "text_delta")).toBe("Checking.");
+  });
+
+  for (const model of ["zai-glm-5-3", "zai-glm-5-3-flash", "mistral-small-latest", "mistral-large-4-0"]) {
+    for (const mode of ["stream", "buffered"] as const) {
+      for (const hidden of [false, true]) {
+        test(`${model} ${mode} hidden=${hidden}: replay native thinking on turn two`, async () => {
+          const provider = adapter();
+          const first = parseRequest({ model, input: "Read the synthetic fixture." });
+          await provider.buildRequest(first);
+          const thought = 'Synthetic replay: retain "quotes", \\ and 😀.\n';
+          const content = [thinking(thought), text("Checking.")];
+          const budget = createTestTranslatorBudget();
+          const events = mode === "stream"
+            ? await collect([{ choices: [{ delta: { content, tool_calls: [{ index: 0, id: "call_read", type: "function", function: { name: "read_file", arguments: "{}" } }] } }] }, { choices: [{ delta: {}, finish_reason: "tool_calls" }] }], budget)
+            : await provider.parseResponse!(Response.json({ choices: [{ message: { role: "assistant", content, tool_calls: [{ id: "call_read", type: "function", function: { name: "read_file", arguments: "{}" } }] }, finish_reason: "tool_calls" }] }), budget);
+          try {
+            const response = buildResponseJSON(events, model, { hideRawReasoning: hidden, translatorBudget: budget });
+            const next = parseRequest({ model, input: [...response.output as unknown[], { type: "function_call_output", call_id: "call_read", output: "42" }] });
+            const wire = JSON.parse((await provider.buildRequest(next)).body);
+            const assistant = wire.messages.find((m: { role: string; tool_calls?: unknown[] }) => m.role === "assistant" && m.tool_calls?.length);
+            expect(assistant.content).toEqual([{ type: "thinking", thinking: [{ type: "text", text: thought }] }, text("Checking.")]);
+            expect(assistant.reasoning_content).toBeUndefined();
+            expect(assistant.reasoning_details).toBeUndefined();
+            expect(assistant.tool_calls[0].id).toBe("call_read");
+            expect(wire.messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "call_read", content: "42" });
+          } finally { budget.dispose(); }
+        });
+      }
+    }
+  }
+
+  test("native replay includes tool-free and reasoning-only assistant turns", async () => {
+    for (const answer of ["answer", ""]) {
+      const parsed = parseRequest({ model: MODEL, input: [{ type: "reasoning", summary: [{ text: "prior thinking" }] }, { role: "assistant", content: answer }] });
+      const wire = JSON.parse((await adapter().buildRequest(parsed)).body);
+      expect(wire.messages[0]).toEqual({ role: "assistant", content: [{ type: "thinking", thinking: [{ type: "text", text: "prior thinking" }] }, ...(answer ? [text(answer)] : [])] });
+    }
+  });
+
+  test("native replay honors explicit opt-outs and leaves other hosts unchanged", () => {
+    for (const preserveReasoningContentModels of [[], ["different-model"]]) {
+      expect(openAIChatSerializesThinking({ adapter: "openai-chat", baseUrl: BASE_URL, preserveReasoningContentModels }, MODEL).text).toBe(false);
+    }
+    for (const baseUrl of ["https://api.openai.com/v1", "https://api.mistral.ai.example.test/v1", "https://example.test/api.mistral.ai/v1", "invalid"]) {
+      expect(openAIChatSerializesThinking({ adapter: "openai-chat", baseUrl }, MODEL).text).toBe(false);
+    }
+    expect(openAIChatSerializesThinking({ adapter: "openai-chat", baseUrl: BASE_URL }, MODEL)).toEqual({ text: true, signature: false, redacted: false });
+  });
+
+  test("native replay never fabricates placeholder thinking, even with generic preserve settings", async () => {
+    for (const extra of [{}, { preserveReasoningContentModels: [MODEL] }]) {
+      const provider = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: BASE_URL, ...extra });
+      const parsed = parseRequest({ model: MODEL, input: [{ type: "function_call", call_id: "call_absent", name: "read_file", arguments: "{}" }, { type: "function_call_output", call_id: "call_absent", output: "42" }] });
+      const wire = JSON.parse((await provider.buildRequest(parsed)).body);
+      expect(wire.messages[0]).toMatchObject({ role: "assistant", content: "" });
+      expect(wire.messages[0].reasoning_content).toBeUndefined();
+    }
+  });
+
+  test("orphan tool recovery uses native thinking only on a matching replay scope", () => {
+    const scope: OcxReasoningReplayScopeRef = { clientPrincipalId: "fixture", clientThreadId: "fixture-thread", current: { providerName: "mistral", providerDestinationIdentity: "destination:fixture", adapterName: "openai-chat", modelId: MODEL, credentialIdentity: "key:fixture" } };
+    clearReasoningReplayCacheForTests();
+    try {
+      rememberReasoningForCall("call_orphan", "cached fixture thinking", scope);
+      for (const hit of [true, false]) {
+        const parsed = parseRequest({ model: MODEL, input: [] });
+        parsed._reasoningReplayScope = hit ? scope : { ...scope, clientThreadId: "other-thread" };
+        parsed.context.messages = [{ role: "toolResult", toolCallId: "call_orphan", toolName: "read_file", content: "42", isError: false, timestamp: 0 }];
+        const wire = messagesToChatFormat(parsed, { adapter: "openai-chat", baseUrl: BASE_URL });
+        expect(wire[0]).toMatchObject({ role: "assistant", content: hit ? [{ type: "thinking", thinking: [{ type: "text", text: "cached fixture thinking" }] }] : "" });
+      }
+    } finally { clearReasoningReplayCacheForTests(); }
   });
 
   test("invalid typed content discards an open tool call", async () => {

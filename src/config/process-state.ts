@@ -97,17 +97,21 @@ export function readRuntimePort(expectedPid?: number): RuntimePortState | null {
   }
 }
 
-export function removePid(expectedPid?: number): void {
+export function removePid(expectedPid?: number, beforeMutation?: () => void): void {
   if (expectedPid !== undefined && readPidFileValue() !== expectedPid) return;
-  try { unlinkSync(getPidPath()); } catch { /* ignore */ }
+  const path = getPidPath();
+  beforeMutation?.();
+  try { unlinkSync(path); } catch { /* ignore */ }
 }
 
-export function removeRuntimePort(expectedPid?: number): void {
+export function removeRuntimePort(expectedPid?: number, beforeMutation?: () => void): void {
   if (expectedPid !== undefined && readRuntimePort(expectedPid) === null) return;
-  try { unlinkSync(getRuntimePortPath()); } catch { /* ignore */ }
+  const path = getRuntimePortPath();
+  beforeMutation?.();
+  try { unlinkSync(path); } catch { /* ignore */ }
   // The record is gone, so the registry pointer names a dead home. Retire it
   // beside the record or stale pointers accumulate toward the reader's cap.
-  unregisterOwnerRegistryHome(getConfigDir());
+  unregisterOwnerRegistryHome(getConfigDir(), beforeMutation);
 }
 
 /**

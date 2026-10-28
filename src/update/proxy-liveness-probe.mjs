@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { probeSpawnSync } from "./mutation-guard.mjs";
 
 /**
  * Is something still answering `/healthz` as an opencodex proxy on this endpoint?
@@ -97,7 +97,7 @@ export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 150
     "});",
   ].join("\n");
   try {
-    const probe = spawnSync(
+    const probe = probeSpawnSync(
       process.execPath,
       ["-e", script, host, String(port), String(timeoutMs)],
       { encoding: "utf8", timeout: timeoutMs + 1500, windowsHide: true },

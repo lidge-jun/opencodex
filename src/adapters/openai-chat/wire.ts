@@ -48,3 +48,12 @@ export function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
     return false;
   }
 }
+
+/** Native Mistral thinking uses content chunks, independently of the hosted model family. */
+export function isMistralChatTarget(provider: OcxProviderConfig): boolean {
+  try {
+    return new URL(provider.baseUrl).hostname === "api.mistral.ai";
+  } catch {
+    return false;
+  }
+}

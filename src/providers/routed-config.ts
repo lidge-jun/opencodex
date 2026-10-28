@@ -13,7 +13,7 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
-import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./derive";
+import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts, registryInputModalitiesForDestination } from "./derive";
 import { cloneFastWire } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
 import {
@@ -122,8 +122,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     // the reasoning item the upstream answers 400 to. Destination matching refuses templated and
     // overridable base URLs, so this cannot follow a retargeted row, and an explicit value wins.
     const destination = registryEntryForProviderDestination(provider);
+    const inputModalities = provider.inputModalities === undefined
+      ? registryInputModalitiesForDestination(providerName, provider) : undefined;
     return {
       ...provider,
+      ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
       ...(destination?.modelDefaultReasoningEfforts ? {
         modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
@@ -298,6 +301,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
+    // The request path never calls enrichProviderFromRegistry(), so a row saved before the
+    // registry declared a provider-wide modality must inherit it here to reach the vision gate.
+    ...(provider.inputModalities === undefined && registryEntry.inputModalities !== undefined
+      ? { inputModalities: [...registryEntry.inputModalities] }
+      : {}),
     ...((provider.reasoningEfforts === undefined || hasLegacyClinePassReasoningEfforts(providerName, provider))
       && registryEntry.reasoningEfforts !== undefined
       ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }

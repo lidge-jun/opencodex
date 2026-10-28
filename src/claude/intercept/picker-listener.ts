@@ -34,6 +34,8 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /** Test seam: no-progress time before an upstream response; never an upload lifetime cap. */
+  uploadIdleMs?: number;
   /**
    * Test seam: arms the drop of a connection whose backend ended, after PICKER_ABANDONED_INPUT_LINGER_MS;
    * returns a cancel function. Production uses a timer.
@@ -54,6 +56,8 @@ export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
 export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 /** Advertised per HTTP/2 connection; Chromium queues further requests rather than failing them. */
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
+/** Pre-response body inactivity budget; native runtime limits remain independent. */
+export const PICKER_UPLOAD_IDLE_MS = 60_000;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
 /**
@@ -217,7 +221,11 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
           // Discard further input and flush a graceful FIN without waiting for body completion.
           req.resume();
           req.socket.end();
-        } else req.destroy();
+        } else {
+          // Bun can synthesize an empty 200 when only its request readable is destroyed.
+          // An unfinished upload without a reply must abort the transport instead.
+          req.socket.destroy();
+        }
       }
     };
     // An HTTP/1.1 reply sent while the upload is unfinished advertises Connection: close. Bun 1.4.3
@@ -358,9 +366,27 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
     if (uploading) {
       let uploadFinished = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const clearIdle = () => { if (idleTimer !== undefined) clearTimeout(idleTimer); idleTimer = undefined; };
+      const armIdle = () => {
+        clearIdle();
+        if (uploadFinished || upstreamResponded || req.isPaused()) return;
+        idleTimer = setTimeout(() => {
+          clientGone = true;
+          options.log?.("picker upload idle timeout");
+          stopUnfinishedUpload();
+        }, options.uploadIdleMs ?? PICKER_UPLOAD_IDLE_MS);
+        idleTimer.unref?.();
+      };
+      const noteProgress = (chunk: Buffer) => { if (chunk.length > 0) armIdle(); };
       const finishUpload = () => {
         if (uploadFinished) return;
         uploadFinished = true;
+        clearIdle();
+        req.off("data", noteProgress);
+        req.off("pause", clearIdle);
+        req.off("resume", armIdle);
+        upReq.off("response", clearIdle);
         req.off("end", finishUpload);
         req.off("close", finishUpload);
         upReq.off("close", onUpstreamClose);
@@ -382,12 +408,18 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       const onUpstreamClose = () => {
         if (!upstreamResponded && !res.writableEnded) stopUnfinishedUpload();
       };
+      // Piping pauses the readable under upstream backpressure; that is not client idleness.
+      req.on("data", noteProgress);
+      req.on("pause", clearIdle);
+      req.on("resume", armIdle);
+      upReq.once("response", clearIdle);
       req.once("end", finishUpload);
       req.once("close", finishUpload);
       upReq.once("close", onUpstreamClose);
       responseWritable.once("finish", onResponseFinish);
       res.once("close", stopUnfinishedUpload);
       if (h2) (req as Http2ServerRequest).stream.once("close", finishUpload);
+      armIdle();
     }
     req.pipe(upReq);
   };

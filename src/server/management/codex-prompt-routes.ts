@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 /**
  * /api/codex-prompt — the Codex prompt-layer surface.
  *
@@ -303,7 +304,7 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
   //
   // Reads stay open to the admin token: describing the prompt stack changes nothing,
   // and the dashboard's own cold load needs it.
-  if (req.method !== "GET" && req.method !== "HEAD" && ctx.principal !== "gui-session") {
+  if (req.method !== "GET" && req.method !== "HEAD" && !hasHumanDashboardSession(ctx)) {
     return fail(
       ctx,
       "dashboard_session_required",
