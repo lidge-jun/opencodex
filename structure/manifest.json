@@ -82,7 +82,7 @@
       "path": "providers/m365-copilot.md",
       "tier": 4,
       "title": "Microsoft 365 Copilot",
-      "scope": "Native ChatHub turns, managed browser OAuth and static model aliases.",
+      "scope": "Native ChatHub turns, managed browser OAuth, account model discovery, images and admission evidence.",
       "documents": ["src/adapters/m365-copilot.ts", "src/adapters/m365-copilot/", "src/oauth/m365-copilot.ts", "src/oauth/m365-copilot-browser.ts", "src/providers/m365-copilot-models.ts"]
     },
     {

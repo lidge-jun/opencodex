@@ -1,5 +1,7 @@
 # Microsoft 365 Copilot
 
+Canonical-preset admission and maintainer security review remain pending. The [public evidence section](../../docs-site/src/content/docs/guides/m365-copilot.md#evidence-and-admission-status) distinguishes Microsoft's documented Graph API from this observed private ChatHub/bootstrap contract and proposes an inert directory reference if the latter cannot meet policy.
+
 `src/providers/registry/entries-core.ts` registers the opt-in, non-featured `m365-copilot` OAuth provider with live account discovery and an empty offline roster. It is separate from `github-copilot`. `src/providers/m365-copilot-models.ts` keeps old request aliases compatible and accepts Microsoft's native selector IDs so new versions need no alias-table update. A selector is not evidence of an underlying model identity.
 
 `src/providers/m365-copilot-discovery.ts` parses only the main `bizchatAsAgentGpt.clientPreferences.modelSelectorMetadata` from Microsoft's authenticated chat-page bootstrap. It validates the work-account identity, flattens nested groups, deduplicates leaves and rejects malformed or excessive rows. Researcher and other agent rosters stay excluded. Daily quota-disabled entries remain in the entitlement roster. `src/codex/catalog/m365-copilot-models.ts` reads that page at the fixed Copilot origin through shared outbound policy, limits the body to 2 MiB, and binds TTL/stale cache rows to the captured account and web cookie. Failed reads never advertise the old alias table. Existing new-model policy and operator selections govern visibility.

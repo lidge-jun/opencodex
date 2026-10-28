@@ -80,7 +80,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | --- | --- |
 | [`quota-snapshots.md`](quota-snapshots.md) | Bounded write deferral and cancellation for Codex and provider account quota snapshots. |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
-| [`providers/m365-copilot.md`](providers/m365-copilot.md) | Native ChatHub turns, managed browser OAuth and static model aliases. |
+| [`providers/m365-copilot.md`](providers/m365-copilot.md) | Native ChatHub turns, managed browser OAuth, account model discovery, images and admission evidence. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
 | [`providers/meta-muse.md`](providers/meta-muse.md) | CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics. |
