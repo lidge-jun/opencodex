@@ -7,6 +7,8 @@ description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 yapılandırma dosyasına yazar ve tekrar kaldırır. On sekiz istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
+Windows'ta mutlak yol gerektiren geçersiz kılmalar bir sürücü harfi (`C:\Users\me\client`) veya UNC paylaşımı (`\\server\share\client`) içermelidir. Geçerli sürücüye bağlı `\Users\me\client` ve `/client/config` biçimleri reddedilir. `~` desteği belgelenmiş seçiciler bunu etkin ev dizinine göre genişletir; Gentle Shell `~` işaretini genişletmez.
+
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | sonraki doğrudan başlatmada | `OPENCODEX_OPENCODE_API_KEY` |

@@ -17,6 +17,7 @@
     "claude-config-root-writer-barrier.test.ts": "claude-integration",
     "claude-config-root-late-admission.test.ts": "claude-integration",
     "claude-config-root-stale-updates.test.ts": "claude-integration",
+    "client-path.test.ts": "clients",
     "codex-catalog-heal-reanchor.test.ts": "codex-integration",
     "tool-identity-hash.test.ts": "adapters",
     "passthrough-media-type.test.ts": "responses",

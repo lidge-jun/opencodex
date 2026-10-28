@@ -5,6 +5,8 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 
 **連線** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十八個客戶端以這種方式運作，每個都有一個開關：
 
+在 Windows 上，要求絕對路徑的覆寫值必須包含磁碟機代號（`C:\Users\me\client`）或 UNC 共用（`\\server\share\client`）。`\Users\me\client` 和 `/client/config` 依賴目前的磁碟機，因此會被拒絕。明確支援 `~` 的選擇器仍以有效家目錄展開；Gentle Shell 不展開 `~`。
+
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接啟動 | `OPENCODEX_OPENCODE_API_KEY` |

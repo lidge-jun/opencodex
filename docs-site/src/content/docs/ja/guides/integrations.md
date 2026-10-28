@@ -5,6 +5,8 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 
 **接続** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。以下のクライアントは、それぞれのスイッチで管理できます。
 
+Windows で絶対パスが必要なオーバーライドには、ドライブ文字（`C:\Users\me\client`）または UNC 共有（`\\server\share\client`）が必要です。現在のドライブに依存する `\Users\me\client` と `/client/config` は拒否されます。`~` 対応と明記されたセレクターは有効なホームを基準に展開します。Gentle Shell は `~` を展開しません。
+
 | クライアント | 設定ファイル | 形式 | 変更が反映される時点 | 認証情報 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 次回の直接起動時 | `OPENCODEX_OPENCODE_API_KEY` |

@@ -5,6 +5,8 @@ description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 
 **연결** 페이지는 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 클라이언트는 각각 스위치로 관리합니다.
 
+Windows에서 절대 경로가 필요한 오버라이드는 드라이브 문자(`C:\Users\me\client`) 또는 UNC 공유(`\\server\share\client`)를 포함해야 합니다. 현재 드라이브에 의존하는 `\Users\me\client`와 `/client/config`는 거부됩니다. `~`를 지원한다고 명시된 선택자는 유효 홈을 기준으로 확장합니다. Gentle Shell은 `~`를 확장하지 않습니다.
+
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 다음 직접 실행 시 | `OPENCODEX_OPENCODE_API_KEY` |

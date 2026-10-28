@@ -12,7 +12,7 @@ never falls back to the Global edition. The edition paths are resolved in
 
 Qoder IDE / qodercli uses JSON at `settings.json` under `QODER_CONFIG_DIR`, default `~/.qoder`;
 `qoderHomeDir` resolves that directory once for export, writing and detection, and refuses a
-relative override. The Qoder exporter in
+relative or Windows drive-less rooted override through the shared client-path resolver. The Qoder exporter in
 `src/clients/config-export/qoder.ts` writes only `providers.opencodex`, with each model's
 `displayName` and `contextWindow` in its `models` array. It does not duplicate those keys in
 `modelConfigs.customModels`: Qoder rejects the provider when the legacy catalog already

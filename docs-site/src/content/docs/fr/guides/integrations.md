@@ -6,6 +6,8 @@ description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Co
 L'onglet **Connexion** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
 puis peut le retirer. Dix-huit clients fonctionnent ainsi, chacun avec son propre commutateur :
 
+Sous Windows, une surcharge exigeant un chemin absolu doit inclure une lettre de lecteur (`C:\Users\me\client`) ou un partage UNC (`\\server\share\client`). Les formes `\Users\me\client` et `/client/config`, dépendantes du lecteur courant, sont refusées. Les sélecteurs documentés comme acceptant `~` le développent depuis le répertoire personnel effectif ; Gentle Shell ne développe pas `~`.
+
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | au prochain lancement direct | `OPENCODEX_OPENCODE_API_KEY` |

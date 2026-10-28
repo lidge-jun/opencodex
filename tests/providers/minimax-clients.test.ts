@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   ClientPathError,
   EXPORT_CLIENTS,
@@ -137,9 +138,9 @@ describe("MiniMax Code client config", () => {
 
   test("resolves the public data-dir overrides in MCode precedence order", () => {
     expect(mcodeHomeDir({}, "/home/u")).toBe(join("/home/u", ".minimax"));
-    expect(mcodeConfigPath({ MAVIS_DATA_DIR: "/legacy" }, "/home/u")).toBe(join("/legacy", "config.yaml"));
-    expect(mcodeConfigPath({ MINIMAX_DATA_DIR: "/current", MAVIS_DATA_DIR: "/legacy" }, "/home/u"))
-      .toBe(join("/current", "config.yaml"));
+    expect(mcodeConfigPath({ MAVIS_DATA_DIR: join(tmpdir(), "legacy") }, "/home/u")).toBe(join(join(tmpdir(), "legacy"), "config.yaml"));
+    expect(mcodeConfigPath({ MINIMAX_DATA_DIR: join(tmpdir(), "current"), MAVIS_DATA_DIR: join(tmpdir(), "legacy") }, "/home/u"))
+      .toBe(join(join(tmpdir(), "current"), "config.yaml"));
     expect(() => mcodeConfigPath({ MINIMAX_DATA_DIR: "relative" }, "/home/u")).toThrow(ClientPathError);
   });
 

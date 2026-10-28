@@ -5,6 +5,8 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 
 **连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下客户端都采用这种方式，各有独立开关：
 
+在 Windows 上，要求绝对路径的覆盖值必须包含盘符（`C:\Users\me\client`）或 UNC 共享（`\\server\share\client`）。`\Users\me\client` 和 `/client/config` 依赖当前驱动器，因此会被拒绝。明确支持 `~` 的选择器仍以有效主目录展开；Gentle Shell 不展开 `~`。
+
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接启动时 | `OPENCODEX_OPENCODE_API_KEY` |

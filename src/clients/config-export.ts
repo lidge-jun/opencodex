@@ -21,10 +21,10 @@
  */
 import { homedir } from "node:os";
 import { gentleShellPaths } from "./gentle-shell-path";
-import { absoluteClientPath, ClientPathError, piAgentDir } from "./client-path";
+import { absoluteClientPath, ClientPathError, isAbsoluteClientPath, piAgentDir } from "./client-path";
 export { ClientPathError, piAgentDir } from "./client-path";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
@@ -397,10 +397,10 @@ export function dshHomeDir(env: OpencodeLaunchEnv = process.env, home: string = 
   if (raw === undefined || raw.trim().length === 0) return join(home, ".dsh");
   if (raw === "~") return home;
   if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(home, raw.slice(2));
-  if (!isAbsolute(raw)) {
+  if (!isAbsoluteClientPath(raw)) {
     throw new ClientPathError(
       `DSH_HOME must be an absolute path or start with ~; "${raw}" depends on the working directory, `
-      + "so opencodex and DSH would disagree about which settings file it names.",
+      + "so opencodex and DSH would disagree about which settings file it names. Use a drive letter or UNC share on Windows.",
     );
   }
   // DSH calls node:path.resolve after tilde expansion. Preserve the raw value
@@ -472,7 +472,7 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
   if (base === undefined) return join(home, ".zcode");
   // Match the native path's value, without cwd or tilde expansion. The native
   // ZCODE_DATA_BASE_DIR selector is not an alias for our ZCODE_DATA_DIR.
-  if (typeof base !== "string" || !isAbsolute(base) || base.includes("\0")) throw unknown();
+  if (typeof base !== "string" || !isAbsoluteClientPath(base) || base.includes("\0")) throw unknown();
   return join(base, ".zcode");
 }
 
@@ -494,7 +494,7 @@ export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 export function commandCodeUserHome(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
   if (platform !== "win32" || home !== homedir()) return home;
   const value = env.HOME ?? env.USERPROFILE;
-  return typeof value === "string" && value.trim() && win32.isAbsolute(value) ? value : home;
+  return typeof value === "string" && value.trim() && isAbsoluteClientPath(value, platform) ? value : home;
 }
 
 /**

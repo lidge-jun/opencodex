@@ -327,6 +327,12 @@ still reads as installed, while a config-path override moves only the file. If y
 are still on the older `.clawdbot` layout, that is found too: the modern directory
 wins when it exists, and the legacy one is used when it is the only one there.
 
+On Windows, overrides requiring absolute paths must include a drive letter
+(`C:\Users\me\client`) or a UNC share (`\\server\share\client`). Drive-less
+rooted forms such as `\Users\me\client` or `/client/config` are refused because
+they depend on the current drive. A selector documented to support `~` still expands
+it against the effective home; Gentle Shell does not expand `~`.
+
 These must be **absolute paths** or start with `~`. A relative one is refused rather
 than resolved, because it would mean whatever directory each process happened to
 start in — and that path is stored with the backup, so it has to name the same file
