@@ -141,6 +141,13 @@ $CODEX_HOME/models_cache.json
 
 在 macOS 上，opencodex 在明確選擇、shim、PATH、既有安裝路徑和可執行的裸 `codex` 後備命令之後，依序檢查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 應用程式內建 CLI，要求其 XML `Info.plist` 識別碼為 `com.openai.codex`，且不會用應用程式候選項自動取代仍可執行的已儲存選擇。
 
+執行檢查也會辨識任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移動後的應用程式套件、明確的
+`CODEX_CLI_PATH` 或設定的執行階段命令，以及符號連結別名。名稱只觸發驗證，不代表可信。
+每次執行前，正規化的套件和確切二進位檔都必須通過嚴格簽章驗證、OpenAI Team ID 及擁有權、
+權限和祖先目錄政策。二進位檔必須位於套件的 `Contents/` 內（包含 Codex.app 的
+`Contents/Resources/codex-aarch64-apple-darwin`）；無法正規化套件或二進位檔時拒絕執行。
+一般非應用程式 CLI 和第三方套件保留原有執行政策。
+
 在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex` 目錄不存在或不含任何 Codex 狀態（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 也會檢查
 `/mnt/c/Users/*/.codex/config.toml` 下是否只有一個 Windows Codex Desktop home。候選項恰好只有一個時，
 會使用該目錄，讓 WSL app-server mode 與 Windows Codex Desktop 共用相同的 config 與 auth 檔案。

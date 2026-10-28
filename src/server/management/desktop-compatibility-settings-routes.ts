@@ -1,12 +1,13 @@
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
+import { isAuthorizedDesktopCompatibilityMutation } from "./desktop-compatibility-authorization";
 
 const PATH = "/api/codex/desktop-compatibility/settings";
 export async function handleDesktopCompatibilitySettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
+  if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   let update: { startOnProxyStart: boolean; revision: string } | undefined;
   if (ctx.req.method === "POST") {
     let body: unknown;

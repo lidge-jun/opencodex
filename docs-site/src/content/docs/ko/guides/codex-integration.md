@@ -213,6 +213,14 @@ $CODEX_HOME/models_cache.json
 
 macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
 
+실행 시에는 위치와 관계없이 `Codex.app`과 `ChatGPT.app`을 인식하며, 이동한 번들, 명시적
+`CODEX_CLI_PATH`·설정 런타임 명령, 심볼릭 링크 별칭에도 같은 검증을 적용합니다. 앱 이름은 검증
+대상만 결정하고 신뢰를 허용하지 않습니다. 매 실행 전에 정규화한 번들과 정확한 실행 파일의
+엄격한 서명 검증, OpenAI Team ID, 소유권·권한·상위 디렉터리 정책을 확인합니다. 실행 파일은
+번들의 `Contents/` 안에 있어야 하며(Codex.app의 `Contents/Resources/codex-aarch64-apple-darwin`
+포함), 번들이나 실행 파일을 정규화할 수 없으면 실행을 거부합니다. 일반 CLI와 다른 회사 앱의
+번들은 기존 실행 정책을 유지합니다.
+
 WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없거나 Codex 상태(`config.toml`, `auth.json`, `sessions`, `history.jsonl`)가 전혀 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
 
 Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 런타임 home으로 설정할 수 있지만, ChatGPT/Codex app은 여전히 `%USERPROFILE%\\.codex`를 읽습니다. `ocx status`와 `ocx doctor`는 이 정확한 불일치를 경고하고, 경로는 가린 채 대상 home을 출력합니다. 해당 Orca shell에서 background service를 설치했다면 먼저 원래 shell에서 uninstall하고, `CODEX_HOME`을 app home으로 설정한 뒤 `ORCA_CODEX_HOME`을 해제하고, sync/restore를 다시 실행한 다음 service를 다시 설치하세요.

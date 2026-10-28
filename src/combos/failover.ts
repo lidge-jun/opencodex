@@ -13,6 +13,7 @@ import {
 
 interface TargetCooldown {
   cooldownUntil: number;
+  revision: number;
   status?: number;
 }
 
@@ -44,6 +45,8 @@ const HTTP_MONTH_INDEX: Record<string, number> = {
 
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
 const targetCooldowns = new Map<string, TargetCooldown>();
+// Never reset: an in-flight reservation may still refer to an entry cleared from the map.
+let nextCooldownRevision = 0;
 let lastReconciledGeneration = 0;
 let liveComboTargets = new Set<string>();
 
@@ -163,6 +166,42 @@ export function isComboTargetInCooldown(
   return true;
 }
 
+/** The live cooldown expiry for one target, or undefined once it is absent or elapsed. */
+export function comboTargetCooldownExpiry(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  now = Date.now(),
+): number | undefined {
+  const key = cooldownMapKey(comboId, target);
+  const entry = targetCooldowns.get(key);
+  if (!entry) return undefined;
+  if (entry.cooldownUntil <= now) {
+    targetCooldowns.delete(key);
+    return undefined;
+  }
+  return entry.cooldownUntil;
+}
+
+/** Identity of the current live write, independent of its possibly repeated expiry. */
+export function comboTargetCooldownRevision(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  now = Date.now(),
+): number | undefined {
+  return isComboTargetInCooldown(comboId, target, now)
+    ? targetCooldowns.get(cooldownMapKey(comboId, target))?.revision : undefined;
+}
+
+/** Lift only the reserved write; a replacement with even the same expiry survives. */
+export function clearComboTargetCooldownIfUnchanged(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  expectedRevision: number,
+): void {
+  const key = cooldownMapKey(comboId, target);
+  if (targetCooldowns.get(key)?.revision === expectedRevision) targetCooldowns.delete(key);
+}
+
 export function isTransientRequestRateLimit(input: {
   status?: number;
   code?: string | null;
@@ -253,7 +292,7 @@ export function coolComboTarget(
     // A spent account window or an unpaid/rejected credential does not turn over in a minute,
     // so the 60s default would re-offer a target that cannot succeed. Only the duration
     // changes; the scope and hop decisions are untouched.
-    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code)
+    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code, options?.status)
       || PROVIDER_SCOPED_FAILURE_CODES.has(normalizedFailureCode(options?.code))
       ? MAX_COOLDOWN_MS
       : isTransientRequestRateLimit({
@@ -262,6 +301,7 @@ export function coolComboTarget(
         message: options?.message,
       }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
+    revision: ++nextCooldownRevision,
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
     status: options?.status,
@@ -355,11 +395,37 @@ const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_r
 // Token-plan windows (Alibaba's DeepSeek/Qwen plans) report "Your token-plan 1-week quota has been
 // exhausted" (#5494). The match is anchored to that phrasing: a looser "quota ... exhausted" would
 // also catch per-minute limits, and this arm outranks the transient rate-limit duration.
-const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted/;
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted|(?:account|weekly|monthly|daily)\s*(?:usage\s+)?quota (?:(?:has been |is )?exhausted|exceeded)/i;
 
-function isAccountWindowExhausted(message: string, code?: string | null): boolean {
-  return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))
-    || ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
+/**
+ * Determines whether an error signals that an account's quota or usage window has been exhausted.
+ *
+ * Explicit error codes (`usage_limit_exceeded`, `insufficient_quota`, etc.) are always authoritative.
+ * For HTTP 400 (Bad Request), prose alone is not authoritative because client validation errors
+ * may echo prompt contents or parameter values containing quota-related words.
+ *
+ * @param message The error message text.
+ * @param code The normalized or raw error code.
+ * @param status The HTTP status code, if known.
+ * @returns True if the failure represents an account window exhaustion.
+ */
+function isAccountWindowExhausted(
+  message: string,
+  code?: string | null,
+  status?: number,
+): boolean {
+  const normalized = normalizedFailureCode(code);
+  if (ACCOUNT_EXHAUSTION_CODES.has(normalized) || normalized === "insufficient_quota") {
+    return true;
+  }
+  // On HTTP 400 (Bad Request / parameter validation), prose alone is not authoritative evidence
+  // of account quota exhaustion because validation errors may echo user prompts or parameter values
+  // quoting "quota exhausted". An authoritative account exhaustion verdict on 400 requires a
+  // structured exhaustion code.
+  if (status === 400 || status === 422) {
+    return false;
+  }
+  return ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
 }
 
 function isProviderScopedQuotaCap(
@@ -377,6 +443,12 @@ function isProviderScopedQuotaCap(
   }
   return text.includes("err_free_prompt_cap")
     || (text.includes("free tier") && text.includes("single request"));
+}
+
+/** A structured account-window exhaustion code; prose never qualifies (a request can echo it). */
+function hasAccountExhaustionCode(code?: string | null): boolean {
+  const normalized = normalizedFailureCode(code);
+  return ACCOUNT_EXHAUSTION_CODES.has(normalized) || normalized === "insufficient_quota";
 }
 
 /**
@@ -878,9 +950,16 @@ export function comboFailureDecision(
   // adapter grants it (the words alone prove nothing for another provider); it must precede the
   // generic invalid_request_error stop.
   if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
+  // A structured account-window exhaustion code is provider-state evidence even inside a
+  // 400 / invalid_request_error envelope, so it must precede that stop. Exhaustion prose alone
+  // never reaches this arm: a validation error can quote quota wording back (#7625).
+  if (hasAccountExhaustionCode(options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }
+  // Quota prose inside a request-validation status (400/422) is not authoritative without a
+  // structured code: the body can quote prompt or parameter text back (#7625).
+  if (error.code === "insufficient_quota" && (status === 400 || status === 422)) return "stop";
   // 402 (payment required) and 425 (too early) are provider-state signals, not verdicts about
   // the request: another combo target can still serve it.
   if ([401, 402, 403, 404, 408, 425, 429].includes(status) || status >= 500) return "hop";

@@ -253,6 +253,36 @@ describe("routed compaction emergency integration", () => {
     expect(fallbackHeaders!.has("chatgpt-account-id")).toBe(false);
   });
 
+  test.each(["text/event-stream", "Text/Event-Stream", "TEXT/EVENT-STREAM; charset=UTF-8"])(
+    "recovers a failed SSE compaction with Content-Type %s", async contentType => {
+      const original = request(body(true));
+      const translatorBudget = createTranslatorBudget();
+      try {
+        const response = await runWithCompactionRecovery(
+          original, settings(), { model: "", provider: "" },
+          { translatorBudget, sendBudget: createRequestExecutionBudget() },
+          async (sent, config, log, options) => {
+            const result = await handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+            if (sent === original) {
+              expect(result.status).toBe(200);
+              expect(result.headers.get("content-type")).toContain("text/event-stream");
+              result.headers.set("content-type", contentType);
+            }
+            return result;
+          },
+        );
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(text).not.toContain("Source rejected compact fixture");
+        const terminal = text.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+          .map(line => JSON.parse(line.slice(6))).find(event => event.type === "response.completed");
+        const compact = terminal.response.output.find((item: { type: string }) => item.type === "compaction");
+        expect(decodeCompactionSummary(compact.encrypted_content)).toContain("Work is pending; resume the report.");
+        expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+      } finally { translatorBudget.dispose(); }
+    },
+  );
+
   test("a failed fallback returns and logs the original failure", async () => {
     fallbackEvents = [{ type: "error", status: 503, code: "server_is_overloaded", message: "Emergency overloaded fixture" }];
     const log: RequestLogContext = { model: "", provider: "" };

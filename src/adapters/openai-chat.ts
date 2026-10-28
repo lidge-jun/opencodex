@@ -511,7 +511,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               const completion = completedBlocksEnabled
                 ? observeCompletedToolBlock(call, rawToolCall.x_opencodex_completed, indexKey, idDelta, rawFunction !== undefined)
                 : "ordinary";
-              if (completion === "invalid") return yield* terminateWithError({ type: "error", message: "invalid negotiated tool completion sequence" });
+              if (completion === "invalid") return yield* terminateWithError({ type: "error", message: "invalid negotiated tool completion sequence", ...(pendingUsage !== undefined ? { usage: pendingUsage } : {}) });
               if (completion === "completed") continue;
               if (!call) {
                 call = {

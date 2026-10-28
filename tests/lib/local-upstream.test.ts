@@ -2,6 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { isLocalUpstream } from "../../src/lib/local-upstream";
 
 describe("isLocalUpstream", () => {
+  test.each([
+    "ftp://localhost/v1", "file://localhost/v1", "[::1]public.example",
+    "[::1]:invalid", "localhost:invalid", "localhost:99999", "localhost:", "0.1.2.3",
+  ])("malformed or unsupported destination keeps safety clocks: %s", destination => {
+    expect(isLocalUpstream(destination)).toBe(false);
+  });
+
+  test.each(["http://[::ffff:127.0.0.1]:8000", "http://[::ffff:192.168.1.2]/v1", "::ffff:7f00:1", "0:0:0:0:0:ffff:127.0.0.1"])(
+    "classifies normalized IPv4-mapped local IPv6: %s", destination => {
+      expect(isLocalUpstream(destination)).toBe(true);
+    },
+  );
+
+  test.each(["http://[::ffff:8.8.8.8]", "127.0.0.1.nip.io", "localhost.example", "foo.local.example", "model.internal"])(
+    "does not infer locality from DNS or a misleading suffix: %s", destination => {
+      expect(isLocalUpstream(destination)).toBe(false);
+    },
+  );
+
   describe("loopback", () => {
     test("classifies localhost (any case, with or without a port)", () => {
       expect(isLocalUpstream("localhost")).toBe(true);

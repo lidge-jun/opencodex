@@ -33,7 +33,7 @@ export function manualUpdateFailureGuidance({ bin, args, owner, platform = proce
 }
 
 /** Phases in which the live package was never touched. */
-const UNTOUCHED_PHASES = new Set(["stage", "verify", "swap-backup"]);
+const UNTOUCHED_PHASES = new Set(["stage", "verify", "authorize", "swap-backup"]);
 
 /**
  * @param {{ phase?: string; rolledBack?: boolean; pkgName: string; version?: string; tag?: string }} failure

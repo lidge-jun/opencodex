@@ -696,10 +696,7 @@ jobs:
       # gui/package.json. Without this the affected shards die on
       # `Cannot find module 'react/jsx-dev-runtime'` while the other shards pass.
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       # Nor is the build. Tests that fetch the served dashboard read the session
       # bootstrap meta tags out of `gui/dist/index.html`, so without a build the
@@ -734,7 +731,7 @@ jobs:
         with:
           role: test-runner # See the Bun roles contract above test.
       - name: Install dependencies and build the GUI the tests serve
-        run: bun install --frozen-lockfile && cd gui && bun install --frozen-lockfile && bun run build
+        run: bash scripts/ci/bun-install-frozen.sh . gui && cd gui && bun run build
       - name: Test the files this pull request reaches
         run: bash scripts/ci/run-changed-tests.sh
 
@@ -760,10 +757,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: Build GUI
         run: |
@@ -802,10 +796,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: Build GUI
         run: |
@@ -840,10 +831,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: GUI lint
         if: needs.changes.outputs.gui == 'true'

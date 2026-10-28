@@ -498,6 +498,19 @@ describe("negotiated block-stop tool completion", () => {
     expect(assembled(out)).toHaveLength(1);
     expect(out.at(-1)?.type).toBe("error");
   });
+  test("an invalid completion sequence still reports the usage already captured", async () => {
+    const out = await events([
+      chunkOf([call(0, "call_a")]),
+      chunkOf([marker(0, "call_a")]),
+      { choices: [], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } },
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]);
+    const error = out.at(-1);
+    expect(error?.type).toBe("error");
+    expect(error?.message).toContain("invalid negotiated tool completion sequence");
+    expect(error?.usage).toEqual({ inputTokens: 11, outputTokens: 7 });
+  });
   test("root input calls stay buffered for existing freeform reconciliation", async () => {
     const out = await events([chunkOf([call(0, "call_a", '{"input":"pwd"}')]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
     expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));

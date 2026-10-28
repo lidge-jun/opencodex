@@ -93,6 +93,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   "qoder-cn": "integrations.semantics.qoderCn",
   "workbuddy": "integrations.semantics.workbuddy",
   "workbuddy-ai": "integrations.semantics.workbuddyAi",
+  t3code: "integrations.semantics.t3code",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -119,6 +120,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   "qoder-cn": "integrations.tab.qoderCn",
   "workbuddy": "integrations.tab.workbuddy",
   "workbuddy-ai": "integrations.tab.workbuddyAi",
+  t3code: "integrations.tab.t3code",
 };
 
 type FileIntegrationPageProps = {

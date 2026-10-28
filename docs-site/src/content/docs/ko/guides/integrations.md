@@ -5,6 +5,8 @@ description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 
 **연결** 페이지는 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 클라이언트는 각각 스위치로 관리합니다.
 
+Windows에서 절대 경로가 필요한 오버라이드는 드라이브 문자(`C:\Users\me\client`) 또는 UNC 공유(`\\server\share\client`)를 포함해야 합니다. 현재 드라이브에 의존하는 `\Users\me\client`와 `/client/config`는 거부됩니다. `~`를 지원한다고 명시된 선택자는 유효 홈을 기준으로 확장합니다. Gentle Shell은 `~`를 확장하지 않습니다.
+
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 다음 직접 실행 시 | `OPENCODEX_OPENCODE_API_KEY` |
@@ -91,6 +93,12 @@ Disable은 opencodex가 소유한다고 기록한 항목만 제거합니다. 이
 잠겨도 해결 방법이 있습니다. 충돌한 클라이언트는 개요 카드와 클라이언트 페이지의 스위치 옆에 **Replace**를 표시합니다. opencodex 설정을 담은 부분을 새 블록으로 교체하기 전에 확인을 요청합니다. 대화 상자에 파일 이름, 잃게 될 내용, 되돌릴 수 있게 해 주는 스냅샷이 나옵니다. 스위치는 어떤 편집을 유지할지 판단할 수 없으므로 잠긴 채로 둡니다. 그 결정은 사용자가 해야 합니다. 그 밖의 거부 조건은 완화하지 않습니다. 파싱할 수 없거나 구조를 판단할 수 없는 파일은 여전히 거부합니다.
 
 Hermes 세션 식별 설정에는 예외가 있습니다. 기존 관리 설정에 `session_affinity_header: session-id`만 추가했다면 **Apply**로 수용할 수 있습니다. 다른 관리 필드의 수정은 계속 충돌로 처리됩니다. 적용 전에는 백그라운드 모델 목록 갱신도 보류됩니다. 이 설정은 provider의 모든 모델에 적용되며 해당 기능을 지원하는 Hermes 버전이 필요합니다. 캐시 적중률은 보장하지 않습니다. [영문 업그레이드 안내](/guides/integrations/#hermes-session-affinity)를 참조하세요.
+
+## Hermes 프로필의 모델 목록 갱신
+
+모델 목록 변경과 `ocx sync`는 실행 중인 프록시의 환경(`HERMES_HOME` 포함)에서 정한 기본 프로필만 자동 갱신합니다. 이름이 있는 프로필은 이전 목록을 유지하므로 **Connect → Hermes**에서 **Update needed**인 프로필을 선택하고 **Apply** 미리 보기를 검토한 뒤 적용하세요. CLI에는 이름이 있는 프로필 선택자가 없습니다.
+
+모델 목록이 바뀌지 않았다면 주석이나 `providers.opencodex` 밖 설정을 수정해도 갱신은 **Current** 상태를 유지하며 파일과 기록된 기준선을 바꾸지 않습니다. 모델 목록 변경이 대기 중이면 자동 갱신은 마지막 적용 이후 달라진 Hermes 파일을 이런 수정까지 포함해 거부합니다. 모델 목록 변경으로 **Update needed**가 표시되면 해당 변경을 **Apply**하여 자동 갱신을 다시 허용할 수 있습니다. 목록이 같은 상태의 Apply는 아무것도 바꾸지 않으며 새 파일 기준선도 저장하지 않습니다. 비활성화했거나 연결한 적 없는 설정은 자동으로 연결하지 않습니다. [영문 프로필 안내](/guides/integrations/#hermes-profiles)를 참조하세요.
 
 ## 변경 미리 보기와 확인
 
@@ -243,9 +251,13 @@ Kilo CLI, VS Code, JetBrains는 전역 설정을 공유합니다. 이 연동은 
 
 Kilo는 이 전역 파일을 모두 병합합니다. 다른 후보 파일에도 `provider.opencodex`가 있으면 상태에 충돌 파일을 표시하고 적용과 교체를 거부합니다. 연동을 켜기 전에 해당 파일에서 `provider.opencodex`를 제거하세요. 이미 소유한 파일의 블록은 충돌 중에도 비활성화할 수 있습니다. 읽을 수 없거나 안전하지 않은 후보 파일도 쓰기를 막습니다.
 
+OpenCodex는 이 후보 파일을 JSONC로 읽습니다. `//` 한 줄 주석은 CR, LF, CRLF 줄바꿈에서 끝나므로, 어떤 줄바꿈으로 저장한 파일이든 주석 뒤의 설정을 그대로 읽습니다.
+
 관리하는 부분은 OpenCode V1 형식의 `provider.opencodex`(`npm`, `options`, `models`)뿐입니다. OpenCode V2의 `providers` 키는 내보내지 않습니다. 대신 모델별 추론 선택지는 프로바이더 블록 안의 변형 맵으로, OpenCode 내보내기와 같은 유효 정규 메타데이터에서 기록됩니다. `$schema`, `model`, `enabled_providers`, MCP 등의 키는 사용자가 관리합니다. 적용한 뒤 Kilo에서 `opencodex/<provider/model>`을 선택하세요.
 
 루프백에서는 `options.apiKey`로 `{env:OPENCODEX_KILO_API_KEY}`를 사용합니다. 루프백이 아닌 바인드에서는 인증을 `options.headers["x-opencodex-api-key"]`로 옮기며 실제 키를 저장하지 않습니다. 적용 시 전역 파일 전체를 보기 좋은 JSON으로 다시 쓰므로 다른 키의 주석과 후행 쉼표는 보존되지 않습니다. Kilo는 자동 카탈로그 갱신 대상입니다. `ocx sync`, `POST /api/sync`, 표시 여부·프로바이더·프리셋 변경은 다른 클라이언트와 같은 소유 블록만 갱신하는 안전한 규칙으로 소유한 Kilo 블록을 갱신하며, 새 Kilo 세션이 갱신된 파일을 읽습니다.
+
+후보 파일을 읽을 때 배열 요소나 객체 속성 뒤의 후행 쉼표는 허용합니다. 빈 배열과 객체는 `[]`, `{}`로 작성하세요. `[,]`, `{,}`는 잘못된 형식으로 거부합니다.
 
 ```bash
 ocx integration client enable --client kilo
@@ -304,3 +316,19 @@ GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로�
 행과 기본값이 함께 제거되며, 되돌리기는 저장된 행과 기본값을 함께 복원합니다.
 
 Factory Droid는 `~/.factory/settings.json`(Windows에서는 `%USERPROFILE%\.factory\settings.json`)을 사용합니다. `ocx integration client enable --client droid`로 명시적으로 활성화한 다음 `/model`에서 사용자 지정 모델을 선택하세요. 관리되는 항목에는 키가 없으며 루프백에서만 동작합니다. 비활성화하면 관리되는 항목이 제거되고, Undo는 저장된 원본 바이트를 복원합니다. 기존 `config.json`에 OpenCodex 항목이 있거나 `settings.local.json`이 `customModels`를 덮어쓰면 활성화 전에 충돌을 해결하세요. [Factory BYOK 문서](https://docs.factory.ai/model-independence/byok)를 참고하세요.
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

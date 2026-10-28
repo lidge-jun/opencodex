@@ -57,7 +57,7 @@ Codex 在 `spawn_agent` 工具說明中最多列出五個模型，並由 Codex �
 | 3 | `deepseek/deepseek-v4-flash` | `5` | 依字母順序第一個剩餘的路由列 |
 | 4 | `google/gemini-3-pro` | `5` | 下一個路由列 |
 | 5 | `moonshot/kimi-k3` | `5` | 下一個路由列 |
-| 6+ | `zai/glm-5.2`，接著是原生 GPT 列 | `5`，接著是 `102` | 不在前五之內 |
+| 6+ | `zai/glm-5.2`，接著是原生 GPT 列 | `5`，接著是 `102 + sourcePriority` | 不在前五之內 |
 
 名冊為空時，opencodex 不固定任何列，前五個依目錄原有的 priority 決定。
 

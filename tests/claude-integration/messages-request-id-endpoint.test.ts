@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { MAX_ACTIVE_TURNS, tryAdmitTurn } from "../../src/server/lifecycle";
-import { MAX_CONCURRENT_INBOUND_BODY_BYTES, withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
+import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
+import { MAX_CONFIGURABLE_INBOUND_BODY_BYTES } from "../../src/server/request-decompress";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { admitWorkflowTurn, chargeWorkflowSends, DEFAULT_WORKFLOW_BUDGET_POLICY, resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
+import { saturateInboundBodyBudget } from "../helpers/inbound-body-budget";
 import type { OcxConfig } from "../../src/types";
 
 type Mode = "caller-forward" | "managed-native" | "translated";
@@ -230,11 +232,8 @@ for (const mode of ["caller-forward", "managed-native", "translated"] as const) 
 }
 
 test("pre-handler body-capacity refusal receives the persisted OCX id and releases capacity", async () => {
-  launch("translated", "json", 200, { maxInboundBodyBytes: MAX_CONCURRENT_INBOUND_BODY_BYTES });
-  const held = await withRaisedInboundBodyAdmission(new Request("http://localhost/v1/messages", {
-    method: "POST", body: "{}",
-  }), "/v1/messages", MAX_CONCURRENT_INBOUND_BODY_BYTES,
-  async () => new Response(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 })));
+  launch("translated", "json", 200, { maxInboundBodyBytes: MAX_CONFIGURABLE_INBOUND_BODY_BYTES });
+  const restoreCapacity = await saturateInboundBodyBudget();
   try {
     const response = await send("translated", false);
     expect(response.status).toBe(503);
@@ -242,10 +241,10 @@ test("pre-handler body-capacity refusal receives the persisted OCX id and releas
     const row = await expectDurableId(response);
     expect(row.status).toBe(503);
     expect(row.errorCode).toBe("server_busy");
-  } finally { await held.body!.cancel("fixture released"); }
+  } finally { await restoreCapacity(); }
   const admitted = await withRaisedInboundBodyAdmission(new Request("http://localhost/v1/messages", {
     method: "POST", body: "{}",
-  }), "/v1/messages", MAX_CONCURRENT_INBOUND_BODY_BYTES, async () => new Response(null, { status: 204 }));
+  }), "/v1/messages", MAX_CONFIGURABLE_INBOUND_BODY_BYTES, async () => new Response(null, { status: 204 }));
   expect(admitted.status).toBe(204);
 });
 

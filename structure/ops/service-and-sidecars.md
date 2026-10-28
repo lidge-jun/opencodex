@@ -24,6 +24,8 @@ Only proven absence enters registration. A query failure refuses the bare comman
 guidance, because treating `unknown` as absent can rerun elevated `schtasks /create` against an
 existing task. Explicit `ocx service install` remains the operator-owned registration request.
 
+`src/lib/windows-elevation.ts` formats scheduler exec failures without echoing child stderr; generic failures retain the numeric exit status. Delete, run and end access denials name the exact command to run from an elevated terminal. `src/service/windows-scheduler.ts` also classifies an owned-task delete exiting 1 as denied when a fresh probe proves the task survived; absent, unreadable and failed probes do not establish that classification. `src/service/windows-ops.ts` retains service assets until deletion is proven complete. `tests/windows/windows-scheduler-errors.test.ts` exercises these paths with injected runners.
+
 `src/config/serving-runtimes.ts` records successfully serving installs and lets only a
 non-sibling managed-service start defer to a verified strictly newer recorded command. The
 census gate recognizes launchd, systemd, and current or repaired WinSW definitions through
@@ -120,7 +122,7 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 and every async ACL hardening flight and deadline-surviving `icacls.exe` runner under that home have settled. `src/config/paths.ts` owns the
 barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
 `tests/server/server-stop-config-hardening.test.ts`.
-`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands.
+`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands. Required-mode failures keep their sanitized ETIMEDOUT/EICACLS semantics and additionally carry a bounded `aclFailure` record — fixed step and stage enums (`deadline_before_spawn`/`spawn_failed`/`runner_rejected`/`runner_watchdog`/`child_result`), measured elapsed and requested budget, success, exit code, and an allowlisted spawn code — copied field-by-field so no path, argv, SID, or child output crosses into the thrown error; `tests/windows/windows-secret-acl-diagnostics.test.ts` covers the boundary.
 
 Removal ownership captures lexical and canonical path identities before each work item or child starts, including Windows short names and directory aliases; deadline survivors retain the same identities. A deleted temporary file is captured through its existing parent. Unreadable identity at capture stays conservatively matched until settlement. Removal compares the requested root against those retained identities, so deleting or retargeting an alias cannot release the original root early. The same Bun regression verifies aliases changed mid-flight still block removal. Matching covers captured and current alias destinations; a second retarget by a writer of the protected directory is out of scope.
 
@@ -235,7 +237,7 @@ deliberate stop. Existing launchd jobs retain
 their old keepalive definition until `ocx service repair` rewrites and reloads the changed plist.
 New WinSW XML stamps `OCX_SERVICE_MANAGED=1`; parent command-line inference applies only to
 legacy registrations whose XML lacks that marker. Bare `OCX_SERVICE=1`
-is never the marker because `ocx claude` and `ocx opencode` companions carry it too; a
+is never the marker because `ocx claude`, `ocx codex`, and `ocx opencode` companions carry it too; Codex's client-token loading separately requires a managed loopback destination. A
 marker-less Windows registration is still recognised by the parent's command line naming
 this install's wrapper script, launcher or WinSW host as a complete token in any position,
 and an unreadable parent command line is no evidence and proceeds. POSIX keeps the
@@ -423,8 +425,7 @@ Live supervision is re-read separately from durable ownership before stop, packa
 service restoration and direct recovery. Each service command, Node/Bun update run and dashboard
 restart decision shares one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
 `desktop` or `unknown` with `desktopSeen: true` blocks; only a later `none` clears it.
-Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains.
-`src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
+Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains; `src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
 when blocked. A restoration refusal after a completed package swap does not undo that update.
 Service install, repair, start and restart refuse before mutation, including Windows XML staging,
 when live Desktop supervision is verified; `ocx stop` shows the Desktop notice. Windows probe acquisition and residual limits: [desktop supervision](desktop-supervision.md#runtime-ownership-from-the-apps-side).
@@ -433,9 +434,9 @@ or the post-install refresh): the manager's `ocx start` child cannot join it, an
 through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
 is made again after the release, and the lease is re-acquired before each fallback's ownership
 re-read so a claim landing in the unleased window is vetoed rather than killed unleased.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful manual-runtime update still prints the existing
-restart hint.
-
+Direct recovery retains the lease until readiness or its bounded deadline. If acquisition fails, Node and Bun return false before owner inspection or spawn and print static manual repair/start guidance without the error's details.
+`src/update/index.ts` rechecks service-home authority in the mutation caller after its final ownership or recovery-plan await, before proxy stop and each service repair. Service mutations also require `homePolicy.serviceAllowed`; a previously installed registration disappearing before full stop refuses, while recovery uses guarded direct start. No await separates these final checks from the control command. The dashboard worker in `src/update/job.ts` also checks service permission before stopping wrappers after its service import. Package replacement retains its separate stable-unknown package-only policy.
+The normal successful manual-runtime update still prints the existing restart hint. All three update lanes use the shared latched mutation gate described in [Update Supervised Recovery](update-supervised-recovery.md#service-home-authority), including fresh checks between blocking control calls and before terminal success.
 Every updater lane makes the same exception where the service manager starts the proxy outside
 the updater's process tree, so that proxy has to take the lease itself; held through the
 repair's health wait, the lease kept it from starting, and recovery fell through to a second,
@@ -451,7 +452,7 @@ service repair` and re-acquires it at the direct-start fallthrough, waiting long
 outlast one service-wrapper respawn, then re-runs the durable-owner and live-supervision veto under it before
 mutating the port, because a claim could have landed during the now-unleased refresh window. A
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
-the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.
+the refresh before it produced no serving proxy; an ownership veto ends as succeeded only after a fresh service-home check. CLI refresh and final fallback vetoes give home refusal precedence too.
 
 On Windows, `src/update/npm-invocation.mjs` reads copied shell-location keys case-insensitively,
 with exact-key precedence, no ambiguous alias selection, and the same absolute-path checks.
@@ -465,6 +466,7 @@ Other Scoop apps, version-directory entries (`NO_JUNCTION`), custom home-root Sc
 arbitrary descendants and cwd inside the resolved Node installation are not admitted.
 
 The Windows npm staging runner (`src/update/npm-install.mjs`) keeps a 180-second install budget and a separate 10-second join budget. Before cleanup or verification, it requires proof that the full installer tree exited, including when npm returns status zero.
+After that barrier and stage verification, the transaction's synchronous replacement callback rechecks home authority, owner, supervision and dead liveness before the live swap. A denied callback returns `authorize`, removes only the owned exited stage and leaves the old package usable; failure guidance classifies this as an untouched install. The same callback runs after synchronous npm staging. Pinned restart preparation separately checks current service permission inside its wrapper callback after the fresh home gate, so confirmed absence grants foreground cleanup without a global service stop.
 On Windows, `src/update/npm-install-job.ps1` creates the root atomically inside a private kill-on-close Job Object using `STARTUPINFOEX` and `PROC_THREAD_ATTRIBUTE_JOB_LIST`. It stays suspended until local exit-proof handling is armed. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` admits only stdin and npm's stderr, excluding the Job and supervisor result pipe; attribute lists and value buffers are freed. Windows 10+ Job List support is required: attribute setup or extended creation failure returns `EINSTALLJOIN` with a clear prerequisite and native error, without starting an unsupervised installer or retrying a legacy creation path. Timeout terminates the job, checks zero active members and waits for the root handle. The updater and recovery stay outside this job; a watchdog bounds supervisor startup/protocol failure.
 Missing exit proof retains the complete stage and marker. npm output drains before a successful join returns; failed supervision stops forwarding it. Windows timeout diagnostics retain `ETIMEDOUT` and the budget; stage failures retain owner-aware recovery through the untouched launcher. POSIX keeps the legacy synchronous install and status-only transaction; complete-tree timeout cleanup remains open there because process groups do not contain detached descendants.
 The npm transaction creates each staging directory exclusively and may clean that fresh path while the creating process still owns it. On POSIX it also creates the stage's `lib` directory, because npm's strict script policy plans the global tree before creating the prefix layout (#5760).
@@ -514,6 +516,8 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+Ordinary signal shutdown passes the CLI's idempotent exit cleanup to `drainAndShutdown` in `src/server/lifecycle.ts`: its drain-finally block calls the synchronous-only `() => undefined` hook before listener stop. Promise-returning hooks are outside this contract; there is no asynchronous cleanup wait. Listener stop and startup-lifecycle release still run if cleanup throws. Restart callers omit that hook and retain their existing routing-preservation decisions; receipt-backed stop deferral remains owned by the stopping client. After verifying a matching receipt, `performStopTeardown` records a dedicated process-lifetime exit deferral; exit cleanup consults it before restoring native Codex/Grok, including when the API's own drain ends in `process.exit`. A query flag or connected-client capability does not set it. API and signal restoration repeat the [connection ownership guard at each write](../runtime.md#remote-hub-hardening-ownership); an unproven API boundary returns 409 before scheduling shutdown, and signal cleanup reports failure while preserving shared configuration. `tests/fixtures/api-stop-exit-runner.ts`, exercised by `tests/service/stop-deferred-teardown.test.ts`, runs the actual API handler, listener drain and process-exit cleanup in one child. `tests/service/shutdown-drain.test.ts` covers the hook with a real loopback listener and the CLI signal handler.
+
 During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and `src/service/linux-linger.ts` observes boot lingering without changing it; enabled, disabled and unknown states receive distinct install advice. Desktop startup distinguishes enabled next-login registration from current loaded state, preserving identity/disabled/supervisor checks. `src/cli/hub-disable.ts` changes persisted hub settings only, prints Desktop/service/manual restart guidance and reminds the operator to review external publishing to old ports.
 an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
@@ -526,10 +530,8 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
-`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
-restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
-input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
-acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
 caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
 a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
 still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup

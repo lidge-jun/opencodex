@@ -1,10 +1,13 @@
 /** Core-owned, config-scoped registration. An inactive install has no Advisor factory. */
 import type { OcxConfig, OcxParsedRequest, OcxTool } from "../../types";
+import type { AdmissionModelScope } from "../admission-model-scope";
 
 export interface AdvisorPlanInput {
   config: OcxConfig;
   workerIdentity: string;
   workerModelId: string;
+  /** Immutable scope captured from the request that is paying for this sidecar. */
+  admissionScope?: AdmissionModelScope;
   abortSignal?: AbortSignal;
 }
 

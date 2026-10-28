@@ -1,3 +1,5 @@
+import { publishCredentialSync } from "../local-credentials/generation";
+import { osStoreAccounts } from "../local-credentials/references";
 import { normalizeAccountAutoPauseRevisions, observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
 import { existsSync, readFileSync } from "node:fs";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -8,6 +10,7 @@ import { atomicWriteFile, isMissingPathError } from "./atomic-write";
 import { getConfigPath } from "./paths";
 import { configRebaseDeletionKeys, projectConfigRebaseProvenance } from "./rebase-provenance";
 import { clientConnectionSchema } from "./schema/leaf-validators";
+import { projectRemovedOpenCodeFreeSnapshot } from "./removed-opencode-free-backup";
 
 /** The requested bytes are current; callers must not roll back only live state. */
 export class ConfigWritePublishedError extends Error {
@@ -17,19 +20,39 @@ export class ConfigWritePublishedError extends Error {
   }
 }
 
-/** The literal file, with no schema merge or default injection. */
-export function readRawConfigJson(): Record<string, unknown> | undefined {
+/** The literal file, with no schema merge or default injection; preserve-only leaves it unprojected. */
+export function readRawConfigJson(projectRetired: boolean | "preserve-only" = false): Record<string, unknown> | undefined {
+  let configPath: string;
+  let bytes: Buffer;
+  let parsed: unknown;
   try {
-    const configPath = getConfigPath();
+    configPath = getConfigPath();
     if (!existsSync(configPath)) return undefined;
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
-    const parsed = JSON.parse(raw) as unknown;
+    bytes = readFileSync(configPath);
+    const raw = bytes.toString("utf-8").replace(/^\uFEFF/, "");
+    parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    return parsed as Record<string, unknown>;
   } catch {
     // Unreadable or corrupt: behave exactly as before. Never fail a save over protection.
     return undefined;
   }
+  if (projectRetired === "preserve-only") {
+    // Preservation is optional; its failure must not discard the parsed snapshot that the
+    // client-state guard and OS-store reference accounting depend on.
+    try {
+      projectRemovedOpenCodeFreeSnapshot(structuredClone(parsed), { path: configPath, bytes });
+    } catch {
+      console.warn("[opencodex] Could not check config.json for retired OpenCode Free entries before saving; no recovery copy was made.");
+    }
+  } else if (projectRetired) {
+    try {
+      projectRemovedOpenCodeFreeSnapshot(parsed, { path: configPath, bytes });
+    } catch {
+      // The in-place projection may be partial; keep the previous unreadable result.
+      return undefined;
+    }
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function failClosedClientPersistenceError(
@@ -67,7 +90,8 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   const pinError = configReasoningPinsConfigError(config);
   if (pinError) throw new Error(pinError);
   const configPath = getConfigPath();
-  const rawBeforeWrite = readRawConfigJson();
+  // Protect late disk edits from these same bytes, retaining raw rows for guards and credential accounting.
+  const rawBeforeWrite = readRawConfigJson("preserve-only");
   const clientPersistenceError = failClosedClientPersistenceError(rawBeforeWrite, config);
   if (clientPersistenceError) throw new Error(clientPersistenceError);
   // External editors can add provider rows the live config deliberately does
@@ -96,7 +120,9 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   let observedPublication = false;
   try {
     if (!unchanged) {
-      atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } });
+      // Register every OS-store reference on either side before a removal can land.
+      publishCredentialSync(() => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } }),
+        { references: [...new Set([...osStoreAccounts(rawBeforeWrite), ...osStoreAccounts(persisted)])] });
       published = true;
     }
     // Publication, not successful cache refresh, is the rollback boundary. A

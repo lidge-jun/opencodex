@@ -1,3 +1,4 @@
 {
-  "free-directory-runcrate.test.ts": "providers"
+  "free-directory-runcrate.test.ts": "providers",
+  "kiro-completion-with-real-tools.test.ts": "providers/kiro"
 }

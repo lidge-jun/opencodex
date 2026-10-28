@@ -8,7 +8,7 @@ import {
 } from "./runtime-api";
 import {
   clientIntegrationPath, validateAsideProfile, integrationOption, integrationFlag,
-  integrationFingerprint, integrationDroidDefaults,
+  integrationFingerprint, integrationDroidDefaults, integrationModelNames,
 } from "./integration-input";
 import { decodeIntegrationPlan, FILE_INTEGRATION_CLIENTS, INTEGRATION_STATES, INTEGRATION_REFUSAL_REASONS } from "./integration-plan-dto";
 
@@ -17,7 +17,8 @@ const USAGE = `Usage:
   ocx integration client restore --op ID --preview [--client aside --profile N] [--confirm-drift] [--json]
   ocx integration client <enable|disable> --client ID [--profile N] [--overwrite-conflict] [--plan-fingerprint TOKEN] [--json]
   ocx integration client restore --op ID [--client aside --profile N] [--confirm-drift] [--plan-fingerprint TOKEN] [--json]
-  Droid apply/overwrite: [--reasoning-default MODEL=EFFORT ... | --clear-reasoning-defaults]`;
+  Droid apply/overwrite: [--reasoning-default MODEL=EFFORT ... | --clear-reasoning-defaults]
+  Hermes/Command Code enable and apply/overwrite preview: [--model-names <alias|routed>]`;
 
 type Intent = {
   preview: boolean; json: boolean; client?: string; profile?: string;
@@ -41,7 +42,6 @@ function parseIntent(argv: string[]): Intent {
   const op = integrationOption(args, "--op");
   const opAlias = integrationOption(args, "--op-id");
   const selectedOperation = integrationOption(args, "--operation");
-  if (args.length) throw new CliUsageError("Unexpected integration argument(s)", USAGE);
   if (op !== undefined && opAlias !== undefined) throw new CliUsageError("Use only one of --op and --op-id", USAGE);
   const opId = op ?? opAlias;
   if (previewFlag && action !== "restore") throw new CliUsageError("--preview applies only to restore; use the preview command", USAGE);
@@ -55,6 +55,8 @@ function parseIntent(argv: string[]): Intent {
     if (selectedOperation !== "apply" && selectedOperation !== "overwrite" && selectedOperation !== "disable") throw new CliUsageError("--operation must be apply, overwrite or disable", USAGE);
     operation = selectedOperation;
   } else operation = action === "restore" ? "restore" : action === "disable" ? "disable" : overwrite ? "overwrite" : "apply";
+  const modelNames = integrationModelNames(args, client, operation, USAGE);
+  if (args.length) throw new CliUsageError("Unexpected integration argument(s)", USAGE);
   if (action !== "restore" && !client) throw new CliUsageError("--client is required", USAGE);
   if (action === "restore" && (!opId?.trim() || (client !== undefined && (client !== "aside" || profile === undefined)))) {
     throw new CliUsageError("restore requires --op; its optional target is --client aside --profile N", USAGE);
@@ -75,6 +77,7 @@ function parseIntent(argv: string[]): Intent {
     body = { enabled: action === "enable", ...(overwrite ? { overwriteConflict: true } : {}) };
   }
   if (defaults !== undefined) body.droidReasoningDefaults = defaults;
+  if (modelNames !== undefined) body.modelNames = modelNames;
   if (token !== undefined) { body.operation = operation; body.planFingerprint = token; }
   return { preview, json, client, profile, operation, path, body };
 }

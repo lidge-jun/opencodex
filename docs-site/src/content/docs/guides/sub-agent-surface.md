@@ -93,7 +93,7 @@ depend on the catalog:
 
 | Catalog | Rows that fill the remaining slots |
 | --- | --- |
-| No Codex account selectors | Other routed `provider/model` rows. They all share priority `5`, so they appear by provider name and then model id, alphabetically. Unfeatured native GPT rows sit at priority `100` plus the number of featured ids or higher, so they come later. |
+| No Codex account selectors | Other routed `provider/model` rows. They all share priority `5`, so they appear by provider name and then model id, alphabetically. Unfeatured native GPT rows use `featured.length + 100 + sourcePriority`, preserving native source order behind those routed rows. |
 | Codex account selectors | Account-qualified native rows (`<selector>/<native-model>`), which directly follow the featured rows. Unfeatured routed rows move to priority `1005` and come after them. |
 
 For example, with no account selectors and this roster:
@@ -109,7 +109,12 @@ For example, with no account selectors and this roster:
 | 3 | `deepseek/deepseek-v4-flash` | `5` | First remaining routed row alphabetically |
 | 4 | `google/gemini-3-pro` | `5` | Next routed row |
 | 5 | `moonshot/kimi-k3` | `5` | Next routed row |
-| 6+ | `zai/glm-5.2`, then native GPT rows | `5`, then `102` | Outside the five |
+| 6+ | `zai/glm-5.2`, then native GPT rows | `5`, then `102 + sourcePriority` | Outside the five |
+
+The native source rank uses current discovery before the pristine backup, exact-model retained
+source rank and upstream snapshot, with fallback `9`. Repeated sync and feature/unfeature preserve
+that unbanded rank. The live list, published catalog and cache agree for equal inputs. See
+[Model ordering](/guides/model-ordering/) for validation and picker-order overrides.
 
 With an empty roster, opencodex pins nothing and the five follow the catalog's normal
 priorities.

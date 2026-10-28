@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { linkDir, linkKnownHostsPath, linkStorePath } from "./paths";
 import { buildTunnelArgv } from "./ssh-argv";
+import { nextLinkConnectionGeneration } from "./relay-auth";
 import { createSshRunner, type SshChild, type SshRunner } from "./ssh-runner";
 import type { LinkDiagnosticSink } from "./diagnostics";
 import { createTunnelHistoryBook, exitCause, type TunnelCause, type TunnelHistory } from "./tunnel-history";
@@ -48,6 +49,8 @@ export interface LinkSupervisor {
    */
   reconnect(linkId: string): Promise<boolean>;
   status(): readonly LinkTunnelStatus[];
+  /** `<runtime instance>:<generation>` of a Home-initiated link's current tunnel; every spawn changes it. */
+  connectionGeneration?(linkId: string): string | undefined;
   notifyAuthenticatedRequest?(apiKeyId: string): void;
   stop(): Promise<void>;
 }
@@ -167,6 +170,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const children = new Map<string, { child: SshChild; argv: readonly string[]; spawnedAt: number }>();
   /** Per-link generation, advanced by spawns and explicit stop/removal reservations. */
   const generations = new Map<string, number>();
+  /** The process-unique connection name of each link's current ssh child, minted at spawn. */
+  const connectionNames = new Map<string, string>();
   const linkRevisions = new Map<string, number>();
   /** Reconnects in flight, so overlapping requests for one link restart it once. */
   const reconnects = new Map<string, Promise<boolean>>();
@@ -270,6 +275,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       const child = runner.spawnTunnel(argv);
       const generation = (generations.get(record.id) ?? 0) + 1;
       generations.set(record.id, generation);
+      connectionNames.set(record.id, nextLinkConnectionGeneration());
       // An older child's exit still being classified no longer speaks for this link.
       exiting.delete(record.id);
       children.set(record.id, { child, argv, spawnedAt: now() });
@@ -407,6 +413,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     start() {
       if (lifecycleFlight) return;
       begin();
+    },
+    connectionGeneration(linkId) {
+      return children.has(linkId) ? connectionNames.get(linkId) : undefined;
     },
     ensureStarted() {
       return runLifecycle(begin);

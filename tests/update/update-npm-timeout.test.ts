@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,7 +37,7 @@ async function readyTimeoutRunner(root: string, receipt: string): Promise<typeof
   const helperLine = 'const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");';
   expect(runnerSource.split(helperLine)).toHaveLength(2);
   const instrumented = runnerSource.replace(helperLine, `const helper = ${JSON.stringify(helper)};`);
-  return (await import("data:text/javascript;base64," + Buffer.from(instrumented).toString("base64"))).runNpmInstall;
+  return (await import("data:text/javascript;base64," + Buffer.from(instrumented.replaceAll('"./mutation-guard.mjs"', JSON.stringify(pathToFileURL(repoPath("src/update/mutation-guard.mjs")).href))).toString("base64"))).runNpmInstall;
 }
 
 test("timeout preserves ETIMEDOUT and permits recovery through the untouched launcher", async () => {
@@ -85,7 +86,7 @@ test.skipIf(process.platform !== "win32").each(["tree", "orphan"])("Windows cmd-
         const env = { ...process.env, PATH: shimDir, PATHEXT: ".CMD" };
         const invocation = npmInvocation([mode, stage, receipt], "win32", env, { cwd: packageDir });
         expect(invocation?.file.toLowerCase()).toEndWith("system32\\cmd.exe");
-        const install = await runReadyInstall(invocation, { env, timeoutMs: 2000 });
+        const install = await runReadyInstall(invocation, { env, timeoutMs: 2000, authorizeMutation: () => true });
         observedInstall = install;
         // Receipt is a handshake from the leaf after acquiring its cwd/file.
         // A startup failure cannot masquerade as a passing timeout test.
@@ -128,14 +129,14 @@ test.skipIf(process.platform !== "win32").each(["tree", "orphan"])("Windows cmd-
 }, 20000);
 
 test.skipIf(process.platform !== "win32").each([["success", 0], ["failure", 23]] as const)("installer preserves %s exit status", async (mode, status) => {
-  const result = await runNpmInstall({ file: Bun.which("node")!, args: [fixturePath("npm-timeout-tree.mjs"), mode], options: {} });
+  const result = await runNpmInstall({ file: Bun.which("node")!, args: [fixturePath("npm-timeout-tree.mjs"), mode], options: {} }, { authorizeMutation: () => true });
   expect(result.status).toBe(status);
   expect(result.processTreeExited).toBe(true);
   expect(result.error).toBeFalsy();
 }, 20000);
 
 test.skipIf(process.platform !== "win32")("spawn failure is explicit and has no running installer", async () => {
-  const result = await runNpmInstall({ file: repoPath(".tmp", "missing-npm-executable"), args: [], options: {} });
+  const result = await runNpmInstall({ file: repoPath(".tmp", "missing-npm-executable"), args: [], options: {} }, { authorizeMutation: () => true });
   expect(result.status).toBeNull();
   expect(result.processTreeExited).toBe(true);
   expect(result.error).toBeTruthy();

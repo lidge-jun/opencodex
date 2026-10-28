@@ -4,6 +4,14 @@ import * as autorestore from "../../src/cli/codex-shim-autorestore";
 import { DEFAULT_READY_WAIT_TIMEOUT_SECONDS } from "../../src/cli/ready";
 
 describe("parseCliHead (pure CLI head, Phase 1)", () => {
+  test("codex owns all forwarded help arguments; ocx help codex stays local", () => {
+    for (const args of [["codex", "--help"], ["codex", "help"], ["codex", "exec", "-h"], ["codex", "-m", "--help"]]) {
+      expect(parseCliHead(args)).toEqual({ kind: "command", command: "codex", args });
+      expect(parseCliHead(args).args).toBe(args);
+    }
+    expect(parseCliHead(["help", "codex"])).toMatchObject({ kind: "help", helpTarget: "codex" });
+  });
+
   test("preserves explicit nested help paths and original argv", () => {
     for (const args of [["help", "models", "context"], ["models", "context", "--help"], ["models", "context", "-h"]]) {
       const head = parseCliHead(args);

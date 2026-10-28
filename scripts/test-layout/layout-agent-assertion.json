@@ -1,7 +1,10 @@
 {
   "windows-native-principal.test.ts": "windows",
+  "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "agent-assertion-auth.test.ts": "server",
   "agent-assertion-routes.test.ts": "responses",
   "authorization-scheme.test.ts": "lib",
-  "server-antigravity-model-roster-routing.test.ts": "server"
+  "server-antigravity-model-roster-routing.test.ts": "server",
+  "antigravity-routing-carry.test.ts": "adapters/google",
+  "server-antigravity-model-denial-recovery.test.ts": "server"
 }

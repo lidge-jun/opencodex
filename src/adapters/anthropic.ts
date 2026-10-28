@@ -30,6 +30,7 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { CLAUDE_CLI_SDK_PACKAGE_VERSION, CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
@@ -556,7 +557,7 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
     "Content-Type": "application/json",
     "anthropic-version": ANTHROPIC_API_VERSION,
     "Accept": stream ? "text/event-stream" : "application/json",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": `@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`,
   };
 }
 
@@ -567,18 +568,30 @@ export function applyAnthropicKeyAuth(headers: Record<string, string>, provider:
   else headers["x-api-key"] = provider.apiKey;
 }
 
+export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
+  return parsed._codexOwnThreadId?.trim()
+    || parsed._clientThreadId?.trim()
+    || (parsed.options.promptCacheKey?.trim() || undefined)
+    || incoming?.headers?.get("x-claude-code-session-id")?.trim()
+    || incoming?.headers?.get("session_id")?.trim()
+    || incoming?.headers?.get("session-id")?.trim()
+    || incoming?.headers?.get("thread-id")?.trim()
+    || undefined;
+}
+
 /**
  * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
  * Code client fingerprint. Shared by the adapter and the managed native lane.
  */
-export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string, sessionKey?: string | null): void {
   headers["Authorization"] = `Bearer ${accessToken}`;
   headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  headers["User-Agent"] = CLAUDE_CLI_USER_AGENT;
   // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
   // header set is a non-first-party signature. (cch billing-header signing is intentionally
   // out of scope — brittle and version-coupled.)
   Object.assign(headers, CLAUDE_CODE_HEADERS);
-  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken, sessionKey);
   headers["x-client-request-id"] = crypto.randomUUID();
 }
 
@@ -1243,7 +1256,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
       const headers = anthropicBaseRequestHeaders(parsed.stream);
-      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);

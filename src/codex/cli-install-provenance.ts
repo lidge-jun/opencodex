@@ -15,6 +15,8 @@ import { posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";
+import { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
+export { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
 import { isSpawnableCodexCandidate } from "./exec-invocation";
 import {
   codexRuntimeStatePath,
@@ -36,15 +38,6 @@ const MAX_RUNTIME_STATE_BYTES = 256 * 1024;
 const MAX_MANIFEST_ANCESTORS = 12;
 /** The published package entrypoint is a few KB; 1 MiB leaves wide headroom. */
 const MAX_PACKAGE_ENTRYPOINT_BYTES = 1024 * 1024;
-/**
- * The native companion binary is streamed in HELD_READ_CHUNK_BYTES chunks and
- * never buffered whole, so this bound limits read time, not memory. Published
- * backings outgrew the former 256 MiB: `@openai/codex@0.163.0-linux-x64` ships a
- * 296,865,480-byte binary, in platform packages of 341-430 MB unpacked. 1 GiB
- * leaves more than 3x headroom over that binary while staying finite; larger
- * files are refused by fstat before any read.
- */
-export const MAX_NATIVE_BACKING_BYTES = 1024 * 1024 * 1024;
 const HELD_READ_CHUNK_BYTES = 1024 * 1024;
 
 export type CodexCliInstallKind =
@@ -126,6 +119,26 @@ export interface CodexCliInstallReport {
     backingKind: "backup" | "real" | null;
   }>;
   readonly evidence: readonly CodexCliInstallEvidence[];
+}
+
+/** Process-local evidence; deliberately absent from the public/redacted report. */
+export interface CodexCliMutationEvidence {
+  readonly prefix: string;
+  readonly launcher: string;
+  readonly canonicalLauncher: string;
+  readonly packageRoot: string;
+  readonly backingRoot: string | null;
+}
+const mutationEvidence = new WeakMap<CodexCliInstallReport, CodexCliMutationEvidence>();
+export function codexCliMutationEvidence(report: CodexCliInstallReport): CodexCliMutationEvidence | null {
+  return mutationEvidence.get(report) ?? null;
+}
+/** Final synchronous selector/link observation after a potentially long full-file readback. */
+export function codexCliMutationSelectionMatches(evidence: CodexCliMutationEvidence, deps: CodexCliInstallProvenanceDeps): boolean {
+  const selected = observeCodexCliSelectedCommand(deps);
+  const path = selected ? resolveCandidateCommandPath(selected, deps) : null;
+  return !!path && canonicalize(path, deps) === evidence.canonicalLauncher
+    && canonicalize(evidence.launcher, deps) === evidence.canonicalLauncher;
 }
 
 export interface CodexCliInstallProvenanceDeps {
@@ -414,6 +427,7 @@ export function isAppBundledCodexPath(path: string, platform: NodeJS.Platform): 
   if (platform === "win32") {
     return normalized.includes("/windowsapps/")
       || normalized.includes("/microsoft/windowsapps/")
+      || normalized.includes("/openai/codex/bin/")
       || normalized.includes("/packages/openai.codex_");
   }
   if (platform === "darwin") return /[.]app\/contents\//i.test(normalized);
@@ -455,13 +469,14 @@ function configuredVersionManagerRoots(
   const roots: string[] = [];
   for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) {
     const raw = platform === "win32" ? caseInsensitiveEnv(env, name) : env[name];
-    if (!raw || !isLocalAbsoluteInspectionPath(raw, platform)) continue;
-    // Windows roots are advisory lexical labels only in this first slice. Do
-    // not resolve or open them until the handle-bound Windows layer exists.
+    if (!raw) continue;
+    // Preserve Windows root spellings for lexical exclusions; the managed-plan
+    // layer refuses roots that cannot be verified as canonical through handles.
     if (platform === "win32") {
       roots.push(normalizePath(win32.normalize(raw), platform));
       continue;
     }
+    if (!isLocalAbsoluteInspectionPath(raw, platform)) continue;
     const canonical = isSafeLocalInspectionPath(raw, deps) ? canonicalize(raw, deps) : null;
     if (canonical) roots.push(normalizePath(canonical, platform));
   }
@@ -700,6 +715,9 @@ const CODEX_PLATFORM_BACKING: Readonly<Record<string, Readonly<{ triple: string;
   "win32:x64": { triple: "x86_64-pc-windows-msvc", package: "@openai/codex-win32-x64" },
   "win32:arm64": { triple: "aarch64-pc-windows-msvc", package: "@openai/codex-win32-arm64" },
 };
+export function codexCliPlatformBacking(platform: NodeJS.Platform, arch: string) {
+  return CODEX_PLATFORM_BACKING[platform + ":" + arch] ?? null;
+}
 
 /** Node's Module._nodeModulePaths: every ancestor's node_modules child, closest first. */
 function nodeModuleDirs(fromDir: string, platform: NodeJS.Platform): string[] {
@@ -781,6 +799,13 @@ interface ObservedContentFile {
 
 function fileContentDomain(role: InstallContentFile["role"]): string {
   return role === "manifest" ? "codex-cli-package-manifest-v1" : "codex-cli-observed-file-v1";
+}
+export function codexCliContentFileDigest(role: InstallContentFile["role"], bytes: Buffer): string {
+  return sha256(fileContentDomain(role), bytes);
+}
+export function codexCliContentSetDigest(platform: NodeJS.Platform, arch: string, triple: string,
+  backingKind: "optional-package" | "package-vendor", files: readonly { role: string; digest: string | undefined }[]): string {
+  return sha256("codex-cli-install-content-v1", JSON.stringify({ layout: "npm-global", platform, arch, triple, backingKind, files }));
 }
 
 /**
@@ -907,6 +932,7 @@ function observeInstallContent(
   env: NodeJS.ProcessEnv,
   deps: CodexCliInstallProvenanceDeps,
   selection: { readonly lexical: string; readonly canonical: string },
+  observedBacking?: (root: string | null) => void,
 ): string | null {
   const arch = deps.arch ?? process.arch;
   const backing = CODEX_PLATFORM_BACKING[platform + ":" + arch];
@@ -1022,15 +1048,10 @@ function observeInstallContent(
       return null;
     }
   }
-  const record = {
-    layout: "npm-global" as const,
-    platform,
-    arch,
-    triple: backing.triple,
-    backingKind: backingManifestPath ? "optional-package" as const : "package-vendor" as const,
-    files: requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })),
-  };
-  return sha256("codex-cli-install-content-v1", JSON.stringify(record));
+  observedBacking?.(backingPackageDir);
+  return codexCliContentSetDigest(platform, arch, backing.triple,
+    backingManifestPath ? "optional-package" : "package-vendor",
+    requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })));
 }
 
 /** Inspect ownership of one configured Codex CLI candidate, without mutation. */
@@ -1053,11 +1074,9 @@ export async function inspectCodexCliInstall(
 
   const env = deps.env ?? process.env;
   if (platform === "win32") {
-    // This first slice never opens a candidate-controlled Windows pathname.
-    // A boolean precheck followed by lstat/realpath/open is raceable when an
-    // ancestor can be replaced with a remote reparse point. Preserve only
-    // lexical, report-only classifications until a handle-bound inspector is
-    // introduced; every result remains unattested and unmanaged.
+    // Lexical exclusions precede the restricted handle-bound plan predicate.
+    // Other Windows layouts remain observation-only; pathname prechecks alone
+    // cannot prove a writable ancestor stayed local and non-reparse.
     const lexicalCandidatePath = win32.isAbsolute(candidate.command)
       && isLocalAbsoluteInspectionPath(candidate.command, platform)
       ? win32.normalize(candidate.command)
@@ -1090,9 +1109,12 @@ export async function inspectCodexCliInstall(
         evidence: Object.freeze([appBundle ? "app_bundle_path" : "version_manager_path"]),
       });
     }
-   return unknownWindowsReport("windows_inspection_deferred", candidate, {
+   const deferred = unknownWindowsReport("windows_inspection_deferred", candidate, {
      location: publicExecutableLocation(lexicalCandidatePath, platform),
    });
+   return (await import("./cli-windows-plan-provenance")).inspectWindowsCodexCliPlanInstall(deps, deferred,
+     path => isAppBundledCodexPath(path, platform) || isCodexCliUpdateVersionManagerPath(path, platform)
+       || isWithinConfiguredVersionManagerRoot(path, managerRoots, platform), managerRoots);
  }
   const configDir = deps.configDir ?? getConfigDir();
   if (!isSafeLocalInspectionPath(configDir, deps)) {
@@ -1227,6 +1249,7 @@ export async function inspectCodexCliInstall(
     const npmPrefix = manifestOwned
       ? manifest.root.slice(0, manifest.root.length - "/lib/node_modules/@openai/codex".length)
       : "";
+    let backingRoot: string | null = null;
     const installContentDigest = manifestOwned && deps.observeInstallContent === true
       // The selection's own lexical->canonical link is part of the claim:
       // verified again at the end of the observation so a retargeted launcher
@@ -1234,14 +1257,14 @@ export async function inspectCodexCliInstall(
       ? observeInstallContent(manifest, npmPrefix, platform, env, deps, {
         lexical: ownershipPath,
         canonical: canonicalOwnershipPath,
-      })
+      }, root => { backingRoot = root; })
       : null;
     const versionMatches = candidate.version === null || candidate.version === manifest.version;
     const reason: CodexCliInstallReason = !global || !linked
       ? "npm_global_unverified"
       : !versionMatches ? "version_mismatch"
         : selectionAttested ? "managed_npm_global" : "selection_unattested";
-    return freezeReport({
+    const report = freezeReport({
       schemaVersion: 1,
       candidateAvailable: true,
       candidateVersion: candidate.version,
@@ -1272,6 +1295,11 @@ export async function inspectCodexCliInstall(
         ...(installContentDigest ? ["install_content_digest" as const] : []),
       ]),
     });
+    if (report.managed && report.installContentDigest && shim.status === "not-tracked") {
+      mutationEvidence.set(report, Object.freeze({ prefix: npmPrefix, launcher: ownershipPath,
+        canonicalLauncher: canonicalOwnershipPath, packageRoot: manifest.root, backingRoot }));
+    }
+    return report;
   }
 
   const stat = deps.stat ?? statSync;

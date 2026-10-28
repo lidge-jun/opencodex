@@ -43,4 +43,23 @@ describe("clearableDeadline", () => {
     expect(deadline.didExpire()).toBe(false);
     deadline.clear();
   });
+
+  test("a non-positive budget arms no header clock; only the parent can abort", async () => {
+    // Disabled header deadline for a local upstream: prefill may stay silent for minutes, so the
+    // deadline must never fire on its own. resolveConnectTimeoutMs hands 0 for this case.
+    for (const ms of [0, -1]) {
+      const parent = new AbortController();
+      const deadline = clearableDeadline(ms, parent.signal);
+      await delay(20);
+      expect(deadline.signal.aborted).toBe(false);
+      expect(deadline.didExpire()).toBe(false);
+
+      const reason = new DOMException("client closed", "AbortError");
+      parent.abort(reason);
+      expect(deadline.signal.aborted).toBe(true);
+      expect(deadline.signal.reason).toBe(reason);
+      expect(deadline.didExpire()).toBe(false);
+      deadline.clear();
+    }
+  });
 });

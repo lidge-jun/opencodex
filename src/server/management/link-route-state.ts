@@ -16,6 +16,7 @@ export interface PendingLinkHost {
   knownHostLine: string;
   probedAt: number;
   sshLatencyMs?: number;
+  remotePlatform?: "posix" | "windows";
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {

@@ -86,6 +86,8 @@ export function bridgeToResponsesSSE(
      */
     localUpstream?: boolean;
     hideThinkingSummary?: boolean;
+    /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
+    chatRawReasoningVisible?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
     /**
@@ -367,10 +369,7 @@ export function bridgeToResponsesSSE(
         ? encoder.encode(': opencodex heartbeat\n\n')
         : encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
-      const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, {
-        localUpstream: options?.localUpstream,
-      });
-      const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
+      let localUpstream = options?.localUpstream;
 
       let currentMsg: {
         itemId: string;
@@ -1036,7 +1035,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "reasoning_raw_delta": {
-              if (options?.hideThinkingSummary || options?.hideRawReasoning) {
+              if (!(options?.chatRawReasoningVisible ?? !options?.hideThinkingSummary) || options?.hideRawReasoning) {
                 hiddenRawReasoning = appendString(
                   hiddenRawReasoning,
                   event.text,
@@ -1184,6 +1183,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "tool_call_end": {
+              if (event.incomplete) { failCurrentToolCall(); break; }
               // Fragments already streamed cannot be repaired. Refuse to complete a function call
               // whose assembled arguments do not parse — cancel the item and fail the turn so the
               // client never sees status:"completed" for unusable args (#765 stream remainder).
@@ -1491,6 +1491,9 @@ export function bridgeToResponsesSSE(
         gated = true;
         beat = setBeatInterval(() => {
           if (closed || gated) return;
+          if (localUpstream !== options?.localUpstream) { localUpstream = options?.localUpstream; stallTicks = 0; }
+          const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, { localUpstream });
+          const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
           if (upstreamActivity) {
             upstreamActivity = false;
             stallTicks = 0;

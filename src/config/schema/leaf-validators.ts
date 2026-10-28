@@ -849,6 +849,21 @@ export const clientIntegrationsSchema = z.object({
   "claude-desktop": z.boolean().optional().catch(undefined),
 }).passthrough();
 
+/**
+ * Opt-in opencode-side request timeouts emitted into the generated opencode provider block.
+ * Each field is a positive millisecond count or the literal `false` (disable that wait). A
+ * malformed per-field value degrades to undefined (the field is dropped and opencode keeps its
+ * native default) rather than rejecting the whole config or emitting an opencode config that
+ * opencode would refuse to load. `.passthrough()` keeps a forward-compatible key a later version
+ * might add.
+ */
+const opencodeClientExportTimeout = z.union([z.number().positive().finite(), z.literal(false)]);
+export const opencodeClientExportSchema = z.object({
+  headerTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  chunkTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  timeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+}).passthrough();
+
 export const asideProfileSyncSchema = z.object({
   allProfiles: z.boolean().optional(),
   profiles: z.record(

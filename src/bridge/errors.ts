@@ -23,12 +23,24 @@ import {
 
 const PINNED_VERDICT_CODES = new Set([CYBER_POLICY_ERROR_CODE, "client_closed_request"]);
 
+// A serialized classifier verdict is not an upstream code. Keep the original code out of
+// the wire body so a combo cannot mistake prose-derived insufficient_quota for evidence.
+const formattedQuotaSources = new WeakMap<Response, string | null>();
+const STRUCTURED_QUOTA_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached", "1308", "insufficient_quota"]);
+
+export function upstreamCodeForComboFailure(response: Response, bodyCode: string | undefined): string | undefined {
+  return bodyCode === "insufficient_quota" && formattedQuotaSources.has(response)
+    ? formattedQuotaSources.get(response) ?? undefined
+    : bodyCode;
+}
+
 export function formatErrorResponse(
   status: number,
   type: string,
   message: string,
-  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean },
+  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean; upstreamCode?: string | null },
 ): Response {
+  const validationStatus = status === 400 || status === 422;
   const error = classifyError(status, type, message);
   // A combo child holding an adapterFailureFromEvent verdict has already classified this
   // failure. Re-deriving it from the status folded insufficient_quota into rate_limit_exceeded
@@ -54,6 +66,11 @@ export function formatErrorResponse(
     error.code = CYBER_POLICY_ERROR_CODE;
     error.type = cyberPolicyErrorType(type);
   }
+  // Only the adapter event's original code can retain this hop identity. Its classified
+  // code may have come from reflected prose, and a generic 422 type can erase a real one.
+  if (validationStatus && options?.upstreamCode
+    && STRUCTURED_QUOTA_CODES.has(options.upstreamCode.trim().toLowerCase().replaceAll("-", "_"))
+    && !PINNED_VERDICT_CODES.has(error.code ?? "")) error.code = options.upstreamCode;
   // The undeclared-tool refusal is deterministic, not a transient upstream failure: its code
   // survives so the Anthropic translator can classify it instead of folding it into a
   // retryable overload (and so clients see the SSE path's rejection identity).
@@ -94,6 +111,10 @@ export function formatErrorResponse(
     status: finalStatus,
     headers,
   });
+  if (validationStatus && error.code === "insufficient_quota") {
+    formattedQuotaSources.set(response, options?.upstreamCode !== undefined
+      ? options.upstreamCode : options?.classified ? null : options?.code ?? null);
+  }
   if (replayBlocked) markResponseNonReplayable(response);
   // Re-wrapping is where the refusal loses its provenance: combo failure consumption parses
   // the JSON and builds a new Response, and the code alone does not tell a later quota

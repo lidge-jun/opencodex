@@ -1,7 +1,7 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
@@ -15,7 +15,7 @@ afterEach(() => {
 describe("Codex CLI updater zero-effect boundary", () => {
   (process.platform === "win32" && process.arch === "x64" ? test : test.skip)(
     "published Node launcher attest observes explicit files without executing targets or changing state", () => {
-      const root = mkdtempSync(join(tmpdir(), "ocx-codex-attest-zero-effect-"));
+      const root = createCodexCliTestRoot("ocx-codex-attest-zero-effect-");
       roots.push(root);
       const prefix = join(root, "explicit-prefix");
       const codexRoot = join(prefix, "node_modules", "@openai", "codex");
@@ -76,7 +76,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
   (process.platform === "win32" && process.arch === "x64" ? test : test.skip)(
     "bare attest identifies the configured candidate through the proof-bound snapshot, without explicit paths",
     () => {
-      const root = mkdtempSync(join(tmpdir(), "ocx-codex-attest-selected-"));
+      const root = createCodexCliTestRoot("ocx-codex-attest-selected-");
       roots.push(root);
       const prefix = join(root, "npm");
       const codexRoot = join(prefix, "node_modules", "@openai", "codex");
@@ -141,7 +141,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
   });
 
   test("published Node launcher check neither executes the candidate launcher nor rewrites invalid state", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-codex-check-zero-effect-"));
+    const root = createCodexCliTestRoot("ocx-codex-check-zero-effect-");
     roots.push(root);
     const launcher = join(root, process.platform === "win32" ? "codex.cmd" : "codex");
     const marker = join(root, "executed.txt");
@@ -180,7 +180,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
   });
 
   test("published Node launcher rejects malformed updater input before any repair or candidate command", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-codex-invalid-zero-effect-"));
+    const root = createCodexCliTestRoot("ocx-codex-invalid-zero-effect-");
     roots.push(root);
     const launcher = join(root, process.platform === "win32" ? "codex.cmd" : "codex");
     const marker = join(root, "executed.txt");
@@ -203,7 +203,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("codex-cli-update action must be check, attest or plan");
+    expect(result.stderr).toContain("codex-cli-update action must be check, attest, plan, apply or status");
     expect(readFileSync(statePath)).toEqual(before);
     expect(existsSync(marker)).toBe(false);
   });

@@ -52,7 +52,8 @@ The app is discovered and confirmed by bundle identifier through
 `darwinDesktopAppAdapter.discover` (`src/codex/desktop-app/darwin.ts`). Launch derives
 the bundled app-server binary from that root (`resolveChatgptCodexBinary`) and refuses
 when none exists or when `untrustedChatgptBundleReason`
-(`src/chatgpt/app-server-shim/bundle-trust.ts`) reports the bundle or binary as owned
+(`src/chatgpt/app-server-shim/bundle-trust.ts`; the signal-aware async twin in
+`bundle-trust-async.ts` serves the exec boundary) reports the bundle or binary as owned
 by another user, group/other-writable, unsigned, or signed by a team other than
 OpenAI's. It writes the mode-0755 executable through an exclusive temp file and a
 rename (never through a symbolic link), quits the bundle by id, waits for this user's
@@ -64,6 +65,11 @@ through the filesystem root. Ancestors must be owned by this user or root; group
 is accepted only for trusted sticky ancestors or root-owned, non-world-writable containers
 whose group matches the local directory service's admin group. An unreadable admin-group lookup
 does not grant that exception. These checks do not attest ACL or mount-policy restrictions.
+Both drivers share filesystem/signature policy and dependency types from
+`src/chatgpt/app-server-shim/bundle-trust-policy.ts`, which imports neither driver and starts no subprocess.
+The selected executable must be strictly inside the bundle's `Contents/`; both the ChatGPT CLI
+layout and Codex.app's `Contents/Resources/codex-aarch64-apple-darwin` layout use this policy.
+
 Restore does not require the experimental flag or a bundled
 app-server binary. It relaunches without that override and removes the launcher only after open succeeds; when no
 `com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
@@ -84,3 +90,16 @@ Tests cover rewriting, byte framing, passthrough degradation, source/compiled
 launcher text, stub launcher execution, hidden preflight, and strict config writes
 in tests/clients/desktop-*.test.ts. Pipe-crash behavior is mock evidence only;
 no bundled-app respawn guarantee is asserted.
+
+## Codex app execution trust
+
+`src/codex/mac-app-bundle.ts` classifies lexical and canonical ancestors named
+`Codex.app` or `ChatGPT.app` at any location, including relocated bundles and executable aliases.
+The name only routes to verification. `src/codex/exec-boundary.ts` requires a canonical bundle/binary
+pair with the binary strictly inside that bundle's `Contents/`, then applies the same synchronous
+or asynchronous OpenAI signature and POSIX filesystem policy before returning an invocation.
+Canonicalization or verification failure refuses execution. This covers environment/configured
+commands and catalog, prompt, login, refresh and remote-workspace consumers; ordinary CLI and
+third-party app paths retain their existing policy. Conventional automatic discovery remains
+limited to the two ChatGPT installation roots. Regression coverage is in
+`tests/codex-integration/exec-known-app-bundles.test.ts`.

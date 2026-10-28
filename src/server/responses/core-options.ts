@@ -6,6 +6,7 @@ import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
+import type { AdmissionModelScope } from "../admission-model-scope";
 import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { ResponsesTerminalRepairScheduler } from "../responses-terminal-repair";
@@ -95,6 +96,8 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
+  admissionScope?: AdmissionModelScope;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */
@@ -186,6 +189,8 @@ export interface HandleResponsesOptions {
   anthropicServerTools?: readonly Record<string, unknown>[];
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /** Metadata-qualified Messages discovery evidence, never caller JSON or a preselected destination. */
+  anthropicToolLoadingSource?: Readonly<Record<string, unknown>>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
@@ -268,6 +273,8 @@ export interface HandleResponsesOptions {
    * returning a Responses body, which the ingress converts as before.
    */
   clientEncoder?: ClientEncoderOption;
+  /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
+  chatRawReasoningVisible?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

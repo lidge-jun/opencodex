@@ -494,7 +494,8 @@ export async function executeResponsesRunTurn(
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
       const sent = transportState.sentOAuthSnapshot;
-      if (error.status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
+      const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
+      if (status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
       oauth401ReplayAttempted = true;
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-oauth-401`);
       if (!hop.allowed) return false;
@@ -840,7 +841,9 @@ export async function executeResponsesRunTurn(
           const storageRefusal = preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
+            redactSecretString(classified.error.message), {
+              code: classified.error.code, classified: true, upstreamCode: preflight.error?.code ?? null,
+            });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -898,6 +901,7 @@ export async function executeResponsesRunTurn(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          chatRawReasoningVisible: options.chatRawReasoningVisible,
           hideRawReasoning: parsed.options.hideRawReasoning,
           declaredToolNames,
           bareCustomToolNames,
@@ -1045,7 +1049,10 @@ export async function executeResponsesRunTurn(
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
+            redactSecretString(classified.error.message), {
+              code: classified.error.code, classified: true,
+              upstreamCode: classifiedError?.code ?? (firstMeaningful?.type === "error" ? firstMeaningful.code : null) ?? null,
+            });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }
@@ -1055,6 +1062,7 @@ export async function executeResponsesRunTurn(
         translatorBudget,
         replayCacheScope: parsed._reasoningReplayScope,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        chatRawReasoningVisible: options.chatRawReasoningVisible,
         hideRawReasoning: parsed.options.hideRawReasoning,
         toolNsMap,
         declaredToolNames,

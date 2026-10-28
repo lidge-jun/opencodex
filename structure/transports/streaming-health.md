@@ -21,7 +21,7 @@ Responses WebSocket terminal frames normalize known `incomplete_details.reason` 
 
 ## Heartbeat and stall deadline
 
-RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.
+Header and JSON policy follow [local deadlines](timeouts.md). Responses and direct-client watchdogs read live serving locality across refreshed continuation legs and reset silence ticks on locality changes. RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.
 
 Native Chat uses the same resolved `stallTimeoutSec` with a pending-upstream-read allowance that
 pauses under downstream backpressure. Its Chat error and cancellation contract is documented in
