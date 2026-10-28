@@ -244,7 +244,9 @@ test.skipIf(process.platform === "win32")("a macOS bundle alias is replaced by t
   const home = mkdtempSync(join(tmpdir(), "ocx-remote-mac-home-"));
   const bundleBinary = join(home, "Applications", "ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex");
   mkdirSync(dirname(bundleBinary), { recursive: true });
-  try { linkSync(process.execPath, bundleBinary); } catch { copyFileSync(process.execPath, bundleBinary); }
+  // A hardlink shares Bun's inode; macOS realpath can return either pathname.
+  // Give the bundle binary its own identity so canonicalization has one target.
+  copyFileSync(process.execPath, bundleBinary);
   const canonicalBinary = realpathSync(bundleBinary);
   const aliasRoot = mkdtempSync(join(tmpdir(), "ocx-remote-mac-alias-"));
   const alias = join(aliasRoot, "codex");

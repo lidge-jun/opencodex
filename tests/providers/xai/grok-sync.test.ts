@@ -260,6 +260,7 @@ describe("syncGrokConfig", () => {
       const result = await syncGrokConfig(10100, config, {
         grokHome,
         hostname: "100.64.0.10",
+        probeHostname: "::1",
       }, {
         fetchAllModels: async () => [],
         injectGrokConfig,
@@ -288,6 +289,7 @@ describe("syncGrokConfig", () => {
       const result = await syncGrokConfig(10100, config, {
         grokHome,
         hostname: "100.64.0.10",
+        probeHostname: "::1",
       }, {
         fetchAllModels: async () => [],
         injectGrokConfig,
