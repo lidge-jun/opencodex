@@ -27,6 +27,11 @@ If the file cannot be parsed, opencodex backs it up as
 `config.json.invalid-<timestamp>`, warns on the console, and starts with defaults. A missing file also
 uses the fresh-install default: one `openai` forward provider.
 
+Local `ocx config set`, `unset`, `import`, offline `ocx effort`, custom-model add/remove, and
+provider add/remove/set-default refuse an invalid or unreadable existing `config.json` without
+changing its bytes. Run `ocx config validate` and repair the file before retrying. Import also
+requires a readable, valid target when a config already exists.
+
 ## Precedence and defaults
 
 ### Provider and model aliases

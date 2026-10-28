@@ -678,13 +678,13 @@ export interface WindowsCliRecoveryIo {
   names(): string[];
   read(name: string): string;
   withProofHandle<T>(name: string, run: (handle: bigint) => T): T;
-  write(name: string, pendingName: string, body: string): void;
+  write(name: string, pendingName: string, body: string, adoptPending?: boolean): void;
 }
 /** The shared recovery protocol uses the ledger's native ancestry, no-reparse,
  * identity, private-DACL and rename primitives at synchronous gate boundaries.
- * Only this process's exact token may replace its bounded pending publication.
+ * Restart publication may write an existing pinned store without creating it.
  */
-export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, run: (io: WindowsCliRecoveryIo) => T): T {
+export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, run: (io: WindowsCliRecoveryIo) => T, publish = false): T {
   if (process.platform !== "win32" || process.arch !== "x64") throw unsafe();
   assertNotRealHomeUnderTest(config);
   const kernel = recoveryFfi.dlopen("kernel32.dll", KERNEL_SYMBOLS);
@@ -704,7 +704,7 @@ export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, 
       if (create) { mkdirSync(dir); hardenSecretDir(toNamespacedPath(dir), { required: true }); }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
     const directoryPin = relOpen(ctx, configPin.handle, "codex-cli-update-recovery", true,
-      create ? ACCESS_DIR_PIN : ACCESS_READ, SHARE_DIR);
+      create || publish ? ACCESS_DIR_PIN : ACCESS_READ, SHARE_DIR);
     inspect(ctx, directoryPin, true); assertCanonicalPath(ctx, directoryPin, dir);
     verify([{ path: dir, directory: true, policy: "private" }]);
     if (create) flushDir(ctx, configPin.handle);
@@ -728,23 +728,28 @@ export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, 
         const file = leaf(name, 0x40100080, 7);
         try { return use(file.handle); } finally { ctx.pins.release(file.handle, kernel); }
       },
-      write(name, pendingName, body) {
-        if (!create || Buffer.byteLength(body) > 1024 || !/^[0-9a-f-]{36}(?:\.terminal|\.proof)?$/.test(name.replace(/\.json$/, ""))
+      write(name, pendingName, body, adoptPending = false) {
+        if (!(create || publish) || Buffer.byteLength(body) > 1024 || !/^[0-9a-f-]{36}(?:\.terminal|\.proof)?$/.test(name.replace(/\.json$/, ""))
           || pendingName !== name.replace(/\.json$/, "") + ".pending") throw unsafe();
-        // A previous failed publication is removed only through its verified pin.
-        try {
-          const old = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
-          markDelete(ctx, old.handle); ctx.pins.release(old.handle, kernel);
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        // Recovery preserves the only durable child identity until atomic rename.
         const temp = join(dir, pendingName), destination = join(dir, name);
-        const fd = openSync(temp, "wx", 0o600);
-        try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
+        if (!adoptPending) {
+          try {
+            const old = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
+            markDelete(ctx, old.handle); ctx.pins.release(old.handle, kernel);
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+          const fd = openSync(temp, "wx", 0o600);
+          try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
+        }
         hardenSecretPath(toNamespacedPath(temp), { required: true });
-        const file = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
+        const file = leaf(pendingName, adoptPending ? ACCESS_LEAF | 0x40000000 : ACCESS_LEAF, SHARE_LEAF);
         try {
           if (!readAll(ctx, file.handle, file.stat.size).equals(Buffer.from(body))) throw unsafe();
+          if (adoptPending) flushDir(ctx, file.handle);
           renamePinned(ctx, file.handle, destination);
-          const published = leaf(name);
+          // The held adopted pin denies other writers; this reader must share
+          // its write/flush access as well as DELETE through identity readback.
+          const published = leaf(name, ACCESS_READ, adoptPending ? SHARE_LEAF_VERIFY | 0x2 : SHARE_LEAF_VERIFY);
           try { if (!sameIdentity(file.stat, published.stat)) throw unsafe(); }
           finally { ctx.pins.release(published.handle, kernel); }
           flushDir(ctx, directoryPin);

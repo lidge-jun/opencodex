@@ -108,6 +108,16 @@ export function adoptPersistedModelDiscovery(
     baseline.disabledModels = structuredClone(persisted.disabledModels);
   }
 }
+
+/** Adopt the committed Advisor subtree without advancing unrelated pending live intent. */
+export function adoptPersistedAdvisor(config: OcxConfig, persisted: OcxConfig["advisor"]): void {
+  config.advisor = structuredClone(persisted);
+  const baseline = liveConfigBaseline.get(config);
+  // A known absent key remains rebaseable when a later disk edit adds it back.
+  if (baseline) baseline.advisor = structuredClone(persisted);
+  clearConfigTopLevelDeletionIntent(config, ["advisor"]);
+  if (baseline) clearConfigTopLevelDeletionIntent(baseline, ["advisor"]);
+}
 /**
  * The live config retains the address of the socket Bun actually opened, while
  * this map retains the operator's desired address for the next process start.
