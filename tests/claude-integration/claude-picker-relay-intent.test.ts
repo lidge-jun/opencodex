@@ -11,10 +11,12 @@ import { getClaudePickerRuntime, startClaudeIntercept } from "../../src/claude/i
 import type { OcxConfig } from "../../src/types";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 const envKeys = ["OPENCODEX_HOME", "OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] as const;
 let previous: Array<string | undefined>;
 let root: string;
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let config: OcxConfig;
 let handle: Awaited<ReturnType<typeof startClaudeIntercept>>;
 let upstream: Server | undefined;
@@ -23,6 +25,7 @@ const binds: Array<{ requested: number; port: number; options: ConnectProxyOptio
 beforeEach(() => {
   previous = envKeys.map(key => process.env[key]);
   root = mkdtempSync(join(tmpdir(), "ocx-picker-relay-intent-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   process.env.OPENCODEX_HOME = root;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(root, "desktop");
   process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
@@ -38,6 +41,7 @@ afterEach(async () => {
     await handle?.stop();
     if (upstream) await new Promise<void>((resolve, reject) => upstream!.close(error => error ? reject(error) : resolve()));
   } finally {
+    lifecycleLock.restore();
     handle = null;
     upstream = undefined;
     envKeys.forEach((key, index) => {

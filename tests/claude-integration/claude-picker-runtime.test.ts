@@ -20,11 +20,13 @@ import {
   type PickerRuntime,
 } from "../../src/claude/intercept/picker-runtime";
 import type { SecurityRunner } from "../../src/claude/intercept/picker-trust";
-import { getClaudePickerRuntime, startClaudeIntercept } from "../../src/claude/intercept/runtime";
+import { getClaudePickerController, getClaudePickerRuntime, startClaudeIntercept } from "../../src/claude/intercept/runtime";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 const previous: Record<string, string | undefined> = {};
 const ENV_KEYS = ["OPENCODEX_HOME", "OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] as const;
 const running: PickerRuntime[] = [];
@@ -87,6 +89,7 @@ const INTERCEPT = { kind: "intercept", port: LISTENER_PORT };
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-picker-runtime-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   for (const key of ENV_KEYS) previous[key] = process.env[key];
   process.env.OPENCODEX_HOME = root;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(root, "desktop-library");
@@ -94,13 +97,18 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const created of running.splice(0)) await created.stop();
-  for (const close of closeFixtures.splice(0)) await close();
-  for (const key of ENV_KEYS) {
-    if (previous[key] === undefined) delete process.env[key];
-    else process.env[key] = previous[key];
+  try {
+    for (const created of running.splice(0)) await created.stop();
+    for (const close of closeFixtures.splice(0)) await close();
+  } finally {
+    // A rejected stop or close must not leave the lifecycle spies, environment or root behind.
+    lifecycleLock.restore();
+    for (const key of ENV_KEYS) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    removeTreeWithRetry(root);
   }
-  removeTreeWithRetry(root);
 });
 
 describe("pickerDesired", () => {
@@ -300,6 +308,13 @@ async function heldEgress(dialUpstream?: Parameters<typeof startConnectProxy>[1]
   return { port: proxy.port, startProxy, close: proxy.close };
 }
 
+// A restart with an applied profile starts a detached controller.enable; join it before stopping,
+// so it cannot run after afterEach restores the lifecycle spy and reach the account-wide lock.
+async function stopAfterPickerSettles(handle: { stop(): Promise<void> } | null | undefined): Promise<void> {
+  try { await getClaudePickerController()?.transition(async () => {}); }
+  finally { await handle?.stop(); }
+}
+
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/2.7032.0";
 
 function connectStatusLine(port: number, host: string, userAgent?: string): Promise<string> {
@@ -436,7 +451,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(names).not.toContain("add-trusted-cert");
       expect(getClaudePickerRuntime()?.selectTunnel("claude.ai", 443)).toEqual(INTERCEPT);
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
     expect(getClaudePickerRuntime()).toBeNull();
   });
@@ -469,7 +484,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(names).not.toContain("remove-trusted-cert");
       expect(names).not.toContain("delete-certificate");
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
     expect(getClaudePickerRuntime()).toBeNull();
   });
@@ -520,7 +535,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(root), "utf8")).sha1).not.toBe(foreignSha1);
       expect(getClaudePickerRuntime()).toBe(fake);
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
     expect(getClaudePickerRuntime()).toBeNull();
   });
@@ -556,7 +571,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(names).not.toContain("remove-trusted-cert");
       expect(names).not.toContain("delete-certificate");
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
     expect(getClaudePickerRuntime()).toBeNull();
   });
@@ -628,7 +643,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(await canBind(handle!.proxyPort)).toBe(false);
       expect(await connectStatusLine(handle!.proxyPort, "api.anthropic.com")).toContain("200");
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
     expect(getClaudePickerRuntime()).toBeNull();
@@ -669,7 +684,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(readFileSync(join(pickerStateDir(root), "profile-state.json"), "utf8")).toBe(stateBefore);
       expect(existsSync(pickerCaPendingUntrustPath(root))).toBe(true);
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
       await new Promise<void>(resolve => squatter.close(() => resolve()));
     }
   });
@@ -701,7 +716,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(calls).toEqual([]);
       expect(readFileSync(pickerCaPendingUntrustPath(root), "utf8")).toBe("{corrupt");
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
   });
 
@@ -769,7 +784,7 @@ describe("startClaudeIntercept wiring", () => {
       const metadata = JSON.parse(readFileSync(join(library, "_meta.json"), "utf8")) as { entries: { name: string }[] };
       expect(metadata.entries.some(entry => entry.name === "opencodex-standard")).toBe(false);
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
   });
 
@@ -827,7 +842,7 @@ describe("startClaudeIntercept wiring", () => {
         expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" }))
           .toMatchObject({ kind: "applied", entryId: original.entryId, proxyUrl: original.proxyUrl });
       } finally {
-        await first?.stop();
+        await stopAfterPickerSettles(first);
       }
       // The next restart adopts the held relay; the surviving selection restores in place.
       retry = true;
@@ -845,7 +860,7 @@ describe("startClaudeIntercept wiring", () => {
         expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" }))
           .toMatchObject({ kind: "applied", entryId: original.entryId, proxyUrl: restoredUrl });
       } finally {
-        await second?.stop();
+        await stopAfterPickerSettles(second);
       }
     } finally { await egress.close(); }
   });
@@ -886,7 +901,7 @@ describe("startClaudeIntercept wiring", () => {
       expect(await connectStatusLine(pickerPort, "spoofed-ua.invalid", `${BROWSER_UA} spoofed`)).toContain("502");
       expect(asked).toEqual(["picker-probe.invalid", "spoofed-ua.invalid"]);
     } finally {
-      await handle?.stop();
+      await stopAfterPickerSettles(handle);
     }
     expect(getClaudePickerRuntime()).toBeNull();
     expect(await canBind(pickerPort)).toBe(true);

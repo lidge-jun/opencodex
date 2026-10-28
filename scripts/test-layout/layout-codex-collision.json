@@ -1,5 +1,8 @@
 {
   "codex-cli-windows-child.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-install.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-outcomes.test.ts": "codex-integration",
+  "codex-cli-update-windows-apply-shared.test.ts": "codex-integration",
   "codex-cli-update-windows-layout.test.ts": "codex-integration",
   "codex-cli-windows-plan.test.ts": "codex-integration",
   "codex-launcher-diagnostics.test.ts": "codex-integration",
@@ -15,6 +18,7 @@
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",
+  "codex-cli-update-windows-pending.test.ts": "codex-integration",
   "codex-cli-update-worker.test.ts": "codex-integration",
   "native-source-priority.test.ts": "codex-integration",
   "server-native-catalog-priority.test.ts": "server",

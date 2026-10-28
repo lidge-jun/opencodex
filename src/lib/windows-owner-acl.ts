@@ -11,6 +11,9 @@ export interface WindowsPrivateEntry {
  * - "private" (default): the exact hardened-object rule — protected DACL, owner is the
  *   serving token (or Administrators only for an enabled elevated owner), and the only
  *   grantees are the token user with Full Control plus SYSTEM/Administrators.
+ * - "private-runtime-directory": the same DACL rule, for directories only; an
+ *   Administrators owner also qualifies when that group is enabled in the token,
+ *   independently of the token's default owner. Secret-file/pairing policy is unchanged.
  * - "write-private": the POSIX mode&022==0 analog for objects we did NOT create — the
  *   serving token or a kernel-equivalent owner (SYSTEM, Administrators, TrustedInstaller)
  *   must own the object, and no grantee outside the trusted write set may hold write,
@@ -24,7 +27,7 @@ export interface WindowsPrivateEntry {
  *   the closest NTFS analog of a root-owned sticky directory such as C:\, whose stock
  *   ACL grants Authenticated Users add-subdirectory while refusing every other write.
  */
-export type WindowsAclPolicy = "private" | "write-private" | "trusted-ancestry";
+export type WindowsAclPolicy = "private" | "private-runtime-directory" | "write-private" | "trusted-ancestry";
 export interface WindowsAclEntry extends WindowsPrivateEntry {
   readonly policy?: WindowsAclPolicy;
 }
@@ -154,6 +157,7 @@ interface ParsedEntry {
 interface ParsedAclRun {
   readonly user: string;
   readonly acceptsAdministrators: boolean;
+  readonly administratorsEnabled: boolean;
   readonly entries: readonly (ParsedEntry | null)[];
 }
 
@@ -206,17 +210,19 @@ function parseAclProtocol(stdout: string | Uint8Array, count: number): ParsedAcl
   if (at !== lines.length - 1) return null;
   return { user: token[1]!.toUpperCase(),
     acceptsAdministrators: token[2]!.toUpperCase() === ADMINISTRATORS && token[3] === "True",
+    administratorsEnabled: token[3] === "True",
     entries };
 }
 
 /** The exact hardened-object policy; unchanged by the shared parser. */
-function privateEntryOk(entry: ParsedEntry | null, directory: boolean, run: ParsedAclRun): boolean {
+function privateEntryOk(entry: ParsedEntry | null, directory: boolean, run: ParsedAclRun, allowEnabledAdmin = false): boolean {
   if (!entry || entry.aces === null) return false;
   const flags = entry.controlFlags;
   if (flags > 0xffff || (flags & PRIVATE_DACL_FLAGS) !== PRIVATE_DACL_FLAGS) return false;
   const owner = entry.owner;
   const user = run.user;
-  if (owner !== user && !(owner === ADMINISTRATORS && run.acceptsAdministrators)) return false;
+  if (owner !== user && !(owner === ADMINISTRATORS
+    && (run.acceptsAdministrators || (allowEnabledAdmin && run.administratorsEnabled)))) return false;
   // The serving account needs its own Full Control entry. SYSTEM and Administrators may also hold plain
   // allow entries: LocalSystem and an elevated administrator can already take ownership of any object, and a
   // filtered administrator token holds Administrators only as deny-only, so the allow entry grants it nothing.
@@ -284,6 +290,10 @@ export function windowsEntriesAclMatches(stdout: string | Uint8Array, entries: r
   if (!run) return false;
   return entries.every((entry, index) => {
     const policy = entry.policy ?? "private";
+    // Runtime roots can predate this token's default owner. Enabled membership is
+    // authoritative here; pairing/secret-file admission retains its stricter policy.
+    if (policy === "private-runtime-directory") return entry.directory
+      && privateEntryOk(run.entries[index] ?? null, true, run, true);
     return policy === "private" ? privateEntryOk(run.entries[index] ?? null, entry.directory, run)
       : confinedEntryOk(run.entries[index] ?? null, run, policy);
   });
