@@ -13,6 +13,9 @@ import * as paths from "../../src/config/paths";
 import * as configModule from "../../src/config";
 import { armClaudeCodeBaseline, claudeCodeBaselineArmed } from "../../src/config/live-reconcile";
 import { CliUsageError } from "../../src/cli/runtime-api";
+import { readCliConfigForMutation } from "../../src/cli/config-mutation";
+import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
+import { advisorRunnable, resolveAdvisorSettings } from "../../src/advisor/settings";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath,
@@ -93,11 +96,11 @@ function holdParent() {
     release() { held = false; released.resolve(); } };
 }
 const operations = ["set", "unset", "import", "effort", "model-add", "model-remove", "provider-add", "provider-remove", "provider-default", "advisor"] as const;
-function requestAdvisor(liveConfig = fixture() as OcxConfig) {
+function requestAdvisor(liveConfig = fixture() as OcxConfig, patch: Record<string, unknown> = { enabled: true }) {
   const url = new URL("http://localhost/api/advisor/settings");
   advisorConfig = liveConfig;
-  armClaudeCodeBaseline(advisorConfig);
-  return handleAdvisorRoutes({ url, req: new Request(url, { method: "PUT", body: JSON.stringify({ enabled: true }) }),
+  if (!claudeCodeBaselineArmed(advisorConfig)) armClaudeCodeBaseline(advisorConfig);
+  return handleAdvisorRoutes({ url, req: new Request(url, { method: "PUT", body: JSON.stringify(patch) }),
     config: advisorConfig, deps: {}, version: "test", trustedLoopbackIngress: false, guiSessionIssuance: null,
     convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
     syncClaudeAgentDefsBestEffort: async () => {},
@@ -308,4 +311,111 @@ test("Advisor preserves a disk edit between admitted read and saver lock", async
   expect((await response!.json()).settings.timeoutMs).toBe(4321);
   expect(received).toBeDefined();
   expect(claudeCodeBaselineArmed(received!)).toBe(true);
+});
+
+// R2 probes: the real saver must recognize a committed grant as baseline, not pending intent.
+test.each(["consent", "enabled", "disabled", "subtree"])("Advisor keeps disk revocation (%s) on a later live save", async revoke => {
+  const hook = spyOn(advisorActivation, "activateAdvisor").mockImplementation(() => {});
+  restores.push(() => hook.mockRestore());
+  const initial = { ...fixture(), advisor: { model: "mock/test-model" } };
+  writeFileSync(join(root, "config.json"), JSON.stringify(initial));
+  const live = configModule.readConfigDiagnostics().config;
+  expect((await requestAdvisor(live, { enabled: true, contextSharingConsent: "v1" }))?.status).toBe(200);
+  const disk = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(disk.advisor.contextSharingConsent).toBe("v1");
+  if (revoke === "consent") delete disk.advisor.contextSharingConsent;
+  else if (revoke === "enabled") delete disk.advisor.enabled;
+  else if (revoke === "disabled") disk.advisor.enabled = false;
+  else delete disk.advisor;
+  writeFileSync(join(root, "config.json"), JSON.stringify(disk));
+  live.effortCap = "high";
+  configModule.saveConfigPreservingClaudeCode(live);
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(saved.advisor).toEqual(disk.advisor);
+  expect(saved.effortCap).toBe("high");
+  expect(advisorRunnable(resolveAdvisorSettings(live))).toBe(false);
+});
+
+test("Advisor adoption retains unrelated pending live intent and handles reset absence", async () => {
+  const hook = spyOn(advisorActivation, "activateAdvisor").mockImplementation(() => {});
+  restores.push(() => hook.mockRestore());
+  const live = configModule.readConfigDiagnostics().config;
+  armClaudeCodeBaseline(live);
+  live.effortCap = "high";
+  expect((await requestAdvisor(live, { reset: true }))?.status).toBe(200);
+  expect(live.advisor).toBeUndefined();
+  expect(live.effortCap).toBe("high");
+  const disk = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(disk.effortCap).toBe("low");
+  disk.effortCap = "medium";
+  disk.advisor = { enabled: false, timeoutMs: 4321 };
+  writeFileSync(join(root, "config.json"), JSON.stringify(disk));
+  configModule.saveConfigPreservingClaudeCode(live);
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(saved.effortCap).toBe("high");
+  expect(saved.advisor).toEqual(disk.advisor);
+});
+
+const nonObjectRoots = ["[]", '[{"operator-original":"synthetic-data-that-must-survive"}]', "null", "true", "42", '"operator-original"'];
+test.each(nonObjectRoots)("mutation reader refuses non-object authority %s", raw => {
+  writeFileSync(join(root, "config.json"), raw);
+  expect(() => readCliConfigForMutation({ passive: true })).toThrow(CliUsageError);
+  expect(() => readCliConfigForMutation()).toThrow(CliUsageError);
+  expect(readFileSync(join(root, "config.json"), "utf8")).toBe(raw);
+  expect(readdirSync(root).filter(name => name.startsWith("config.json.invalid-"))).toEqual([]);
+});
+for (const operation of cliOperations) {
+  test.each(nonObjectRoots)(`${operation} refuses non-object authority %s without changing bytes`, async raw => {
+    writeFileSync(join(root, "config.json"), raw);
+    const exit = spyOn(process, "exit").mockImplementation(() => { throw new Error("unexpected CLI exit"); });
+    restores.push(() => exit.mockRestore());
+    const work = operation === "model-add"
+      ? handleModels(["add", "openai", "review-array-model", "--json"], { findLiveProxy: async () => null })
+      : run(operation);
+    const outcome = await work.then(value => value, error => error);
+    expect(readFileSync(join(root, "config.json"), "utf8")).toBe(raw);
+    expect(readdirSync(root).filter(name => name.startsWith("config.json.invalid-"))).toEqual([]);
+    if (["set", "unset", "import", "effort"].includes(operation)) expect(outcome).toBe(2);
+    else expect(outcome).toBeInstanceOf(CliUsageError);
+    expect(existsSync(join(root, "config-mutation.sqlite"))).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+  });
+}
+
+test("Advisor refuses file diagnostics with an Anthropic provenance error", async () => {
+  const live = configModule.readConfigDiagnostics().config;
+  const raw = JSON.stringify({ ...fixture(), providers: { ...fixture().providers, anthropic: {
+    adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com",
+    anthropicOAuthInstance: "anthropic2",
+  } } });
+  writeFileSync(join(root, "config.json"), raw);
+  const diagnostics = configModule.readConfigDiagnostics({ passive: true });
+  expect(diagnostics.source).toBe("file");
+  expect(diagnostics.error).toContain("anthropicOAuthInstance");
+  const activation = spyOn(advisorActivation, "activateAdvisor").mockImplementation(() => {});
+  restores.push(() => activation.mockRestore());
+  const response = await requestAdvisor(live);
+  expect(response?.status).toBe(500);
+  expect(await response!.json()).toEqual({ error: { code: "write_failed", message: "The configuration could not be saved." } });
+  expect(readFileSync(join(root, "config.json"), "utf8")).toBe(raw);
+  expect(live.advisor).toBeUndefined();
+  expect(activation).not.toHaveBeenCalled();
+  expect(existsSync(join(root, "config-mutation.sqlite"))).toBe(false);
+});
+
+test.each(["models", "provider"])("%s dispatch reports invalid authority with standard exit two", async command => {
+  const raw = '{"providers":';
+  writeFileSync(join(root, "config.json"), raw);
+  const args = command === "models" ? [command, "add", "mock", "new-model", "--json"]
+    : [command, "add", "third", "--adapter", "openai-chat", "--base-url", "https://third.example/v1", "--json"];
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  restores.push(() => error.mockRestore());
+  const previousExit = process.exitCode;
+  try {
+    process.exitCode = 79;
+    expect(await dispatchCommand({ kind: "command", command, args }, { args } as CliDispatchDeps)).toBe(2);
+    expect(error.mock.calls).toEqual([["Error: config.json is invalid or unreadable; run ocx config validate and repair it before retrying. Nothing was saved."]]);
+    expect(readFileSync(join(root, "config.json"), "utf8")).toBe(raw);
+    expect(existsSync(join(root, "config-mutation.sqlite"))).toBe(false);
+  } finally { process.exitCode = previousExit; }
 });

@@ -200,7 +200,7 @@ export function subagentDefaultSyncEffective(
 }
 
 export function mergeConfigDefaults(parsed: unknown): unknown {
-  if (!parsed || typeof parsed !== "object") return parsed;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
   const defaults = getDefaultConfig();
   const raw = parsed as Record<string, unknown>;
   // Same absence-is-meaningful pin as the repair merge above.
