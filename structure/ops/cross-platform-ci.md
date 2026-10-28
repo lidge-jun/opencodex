@@ -43,6 +43,10 @@ gate` job is its exact complement on pull requests — it runs wherever the `ci`
 so every pull request scans exactly once and the coverage does not depend on an enumerated path
 list. The aggregate derives the same expectation from its `scoped` result.
 
+The macOS suite has four duration-weighted shards (`macos N/4`, `TEST_SHARD=N/4`), each capped
+at 20 minutes. With the control and widget/bundle job, `lane=all` requests six macOS jobs for five
+runner slots, so one queues. The fourth shard adds setup overhead while dividing the same suite.
+
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
