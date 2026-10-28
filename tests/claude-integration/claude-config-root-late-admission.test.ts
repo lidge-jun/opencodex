@@ -21,6 +21,7 @@ import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user
 import { writeServiceApiTokenFile } from "../../src/lib/service-secrets";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 const success: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const turn = () => new Promise<void>(done => setImmediate(done));
@@ -31,10 +32,12 @@ function deferred() {
 }
 const keys = ["OPENCODEX_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR", "OPENCODEX_ACL_TIMEOUT_MS", "OPENCODEX_ACL_VERIFY_EXISTING"] as const;
 let root: string;
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let previous: (string | undefined)[];
 let restores: Array<() => void>;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-config-writer-barrier-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   previous = keys.map(key => process.env[key]);
   process.env.OPENCODEX_HOME = root;
   process.env.CODEX_HOME = join(root, "codex");
@@ -53,6 +56,7 @@ beforeEach(() => {
 afterEach(async () => {
   await paths.flushConfigDirHardeningAndReaps(root);
   for (const restore of restores.reverse()) restore();
+  lifecycleLock.restore();
   setAsyncIcaclsRunnerForTests(null);
   setAsyncIcaclsBeltSchedulerForTests(null);
   setNowForTests(null);
