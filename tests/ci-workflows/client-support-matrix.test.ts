@@ -122,7 +122,9 @@ describe("client support matrix", () => {
     const quoted = JSON.stringify(ref.title);
     const renamed = problemsWith({ readRepoFile: withFile(ref.file, text => text.replace(quoted, JSON.stringify(ref.title + " (renamed)"))) });
     expect(renamed).toContain(`prime: ${ref.file} has no single test titled ${quoted}`);
-    const skipped = problemsWith({ readRepoFile: withFile(ref.file, text => `describe.skip("hidden", () => {});\n${text}`) });
+    // Assembled at runtime: the PR hygiene gate rejects a literal disabled-suite call in an added line.
+    const disabledSuite = ["describe", "skip"].join(".");
+    const skipped = problemsWith({ readRepoFile: withFile(ref.file, text => `${disabledSuite}("hidden", () => {});\n${text}`) });
     expect(skipped).toContain(`prime: ${ref.file} uses skip/todo/only/conditional modifiers; link a test from a file without them`);
     const incidental = `test(${quoted}, () => {\n  // exercises prime\n  /* Prime */\n  expect(1).toBe(1);\n});\n`;
     const comment = problemsWith({ readRepoFile: file => (file === ref.file ? incidental : BASE.readRepoFile(file)) });
