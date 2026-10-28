@@ -35,8 +35,10 @@ every caller, and reads only caches other paths filled:
   reads the admission snapshot from memory or its file without resolving the sign-in. A parsed CLI
   limit refusal is a `custom` window `refusal` with `exhausted: true` and source `estimated`.
 - Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the
-  `pooled` windows only of a provider that has no account rows (an API-key provider's credits, for
-  example); an in-band observed report is `header`, any other report is `measured`.
+  `pooled` windows only where account rows do not serve the configured provider: a provider with
+  no account rows (an API-key provider's credits, for example) or a per-account provider configured
+  with an API key (see [Pooled windows](#pooled-windows)). An in-band observed report is `header`,
+  any other report is `measured`.
 
 `tests/server/quota-pool-relay.test.ts` reads the route on the Home, over the link relay and over
 the hub relay against a pool account with an expired token and an empty provider-report cache. It
