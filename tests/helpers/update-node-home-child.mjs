@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createUpdateServiceHomePolicy, parseUpdateWorkerHome, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "../../src/update/service-home-policy.mjs";
 import { inspectPackageRuntimeLiveness, planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../../src/update/tray-update-plan.mjs";
+import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../../src/update/update-failure-guidance.mjs";
 
 const [home, observed, ...argv] = process.argv.slice(2);
 if (!home || process.env.OPENCODEX_HOME !== home) throw new Error("isolated fixture home required");
@@ -47,8 +48,10 @@ const dependencies = {
   probeProxyLiveness: () => "dead", hasPendingTeardownIn: () => false,
   acquireOwnershipMutationLease: () => ({ token: "fixture", release: () => trace.push("release") }),
   delegatedOwnershipMutationToken: null,
-  transactionalNpmUpdate: () => { trace.push("replacement"); packageReplaced = true; return { ok: true }; },
+  // The launcher imports the synchronous transaction as transactionalNpmUpdateSync.
+  transactionalNpmUpdateSync: () => { trace.push("replacement"); packageReplaced = true; return { ok: true }; },
   transactionalNpmUpdateAsync: async () => { trace.push("replacement"); packageReplaced = true; return { ok: true }; },
+  manualUpdateFailureGuidance, npmUpdateFailureGuidance,
   launcherUsableAfterNpmUpdate: () => observed !== "post-refusal-unverified",
   launcherStartHint: () => "fixture manual start",
 };

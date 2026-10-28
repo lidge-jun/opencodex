@@ -1,21 +1,22 @@
 // Auxiliary regression lint over known patterns, not a security boundary or
 // completeness proof. Runtime mutation guards enforce update authority.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API } from "typescript/unstable/sync";
+import { lintTest, openUpdateLintParser } from "../helpers/update-lint-parser";
 import { rawMutationViolations } from "../helpers/update-mutation-scanner";
 import { capabilityControlCalls } from "../helpers/update-helper-inventory";
 import { repoPath } from "../helpers/repo-root";
 
-const api = new API();
-afterAll(() => api.close());
+const api = openUpdateLintParser();
+const lint = lintTest(api);
+afterAll(() => api?.close());
 function inspect(text: string, target = "src/update/job-pinned-start.ts") {
   const dir = mkdtempSync(join(tmpdir(), "ocx-closed-policy-")), file = join(dir, "probe.ts");
   writeFileSync(file, text);
-  const snapshot = api.updateSnapshot({ openFiles: [file] });
+  const snapshot = api!.updateSnapshot({ openFiles: [file] });
   try {
     const source = snapshot.getDefaultProjectForFile(file)!.program.getSourceFile(file)!;
     return { scanner: rawMutationViolations(source, target), inventory: capabilityControlCalls(source, target) };
@@ -56,7 +57,7 @@ const probes = [
   'let load; load = require; let io; io = load("node:fs"); io.cpSync(source,target);',
 ];
 for (const probe of probes) for (const mode of ["scanner", "inventory"] as const)
-  test(`${mode} rejects known acquisition pattern: ${probe}`, () => {
+  lint(`${mode} rejects known acquisition pattern: ${probe}`, () => {
     expect(inspect(probe, "bin/ocx.mjs")[mode].length).toBeGreaterThan(0);
   });
 
@@ -66,7 +67,7 @@ for (const probe of [
   'import { setTimeout } from "node:timers";',
   'export * from "./unreviewed-helper";',
   'import "./index";',
-]) test("static imports/exports require explicit admission: " + probe, () => {
+]) lint("static imports/exports require explicit admission: " + probe, () => {
   expect(inspect(probe).scanner.length).toBeGreaterThan(0);
 });
 
@@ -74,21 +75,21 @@ for (const target of ["src/update/mutation-guard.mjs", "src/update/guarded-runti
   for (const probe of ['import.meta.require("node:fs").cpSync(source,target);',
     'const load = require; load("node:fs");', 'Reflect.apply(operation,null,args);',
     'await import("node:vm");', 'import { runInThisContext } from "node:vm";'])
-    test("wrapper lint rejects known import/root pattern: " + target + ": " + probe, () => {
+    lint("wrapper lint rejects known import/root pattern: " + target + ": " + probe, () => {
       expect(inspect(probe, target).scanner.length).toBeGreaterThan(0);
     });
 
-test("inventory preserves loader-result identity through destructuring", () => {
+lint("inventory preserves loader-result identity through destructuring", () => {
   const result = inspect('const load = require; const io = load("node:fs"); const { cpSync: copy } = io; copy(source,target);');
   expect(result.inventory.map(node => node.getText())).toContain("copy(source,target)");
 });
 
-test("wrapper root slots reject extra occurrences", () => {
+lint("wrapper root slots reject extra occurrences", () => {
   expect(inspect('function materializeMutationData(value){ Reflect.ownKeys(value); Reflect.ownKeys(value); }',
     "src/update/mutation-guard.mjs").scanner.length).toBeGreaterThan(0);
 });
 
-test("deferred imports admit only reviewed bindings, contexts and counts", () => {
+lint("deferred imports admit only reviewed bindings, contexts and counts", () => {
   const binding = 'const { guardedStartWindowsTray } = await import("./guarded-tray-ops");';
   expect(inspect('async function runUpdate(){' + binding.repeat(3) + '}', "src/update/index.ts").scanner).toEqual([]);
   for (const body of [binding.repeat(4), 'const runtime = await import("./guarded-tray-ops");',
@@ -97,7 +98,7 @@ test("deferred imports admit only reviewed bindings, contexts and counts", () =>
   expect(inspect('async function other(){' + binding + '}', "src/update/index.ts").scanner.length).toBeGreaterThan(0);
 });
 
-test("production resolver resolves default and alternate package roots without executing a package", () => {
+lint("production resolver resolves default and alternate package roots without executing a package", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-resolver-"));
   try {
     const source = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
@@ -120,7 +121,7 @@ test("production resolver resolves default and alternate package roots without e
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("resolver-only site admits resolution and rejects escape, aliases and a second factory", () => {
+lint("resolver-only site admits resolution and rejects escape, aliases and a second factory", () => {
   const prefix = 'import { createRequire } from "node:module"; function bunBinDir(launcherPath){';
   const factory = 'const resolver = createRequire(launcherPath || import.meta.url);';
   expect(inspect(prefix + factory + 'return dirname(resolver.resolve("bun/package.json"));}', "bin/ocx.mjs").scanner).toEqual([]);

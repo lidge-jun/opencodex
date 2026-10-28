@@ -1,18 +1,19 @@
 // Scanner/inventory cases are best-effort known-pattern lint, not a security
 // boundary or completeness proof. The runtime cases exercise the authority guard.
 import { afterAll, expect, test } from "bun:test";
-import { API } from "typescript/unstable/sync";
+import { lintTest, openUpdateLintParser } from "../helpers/update-lint-parser";
 import { repoPath } from "../helpers/repo-root";
 import { createUpdateServiceHomePolicy } from "../../src/update/service-home-policy.mjs";
 import { files, rawMutationViolations, updateModuleFiles } from "../helpers/update-mutation-scanner";
 import { helperControlInventory } from "../helpers/update-helper-inventory";
 import { helperControlContracts } from "../helpers/update-helper-control-contracts";
 
-const api = new API();
-afterAll(() => api.close());
-test("known-pattern lint finds no unclassified update primitive references", () => {
+const api = openUpdateLintParser();
+const lint = lintTest(api);
+afterAll(() => api?.close());
+lint("known-pattern lint finds no unclassified update primitive references", () => {
   const scanFiles = ["bin/ocx.mjs", ...updateModuleFiles()];
-  const snapshot = api.updateSnapshot({openFiles:scanFiles.map(f=>repoPath(f))});
+  const snapshot = api!.updateSnapshot({openFiles:scanFiles.map(f=>repoPath(f))});
   const failures: string[]=[];
   try { for (const file of scanFiles) {
     const source=snapshot.getDefaultProjectForFile(repoPath(file))!.program.getSourceFile(repoPath(file))!;
@@ -45,8 +46,8 @@ test("confirmed service disappearance skips service control while retaining fore
   expect(restricted.authorizeMutation("runtime")).toBe(false); expect(restricted.authorizeMutation("package-publish")).toBe(false);
 });
 
-test("known-pattern helper inventory has explicit control-site contracts", () => {
-  const { helpers, sites, policyViolations } = helperControlInventory(api);
+lint("known-pattern helper inventory has explicit control-site contracts", () => {
+  const { helpers, sites, policyViolations } = helperControlInventory(api!);
   expect(policyViolations).toEqual([]);
   const matched = new Set<number>();
   for (const [file, context, prefix, count, contract] of helperControlContracts) {

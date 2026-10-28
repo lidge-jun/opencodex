@@ -1,20 +1,21 @@
 // Best-effort known-pattern regression lint, not a security boundary or
 // completeness proof. Runtime mutation guards enforce update authority.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API } from "typescript/unstable/sync";
+import { lintTest, openUpdateLintParser } from "../helpers/update-lint-parser";
 import { rawMutationViolations, updateModuleFiles } from "../helpers/update-mutation-scanner";
 import { capabilityControlCalls } from "../helpers/update-helper-inventory";
 
 // Reuse the parser service; each mutant still gets its own file and snapshot.
 // Repeated compiler subprocess startup is unrelated to the scanner contract.
-const api = new API();
-afterAll(() => api.close());
+const api = openUpdateLintParser();
+const lint = lintTest(api);
+afterAll(() => api?.close());
 function scan(text: string, mode: "scanner" | "inventory" = "scanner", target = "src/update/job-pinned-start.ts") {
   const dir=mkdtempSync(join(tmpdir(),"ocx-raw-mutation-")), file=join(dir,"mutant.ts");
-  writeFileSync(file,text); const snapshot=api.updateSnapshot({openFiles:[file]});
+  writeFileSync(file,text); const snapshot=api!.updateSnapshot({openFiles:[file]});
   try {
     const source = snapshot.getDefaultProjectForFile(file)!.program.getSourceFile(file)!;
     return mode === "inventory" ? capabilityControlCalls(source).map(node => node.getText()) : rawMutationViolations(source, target);
@@ -24,7 +25,7 @@ function scan(text: string, mode: "scanner" | "inventory" = "scanner", target = 
 // Reviewer round-10 named-object variants: every raw call fails regardless of
 // where its options came from. Runtime tests separately prove wrapped refusal.
 for (const options of ["startOptions", "{ ...startOptions }", "{ stdio: startOptions.stdio }"])
-  test("raw named-options mutant is rejected: "+options,()=>{
+  lint("raw named-options mutant is rejected: "+options,()=>{
     const mutant='const startOptions = { get stdio(){ return preparePinnedStartStdio(); } }; if(authorizeMutation("runtime")) spawn(cmd.bin,cmd.args,'+options+');';
     expect(scan(mutant).length).toBeGreaterThan(0);
   });
@@ -103,7 +104,7 @@ for (const text of [
   'process.kill(pid);', 'fs.rename(from,to);', 'fs.unlink(state);', 'killProxy(pid);',
   'spawn(file,args,{get stdio(){return blocking();}});',
   'if(authorizeMutation("runtime")){await ready();spawn(file,args,options);}',
-]) test("scanner rejects raw reference/alias: "+text,()=>expect(scan(text).length).toBeGreaterThan(0));
+]) lint("scanner rejects raw reference/alias: "+text,()=>expect(scan(text).length).toBeGreaterThan(0));
 
 for (const text of [
   'await Bun.file(target).delete();',
@@ -120,26 +121,26 @@ for (const text of [
   'import { futureMutation as mutate } from "node:fs"; const alias = mutate; alias(target);',
   'import * as sockets from "node:net"; sockets.createConnection(options);',
   'process.futureControl(target);',
-]) test("inventory includes sensitive capability acquisition/call: " + text, () => expect(scan(text, "inventory").length).toBeGreaterThan(0));
+]) lint("inventory includes sensitive capability acquisition/call: " + text, () => expect(scan(text, "inventory").length).toBeGreaterThan(0));
 
-test("explicit read-only imports and runtime observations remain allowed", () => {
+lint("explicit read-only imports and runtime observations remain allowed", () => {
   expect(scan('import { readFileSync as read, statSync } from "node:fs"; import { readFile } from "node:fs/promises"; import { sleep } from "bun"; read(target); statSync(target); await readFile(target); await sleep(1); process.cwd(); process.getuid?.(); process.env.HOME; Bun.sleep(1);')).toEqual([]);
   expect(scan('import type { FileHandle } from "node:fs/promises"; import type { ChildProcess } from "node:child_process"; type T = typeof Bun;')).toEqual([]);
 });
 
-test("exact log exemptions reject another target, descriptor, or occurrence", () => {
+lint("exact log exemptions reject another target, descriptor, or occurrence", () => {
   const prefix = 'import { closeSync, mkdirSync, openSync, writeSync } from "node:fs"; function spawnWorkerPinnedStart(){';
   expect(scan(prefix + 'closeSync(logFd);}', "scanner")).toEqual([]);
   expect(scan(prefix + 'openSync(livePackage,"w");}', "scanner").length).toBeGreaterThan(0);
   expect(scan(prefix + 'closeSync(otherFd);}', "scanner").length).toBeGreaterThan(0);
   expect(scan(prefix + 'closeSync(logFd); closeSync(logFd); closeSync(logFd);}', "scanner")).toContain('extra allowlisted capability occurrence: closeSync(logFd)');
 });
-test("wrapped options require no static argument grammar",()=>{
+lint("wrapped options require no static argument grammar",()=>{
   expect(scan('guardedSpawn(authorizeMutation,"runtime",cmd.bin,cmd.args,startOptions);')).toEqual([]);
   expect(scan('guardedSpawn(authorizeMutation,"runtime",cmd.bin,cmd.args,{ ...startOptions });')).toEqual([]);
 });
 
-test("update inventory descends into nested module directories", () => {
+lint("update inventory descends into nested module directories", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-update-inventory-"));
   try {
     mkdirSync(join(root, "nested", "deeper"), { recursive: true });

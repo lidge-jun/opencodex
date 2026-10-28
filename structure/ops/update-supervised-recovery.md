@@ -260,6 +260,8 @@ probe and cleanup exceptions. These snapshots confer no runtime authority.
 The helper inventory scans update modules and the launcher's direct source imports using known
 function/call/count patterns; detected unclassified sites fail the regression check. The launcher
 resolver-body snapshot and `tests/update/update-capability-policy.test.ts` are likewise auxiliary.
+These lint cases parse through TypeScript 7's sync client, which cannot start under Bun on POSIX
+(`tests/helpers/update-lint-parser.ts`); there they are skipped, while every runtime guard case runs.
 `tests/update/update-mutation-scanner.test.ts` rejects raw named-options, spread and member-read
 mutants, native import aliases, Bun shell imports/references and tagged-template execution.
 It also rejects direct worker/process and file-write primitives outside exact reviewed
