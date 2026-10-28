@@ -1,4 +1,5 @@
 {
+  "xai-additional-tools.test.ts": "providers/xai",
   "free-directory-runcrate.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro"
 }

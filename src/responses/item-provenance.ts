@@ -30,16 +30,23 @@ export function isHistoricalItem(item: unknown): boolean {
   );
 }
 
+/** A live marker survives even when a rewrite removes every historical item. */
+export function hasItemProvenance(item: unknown): boolean {
+  return typeof item === "object" && item !== null
+    && typeof (item as Record<string | symbol, unknown>)[REPLAY_HISTORICAL_ITEM] === "boolean";
+}
+
 /**
- * Tag the initial slice of items [0 ... prefixLength) as historical.
+ * Tag both historical and live items so an empty replay prefix remains distinguishable
+ * from an input that has never been tagged.
  */
 export function tagHistoricalInputItems(input: unknown[], prefixLength: number): unknown[] {
   if (!Array.isArray(input)) return input;
   const prefix = Math.min(input.length, Math.max(0, Math.trunc(prefixLength)));
   if (prefix <= 0) return input;
   return input.map((item, index) => {
-    if (index < prefix && isPlainObject(item)) {
-      return markHistoricalItem({ ...item });
+    if (isPlainObject(item)) {
+      return { ...item, [REPLAY_HISTORICAL_ITEM]: index < prefix };
     }
     return item;
   });
@@ -52,7 +59,7 @@ export function tagHistoricalInputItems(input: unknown[], prefixLength: number):
  */
 export function computeReplayPrefixLength(input: unknown[], fallback = 0): number {
   if (!Array.isArray(input)) return fallback;
-  const hasProvenance = input.some(isHistoricalItem);
+  const hasProvenance = input.some(hasItemProvenance);
   if (!hasProvenance) {
     return Math.min(input.length, Math.max(0, Math.trunc(fallback)));
   }

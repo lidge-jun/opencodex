@@ -247,7 +247,19 @@ describe("xAI Responses additional_tools promotion", () => {
     expect(body.tools).toBeArray();
     expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
   });
-test("Finding 1: historical declarations do not deduplicate current declarations before promotion", () => {
+  test.each(["configuration_update", "reasoning"])("Finding 3: removing the entire %s replay prefix preserves current tools", type => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      dropResponsesReasoningItems: true,
+    };
+    const { body } = build(provider, {
+      input: [{ type, content: "historical" }, { type: "additional_tools", tools: [lookup] }],
+    }, 1);
+    expect(body.tools).toEqual([lookup]);
+  });
+
+  test("Finding 1: historical declarations do not deduplicate current declarations before promotion", () => {
     const xaiProvider: OcxProviderConfig = {
       adapter: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
@@ -306,6 +318,16 @@ test("Finding 1: historical declarations do not deduplicate current declarations
     const { body } = build(xaiProvider, raw, 1);
     expect(body.tools).toBeArray();
     expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("Finding 1: a historical bare declaration does not suppress the live functions namespace", () => {
+    const { body } = build({ adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" }, {
+      input: [
+        { type: "additional_tools", tools: [lookup] },
+        { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [lookup] }] },
+      ],
+    }, 1);
+    expect(body.tools).toEqual([lookup]);
   });
 
   test("Finding 3: synthesizing missing historical tool output does not reactivate retired tools", () => {

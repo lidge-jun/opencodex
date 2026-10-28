@@ -8,7 +8,7 @@ import {
   XaiToolSchemaCompatibilityError,
 } from "../xai-tool-schema";
 import { isPlainObject } from "./internal";
-import { isHistoricalItem } from "../../responses/item-provenance";
+import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
@@ -214,7 +214,7 @@ export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: num
   const currentTurnStart = Number.isFinite(replayPrefixLength)
     ? Math.max(0, Math.trunc(replayPrefixLength!))
     : 0;
-  const hasProvenance = body.input.some(isHistoricalItem);
+  const hasProvenance = body.input.some(hasItemProvenance);
 
   const currentAdditionalToolsIndex = body.input.findIndex((item, index) => {
     const isHistorical = hasProvenance ? isHistoricalItem(item) : (index < currentTurnStart);

@@ -1,4 +1,4 @@
-import { isHistoricalItem } from "../responses/item-provenance";
+import { hasItemProvenance, isHistoricalItem } from "../responses/item-provenance";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -57,7 +57,7 @@ export function promoteResponsesAdditionalTools(
   const currentTurnStart = Number.isFinite(replayPrefixLength)
     ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength)))
     : 0;
-  const hasProvenance = body.input.some(isHistoricalItem);
+  const hasProvenance = body.input.some(hasItemProvenance);
   let changed = false;
   for (const [index, item] of body.input.entries()) {
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {

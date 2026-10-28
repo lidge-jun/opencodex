@@ -207,7 +207,9 @@ Codex Desktop packages client tools inside an `additional_tools` input item; str
 rejecting non-ResponseItem input types—including official xAI endpoints (`api.x.ai`,
 `cli-chat-proxy.grok.com`), OpenCode Go, and custom providers opting in with
 `promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper
-from `input` while preserving turn boundaries via `_replayPrefixLen`.
+from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair;
+boundaries survive removals, insertions and adjacency rewrites, including removal of every historical item.
+Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets; loaded search tools join the live catalog or top-level tools.
 
 Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening it:
 a root `oneOf` whose branches differ in one property becomes that property's `oneOf`, or its `anyOf`
