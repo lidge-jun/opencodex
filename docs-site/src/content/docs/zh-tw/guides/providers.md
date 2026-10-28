@@ -348,7 +348,7 @@ Replay 需要明確的 `store: false`、完整輸入且僅含用戶端執行的�
 
 在標準 `opencode-zen` 提供者中，使用 API 金鑰驗證及官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 時，Gemini 會在預設 `googleMode: ai-studio` 下自動使用 Google 原生 API。Zen 模型 ID 維持不變，包括沒有 `-tiered` 後綴的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影響。載入已儲存的設定時，僅忽略這些原生模型符合條件的舊 Chat/Responses 覆寫設定，以及符合條件的 Responses 專用 `image_generation` 託管工具偏好。自訂提供者、非金鑰驗證路由及其他偏好維持不變。
 
-**已移除 `opencode-free` 支援。** OpenCode 上游免費層級的限制使所有模型都回傳 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。載入既有設定時，會在記憶體中停用相關項目與相依的模型參照，每個程序只警告一次，不修改檔案。如果它原為預設供應商，將以標準 OpenAI OAuth 路徑作為預設。請使用 `opencode-go`、需要 key 的 `opencode-zen` 或其他供應商。[OpenCode Zen 條款](https://opencode.ai/docs/zen/)。
+**已移除 `opencode-free` 支援。** OpenCode 上游免費層級的限制使所有模型都回傳 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。載入既有設定時，會在記憶體中停用相關項目與相依的模型參照，每個程序只警告一次，載入時不修改檔案。下次儲存設定時，這些項目及參照將從 config.json 中移除。儲存前，原始檔案會自動保留到同目錄的 `config.json.pre-opencode-free-removal.bak`；如果該名稱已被占用，則使用唯一的同層檔名。位元組完全相同的獨立副本僅在能夠驗證其僅限擁有者存取時才會重用，否則會在旁邊寫入新的受保護副本。既有檔案不會覆寫。首次載入重疊時，可能留下多個相同的受保護副本。警告會顯示復原副本的路徑。如需復原（例如降級後），請將該副本複製回 config.json 並覆寫。如果自動複製失敗，警告會提示立即複製 config.json。如果它原為預設供應商，將以標準 OpenAI OAuth 路徑作為預設。請使用 `opencode-go`、需要 key 的 `opencode-zen` 或其他供應商。[OpenCode Zen 條款](https://opencode.ai/docs/zen/)。 被動讀取只套用記憶體中的停用，不建立副本或顯示警告。
 
 保留正常的 Claude Desktop 指派與預設值。來源模型允許清單變空的規則會停用；注入模型遭移除時，也會停用原生子代理同步。後續儲存設定時不會還原已移除的參照，並會保留正常的同時編輯。
 

@@ -19,7 +19,6 @@ import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } f
 import { ConfigWritePublishedError, persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
 import { configDiagnosticsFromRaw, readConfigDiagnostics, validateConfigCandidate } from "./diagnostics";
 import { normalizePersistedClaudeCode } from "./load-degrade";
-import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
 import { reconcileApiKeys } from "./api-key-reconcile";
 import { captureLiveTopologyBaseline, LIVE_TOPOLOGY_KEYS, projectLiveTopology } from "./live-topology";
 
@@ -531,8 +530,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
-    const onDisk = readRawConfigJson();
-    sanitizeRemovedOpenCodeFreeForLoad(onDisk);
+    const onDisk = readRawConfigJson(true);
     const pauseBefore = snapshotAutoPauseFingerprints(config);
     const baseline = liveConfigBaseline.get(config);
     let diskDeletedKeys = new Set<string>();

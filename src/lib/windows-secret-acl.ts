@@ -45,6 +45,7 @@ import {
   type SubprocessDeadlineScheduler,
 } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
+import { verifyWindowsPrivateEntries, verifyWindowsPrivateEntriesAsync } from "./windows-owner-acl";
 import {
   cachedCurrentWindowsIdentity,
   resolveCurrentWindowsPrincipal,
@@ -1009,10 +1010,17 @@ function existingAclAlreadyCompliant(targetPath: string, directory: boolean, dea
     const remaining = deadline - nowFn();
     if (remaining <= 0) return false;
     const result = icaclsRunner([targetPath], remaining);
-    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+    return result.success && (existingAclIsCompliant(targetPath, directory, result.stdout, identity.name)
+      || verifyWindowsPrivateEntries([{ path: targetPath, directory }], deadline - nowFn()));
   } catch {
     return false;
   }
+}
+
+/** Fresh owner/protected-DACL verification; never use the name-only shortcut, harden or trust a memo. */
+export function verifySecretPathAcl(targetPath: string): boolean {
+  if (!windowsSecretAclApplies()) return false;
+  return verifyWindowsPrivateEntries([{ path: targetPath, directory: false }], resolveHardenDeadlineMs());
 }
 
 async function existingAclAlreadyCompliantAsync(
@@ -1027,7 +1035,8 @@ async function existingAclAlreadyCompliantAsync(
     const remaining = deadline - nowFn();
     if (remaining <= 0) return false;
     const result = await awaitAsyncIcaclsRunner([targetPath], remaining);
-    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+    return result.success && (existingAclIsCompliant(targetPath, directory, result.stdout, identity.name)
+      || await verifyWindowsPrivateEntriesAsync([{ path: targetPath, directory }], deadline - nowFn()));
   } catch {
     return false;
   }
@@ -1348,7 +1357,7 @@ function hardenEntry(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
-  // The owner-only compliance probe cannot vouch for a shape that also needs read ACEs.
+  // Secret compliance does not prove the extra read grants required by a staged payload.
   if (extraReadAces.length === 0 && existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);

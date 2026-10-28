@@ -10,6 +10,7 @@ import { atomicWriteFile, isMissingPathError } from "./atomic-write";
 import { getConfigPath } from "./paths";
 import { configRebaseDeletionKeys, projectConfigRebaseProvenance } from "./rebase-provenance";
 import { clientConnectionSchema } from "./schema/leaf-validators";
+import { projectRemovedOpenCodeFreeSnapshot } from "./removed-opencode-free-backup";
 
 /** The requested bytes are current; callers must not roll back only live state. */
 export class ConfigWritePublishedError extends Error {
@@ -20,13 +21,15 @@ export class ConfigWritePublishedError extends Error {
 }
 
 /** The literal file, with no schema merge or default injection. */
-export function readRawConfigJson(): Record<string, unknown> | undefined {
+export function readRawConfigJson(projectRetired = false): Record<string, unknown> | undefined {
   try {
     const configPath = getConfigPath();
     if (!existsSync(configPath)) return undefined;
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
+    const bytes = readFileSync(configPath);
+    const raw = bytes.toString("utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    if (projectRetired) projectRemovedOpenCodeFreeSnapshot(parsed, { path: configPath, bytes });
     return parsed as Record<string, unknown>;
   } catch {
     // Unreadable or corrupt: behave exactly as before. Never fail a save over protection.

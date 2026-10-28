@@ -353,3 +353,8 @@ export async function verifyWindowsEntriesAclAsync(entries: readonly WindowsAclE
     return result.success && !result.timedOut && windowsEntriesAclMatches(result.stdout, entries);
   } catch { return false; }
 }
+
+/** Async private-only verification for hardening paths that must yield; every entry uses the "private" policy. */
+export async function verifyWindowsPrivateEntriesAsync(entries: readonly WindowsPrivateEntry[], timeoutMs: number): Promise<boolean> {
+  return verifyWindowsEntriesAclAsync(entries.map(({ path, directory }) => ({ path, directory, policy: "private" as const })), timeoutMs);
+}
