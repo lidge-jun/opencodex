@@ -19,7 +19,8 @@ export function attachExportAliasSelectors(config: OcxConfig, input: readonly Ex
   // A roster may predate a config/cache change during discovery. Candidate
   // metadata is evidence to refresh, never authority to reuse across that change.
   const models = input.map(({ aliasNamespaced: _priorCandidate, ...model }) => model);
-  const aliases = new Map(Object.entries(config.providers).map(([name, provider]) => [name, {
+  // A minimal or partially repaired config can omit providers; it then has no aliases.
+  const aliases = new Map(Object.entries(config.providers ?? {}).map(([name, provider]) => [name, {
     namespace: effectiveProviderAlias(name, provider, config) ?? name,
     models: effectiveModelAliases(config, provider, knownModelIdsForProvider(name, provider, config)),
   }]));
