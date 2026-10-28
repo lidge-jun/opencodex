@@ -31,8 +31,14 @@ export interface SelectedRuntimeResult {
 }
 
 const TEXT_FIELDS = ["client", "product", "clientVersion", "opencodexVersion", "verifiedOn", "scenario", "evidence"] as const;
-// Characters that would break or inject Markdown/HTML in a table cell or link label.
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f|[\]<>`()\\]/;
+// Allowlist for text cells: letters (with combining marks), digits, spaces and plain punctuation. It keeps
+// out Markdown emphasis, table delimiters, links, HTML entities, and control or bidirectional characters,
+// so the rendered cell reads exactly as the recorded claim.
+const SAFE_TEXT = /^[\p{L}\p{M}\p{N} .,:;/+'’!?#%=-]+$/u;
+// Allowlist for evidence links: an https URL with a named host and no characters that are significant in a
+// Markdown table or link destination.
+const SAFE_URL = /^https:\/\/[A-Za-z0-9.-]+(?::[0-9]+)?(?:\/[A-Za-z0-9._~%!$&'*+,;=:@/-]*)?(?:\?[A-Za-z0-9._~%!$&'*+,;=:@/?-]*)?(?:#[A-Za-z0-9._~%!$&'*+,;=:@/?-]*)?$/;
+const LOCAL_HOST_SUFFIXES = [".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".test", ".example", ".invalid", ".arpa"];
 
 function isRealDate(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -43,7 +49,7 @@ function isRealDate(value: string): boolean {
 }
 
 function evidenceProblem(value: string): string | undefined {
-  if (/[\s<>()\u0000-\u001f\u007f]/.test(value)) return "contains whitespace, angle brackets, parentheses or control characters";
+  if (/[\s<>()|[\]`\\\u0000-\u001f\u007f]/.test(value)) return "contains whitespace or characters that break the table (| [ ] ( ) < > ` \\)";
   let url: URL;
   try {
     url = new URL(value);
@@ -52,7 +58,12 @@ function evidenceProblem(value: string): string | undefined {
   }
   if (url.protocol !== "https:") return "must use https";
   if (url.username || url.password) return "must not carry credentials";
-  if (!url.hostname.includes(".")) return "must name a public host";
+  if (!SAFE_URL.test(value)) return "may only use letters, digits and URL punctuation that is safe in a Markdown link";
+  const host = url.hostname.toLowerCase();
+  const ipLiteral = /^[0-9.]+$/.test(host) || host.startsWith("[");
+  if (ipLiteral || !host.includes(".") || host === "localhost" || LOCAL_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+    return "must name a public host (not an IP address or a local or internal name)";
+  }
   return undefined;
 }
 
@@ -97,8 +108,8 @@ export function parseRuntimeResults(text: string | undefined, knownIds: Readonly
       if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
         problems.push(`${at}.${field} must be a non-empty string without surrounding whitespace`);
         valid = false;
-      } else if (field !== "evidence" && UNSAFE_TEXT.test(value)) {
-        problems.push(`${at}.${field} contains characters that cannot appear in the table (| [ ] < > \` ( ) \\ or control characters)`);
+      } else if (field !== "evidence" && !SAFE_TEXT.test(value)) {
+        problems.push(`${at}.${field} may only use letters, digits, spaces and . , : ; / + ' ! ? # % = -`);
         valid = false;
       }
     }
@@ -128,6 +139,11 @@ export function parseRuntimeResults(text: string | undefined, knownIds: Readonly
   return { results, problems };
 }
 
+/** Locale-independent total order (UTF-16 code units), so selection never depends on the runtime locale. */
+function byCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** The most recently verified result per client; ties break on product, versions and scenario. */
 export function selectRuntimeResults(results: readonly RuntimeResult[]): Map<string, SelectedRuntimeResult> {
   const byClient = new Map<string, RuntimeResult[]>();
@@ -135,11 +151,11 @@ export function selectRuntimeResults(results: readonly RuntimeResult[]): Map<str
   const selected = new Map<string, SelectedRuntimeResult>();
   for (const [client, list] of byClient) {
     const ordered = [...list].sort((a, b) =>
-      b.verifiedOn.localeCompare(a.verifiedOn)
-      || a.product.localeCompare(b.product)
-      || a.clientVersion.localeCompare(b.clientVersion)
-      || a.opencodexVersion.localeCompare(b.opencodexVersion)
-      || a.scenario.localeCompare(b.scenario));
+      byCodeUnits(b.verifiedOn, a.verifiedOn)
+      || byCodeUnits(a.product, b.product)
+      || byCodeUnits(a.clientVersion, b.clientVersion)
+      || byCodeUnits(a.opencodexVersion, b.opencodexVersion)
+      || byCodeUnits(a.scenario, b.scenario));
     selected.set(client, { result: ordered[0]!, others: ordered.length - 1 });
   }
   return selected;
