@@ -30,6 +30,10 @@ ocx start --socks5-off
 
 停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
+對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
+
+要在還原後再次從 Codex 使用 Home，請先執行 `ocx start`（已安裝服務時使用 `ocx service start`），再執行 `ocx sync --restart-codex`。僅啟動不會重新套用路由；sync 不會重新建立 Grok 設定區塊。若在停止服務前無法確認連線擁有權，停止 API 會回傳 HTTP 409 與 `sharedTeardown: "refused"`，並讓 Proxy 與服務管理員繼續執行。請等待進行中的連線或中斷連線作業完成後再試。
+
 ### `ocx restart`
 
 執行 `stop` 後接 `ensure`：停止代理／服務、還原原生 Codex、在背景啟動代理，並將即時連接埠同步回 Codex。
@@ -160,6 +164,8 @@ ocx status --json
 
 當命令在 Codex 應用程式內部執行時，重啟會交給分離的 helper，此工作階段會隨應用程式一起結束。
 
+**指定來源的同步。** `ocx sync --expect-link <linkId>`（Remote Link Child）與 `ocx sync --expect-hub-key <apiKeyId>`（hub 用戶端）只有在本機仍連線到該連結或使用該金鑰時才會同步。否則不會變更任何內容，也不會同步本機供應商，指令以結束碼 5 結束，stderr 最後一行為 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`。格式錯誤或重複的旗標以結束碼 2 結束。詳情請見[英文參考](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)。
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 使 Codex 的本機模型選擇器快取失效，使其從現用的 opencodex 目錄重建。與 `ocx sync` 相同的過時 `app-server` 警告與可選重啟旗標適用。
@@ -277,7 +283,7 @@ Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 s
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。在啟用管理 ingress 的 hub 上，開啟的是 `http://127.0.0.1:<管理埠>`。
+在 `http://127.0.0.1:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。在啟用管理 ingress 的 hub 上，開啟的是 `http://127.0.0.1:<管理埠>`。
 
 ## 更新
 

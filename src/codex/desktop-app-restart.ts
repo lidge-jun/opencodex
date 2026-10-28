@@ -41,6 +41,7 @@ import { darwinDesktopAppAdapter, darwinDefaultExec } from "./desktop-app/darwin
 import { linuxDesktopAppAdapter, linuxDefaultExec } from "./desktop-app/linux";
 import { windowsDesktopAppAdapter, windowsDefaultExec } from "./desktop-app/windows";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
+import { beginCodexCliSelectionParentWrite } from "./cli-update-selection-gate";
 
 export type { DesktopAppExecOptions } from "./desktop-app/types";
 
@@ -90,6 +91,7 @@ export type DesktopAppRestartReason =
   | "restart_in_flight"
   | "handoff_started"
   | "relaunch_context_failed"
+  | "selection_mutation_busy"
   | "targets_survived"
   | "relaunch_failed";
 
@@ -248,11 +250,27 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   // first quits and relaunches, the second sees the freshly started shell as a target
   // and kills it. Own-pid reentrancy means the wp5 helper runs this same step and
   // finds the lock its caller made out to it.
-  const acquisition = acquireDesktopRestartLock(io.lock);
-  if (!acquisition.acquired) return skipped("restart_in_flight");
+  // A cli-update worker holds this gate from its final process scan through
+  // installer termination and readback, so no new shell may appear inside. The
+  // admission check runs BEFORE the restart lock and every mutation this
+  // function performs: a busy refusal must leave the app, the lock and any
+  // handoff all untouched. Held through relaunch or a failed attempt's
+  // cleanup; a handoff helper's own delayed descendants stay the documented
+  // pre-existing residual.
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) return skipped("selection_mutation_busy");
 
   let handedOff = false;
+  // The lock attempt sits inside the protected scope too: a throw from the
+  // lock's own mkdir/write before the try would otherwise leak this
+  // process-wide gate for the rest of the process. lockHeld distinguishes
+  // "acquisition threw/refused" from "lock taken" so a failed attempt never
+  // releases a lock this call does not hold.
+  let lockHeld = false;
   try {
+    const acquisition = acquireDesktopRestartLock(io.lock);
+    if (!acquisition.acquired) return skipped("restart_in_flight");
+    lockHeld = true;
     const install = adapter.discover(exec);
     if (!install) return skipped("package_discovery_failed");
 
@@ -366,6 +384,7 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   } finally {
     // On the handoff path ownership was transferred to the helper, so releasing here
     // would drop a lock that is still protecting a restart about to happen.
-    if (!handedOff) releaseDesktopRestartLock(io.lock);
+    selectionWrite.exit();
+    if (lockHeld && !handedOff) releaseDesktopRestartLock(io.lock);
   }
 }

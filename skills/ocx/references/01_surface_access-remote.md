@@ -154,7 +154,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 Usage: `ocx link cleanup [--link-id <id>] [--json]`
 
-Find Windows Remote Link Children and explain how to move them to Hub mode.
+Inspect Remote Link Child platforms and show disconnect guidance.
 
 State-changing: no. JSON mode: `payload`.
 
@@ -165,8 +165,8 @@ Drives no management route.
 | `--link-id` | string | Check only this link. |
 | `--json` | boolean | Emit {links, changed:false} as JSON. |
 
-- Runs on the Home from its local link store. Asks each Home-initiated Child for uname -s over the link's pinned SSH trust; a Windows answer (Git Bash, MSYS, Cygwin, cmd or PowerShell) is reported with recovery steps.
-- Never revokes, disconnects or edits a link. A Windows Child needs ocx disconnect on itself, then ocx link revoke --force --yes on the Home, then ocx hub invite and ocx connect.
+- Runs on the Home from its local link store. Asks each Home-initiated Child for its platform over the link's pinned SSH trust (the fixed %OS% probe, then uname -s) and reports Windows Children with disconnect guidance.
+- Never revokes, disconnects or edits a link. An ordinary ocx link revoke --yes disconnects a Windows Child through PowerShell over the recorded SSH trust.
 
 ### `ocx remote-workspace pair`
 

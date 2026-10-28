@@ -94,13 +94,14 @@ describe("install scripts", () => {
     // and spun past its own timeout. Scratch run 38213764818 stalled 8 of 252 Linux shard 1/4
     // batch-5 runs that way (CLI child a zombie, its pidfd armed but never polled).
     // tests/ci-workflows/test-runner-spawnsync-finalizer.test.ts keeps the runner above it.
-    // Rejoin after the upstream runner crash is fixed and a green `lane=all` dispatch
-    // proves the unified version; then delete testRunnerBun and the setup action's role.
+    // The security transition now defaults both roles to 1.4.4. Keep their independent
+    // validation; promotion still requires a green full cross-platform lane=all candidate run.
     expect(pkg.dependencies?.bun).toBe("1.4.4");
-    expect(pkg.testRunnerBun).toBe("1.4.3");
+    expect(pkg.testRunnerBun).toBe("1.4.4");
     expect(pkg.dependencies?.zod).toBe("4.6.6");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
-    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
+    // Bun's type definitions track the runtime pin rather than a literal of their own.
+    expect(pkg.devDependencies?.["@types/bun"]).toBe(pkg.dependencies?.bun);
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");
@@ -221,7 +222,7 @@ exit 0
     expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]');
     expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
     expect(launcher).toContain("!isBunGlobalInstall()");
-    expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher)");
+    expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher, homePolicy.authorizeMutation)");
     expect(launcher).toContain("runNpmSelfUpdate()");
     expect(launcher).toContain("runPnpmSelfUpdate()");
   });

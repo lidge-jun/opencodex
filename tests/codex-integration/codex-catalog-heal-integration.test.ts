@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { armDetachedConfigBaseline, loadConfig, saveConfig } from "../../src/config";
 import { captureCatalogAdmissionSnapshot, createCatalogConvergeRequest } from "../../src/codex/catalog-admission";
+import { compareCatalogHealPaths } from "../../src/codex/catalog/heal-observation";
 import { clearGatherRoutedModelsInflight, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import { setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
 import { catalogBackupPathFor, legacyCatalogBackupPath } from "../../src/codex/catalog/parsing";
@@ -154,6 +155,24 @@ test.each([undefined, Promise.resolve(true)])("an untyped guard returning %p can
   const beforeCommit = (() => value) as unknown as () => boolean;
   expect(await commitCodexCatalogCandidate(gathered.candidate, 1_000, { beforeCommit }))
     .toEqual({ kind: "stale", reason: "process-local" });
+  expect(events).toEqual([]);
+  expect(existsSync(catalogBackupPathFor(catalogPath))).toBe(false);
+  expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+});
+
+test("unknown expected-target identity prevents every catalog and cache write", async () => {
+  let expectedCatalogPath = catalogPath;
+  for (let i = 0; i < 20; i += 1) {
+    const next = join(codexHome, `expected-${i}.json`);
+    symlinkSync(expectedCatalogPath, next, "file"); expectedCatalogPath = next;
+  }
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(config()));
+  expect(gathered.kind).toBe("candidate");
+  if (gathered.kind !== "candidate") throw new Error("Expected catalog candidate.");
+  expect(compareCatalogHealPaths(catalogPath, expectedCatalogPath)).toBe("unknown");
+  expect(await commitCodexCatalogCandidate(gathered.candidate, 1_000, { expectedCatalogPath, beforeCommit: () => true }))
+    .toEqual({ kind: "stale", reason: "target-identity" });
+  expect(readFileSync(catalogPath, "utf8")).toBe(nativeBytes);
   expect(events).toEqual([]);
   expect(existsSync(catalogBackupPathFor(catalogPath))).toBe(false);
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);

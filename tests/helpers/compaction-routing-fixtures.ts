@@ -61,6 +61,7 @@ export function keyProviderConfig(overrides: Partial<OcxProviderConfig> = {}): O
 
 export function nativePoolConfig(): OcxConfig {
   return {
+    port: 0,
     defaultProvider: "openai",
     activeCodexAccountId: "pool-a",
     providers: {

@@ -91,6 +91,8 @@ describe("memory phase detection", () => {
   test("recognizes each phase from Codex's own turn metadata", () => {
     expect(detectMemoryModelPhase(body(), new Headers({ "x-codex-turn-metadata": extractMetadata() }))).toBe("extract");
     expect(detectMemoryModelPhase(body("gpt-5.6-terra"), new Headers({ "x-codex-turn-metadata": consolidationMetadata() }))).toBe("consolidation");
+    expect(detectMemoryModelPhase(body("gpt-6.1-terra"), new Headers({ "x-codex-turn-metadata": consolidationMetadata() }))).toBe("consolidation");
+    expect(detectMemoryModelPhase(body("gpt-6.1-terra"), new Headers({ "x-codex-turn-metadata": extractMetadata() }))).toBe("extract");
   });
 
   test("explicit non-memory metadata outranks the sub-agent header", () => {
@@ -378,6 +380,39 @@ describe("memory model routing", () => {
     expect(calls[0]!.reasoning.effort).toBe("high");
     // Phase 1 shares its model id with the app's helper calls, so the marker is what tells them apart.
     expect(logCtx.shadowCallRewrittenFrom).toBeUndefined();
+  });
+
+  test("a Terra shadow opt-in still yields to a configured consolidation route", async () => {
+    const settings = config();
+    settings.shadowCallIntercept = {
+      enabled: true,
+      model: "gateway/helper",
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    };
+    const calls: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return Response.json(completion());
+    }) as typeof fetch;
+
+    const configuredRoute = await handleResponses(
+      request(body("gpt-5.6-terra"), consolidationMetadata()), settings, { model: "", provider: "" },
+    );
+    expect(configuredRoute.status).toBe(200);
+    await configuredRoute.text();
+    expect(calls[0]!.model).toBe("strong");
+
+    const withoutMemoryRouting = config();
+    delete withoutMemoryRouting.memoryModels;
+    withoutMemoryRouting.shadowCallIntercept = settings.shadowCallIntercept;
+    const shadowLog: { model: string; provider: string; shadowCallRewrittenFrom?: string } = { model: "", provider: "" };
+    const shadowed = await handleResponses(
+      request(body("gpt-5.6-terra"), consolidationMetadata()), withoutMemoryRouting, shadowLog,
+    );
+    expect(shadowed.status).toBe(200);
+    await shadowed.text();
+    expect(calls[1]!.model).toBe("helper");
+    expect(shadowLog.shadowCallRewrittenFrom).toBe("gpt-5.6-terra");
   });
 
   test("a target that no longer resolves fails the memory call instead of falling back", async () => {

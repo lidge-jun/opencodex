@@ -112,6 +112,12 @@ function deepseekReasoningProvider(): OcxProviderConfig {
 }
 
 describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
+  test("restored Pro preserves native Responses and translated Chat dispatch", () => {
+    for (const inbound of ["responses", "chat", "anthropic"] as const) {
+      expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-pro", deepseekProvider(), inbound).adapter)
+        .toBe(inbound === "responses" ? "openai-responses" : "openai-chat");
+    }
+  });
   test("a Responses inbound rides the native Responses wire", () => {
     const resolved = resolveWireProtocolOverride("deepseek", MODEL, deepseekProvider(), "responses");
     expect(resolved.adapter).toBe("openai-responses");
@@ -153,6 +159,7 @@ describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
   test("the official DeepSeek Responses route opts into terminal repair", () => {
     const provider = deepseekProvider();
     expect(providerModelResponsesTerminalRepair("deepseek", provider, MODEL)).toEqual({ graceMs: 5_000 });
+    expect(providerModelResponsesTerminalRepair("deepseek", provider, "deepseek-v4-pro")).toEqual({ graceMs: 5_000 });
     expect(providerModelResponsesTerminalRepair("deepseek", provider, "deepseek-chat")).toBeUndefined();
     expect(providerModelResponsesTerminalRepair("custom-deepseek", provider, MODEL)).toBeUndefined();
   });
@@ -248,7 +255,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     expect(request.body.stream).toBe(true);
   });
 
-  test("HTTP streams a DeepSeek delta before safely repairing a missing terminal", async () => {
+  test.each([MODEL, "deepseek-v4-pro"])("HTTP streams %s before safely repairing a missing terminal", async (model) => {
     const source = controlledSse();
     const scheduler = new ManualTerminalScheduler();
     const requestBodies: Record<string, unknown>[] = [];
@@ -270,7 +277,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: MODEL, input: "ping", stream: true }),
+        body: JSON.stringify({ model, input: "ping", stream: true }),
       }),
       config,
       { model: "", provider: "" },

@@ -57,7 +57,7 @@ Codex는 `spawn_agent` 도구 설명에 모델을 최대 5개까지 나열하며
 | 3 | `deepseek/deepseek-v4-flash` | `5` | 알파벳 순으로 첫 번째인 남은 라우팅 행 |
 | 4 | `google/gemini-3-pro` | `5` | 다음 라우팅 행 |
 | 5 | `moonshot/kimi-k3` | `5` | 다음 라우팅 행 |
-| 6+ | `zai/glm-5.2`, 그다음 네이티브 GPT 행 | `5`, 그다음 `102` | 5개 밖 |
+| 6+ | `zai/glm-5.2`, 그다음 네이티브 GPT 행 | `5`, 그다음 `102 + sourcePriority` | 5개 밖 |
 
 로스터가 비어 있으면 opencodex는 아무것도 고정하지 않고, 5개는 카탈로그의 원래 priority를 따릅니다.
 

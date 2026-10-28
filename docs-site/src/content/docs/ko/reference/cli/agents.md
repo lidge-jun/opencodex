@@ -162,6 +162,39 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 시작합니다. `none`은 해당 family가 비어 있을 때만 유효합니다. 레거시 apply 플래그인 `--static`, `--hybrid`, `--discovery-only`도 계속 지원합니다. Claude Code 설정은 `ocx claude config <status|set> ...`를 사용하십시오.
 
+### `ocx codex [codex args...]`
+
+키는 설정과 해당 경로가 다른 보안 주체의 변경으로부터 보호될 때만 전달합니다. 현재 사용자와 권한 있는 OS 주체는 신뢰합니다. 같은 사용자로 실행되는 프로세스는 신뢰 대상입니다. 사용자의 쓰기 권한을 가진 행위자는 사용자의 OpenCodex 키 파일도 이미 읽을 수 있습니다. 검증과 네이티브 시작 사이에 같은 사용자가 설정을 교체하는 시나리오는 이 위협 모델의 범위 밖이며, 런처는 인계 시 설정을 고정하지 않습니다.
+
+일반적인 Windows 설치의 기본 ProgramData 권한은 다른 사용자에게 디렉터리 생성 권한을 줍니다. 따라서 `ProgramData\OpenAI\Codex`가 없어도 자동 자격 증명을 보류합니다. ProgramData 아래의 시스템 Codex 설정 폴더는 존재해야 하고 Administrators/SYSTEM만 쓸 수 있어야 하며, 다른 사용자가 상위 디렉터리를 교체할 수 없어야 합니다. 관리자에게 디렉터리 정책 검토를 요청하세요. opencodex는 직접 ACL을 변경하지 않으며 프로비저닝 명령을 제공하지 않습니다.
+
+대신 사용자가 직접 키를 제공할 수 있습니다. 예를 들어 `OPENCODEX_API_AUTH_TOKEN` 환경 변수를 내보내면 `ocx codex`는 그 값을 그대로 유지합니다. 기존 시스템 설정 파일은 여전히 자동 자격 증명을 보류하며 별도 검토가 필요합니다. 각 보류 사유는 키 값, 키 파일 내용이나 경로 없이 짧고 구체적인 stderr 진단 한 줄로 표시됩니다.
+
+한 단어 프롬프트 앞에는 `--`를 넣어 알 수 없는 Codex 하위 명령 선택을 막으세요.
+
+설정 파일이 없어도 machine 설정 경로에 다른 사용자가 파일을 만들 수 없어야 합니다. Windows ProgramData/OpenAI/Codex 경로의 보호를 증명할 수 없으면 자동 토큰을 보류하며 디렉터리를 만들지 않습니다. macOS는 거부 전용 ACL과 읽기 전용 허용 항목을 수락합니다. 쓰기·추가·삭제·속성·보안·소유자 변경을 허용하는 항목은 앞에 거부 항목이 있어도 거부합니다. 알 수 없는 태그나 검사 오류도 거부합니다.
+
+새 서비스 토큰은 argv가 아래 허용 목록 안에 있고, 비어 있지 않은 HTTP(S)/ALL proxy 및 `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` 환경 재정의가 없으며(정규 `CODEX_HOME`은 허용), 홈·설정·시스템 경로가 소유권 검사를 통과할 때만 읽습니다. 설정에는 검증된 키와 정확한 관리 loopback provider만 있어야 하며 추가 자격 증명 소비자나 설정층이 없어야 합니다. `-c`/`--config`, `-p`/`--profile`, 알 수 없는 플래그, `resume`/`fork` 등 허용 목록 밖의 인자는 토큰을 보류하고 값 없는 진단을 출력합니다. 명시적인 사용자 자격 증명과 원래 인자는 유지합니다.
+
+정규 홈 디렉터리와 `config.toml`은 현재 사용자 소유여야 합니다. POSIX에서는 group/other 쓰기를, Windows에서는 현재 사용자·SYSTEM·Administrators 이외의 DACL 쓰기 권한을 거부하고 소유자 SID를 확인합니다. 상위 경로 교체 권한도 확인합니다. macOS에서는 강제 Codex 설정 preference가 없어야 합니다. 같은 사용자나 관리자의 악성 프로세스로부터 격리하는 기능은 아닙니다.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+자동 자격 증명 전달은 `CODEX_HOME`의 `~`와 공백을 리터럴 경로로 해석하고 검증한 뒤, 동일한 정규 절대 경로를 자식에게 전달합니다. 홈을 읽을 수 없으면 토큰을 읽지 않습니다. 대소문자와 관계없이 `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` 중 비어 있지 않은 값이 있으면 `NO_PROXY`와 무관하게 자동 로딩을 건너뜁니다. 거부된 실행과 사용자가 내보낸 자격 증명은 변경하지 않습니다. 새 토큰을 전달할 때 자식의 `NO_PROXY`와 `no_proxy`에 기존 우회 항목을 보존하면서 `127.0.0.1`과 `::1`을 추가합니다. `features.respect_system_proxy`를 켜거나 `--enable`/`--disable`을 전달하면 자동 로딩을 건너뜁니다.
+
+원래 인자로 Codex를 실행하기 전에 프록시 시작을 시도합니다. 라우팅은 Codex 설정이 소유하며 런처가 재작성하지 않습니다. 네이티브 및 다른 게이트웨이 경로에서는 시작을 생략합니다. 알 수 없는 라우팅은 경고 후 시작을 시도하며, 시작 실패 시에도 경고 후 실행합니다. 도움말·버전 및 `login`, `doctor`, `help` 같은 내부 명령은 시작과 자동 토큰 읽기를 생략합니다.
+
+선택한 provider의 전체 전송 설정이 이 설치의 로컬 리스너 또는 저장된 로컬 클라이언트 연결에 대해 생성한 관리 블록과 일치할 때만, 누락된 `OPENCODEX_API_AUTH_TOKEN`을 이 설치의 `service-api-token`에서 읽습니다. 이름이나 주입 주석만으로는 허용하지 않습니다. 알 수 없거나 원격인 목적지, 기본 profile, 프로젝트 설정, `OPENAI_BASE_URL`, 전달된 `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote`는 자동 읽기를 생략합니다. 사용자가 export한 자격 증명과 인자는 보존하며, 토큰 파일 경로 재정의와 관리 토큰 충돌은 거부합니다.
+
+일치가 확인된(`matched`) autostart wrapper만 backing Codex를 직접 실행합니다. 검사 예외를 포함한 알 수 없는 상태는 검증된 bypass가 필요하며, 관리되는 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처는 지원합니다. 검증할 수 없거나 오래된 wrapper는 종료 코드 1로 거부하며 Codex를 시작하지 않습니다. `ocx codex-shim install`로 갱신하세요. 이 실행은 shim을 수리하지 않으며, 내용 검사는 Windows backing 파일 출처나 동시 경로 교체를 보장하지 않습니다.
+
+런처 도움말은 `ocx help codex`, Codex 도움말은 `ocx codex --help`입니다. 이후 plain `codex`의 동작은 기존과 같습니다.
+
 ### `ocx opencode [opencode args...]`
 
 프록시가 실행 중인지 확인한 뒤, OpenCode의 인라인 런타임 계층(`OPENCODE_CONFIG_CONTENT`)에 생성된 `provider.opencodex` 및 `providers.opencodex` 블록을 넣어 opencode를 실행합니다. 기존 인라인 config는 유지되고, 이번 실행에서는 이 두 키만 교체됩니다. 전역 또는 프로젝트 `opencode.json` 파일은 기존 override가 있는지 경고하기 위해 읽을 수 있지만, 디스크상의 파일은 절대 수정하지 않습니다. 라우팅된 model은 `opencodex/<provider>/<model>`로 나타납니다. 이후 plain `opencode`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
@@ -256,7 +289,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows는 후보나 설정 파일을 읽지 않고 검사를 연기합니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
+`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows x64는 증명에 바인딩된 절대 표준 npm `codex.cmd`와 보유 핸들로 바인딩된 Node/npm 도구체인(있으면 프리픽스 로컬, 없다고 확인되면 런처 아키텍처에 고정된 캡처된 PATH 쌍), 검증된 인프리픽스 플랫폼 백킹도 지원하며 reparse를 거부하는 보유 핸들을 사용합니다. 다른 Windows 레이아웃은 계속 연기되거나 관리되지 않습니다. Windows의 `managed` 결과는 관측된 설치 레이아웃만 분류하며, 바인딩된 Node/npm은 업데이터의 읽기 전용 메타데이터 도구체인일 뿐 이후 `codex.cmd` 호출이 어떤 인터프리터를 해석할지를 보증하지 않습니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. Windows x64 apply는 검증된 개인 쓰기 권한을 가진 제한된 npm prefix를 요구하고 무관한 패키지·shim을 보존하며, 적용 조건을 충족하지 않는 관측 레이아웃은 `applicable: false`와 `refusal: windows_apply_disabled`를 가진 결정적 읽기 전용 plan을 생성합니다. PATH 전용 선택·OpenCodex 자동 시작 래퍼·global/vendor 폴백은 계속 연기됩니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
 
 Windows에서 `CODEX_CLI_PATH=codex` 같은 단순 명령 이름이나 원격 경로·장치 경로가 후보로 캡처되면 `candidate_path_unavailable`을 보고합니다. 후보는 캡처됐지만 해당 경로가 이 검사 대상에 적합하지 않은 경우입니다.
 
@@ -306,3 +339,19 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

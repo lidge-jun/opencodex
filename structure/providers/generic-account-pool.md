@@ -26,6 +26,8 @@ are excluded. `tests/oauth/generic-session-affinity.test.ts` and
 
 ## Combo sibling probes
 
+Antigravity model routing in `src/oauth/generic-account-failover.ts` ranks siblings by configured strategy or family headroom only within the best readiness/model-support tier. A known omission stays excluded, and unknown support stays usable. Reactive model-404 rotation excludes accounts already attempted in the request and prefers positive support before unknown support without changing account-wide auth or cooldown state.
+
 `src/server/responses/core-combo.ts` asks `src/oauth/generic-account-failover.ts` whether a refused
 account has an eligible sibling before cooling the whole target. This probe records the refused
 account's cooldown but passes `commit: false`, so it only peeks at a round-robin pool. An unsent

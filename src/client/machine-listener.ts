@@ -41,6 +41,7 @@ import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
 import { relayLinkManagementRead } from "./link-management-relay";
 import type { ClientRestartAdmission } from "./runtime-restart";
+import { isLinkConnectionGeneration } from "../link/relay-auth";
 
 const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
@@ -72,6 +73,8 @@ export interface MachineListenerDeps {
    * with `link.reason` while it is not; `/healthz` is unaffected (`link-readiness.ts`).
    */
   linkReadiness?: () => LinkReadiness | Promise<LinkReadiness>;
+  /** Link mode: the current tunnel connection, reported by a ready `/readyz` for `ocx status`. */
+  linkConnectionGeneration?: () => string | undefined;
   /**
    * The bound restart (OCX-6). With it, `/healthz` proves this process's identity to a challenge,
    * advertises `restartCapability` and `startedAt`, and `POST /api/system/restart` accepts a
@@ -204,7 +207,10 @@ export function startMachineListener(
           return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: link.reason } },
             { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
         }
-        return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: { state: "available" } } : {}) });
+        let connectionGeneration: string | undefined;
+        try { connectionGeneration = link ? deps.linkConnectionGeneration?.() : undefined; } catch { connectionGeneration = undefined; }
+        const linkBody = isLinkConnectionGeneration(connectionGeneration) ? { state: "available", connectionGeneration } : { state: "available" };
+        return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: linkBody } : {}) });
       }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);

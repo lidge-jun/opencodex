@@ -34,8 +34,8 @@ consultez les conditions actuelles d'Anthropic.
 Comportement lorsque cette option est activée :
 
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
-  efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
-- L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
+  et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues. Seul un refus de quota partagé efface ses affinités ; une limitation temporaire les conserve.
+- L'affinité survit au redémarrage dans le même répertoire de configuration et la même instance fournisseur (24 heures d'inactivité, 2 000 liaisons au maximum). Le fichier privé ne contient que des empreintes de session et d'identité de connexion, jamais de clé de session brute ni de jeton. Les anciens comptes sans identité persistante restent locaux au processus jusqu'à leur prochaine connexion. Le renouvellement du jeton conserve la liaison ; une nouvelle connexion, la suppression, la pause, une réauthentification requise ou une sélection manuelle pendant l'exécution l'invalident. Un détour temporaire dû à une limitation de débit conserve la liaison initiale.
 - Les erreurs de renouvellement du jeton conservent la règle `needsReauth`. Un 403 confirmé lié à un abonnement ou à la facturation du compte peut déclencher un basculement avant la sortie, avec une temporisation selon `Retry-After` ou de dix minutes. Un refus d’autorisation ordinaire reste terminal. Voir la [reprise des comptes](/guides/claude-code/).
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
@@ -199,6 +199,8 @@ quittez complètement puis rouvrez Claude Desktop.
 
 Le mode picker fait partie de first-party : le [risque pour le compte du mode first-party](#first-party-sur-demande)
 s'applique donc aussi à ce mode.
+
+Avant la première réponse du serveur amont, un téléversement picker sans progression pendant 60 secondes est fermé. Une expiration interrompt le téléversement sans réponse de succès ; en HTTP/2, seul le flux concerné est réinitialisé. Ce délai d’inactivité est suspendu lorsque le serveur amont exerce une contre-pression et supprimé dès la fin du téléversement ou la première réponse amont. Ce mécanisme de surveillance de l’inactivité n’ajoute aucune limite à la durée totale du téléversement ; les limites existantes de l’environnement d’exécution et du protocole restent applicables. Ce délai d’inactivité ne s’applique pas aux flux de réponse.
 
 ### Utiliser les modèles opencodex depuis l'onglet Code de Desktop (associations first-party)
 

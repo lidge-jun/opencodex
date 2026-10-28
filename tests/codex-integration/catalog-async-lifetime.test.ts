@@ -18,7 +18,8 @@ beforeEach(() => {
   mkdirSync(repoPath(".tmp"), { recursive: true });
   root = mkdtempSync(repoPath(".tmp/catalog-async-"));
   selected = { command: join(root, "codex.exe"), version: "0.160.0", source: "environment" };
-  writeFileSync(selected.command, "synthetic executable");
+  // Darwin's execution boundary checks X_OK before the mocked executor is called.
+  writeFileSync(selected.command, "synthetic executable", { mode: 0o700 });
   saved = Object.fromEntries(["OPENCODEX_HOME", "CODEX_HOME", "CODEX_CLI_PATH"].map(key => [key, process.env[key]]));
   process.env.OPENCODEX_HOME = root;
   process.env.CODEX_HOME = join(root, "codex-home");
@@ -48,6 +49,53 @@ function hold<T>() {
 function warmRuntime() {
   runtime.setCodexRuntimeResolveCacheForTests({ runtime: selected, failures: [] }, { discoverAlternatives: false });
 }
+
+for (const phase of ["cold", "warm", "prepublication"] as const) {
+  test(`runtime wrapper cancellation is null and write-free at ${phase}`, async () => {
+    const file = join(root, "codex-runtime.json");
+    const before = JSON.stringify({ version: 1, command: selected.command, source: "environment", selectedVersion: "0.159.0", origin: "discovered", updatedAt: "2026-10-08T00:00:00Z" });
+    writeFileSync(file, before);
+    if (phase !== "cold") warmRuntime();
+    const controller = new AbortController();
+    if (phase !== "prepublication") controller.abort(new Error("fixture cancellation"));
+    const outcome = await runtime.resolveAndPersistCodexRuntimeAsync({ discoverAlternatives: false, signal: controller.signal }, () => {
+      if (phase === "prepublication") controller.abort(new Error("publication cancelled"));
+      return true;
+    }).then(value => ({ value, error: null }), error => ({ value: undefined, error }));
+    expect({ ...outcome, bytes: readFileSync(file, "utf8"), probes: exec.mock.calls.length })
+      .toEqual({ value: null, error: null, bytes: before, probes: 0 });
+  });
+}
+
+test("runtime wrapper contains an entered probe abort but raw resolver still rejects", async () => {
+  const entered = hold<void>(), released = hold<void>(), controller = new AbortController();
+  const deps: runtime.ResolveCodexRuntimeDeps = {
+    discoverAlternatives: false, signal: controller.signal,
+    execFile: async () => { entered.resolve(); await released.promise; throw new Error("probe cancelled"); },
+  };
+  const pending = runtime.resolveAndPersistCodexRuntimeAsync(deps);
+  const observed = pending.then(value => ({ value, error: null }), error => ({ value: undefined, error }));
+  try {
+    await Promise.race([entered.promise, observed.then(() => { throw new Error("wrapper settled before probe entry"); })]);
+    controller.abort(new Error("fixture cancellation"));
+  } finally { released.resolve(); }
+  const result = await observed;
+  expect({ ...result, persisted: existsSync(join(root, "codex-runtime.json")) })
+    .toEqual({ value: null, error: null, persisted: false });
+  const rawError = await runtime.resolveCodexRuntimeAsync(deps).then(() => null, error => error);
+  expect(rawError).toBeInstanceOf(Error);
+});
+
+test("runtime wrapper preserves non-cancellation exceptions", async () => {
+  warmRuntime();
+  const sentinel = new Error("currentness callback failed");
+  const error = await runtime.resolveAndPersistCodexRuntimeAsync({ discoverAlternatives: false }, () => { throw sentinel; })
+    .then(() => null, error => error);
+  expect(error).toBe(sentinel);
+  const deps = Object.defineProperty({}, "env", { get() { throw sentinel; } });
+  expect(await runtime.resolveAndPersistCodexRuntimeAsync(deps).then(() => null, error => error)).toBe(sentinel);
+  expect(existsSync(join(root, "codex-runtime.json"))).toBe(false);
+});
 
 test("concurrent async loads share one version/model flight and warm reload runs no child", async () => {
   const results = await Promise.all(Array.from({ length: 12 }, () => bundled.loadBundledCodexCatalogAsync()));
@@ -140,9 +188,12 @@ test("a scoped source abort does not cancel an independent shared model flight",
 
 test("scoped flight abort propagates to its executor and cannot publish late output", async () => {
   const held = hold<string>();
+  const entered = hold<void>();
   const controller = new AbortController();
   let signal: AbortSignal | undefined;
-  const pending = bundled.loadBundledCodexCatalogAsync({ commandCandidates: () => [selected.command], execFile: (_file, _args, options) => { signal = options.signal; return held.promise; } }, () => true, controller.signal);
+  const pending = bundled.loadBundledCodexCatalogAsync({ commandCandidates: () => [selected.command], execFile: (_file, _args, options) => { signal = options.signal; entered.resolve(); return held.promise; } }, () => true, controller.signal);
+  // The async exec boundary yields first; this case aborts an executor already in flight.
+  await Promise.race([entered.promise, pending.then(() => { throw new Error("catalog settled before executor entry"); })]);
   controller.abort();
   expect(await pending).toBeNull();
   expect(signal?.aborted).toBe(true);
@@ -280,7 +331,7 @@ test("a new shared selection aborts obsolete model work and refuses its late pub
   const obsolete = bundled.loadBundledCodexCatalogAsync();
   await started.promise;
   process.env.CODEX_CLI_PATH = join(root, "next.exe");
-  writeFileSync(process.env.CODEX_CLI_PATH, "synthetic executable");
+  writeFileSync(process.env.CODEX_CLI_PATH, "synthetic executable", { mode: 0o700 });
   const next = bundled.loadBundledCodexCatalogAsync();
   expect(oldSignal?.aborted).toBe(true);
   held.resolve(JSON.stringify(catalog));

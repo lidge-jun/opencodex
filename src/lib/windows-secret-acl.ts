@@ -45,6 +45,7 @@ import {
   type SubprocessDeadlineScheduler,
 } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
+import { verifyWindowsPrivateEntries, verifyWindowsPrivateEntriesAsync } from "./windows-owner-acl";
 import {
   cachedCurrentWindowsIdentity,
   resolveCurrentWindowsPrincipal,
@@ -331,10 +332,66 @@ export interface IcaclsResult {
   exitCode: number | null;
   timedOut: boolean;
   stdout: string;
+  /**
+   * Diagnostics only: how a failure was produced when it is not a child
+   * result. `spawn_failed` means the spawn call itself threw — no process
+   * existed; `runner_rejected` means the runner promise rejected without a
+   * result; `runner_watchdog` means the caller-side belt fired before the
+   * runner settled — a killed child may still be reaping. Absent means
+   * `child_result` (a spawned child produced a verdict, including timeouts).
+   */
+  readonly failureStage?: "spawn_failed" | "runner_rejected" | "runner_watchdog";
+  /**
+   * Allowlisted OS code from the failed spawn (e.g. ENOENT), never an error
+   * object, message, or path. Present only alongside `failureStage ===
+   * "spawn_failed"`.
+   */
+  readonly spawnErrorCode?: string;
 }
 
 type IcaclsRunner = (args: string[], timeoutMs: number) => IcaclsResult;
 type AsyncIcaclsRunner = (args: string[], timeoutMs: number) => Promise<IcaclsResult>;
+
+/** The only icacls operations this module runs; argv is never derived from it. */
+export type IcaclsStep = "/grant:r" | "/inheritance:r" | "/remove:g" | "/findsid";
+const ICACLS_STEPS: ReadonlySet<string> = new Set(["/grant:r", "/inheritance:r", "/remove:g", "/findsid"]);
+
+/**
+ * Fixed failure stages for `aclFailure` diagnostics: the shared deadline ran
+ * out before a spawn was attempted, the spawn itself threw, the runner
+ * rejected, the caller-side watchdog fired before the runner settled, or a
+ * child process produced a result. Enum literals only — never parsed from
+ * errors, and each value is written only by the code that can prove it.
+ */
+export type AclFailureStage =
+  | "deadline_before_spawn"
+  | "spawn_failed"
+  | "runner_rejected"
+  | "runner_watchdog"
+  | "child_result";
+
+/**
+ * Bounded, allowlisted failure metadata carried on a sanitized ACL error.
+ * Every field is a fixed enum literal, a boolean, or a finite number — no
+ * path, argv, SID, stdout/stderr, message or stack ever crosses this boundary,
+ * so a caller may log or branch on it without re-sanitizing.
+ */
+export interface AclFailureDiagnostics {
+  /** The icacls step being attempted — one of the fixed literals used by runIcacls. */
+  readonly step: IcaclsStep;
+  readonly stage: AclFailureStage;
+  /**
+   * For spawned steps, the measured runner time; for `deadline_before_spawn`,
+   * how much of the shared sequence had already elapsed.
+   */
+  readonly elapsedMs: number;
+  /** The exact remaining budget handed to the runner (<= 0 when refused pre-spawn). */
+  readonly budgetMs: number;
+  readonly success: boolean;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly spawnErrorCode?: string;
+}
 
 function resolveIcaclsExecutable(): string {
   // Same authority as schtasks/powershell: never take icacls from PATH.
@@ -343,8 +400,55 @@ function resolveIcaclsExecutable(): string {
   return resolveTrustedWindowsIcaclsExe();
 }
 
-function spawnFailedResult(): IcaclsResult {
-  return { success: false, exitCode: null, timedOut: false, stdout: "" };
+/**
+ * OS spawn codes safe to surface in diagnostics: fixed symbolic names that
+ * say WHY the child could not start. Anything else — messages, paths,
+ * platform-specific strings — stays inside the process.
+ */
+const ALLOWED_SPAWN_ERROR_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "EACCES",
+  "EPERM",
+  "EAGAIN",
+  "ENOMEM",
+]);
+
+function allowlistedSpawnErrorCode(code: unknown): string | undefined {
+  return typeof code === "string" && ALLOWED_SPAWN_ERROR_CODES.has(code) ? code : undefined;
+}
+
+/** Extract an allowlisted spawn code from a thrown spawn error; never the error itself. */
+function spawnErrorCodeOf(error: unknown): string | undefined {
+  if (error && typeof error === "object" && "code" in error) {
+    return allowlistedSpawnErrorCode((error as { code?: unknown }).code);
+  }
+  return undefined;
+}
+
+function spawnFailedResult(spawnErrorCode?: string): IcaclsResult {
+  return {
+    success: false,
+    exitCode: null,
+    timedOut: false,
+    stdout: "",
+    failureStage: "spawn_failed",
+    ...(spawnErrorCode !== undefined ? { spawnErrorCode } : {}),
+  };
+}
+
+/**
+ * The async runner rejected instead of producing a result. That is not spawn
+ * evidence — nothing proves a child ever existed — so it keeps its own stage
+ * and carries no spawnErrorCode.
+ */
+function runnerRejectedResult(): IcaclsResult {
+  return {
+    success: false,
+    exitCode: null,
+    timedOut: false,
+    stdout: "",
+    failureStage: "runner_rejected",
+  };
 }
 
 /**
@@ -354,14 +458,15 @@ function spawnFailedResult(): IcaclsResult {
  */
 function trySpawnIcacls(args: string[]) {
   try {
-    return Bun.spawn([resolveIcaclsExecutable(), ...args], {
+    const proc = Bun.spawn([resolveIcaclsExecutable(), ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
       windowsHide: true,
     });
-  } catch {
-    return null;
+    return { proc, spawnErrorCode: undefined };
+  } catch (error) {
+    return { proc: null, spawnErrorCode: spawnErrorCodeOf(error) };
   }
 }
 
@@ -382,8 +487,8 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
       timedOut: result.exitedDueToTimeout ?? false,
       stdout: result.stdout ? result.stdout.toString() : "",
     };
-  } catch {
-    return spawnFailedResult();
+  } catch (error) {
+    return spawnFailedResult(spawnErrorCodeOf(error));
   }
 }
 
@@ -393,8 +498,9 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
  * classifies the deadline and keeps waiting for a killed child to actually exit.
  */
 async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
-  const proc = trySpawnIcacls(args);
-  if (!proc) return spawnFailedResult();
+  const spawned = trySpawnIcacls(args);
+  if (!spawned.proc) return spawnFailedResult(spawned.spawnErrorCode);
+  const proc = spawned.proc;
   const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
   const stdout = !timedOut && proc.stdout
     ? await new Response(proc.stdout).text().catch(() => "")
@@ -419,7 +525,7 @@ function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<Icac
     };
     const run = () => asyncIcaclsRunner(args, timeoutMs).then(
       result => { finish(result); },
-      () => { finish(spawnFailedResult()); },
+      () => { finish(runnerRejectedResult()); },
     );
     // Capture and register ownership before the child can start or mutate its alias.
     const tracked = args[0] ? startTrackedAsyncAclWork(args[0], run) : undefined;
@@ -432,7 +538,13 @@ function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<Icac
       () => {
         const targetPath = args[0];
         if (targetPath && tracked) registerPendingAsyncIcaclsReap(targetPath, tracked.entry);
-        finish({ success: false, exitCode: null, timedOut: true, stdout: "" });
+        finish({
+          success: false,
+          exitCode: null,
+          timedOut: true,
+          stdout: "",
+          failureStage: "runner_watchdog",
+        });
       },
       Math.max(1, timeoutMs) + SUBPROCESS_KILL_GRACE_MS + ASYNC_ICACLS_BELT_MARGIN_MS,
     );
@@ -493,7 +605,7 @@ function pathIsAtOrBelow(target: string, root: string): boolean {
   return suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
-function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): boolean {
+function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity, includeAncestors = false): boolean {
   const target = entry.identity;
   // Failure at capture stays conservative, even if the alias later becomes readable.
   if (target.canonical === undefined || root.canonical === undefined) return true;
@@ -501,7 +613,43 @@ function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): bo
   if (current === undefined) return true;
   const targets = [target.lexical, target.canonical, current];
   return [root.lexical, root.canonical].some(rootPath =>
-    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)));
+    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)
+      || (includeAncestors && pathIsAtOrBelow(rootPath, targetPath))));
+}
+
+/** Admission can refuse without surrendering the registry's retained-child cleanup ownership. */
+export class WindowsSecretAclSettleTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  readonly aclFailureOrigin = "acl_settle_timeout";
+  constructor() { super("ACL settlement timed out"); this.name = "WindowsSecretAclSettleTimeoutError"; }
+}
+
+/** Run a synchronous mutation after overlapping ACL work exits, within one harden budget. */
+export async function withWindowsSecretAclSettled<T>(rootPath: string, mutate: () => T): Promise<T> {
+  const deadline = nowFn() + resolveHardenDeadlineMs();
+  const root = captureRemovalIdentity(rootPath);
+  let cancelDeadline: (() => void) | undefined;
+  let timeout: Promise<never> | undefined;
+  let expired = false;
+  try {
+    while (true) {
+      if (expired || nowFn() >= deadline) throw new WindowsSecretAclSettleTimeoutError();
+      const pending = [...activeAsyncAclWork.values(), ...pendingAsyncIcaclsReaps.values()]
+        .flatMap(entries => [...entries])
+        .filter(entry => retainedWorkIsAtOrBelow(entry, root, true))
+        .map(entry => entry.reap);
+      // No await between this final observation and the mutation. A newly queued hardener's
+      // microtasks cannot run icacls until the synchronous callback has completely returned.
+      if (pending.length === 0) return mutate();
+      timeout ??= new Promise<never>((_resolve, reject) => {
+        cancelDeadline = asyncIcaclsBeltScheduler(() => {
+          expired = true;
+          reject(new WindowsSecretAclSettleTimeoutError());
+        }, Math.max(1, deadline - nowFn()));
+      });
+      await Promise.race([Promise.all(pending), timeout]);
+    }
+  } finally { cancelDeadline?.(); }
 }
 
 /** True while an async icacls runner still owns this exact path after its caller's belt fired. */
@@ -550,7 +698,7 @@ export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): 
   asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
 }
 
-/** Test seam: fire the outer caller-facing belt without sleeping. */
+/** Test seam: drive child belts and admission deadlines without sleeping. */
 export function setAsyncIcaclsBeltSchedulerForTests(
   scheduler: SubprocessDeadlineScheduler | null,
 ): void {
@@ -694,12 +842,65 @@ export function windowsSecretAclApplies(): boolean {
   return (platformOverride ?? process.platform) === "win32";
 }
 
+/**
+ * Per-spawn observation measured by run(): which stage produced the result,
+ * how long it took, and the exact budget it was given. Measured at the call
+ * site — not inside the runner — so injected runners are observed identically.
+ */
+interface IcaclsRunMeta {
+  readonly stage: AclFailureStage;
+  readonly elapsedMs: number;
+  readonly budgetMs: number;
+}
+
+/** Runner-reported failure provenance; anything else is treated as a child result. */
+const RUNNER_FAILURE_STAGES: ReadonlySet<string> = new Set([
+  "spawn_failed",
+  "runner_rejected",
+  "runner_watchdog",
+]);
+
+/**
+ * An injected runner may write any string into failureStage, so the enum is
+ * re-validated at the boundary instead of trusting the declared type.
+ */
+function runnerFailureStageOf(result: IcaclsResult): AclFailureStage {
+  return typeof result.failureStage === "string" && RUNNER_FAILURE_STAGES.has(result.failureStage)
+    ? result.failureStage
+    : "child_result";
+}
+
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 /** Error carrying an honest code: ETIMEDOUT only for real timeouts, EICACLS otherwise. */
-function icaclsError(step: string, result: IcaclsResult): NodeJS.ErrnoException {
+function icaclsError(step: IcaclsStep, result: IcaclsResult, meta: IcaclsRunMeta): NodeJS.ErrnoException {
+  // Coerce once so the error code and the diagnostics record can never disagree.
+  // Boolean() keeps the original truthy semantics the memo/retry callers relied
+  // on — a mistyped truthy timedOut still means "timeout", not "child ok".
+  const timedOut = Boolean(result.timedOut);
   const err = new Error(
-    result.timedOut ? `icacls ${step} timed out` : `icacls ${step} exited ${result.exitCode ?? "null"}`,
-  ) as NodeJS.ErrnoException;
-  err.code = result.timedOut ? "ETIMEDOUT" : "EICACLS";
+    timedOut ? `icacls ${step} timed out` : `icacls ${step} exited ${result.exitCode ?? "null"}`,
+  ) as NodeJS.ErrnoException & { aclFailure: AclFailureDiagnostics };
+  err.code = timedOut ? "ETIMEDOUT" : "EICACLS";
+  // Injected runners are untrusted: every field is coerced back to its declared
+  // enum/number/boolean shape so only allowlisted values reach the boundary.
+  const spawnErrorCode = result.failureStage === "spawn_failed"
+    ? allowlistedSpawnErrorCode(result.spawnErrorCode)
+    : undefined;
+  err.aclFailure = {
+    step,
+    stage: meta.stage,
+    elapsedMs: finiteOrZero(meta.elapsedMs),
+    budgetMs: finiteOrZero(meta.budgetMs),
+    success: Boolean(result.success),
+    exitCode: typeof result.exitCode === "number" && Number.isFinite(result.exitCode)
+      ? result.exitCode
+      : null,
+    timedOut,
+    ...(spawnErrorCode !== undefined ? { spawnErrorCode } : {}),
+  };
   return err;
 }
 
@@ -809,10 +1010,17 @@ function existingAclAlreadyCompliant(targetPath: string, directory: boolean, dea
     const remaining = deadline - nowFn();
     if (remaining <= 0) return false;
     const result = icaclsRunner([targetPath], remaining);
-    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+    return result.success && (existingAclIsCompliant(targetPath, directory, result.stdout, identity.name)
+      || verifyWindowsPrivateEntries([{ path: targetPath, directory }], deadline - nowFn()));
   } catch {
     return false;
   }
+}
+
+/** Fresh owner/protected-DACL verification; never use the name-only shortcut, harden or trust a memo. */
+export function verifySecretPathAcl(targetPath: string): boolean {
+  if (!windowsSecretAclApplies()) return false;
+  return verifyWindowsPrivateEntries([{ path: targetPath, directory: false }], resolveHardenDeadlineMs());
 }
 
 async function existingAclAlreadyCompliantAsync(
@@ -827,7 +1035,8 @@ async function existingAclAlreadyCompliantAsync(
     const remaining = deadline - nowFn();
     if (remaining <= 0) return false;
     const result = await awaitAsyncIcaclsRunner([targetPath], remaining);
-    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+    return result.success && (existingAclIsCompliant(targetPath, directory, result.stdout, identity.name)
+      || await verifyWindowsPrivateEntriesAsync([{ path: targetPath, directory }], deadline - nowFn()));
   } catch {
     return false;
   }
@@ -835,18 +1044,36 @@ async function existingAclAlreadyCompliantAsync(
 
 function runIcacls(targetPath: string, directory: boolean, deadline: number, extraReadAces: readonly string[]): void {
   const principal = currentWindowsPrincipal(deadline);
+  const sequenceStartedAt = nowFn();
 
   // The deadline is owned by hardenEntry (total budget incl. retry + verification).
-  const run = (step: string, args: string[]): IcaclsResult => {
+  const run = (step: IcaclsStep, args: string[]): { result: IcaclsResult; meta: IcaclsRunMeta } => {
     const remaining = deadline - nowFn();
     if (remaining <= 0) {
-      throw icaclsError(step, { success: false, exitCode: null, timedOut: true, stdout: "" });
+      throw icaclsError(
+        step,
+        { success: false, exitCode: null, timedOut: true, stdout: "" },
+        {
+          stage: "deadline_before_spawn",
+          elapsedMs: Math.max(0, nowFn() - sequenceStartedAt),
+          budgetMs: remaining,
+        },
+      );
     }
-    return icaclsRunner(args, remaining);
+    const started = nowFn();
+    const result = icaclsRunner(args, remaining);
+    return {
+      result,
+      meta: {
+        stage: runnerFailureStageOf(result),
+        elapsedMs: Math.max(0, nowFn() - started),
+        budgetMs: remaining,
+      },
+    };
   };
-  const runOrThrow = (step: string, args: string[]): void => {
-    const result = run(step, args);
-    if (!result.success) throw icaclsError(step, result);
+  const runOrThrow = (step: IcaclsStep, args: string[]): void => {
+    const { result, meta } = run(step, args);
+    if (!result.success) throw icaclsError(step, result, meta);
   };
 
   // Step 1: grant current user full control BEFORE any destructive ACL change.
@@ -862,17 +1089,17 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number, ext
   // before accepting the failure as harmless — a swallowed real failure would leave
   // Everyone/Users/Authenticated Users grants while reporting hardened.
   // `/remove:g` cannot remove the explicit current-user ACE installed in step 1.
-  const removal = run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
+  const { result: removal, meta: removalMeta } = run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
   if (!removal.success) {
-    if (removal.timedOut) throw icaclsError("/remove:g", removal);
+    if (removal.timedOut) throw icaclsError("/remove:g", removal, removalMeta);
     for (const sid of BROAD_SIDS) {
-      const found = run("/findsid", [targetPath, "/findsid", sid]);
-      if (!found.success) throw icaclsError("/findsid", found);
+      const { result: found, meta: foundMeta } = run("/findsid", [targetPath, "/findsid", sid]);
+      if (!found.success) throw icaclsError("/findsid", found, foundMeta);
       // icacls /findsid echoes the target path in its "SID Found" line only when the SID
       // still holds an ACE; the summary lines carry only counts. Matching the path echo —
       // not the (localized) prose — keeps the check locale-independent.
       if (found.stdout.includes(targetPath)) {
-        throw icaclsError("/remove:g", removal);
+        throw icaclsError("/remove:g", removal, removalMeta);
       }
     }
   }
@@ -881,30 +1108,48 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number, ext
 /** Async counterpart of runIcacls — same step order and timeout/error classification (#612). */
 async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: number, extraReadAces: readonly string[]): Promise<void> {
   const principal = await currentWindowsPrincipalAsync(deadline);
+  const sequenceStartedAt = nowFn();
 
-  const run = async (step: string, args: string[]): Promise<IcaclsResult> => {
+  const run = async (step: IcaclsStep, args: string[]): Promise<{ result: IcaclsResult; meta: IcaclsRunMeta }> => {
     const remaining = deadline - nowFn();
     if (remaining <= 0) {
-      throw icaclsError(step, { success: false, exitCode: null, timedOut: true, stdout: "" });
+      throw icaclsError(
+        step,
+        { success: false, exitCode: null, timedOut: true, stdout: "" },
+        {
+          stage: "deadline_before_spawn",
+          elapsedMs: Math.max(0, nowFn() - sequenceStartedAt),
+          budgetMs: remaining,
+        },
+      );
     }
-    return awaitAsyncIcaclsRunner(args, remaining);
+    const started = nowFn();
+    const result = await awaitAsyncIcaclsRunner(args, remaining);
+    return {
+      result,
+      meta: {
+        stage: runnerFailureStageOf(result),
+        elapsedMs: Math.max(0, nowFn() - started),
+        budgetMs: remaining,
+      },
+    };
   };
-  const runOrThrow = async (step: string, args: string[]): Promise<void> => {
-    const result = await run(step, args);
-    if (!result.success) throw icaclsError(step, result);
+  const runOrThrow = async (step: IcaclsStep, args: string[]): Promise<void> => {
+    const { result, meta } = await run(step, args);
+    if (!result.success) throw icaclsError(step, result, meta);
   };
 
   await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory), ...extraReadAces]);
   await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
-  const removal = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
+  const { result: removal, meta: removalMeta } = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
   if (!removal.success) {
-    if (removal.timedOut) throw icaclsError("/remove:g", removal);
+    if (removal.timedOut) throw icaclsError("/remove:g", removal, removalMeta);
     for (const sid of BROAD_SIDS) {
-      const found = await run("/findsid", [targetPath, "/findsid", sid]);
-      if (!found.success) throw icaclsError("/findsid", found);
+      const { result: found, meta: foundMeta } = await run("/findsid", [targetPath, "/findsid", sid]);
+      if (!found.success) throw icaclsError("/findsid", found, foundMeta);
       if (found.stdout.includes(targetPath)) {
-        throw icaclsError("/remove:g", removal);
+        throw icaclsError("/remove:g", removal, removalMeta);
       }
     }
   }
@@ -940,9 +1185,48 @@ function isTimeoutError(error: unknown): boolean {
     && String((error as NodeJS.ErrnoException).code) === "ETIMEDOUT";
 }
 
+/**
+ * Field-by-field allowlist copy of an aclFailure record from an untrusted cause.
+ * A malformed field invalidates the whole record except `spawnErrorCode`,
+ * which is optional and simply omitted when it is not an allowlisted code.
+ */
+function sanitizeAclFailure(cause: unknown): AclFailureDiagnostics | undefined {
+  if (!cause || typeof cause !== "object" || !("aclFailure" in cause)) return undefined;
+  const raw = (cause as { aclFailure?: unknown }).aclFailure;
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.step !== "string" || !ICACLS_STEPS.has(f.step)) return undefined;
+  if (
+    f.stage !== "deadline_before_spawn" &&
+    f.stage !== "spawn_failed" &&
+    f.stage !== "runner_rejected" &&
+    f.stage !== "runner_watchdog" &&
+    f.stage !== "child_result"
+  ) {
+    return undefined;
+  }
+  if (typeof f.elapsedMs !== "number" || !Number.isFinite(f.elapsedMs)) return undefined;
+  if (typeof f.budgetMs !== "number" || !Number.isFinite(f.budgetMs)) return undefined;
+  if (typeof f.success !== "boolean" || typeof f.timedOut !== "boolean") return undefined;
+  if (f.exitCode !== null && (typeof f.exitCode !== "number" || !Number.isFinite(f.exitCode))) {
+    return undefined;
+  }
+  const spawnErrorCode = allowlistedSpawnErrorCode(f.spawnErrorCode);
+  return {
+    step: f.step as IcaclsStep,
+    stage: f.stage,
+    elapsedMs: f.elapsedMs,
+    budgetMs: f.budgetMs,
+    success: f.success,
+    exitCode: f.exitCode as number | null,
+    timedOut: f.timedOut,
+    ...(spawnErrorCode !== undefined ? { spawnErrorCode } : {}),
+  };
+}
+
 /** Preserve only the bounded machine-readable cause on a sanitized public error. */
 function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoException {
-  const error = new Error(diagnostics) as NodeJS.ErrnoException;
+  const error = new Error(diagnostics) as NodeJS.ErrnoException & { aclFailure?: AclFailureDiagnostics };
   const code = cause && typeof cause === "object" && "code" in cause
     ? String((cause as { code?: unknown }).code)
     : "";
@@ -959,6 +1243,8 @@ function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoExc
   ) {
     error.code = code;
   }
+  const aclFailure = sanitizeAclFailure(cause);
+  if (aclFailure) error.aclFailure = aclFailure;
   return error;
 }
 
@@ -1071,7 +1357,7 @@ function hardenEntry(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
-  // The owner-only compliance probe cannot vouch for a shape that also needs read ACEs.
+  // Secret compliance does not prove the extra read grants required by a staged payload.
   if (extraReadAces.length === 0 && existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);

@@ -34,6 +34,96 @@ async function bootstrap(response: Response, origin: string) {
   return { token: token!, csrf: csrf! };
 }
 
+const MINT_STDERR_TAIL_BYTES = 4096;
+
+const GUI_PAIR_FAILURE_CLASSES = [
+  "usage", "origin-scope", "runtime-discovery", "standalone-target", "local-intent",
+  "unattested-target", "runtime-mismatch", "attestation", "capability", "transport",
+  "rejected", "unknown",
+] as const;
+type GuiPairFailureClass = (typeof GUI_PAIR_FAILURE_CLASSES)[number];
+
+interface GuiPairStderrObservation {
+  /** Byte-bounded decoded tail; an input to classification only, never reported. */
+  tail: string;
+  /** How observation ended: a natural pipe EOF, an explicit cancel, or a read failure. */
+  state: "eof" | "cancelled" | "error";
+}
+
+// The fixed stderr vocabulary of runGuiCommand in src/cli/gui.ts. Only this class token may be
+// reported: raw stderr can carry paths, command details or a thrown stack, so it stays withheld
+// exactly like the credential-bearing stdout body. An incomplete observation is only "unknown".
+function classifyGuiPairFailure(observed: GuiPairStderrObservation): GuiPairFailureClass {
+  if (observed.state !== "eof") return "unknown";
+  const stderr = observed.tail;
+  if (stderr.includes("Usage: ocx gui")) return "usage";
+  if (stderr.includes("standalone configured literal loopback origin")) return "origin-scope";
+  if (stderr.includes("No running attested OpenCodex proxy")) return "runtime-discovery";
+  if (stderr.includes("configured loopback address and port")) return "standalone-target";
+  if (stderr.includes("write access to the private OpenCodex home")) return "local-intent";
+  const refused = stderr.match(/GUI pairing failed \((unattested-target|runtime-mismatch|attestation|capability|transport|rejected)\)/);
+  if (refused) return refused[1] as GuiPairFailureClass;
+  return "unknown";
+}
+
+/**
+ * Own the mint child's stderr pipe. Every chunk is folded into a fixed byte window with a bounded
+ * copy — the retained window stays at 4 KiB and a large chunk's backing buffer is never kept —
+ * while the reader drains continuously so a chatty child cannot block on a full pipe. finish()
+ * ends observation on every path: a pipe still open receives one explicit cancel and the drain
+ * task's own settlement is always awaited — cancel is a request, never abandonment. The contract
+ * covers the observed EOF/cancel/error settlement only; whether the native stderr source itself
+ * completed is what the next run's drain state reports. A pipe that closed between the child's
+ * exit and the cancel is reported "cancelled", the conservative side.
+ */
+function drainGuiPairStderr(stream: ReadableStream<Uint8Array>): {
+  done: Promise<void>;
+  finish: () => Promise<GuiPairStderrObservation>;
+} {
+  const reader = stream.getReader();
+  const tail = new Uint8Array(MINT_STDERR_TAIL_BYTES);
+  let size = 0;
+  let cancelRequested = false;
+  let cancelFailed = false;
+  let settled: GuiPairStderrObservation["state"] | null = null;
+  const done = (async (): Promise<void> => {
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) {
+          settled = cancelRequested ? "cancelled" : "eof";
+          break;
+        }
+        const chunk = next.value;
+        if (chunk.length >= tail.length) {
+          tail.set(chunk.subarray(chunk.length - tail.length));
+          size = tail.length;
+        } else {
+          const keep = Math.min(size + chunk.length, tail.length);
+          tail.copyWithin(0, size + chunk.length - keep, size);
+          tail.set(chunk, keep - chunk.length);
+          size = keep;
+        }
+      }
+    } catch {
+      settled = "error";
+    } finally {
+      try { reader.releaseLock(); } catch { /* A settled or already-released reader can refuse. */ }
+    }
+  })();
+  return {
+    done,
+    async finish() {
+      if (settled === null) {
+        cancelRequested = true;
+        try { await reader.cancel(); } catch { cancelFailed = true; }
+      }
+      await done;
+      return { tail: new TextDecoder().decode(tail.subarray(0, size)), state: cancelFailed ? "error" : settled ?? "cancelled" };
+    },
+  };
+}
+
 describe("standalone CLI pairing", () => {
   // Both children run src/cli/index.ts, whose start path loads the whole server graph. On a cold
   // Windows runner that load took most of the readiness watchdog; pay it here, not in the case.
@@ -159,11 +249,25 @@ describe("standalone CLI pairing", () => {
       await expectStatus(ordinary, false);
 
       const mint = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "gui", "pair", "--origin", origin, "--json"], {
-        cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+        cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });
       children.add(mint);
-      const [mintExit, output] = await Promise.all([mint.exited, new Response(mint.stdout).text()]);
-      expect(mintExit, "headless gui pair CLI succeeds (output withheld)").toBe(0);
+      const mintStartedAt = performance.now();
+      const mintStderr = drainGuiPairStderr(mint.stderr);
+      let mintExit = -1;
+      let output = "";
+      let mintObserved: GuiPairStderrObservation;
+      try {
+        [mintExit, output] = await Promise.all([mint.exited, new Response(mint.stdout).text()]);
+      } finally {
+        // End the observation on success, failure and thrown paths alike: a still-open pipe
+        // receives one cancel, then the drain task's settlement is awaited before we proceed.
+        mintObserved = await mintStderr.finish();
+      }
+      // elapsed spans spawn through observation settle, not only the child's exit edge.
+      const mintElapsedMs = Math.round(performance.now() - mintStartedAt);
+      const mintClass = mintExit === 0 ? "n/a" : classifyGuiPairFailure(mintObserved);
+      expect(mintExit, `headless gui pair CLI succeeds (exit=${mintExit} signal=${mint.signalCode ?? "none"} elapsed=${mintElapsedMs}ms class=${mintClass} drain=${mintObserved.state}; output withheld)`).toBe(0);
       const minted = parseObject(output);
       expect(minted.kind === "created", "CLI retains its original grant response").toBe(true);
       expect(minted.browserOrigin === origin && minted.serverOrigin === origin, "CLI exact origin binding").toBe(true);
@@ -218,4 +322,75 @@ describe("standalone CLI pairing", () => {
       removeTreeWithRetry(root);
     }
   }, DEADLINE + 10_000);
+});
+
+// Semantic checks for the drain/classification helpers above: no child, server or credential.
+describe("gui pair stderr observation", () => {
+  const encode = (value: string) => new TextEncoder().encode(value);
+  const streamOf = (chunks: string[]) => new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encode(chunk));
+      controller.close();
+    },
+  });
+
+  test("a fixed phrase split across chunks still classifies at EOF", async () => {
+    const drain = drainGuiPairStderr(streamOf(["GUI pairing failed (", "attes", "tation).\n"]));
+    await drain.done;
+    const observed = await drain.finish();
+    expect(observed.state, "drain reached pipe EOF").toBe("eof");
+    expect(classifyGuiPairFailure(observed), "finite class from the bounded tail").toBe("attestation");
+  });
+
+  test("a phrase evicted from the byte tail and foreign bytes stay unknown", async () => {
+    const drain = drainGuiPairStderr(streamOf([
+      "GUI pairing failed (attestation).\n",
+      "s".repeat(MINT_STDERR_TAIL_BYTES + 512),
+    ]));
+    await drain.done;
+    const observed = await drain.finish();
+    expect(observed.state, "drain reached pipe EOF").toBe("eof");
+    expect(observed.tail, "the retained window holds only the last 4096 ASCII bytes").toBe("s".repeat(MINT_STDERR_TAIL_BYTES));
+    const value = classifyGuiPairFailure(observed);
+    expect(GUI_PAIR_FAILURE_CLASSES as readonly string[], "reported class stays finite").toContain(value);
+    expect(value, "an evicted phrase is not resurrected").toBe("unknown");
+  });
+
+  test("a read error ends the observation as incomplete", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encode("GUI pairing failed (attestation).\n"));
+        controller.error(new Error("fixture-sentinel"));
+      },
+    });
+    const observed = await drainGuiPairStderr(stream).finish();
+    expect(observed.state).toBe("error");
+    expect(classifyGuiPairFailure(observed)).toBe("unknown");
+  });
+
+  test("a pipe held past the child's exit is cancelled and the task still settles", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+    const drain = drainGuiPairStderr(stream);
+    controller.enqueue(encode("GUI pairing failed (attestation).\n"));
+    const observed = await drain.finish();
+    expect(observed.state).toBe("cancelled");
+    expect(classifyGuiPairFailure(observed)).toBe("unknown");
+    await drain.done;
+    expect(() => controller.enqueue(encode("again")), "no live read remains after finish").toThrow();
+  });
+
+  test("a rejecting underlying cancel surfaces as error, never hidden cancelled", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) { controller = c; },
+      cancel() { return Promise.reject(new Error("fixture-cancel-refusal")); },
+    });
+    const drain = drainGuiPairStderr(stream);
+    controller.enqueue(encode("GUI pairing failed (attestation).\n"));
+    const observed = await drain.finish();
+    expect(observed.state).toBe("error");
+    expect(classifyGuiPairFailure(observed)).toBe("unknown");
+    await drain.done;
+  });
 });

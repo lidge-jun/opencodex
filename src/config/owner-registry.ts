@@ -156,10 +156,11 @@ export function readOwnerRegistry(): OwnerRegistryRead {
 }
 
 /** Retire 'home' from the shared registry. Best-effort like registration. */
-export function unregisterOwnerRegistryHome(home: string): void {
-  try {
-    unlinkSync(registryEntryPath(ownerRegistryDir(), home));
-  } catch { /* a missing pointer needs no removal */ }
+export function unregisterOwnerRegistryHome(home: string, beforeMutation?: () => void): void {
+  let path: string;
+  try { path = registryEntryPath(ownerRegistryDir(), home); } catch { return; }
+  beforeMutation?.();
+  try { unlinkSync(path); } catch { /* a missing pointer needs no removal */ }
 }
 
 /** Register this process's own home after its runtime record is published. */

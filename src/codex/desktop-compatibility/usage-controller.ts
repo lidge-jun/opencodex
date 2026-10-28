@@ -46,6 +46,8 @@ export class UsageRelayController {
     return this.activation.activate(options);
   }
   observeOnly() { return this.activation.observeOnly(); }
+  /** Internal package-proof revocation; synchronous so pending output loses its generation first. */
+  invalidateContext() { this.activation.invalidateIdentity(); }
   expireIfNeeded() { return this.activation.expireIfNeeded(); }
   registerStream(exchange: Exchange, close: () => Promise<void>): Registration | null {
     if (exchange.status !== 200) return null;

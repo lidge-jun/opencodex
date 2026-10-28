@@ -10,8 +10,10 @@ import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let library = "";
 let previousHome: string | undefined;
 let previousLibrary: string | undefined;
@@ -106,6 +108,7 @@ function oversizedTrackedBody(): {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-toggle-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   library = join(root, "desktop-library");
   previousHome = process.env.OPENCODEX_HOME;
   previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -117,6 +120,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  lifecycleLock.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;

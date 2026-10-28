@@ -158,3 +158,9 @@ OpenCodex가 `web_search` 가로채기를 멈추고 Codex 통합이 `~/.codex/co
 파일을 직접 고치고 싶다면 이전처럼 `config.json`에서 `enabled`를 `false`로 두면 됩니다. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
 fingerprint 선례를 따르지만, 실제 계정과 작업량으로 충분히 soak test하는 편이 좋습니다. 전체
 필드는 [설정 레퍼런스](/ko/reference/configuration/server/#sidecars)를 참고하세요.
+
+검색 응답의 선택 필드 형식이 잘못되어도 유효한 답변과 출처는 유지합니다. 오류 메시지 값의 형식이 잘못되면 일반 실패 메시지를 표시합니다.
+
+검색 답변의 Sources 목록에서 URL과 짝을 이루지 못한 글머리표는 출처로 삭제하지 않고 답변에 남깁니다. 제목 다음 줄에 해당 URL이 있으면 하나의 출처로 처리합니다. `mode:fast`처럼 인라인 코드 안의 비 HTTP URI 형태 텍스트는 답변에 남기며, 코드로 표시한 HTTP(S) URL은 출처로 처리합니다.
+
+긴 검색어와 답변은 UTF-16 서로게이트 쌍을 나누지 않는 위치에서 줄이므로, 결과 길이 제한 때문에 😀 같은 한 글자가 반으로 잘리지 않습니다. 다만 제로 폭 결합자(ZWJ)로 이어진 이모지처럼 여러 글자로 이루어진 조합은 중간에서 잘릴 수 있습니다.

@@ -303,3 +303,7 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## 冷却恢复预约
+
+通过 `cooldownReprobe: { enabled: true }` 启用的恢复尝试只属于预约它的请求；其他请求仍受已保存的冷却限制。预约会在冷却等待和 JEV 选择期间保留。目标在等待期间重新可用时，只要其冷却记录没有变化，就仍可重试；新的冷却记录会使该目标的预约失效。成功后，只清除实际响应目标未改变的冷却记录；未尝试的目标和新的失败仍保留冷却。提供方禁用、配额、请求资格和取消检查仍然生效。请参阅[设置与限制](/guides/combos/#retry-all-cooled-targets-opt-in)。

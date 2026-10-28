@@ -11,8 +11,44 @@ and a null token, bounds UTF-16 decoding, and frees the allocation even when the
 with a bounded SID read, `LocalFree` and `CloseHandle` on every exit. A cold PowerShell start
 cannot breach the lookup budget on x64 because no child process starts (#7544).
 Unsupported FFI retains the bounded trusted PowerShell helper; native API failures refuse.
+`src/lib/windows-native-principal.ts` reuses that token reader for the ACL identity pair and
+translates its live SID with `LookupAccountSidW`, preserving native UTF-16 account/domain names.
+The async resolver runs native work in `src/lib/windows-native-principal-worker.ts`; callers have
+independent monotonic deadlines while one shared job stays owned through Worker closure. Expired
+results do not enter the identity cache or the ACL timeout memo. The sync resolver rejects an
+elapsed budget before caching; unsupported architectures retain the trusted PowerShell helper.
+Token, SID allocation and DLL cleanup finish before the Worker posts its result and exits.
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.
+
+## Bun test lock generations
+
+`scripts/test-run-lock.ts` serializes updated runners' authoritative acquire, stale
+retirement, same-run/inherited member registration and owner release through
+`scripts/test-run-lock-gate.ts`. A synchronous `BEGIN IMMEDIATE` holds the gate
+through liveness checks and filesystem changes; polling and callbacks run outside.
+The gate is the permanent `${lockPath}.gate.sqlite` sibling. It is never renamed,
+unlinked or PID/mtime-reclaimed. The existing effective-user runtime/ACL boundary
+protects it; redirected and hardlinked gate paths are refused. SQLite owns its
+file descriptors, with no separate filesystem open/close of the gate inode.
+
+Acquire retries SQLite busy within its existing bounded wait. Synchronous owner
+release retries the gate in bounded slices under a ten-second elapsed deadline,
+then fails without deleting the canonical lock. Process death releases the
+gate's OS lock. The next runner applies
+the existing conservative process-start/PID/member evidence to directory state.
+Owner publication probes before exposing a new directory; failed publication
+never recursively deletes through the current canonical path. Retirement checks
+directory identity and owner contents before and after quarantine rename. An
+unexpected displaced object is preserved rather than restored over another owner.
+Only the original owner capability releases a generation; joined release is a no-op.
+
+The canonical name, version 1 owner records, member names and legacy live-PID veto
+remain compatible. This does not stop an old in-flight executable that ignores the
+gate and already decided to rename/delete a previous generation. Finish pre-update
+test runners before upgrading; metadata compatibility is not mixed-version race
+freedom. `tests/ci-workflows/test-run-lock-generation.test.ts` exercises private
+paths, delayed generation transitions, member/release ordering and gate-holder death.
 
 ## Sandbox lifecycle
 
@@ -72,13 +108,14 @@ one promise. After teardown starts only the lifecycle's own abort reason is abso
 error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before
 draining producers/reaps and restoring or removing a home. The helper does not replace
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).
 It settles producers, then each root's config flights, closes the request-history SQLite index,
 drains each root's ACL work, then asks `nativeMainOwnerHomesOpenAtOrBelow` whether a native-main
-owner below the root is still open, acquiring (descriptor and SQLite handle held while its hardener
+owner at or below the root is still open, acquiring (descriptor and SQLite handle held while its hardener
 runs), waiting on a retry, or closing; only roots that pass both are removed. An open owner fails
 that root at once with an error naming the owner home, without spending the removal retry budget.
 A producer or history failure blocks every removal; a root-specific drain or owner failure

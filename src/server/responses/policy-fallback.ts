@@ -1,5 +1,6 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
@@ -130,7 +131,11 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
-    return comboFailureDecision(response.status, text, { code: errorCodeFromText(text) }) === "hop";
+    return comboFailureDecision(response.status, text, {
+      code: errorCodeFromText(text),
+      // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
+      verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
+    }) === "hop";
   } catch {
     return false;
   }

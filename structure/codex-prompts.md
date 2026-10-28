@@ -58,6 +58,16 @@ matches the submitted input. Refusals and newer edits keep their drafts.
 runs `codex debug prompt-input` in that home, bounded in time and in bytes, maps each rendered section
 onto a layer, and takes no caller-supplied directory. Captured process output is never serialized
 back: a failure is a classified kind plus a fixed phrase and the resolved command.
+Each caller's budget includes metadata time, the shared-flight wait and verification.
+Synchronous metadata reads cannot be interrupted; an elapsed check after they return stops a
+budget-exhausted caller from starting a flight even when a stalled event loop kept the timer
+quiet. Expiry preserves the locally read base prompt and reports `execution-failed` with a
+timed-out detail; an external cancellation that won first retains its cancelled status. Equal callers share one flight
+whose fixed deadline covers asynchronous execution-trust validation and the probe child. The flight claims the sole
+slot before validation begins; a rejected target becomes the shared failure for every joined caller.
+A caller's expiry ends only its own wait and never extends the shared bound. The flight's deadline timer,
+last-waiter exit, output overflow or process errors can stop the flight. Before a child is spawned, the slot
+is held until asynchronous trust validation settles; after spawn, it is held until the exact child closes.
 Non-object messages and content items are skipped, and only string text is extracted; output with no recognized sections returns `output-invalid`, while a resolved installed runtime that cannot spawn returns `program-not-found`.
 
 The base prompt is absent from that output, because Codex discards `base_instructions` before

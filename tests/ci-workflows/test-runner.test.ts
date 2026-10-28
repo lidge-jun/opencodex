@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -34,6 +35,9 @@ import {
 import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import {
   acquireTestRunLock,
+  parseDarwinTestProcessStart,
+  parseLinuxTestProcessStart,
+  readTestRunProcessStartBatch,
   resolveBareTestRunIdentity,
   resolveDefaultTestRunLockPath,
   resolveInheritedTestRunLock,
@@ -1483,6 +1487,227 @@ describe("bun test user lock", () => {
     } finally {
       removeTreeWithRetry(root);
     }
+  });
+
+  const startA = "win32:1600000000000";
+  const startB = "win32:1600000000001";
+  const identityReader = (start: string | null) => (pids: readonly number[]) =>
+    new Map(pids.map(pid => [pid, start]));
+  const identityFixture = (ownerStart: unknown, memberStart?: unknown, legacyMember = false) => {
+    const root = mkdtempSync(join(tmpdir(), "opencodex-test-lock-"));
+    const lockPath = join(root, "suite.lock");
+    const owner = {
+      version: 1, runId: "held", token: "fixture-token", acquiredAt: new Date().toISOString(),
+      pid: memberStart === undefined && !legacyMember ? process.pid : 2_147_483_647,
+      ...(ownerStart === undefined ? {} : { processStart: ownerStart }),
+    };
+    mkdirSync(lockPath);
+    writeFileSync(join(lockPath, "owner.json"), JSON.stringify(owner));
+    if (memberStart !== undefined || legacyMember) {
+      mkdirSync(join(lockPath, "members"));
+      const prefix = legacyMember ? String(process.pid)
+        : `${process.pid}.v2.${createHash("sha256").update(String(memberStart)).digest("hex")}`;
+      writeFileSync(join(lockPath, "members", `${prefix}-${owner.token}`),
+        legacyMember ? "" : JSON.stringify(memberStart));
+    }
+    return { root, lockPath, owner };
+  };
+
+  for (const member of [false, true]) {
+    test(`a reused ${member ? "member" : "owner"} PID is reclaimed by a different or same run`, async () => {
+      for (const runId of ["next", "held"]) {
+        const fixture = identityFixture(startA, member ? startA : undefined);
+        try {
+          const replacement = await acquireTestRunLock({
+            runId, lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 50,
+            env: queuedTestEnv, processStartBatch: identityReader(startB),
+          });
+          expect(replacement.acquired).toBe(true);
+          expect(replacement.owner?.processStart).toBe(startB);
+          replacement.release();
+          expect(existsSync(fixture.lockPath)).toBe(false);
+        } finally { removeTreeWithRetry(fixture.root); }
+      }
+    });
+
+    for (const [label, recorded, current] of [
+      ["matching", startA, startA],
+      ["unreadable", startA, null],
+      ["malformed current", startA, "unrecognized"],
+      ["malformed recorded", { unexpected: true }, startB],
+      ["invalid calendar", "darwin:2026-99-99T25:00:00Z", startB],
+      ["different platform", startA, "linux:00000000-0000-0000-0000-000000000001:10"],
+    ] as const) {
+      test(`${label} ${member ? "member" : "owner"} identity preserves the live veto`, async () => {
+        const fixture = identityFixture(recorded, member ? recorded : undefined);
+        try {
+          await expect(acquireTestRunLock({
+            runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+            env: queuedTestEnv, processStartBatch: identityReader(current),
+          })).rejects.toThrow("timed out");
+          expect(JSON.parse(readFileSync(join(fixture.lockPath, "owner.json"), "utf8"))).toEqual(fixture.owner);
+        } finally { removeTreeWithRetry(fixture.root); }
+      });
+    }
+  }
+
+  for (const member of [false, true]) {
+    test(`a legacy ${member ? "member" : "owner"} with a live PID always vetoes reclamation`, async () => {
+      const fixture = identityFixture(undefined, undefined, member);
+      try {
+        await expect(acquireTestRunLock({
+          runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+          env: queuedTestEnv, processStartBatch: identityReader(startB),
+        })).rejects.toThrow("timed out");
+      } finally { removeTreeWithRetry(fixture.root); }
+    });
+  }
+
+  test("modern re-registration uses a new path; legacy re-registration remains a PID veto", async () => {
+    const fixture = identityFixture(startA);
+    let current = startA;
+    const processStartBatch = (pids: readonly number[]) => new Map(pids.map(pid =>
+      [pid, pid === process.ppid ? startA : current]));
+    // A separate live owner lets successive instances of the member PID join.
+    fixture.owner.pid = process.ppid;
+    writeFileSync(join(fixture.lockPath, "owner.json"), JSON.stringify(fixture.owner));
+    const options = { runId: "held", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+      env: queuedTestEnv, processStartBatch };
+    try {
+      expect((await acquireTestRunLock(options)).acquired).toBe(false);
+      current = startB;
+      expect((await acquireTestRunLock(options)).acquired).toBe(false);
+      const files = readdirSync(join(fixture.lockPath, "members"));
+      expect(files.length).toBe(2);
+      for (const file of files) {
+        expect(Number.parseInt(file, 10)).toBe(process.pid); // old-reader compatibility
+        expect(file.endsWith(`-${fixture.owner.token}`)).toBe(true);
+      }
+      fixture.owner.pid = 2_147_483_647;
+      writeFileSync(join(fixture.lockPath, "owner.json"), JSON.stringify(fixture.owner));
+      await expect(acquireTestRunLock({ ...options, runId: "blocked" })).rejects.toThrow("timed out");
+      // The legacy writer appends empty to its own PID-only path. Even after all
+      // modern identities become stale, that registration must preserve liveness.
+      const legacy = join(fixture.lockPath, "members", `${process.pid}-${fixture.owner.token}`);
+      writeFileSync(legacy, JSON.stringify(startA));
+      writeFileSync(legacy, "", { flag: "a" });
+      current = "win32:1600000000002";
+      await expect(acquireTestRunLock({ ...options, runId: "blocked" })).rejects.toThrow("timed out");
+      expect(readFileSync(legacy, "utf8")).toBe(JSON.stringify(startA));
+    } finally { removeTreeWithRetry(fixture.root); }
+  });
+
+  test("unknown registration falls back to an empty legacy member marker", async () => {
+    const fixture = identityFixture(undefined);
+    try {
+      await acquireTestRunLock({
+        runId: "held", lockPath: fixture.lockPath, env: queuedTestEnv,
+        processStartBatch: identityReader(null),
+      });
+      expect(readFileSync(join(fixture.lockPath, "members", `${process.pid}-${fixture.owner.token}`), "utf8")).toBe("");
+    } finally { removeTreeWithRetry(fixture.root); }
+  });
+
+  test("a failed identity probe stays conservative", async () => {
+    const fixture = identityFixture(startA);
+    try {
+      await expect(acquireTestRunLock({
+        runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+        env: queuedTestEnv, processStartBatch() { throw new Error("unreadable"); },
+      })).rejects.toThrow("timed out");
+    } finally { removeTreeWithRetry(fixture.root); }
+  });
+
+  test("stale verdicts are not cached across polls", async () => {
+    const fixture = identityFixture(startA, startB);
+    fixture.owner.pid = process.ppid;
+    writeFileSync(join(fixture.lockPath, "owner.json"), JSON.stringify(fixture.owner));
+    let waited = false;
+    let ownerProbes = 0;
+    const startedAt = Date.now();
+    let now = startedAt;
+    let freshOwnerObserved = false;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    // Leave the real scheduler and gate intact. If cached liveness suppresses
+    // the next identity probe, the existing real deadline still ends the wait.
+    const escapeAt = performance.now() + INTERNAL_DEADLINE_MS;
+    const escape = setInterval(() => {
+      if (performance.now() >= escapeAt) now = startedAt + 20;
+    }, 5);
+    try {
+      await expect(acquireTestRunLock({
+        runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20, env: queuedTestEnv,
+        onWait() { waited = true; now = Math.max(now, startedAt + 19); },
+        processStartBatch: pids => new Map(pids.map(pid => {
+          if (pid === process.ppid) {
+            ownerProbes += 1;
+            if (waited) {
+              freshOwnerObserved = true;
+              now = startedAt + 20;
+            }
+          }
+          return [pid, waited ? startA : startB];
+        })),
+      })).rejects.toThrow("timed out");
+      expect(freshOwnerObserved).toBe(true);
+      expect(ownerProbes).toBeGreaterThan(1);
+    } finally {
+      clearInterval(escape);
+      clock.mockRestore();
+      removeTreeWithRetry(fixture.root);
+    }
+  });
+
+  test("only ESRCH proves a PID dead", async () => {
+    for (const [code, member] of ["EPERM", "EACCES", "EINVAL", undefined].flatMap(code =>
+      [[code, false], [code, true]] as const)) {
+      const fixture = identityFixture(startA, member ? startA : undefined);
+      const originalKill = process.kill.bind(process);
+      const kill = spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (member && pid !== process.pid) return originalKill(pid, signal);
+        throw Object.assign(new Error("probe"), { code });
+      });
+      try {
+        await expect(acquireTestRunLock({
+          runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+          env: queuedTestEnv, processStartBatch: identityReader(startB),
+        })).rejects.toThrow("timed out");
+      } finally { kill.mockRestore(); removeTreeWithRetry(fixture.root); }
+    }
+  });
+
+  test("the platform identity reader reports a stable own identity", () => {
+    const first = readTestRunProcessStartBatch([process.pid]).get(process.pid);
+    if (!["win32", "darwin", "linux"].includes(process.platform)) return;
+    expect(first?.startsWith(`${process.platform}:`)).toBe(true);
+    expect(readTestRunProcessStartBatch([process.pid]).get(process.pid)).toBe(first);
+  });
+
+  test("macOS process starts use strict English UTC tokens", () => {
+    expect(parseDarwinTestProcessStart("Thu Oct 22 10:03:04 2026")).toBe("darwin:2026-10-22T10:03:04Z");
+    for (const value of ["Thu Oct 22 10:03:04 2026 PST", "Thu Oct 22 25:03:04 2026",
+      "Thu Feb 31 10:03:04 2026", "Wed Oct 22 10:03:04 2026", "jeu. oct. 22 10:03:04 2026"]) {
+      expect(parseDarwinTestProcessStart(value)).toBeNull();
+    }
+  });
+
+  test("Linux identity uses normalized start ticks and boot UUID without a wall clock", () => {
+    const boot = "00000000-0000-0000-0000-000000000001";
+    const stat = `123 (name with ) parentheses) S ${Array(18).fill("0").join(" ")} 000123 0`;
+    expect(parseLinuxTestProcessStart(stat, `${boot}\n`)).toBe(`linux:${boot}:123`);
+    expect(parseLinuxTestProcessStart(stat, "unreadable")).toBeNull();
+    expect(parseLinuxTestProcessStart(stat.replace("000123", "invalid"), boot)).toBeNull();
+  });
+
+  test("file timestamps never override matching process identities", async () => {
+    const fixture = identityFixture(startA);
+    try {
+      utimesSync(join(fixture.lockPath, "owner.json"), new Date(0), new Date(0));
+      await expect(acquireTestRunLock({
+        runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20,
+        env: queuedTestEnv, processStartBatch: identityReader(startA),
+      })).rejects.toThrow("timed out");
+    } finally { removeTreeWithRetry(fixture.root); }
   });
 
   test("a live competing run fails closed after the bounded wait", async () => {

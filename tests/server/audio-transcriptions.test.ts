@@ -11,6 +11,7 @@ import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-sta
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import * as routing from "../../src/codex/routing";
 import * as authContext from "../../src/codex/auth-context";
+import * as nativeMainRefresh from "../../src/codex/native-main-refresh-mode";
 import { startServer } from "../../src/server";
 import { handleAudioTranscriptions, AUDIO_BODY_MAX_BYTES, AUDIO_FILE_MAX_BYTES } from "../../src/server/audio-transcriptions";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
@@ -282,6 +283,52 @@ describe("standalone transcription API", () => {
     expect(captured[0]!.headers.get("user-agent")).toBe("codex_cli_rs");
     expect(captured[0]!.headers.get("originator")).toBe("codex_cli_rs");
     expect((await captured[0]!.formData()).get("model")).toBeNull();
+  });
+
+  test("stored Direct transcription discovers a keyring-only login", async () => {
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-keyring-account" });
+    nativeMainRefresh.setNativeMainRefreshResolutionForTests({
+      mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1",
+    });
+    const authStatus = spyOn(nativeMainRefresh, "requestCodexAuthStatus").mockResolvedValue({
+      authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true,
+    });
+    try {
+      const cfg = config();
+      cfg.defaultProvider = "openai";
+      cfg.providers = { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } };
+      saveConfig(cfg);
+      expect((await request()).status).toBe(200);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.headers.get("authorization")).toBe(`Bearer ${token}`);
+      expect(captured[0]!.headers.get("chatgpt-account-id")).toBe("fixture-keyring-account");
+    } finally {
+      nativeMainRefresh.setNativeMainRefreshResolutionForTests(null);
+      authStatus.mockRestore();
+    }
+  });
+
+  test("a temporary keyring lookup failure is retryable without sending audio", async () => {
+    nativeMainRefresh.setNativeMainRefreshResolutionForTests({
+      mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1",
+    });
+    const authStatus = spyOn(nativeMainRefresh, "requestCodexAuthStatus").mockRejectedValue(
+      new nativeMainRefresh.CodexAuthStatusError("fixture private lookup detail"),
+    );
+    try {
+      const cfg = config();
+      cfg.defaultProvider = "openai";
+      cfg.providers = { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } };
+      saveConfig(cfg);
+      const response = await request();
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("1");
+      expect(await response.text()).not.toContain("fixture private lookup detail");
+      expect(captured).toHaveLength(0);
+    } finally {
+      nativeMainRefresh.setNativeMainRefreshResolutionForTests(null);
+      authStatus.mockRestore();
+    }
   });
 
   test("stored Direct credentials never inherit a caller account ID", async () => {

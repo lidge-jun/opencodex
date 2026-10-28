@@ -310,7 +310,12 @@ export async function releaseResponseBodyBestEffort(
   }
   const cancel = body.cancel().catch(() => {});
   if (!signal) {
-    await Promise.race([cancel, new Promise<void>(resolve => setTimeout(resolve, timeoutMs))]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([cancel, new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs); })]);
+    } finally {
+      clearTimeout(timer);
+    }
     return;
   }
   await new Promise<void>(resolve => {

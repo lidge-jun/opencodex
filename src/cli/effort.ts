@@ -1,4 +1,6 @@
 import { loadConfig, saveConfig } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import {
   CODEX_REASONING_LEVELS,
   configuredReasoningEfforts,
@@ -232,20 +234,23 @@ async function setEffort(
   }
 
   // Offline persistence path: only reached when no live proxy was found before mutation
-  const config = loadConfig();
-  if (validatedMain !== undefined) {
-    if (validatedMain === null) delete config.effortCap;
-    else config.effortCap = validatedMain;
-  }
-  if (validatedSubagent !== undefined) {
-    if (validatedSubagent === null) delete config.subagentEffortCap;
-    else config.subagentEffortCap = validatedSubagent;
-  }
-  if (validatedInjection !== undefined) {
-    if (validatedInjection === null) delete config.injectionEffort;
-    else config.injectionEffort = validatedInjection;
-  }
-  saveConfig(config);
+  const config = await withConfigDirHardeningSettled(getConfigDir(), () => {
+    const config = readCliConfigForMutation();
+    if (validatedMain !== undefined) {
+      if (validatedMain === null) delete config.effortCap;
+      else config.effortCap = validatedMain;
+    }
+    if (validatedSubagent !== undefined) {
+      if (validatedSubagent === null) delete config.subagentEffortCap;
+      else config.subagentEffortCap = validatedSubagent;
+    }
+    if (validatedInjection !== undefined) {
+      if (validatedInjection === null) delete config.injectionEffort;
+      else config.injectionEffort = validatedInjection;
+    }
+    saveConfig(config);
+    return config;
+  });
 
   const result = {
     ok: true,
