@@ -40,7 +40,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripInternalReasoningEnabled, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { isCanonicalOnlyInputItem, repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -317,6 +317,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (!isOpenAiOperatedResponsesDestination(provider)) {
           if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
+          if (
+            typeof replayPrefixLen === "number"
+            && replayPrefixLen > 0
+            && isPlainObject(outBody)
+            && Array.isArray(outBody.input)
+          ) {
+            const prefixItems = outBody.input.slice(0, Math.min(outBody.input.length, Math.trunc(replayPrefixLen)));
+            const droppedInPrefix = prefixItems.filter(isCanonicalOnlyInputItem).length;
+            replayPrefixLen = Math.max(0, replayPrefixLen - droppedInPrefix);
+          }
           outBody = stripCanonicalOnlyInputItems(outBody);
         }
         outBody = promoteClientLoadedTools(outBody);

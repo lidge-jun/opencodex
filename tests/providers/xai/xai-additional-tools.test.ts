@@ -221,4 +221,30 @@ describe("xAI Responses additional_tools promotion", () => {
     expect(body.tools).toBeArray();
     expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
   });
+
+  test("promoteResponsesAdditionalTools recalculates replay boundary when canonical-only items are dropped", () => {
+    const xaiProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      headers: { authorization: "Bearer xai-key" },
+    };
+
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "configuration_update", reasoning: { effort: "high" } },
+        { type: "message", role: "user", content: "hello" },
+        { type: "additional_tools", tools: [lookup] },
+      ],
+    };
+
+    // Original prefix len is 2 (configuration_update + user message).
+    // When configuration_update is dropped, prefix len must adjust from 2 to 1.
+    // additional_tools moves from index 2 to index 1, which matches the new prefix boundary (>= 1),
+    // so its tools are promoted to top-level tools.
+    const { body } = build(xaiProvider, raw, 2);
+    expect(body.input).toEqual([{ type: "message", role: "user", content: "hello" }]);
+    expect(body.tools).toBeArray();
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
 });
