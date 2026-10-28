@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
 import { trackBackgroundWork } from "../../src/lib/background-work";
@@ -19,11 +19,28 @@ export async function waitForWindowsRecovery(probe: () => WindowsRecoveryProbe) 
     last = probe();
     if (last.entered) {
       const guardian = "guardian" in last.recovery ? last.recovery.guardian : undefined;
-      if (!guardian || ["absent", "reused", "exited"].includes(guardian.state)) return last;
+      if (guardian ? ["absent", "reused", "exited"].includes(guardian.state) : last.guardianStarted === false) return last;
     }
     if (performance.now() >= deadline) throw new Error("native_recovery_proof_timeout: " + JSON.stringify(last));
     await Bun.sleep(50);
   } while (true);
+}
+
+export async function drainWindowsRestartRecovery(owner: Pick<Bun.Subprocess, "exited" | "kill">,
+  probe: () => WindowsRecoveryProbe, settled: () => void, ownerExitMs = WINDOWS_RECOVERY_PROOF_MS) {
+  let timer: ReturnType<typeof setTimeout> | undefined, ownerExitError: unknown;
+  try {
+    await Promise.race([owner.exited, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("fixture_owner_exit_timeout")), ownerExitMs);
+    })]);
+  } catch (error) {
+    ownerExitError = error;
+    try { owner.kill(); }
+    catch (stopError) { ownerExitError = new AggregateError([error, stopError], "fixture_owner_stop_failed"); }
+  } finally { clearTimeout(timer); }
+  await waitForWindowsRecovery(probe);
+  settled(); // Actual Job/receipt proof even when the test body throws.
+  if (ownerExitError) throw ownerExitError;
 }
 
 /** Failure cleanup must prove recovery too; a failed drain stays tracked. */
@@ -42,18 +59,12 @@ export async function withWindowsRestartRecoveryFixture<T>(descendant: boolean,
       env: { ...env, OPENCODEX_HOME: home }, timeout: 30_000,
     });
     if (result.exitCode !== 0) throw new Error("fixture_probe_failed: " + result.stderr.toString());
-    return JSON.parse(result.stdout.toString());
+    return { ...JSON.parse(result.stdout.toString()),
+      guardianStarted: owner.exitCode !== null ? existsSync(join(root, "native-starting")) : undefined };
   };
   try { return await body({ root, config, alias, owner, probe }); }
   finally {
     writeFileSync(join(root, "stop"), "stop");
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([owner.exited, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("fixture_owner_exit_timeout")), WINDOWS_RECOVERY_PROOF_MS);
-      })]);
-    } finally { clearTimeout(timer); }
-    await waitForWindowsRecovery(() => probe());
-    settled(); // Actual Job/receipt proof even when the test body throws.
+    await drainWindowsRestartRecovery(owner, () => probe(), settled);
   }
 }

@@ -44,6 +44,7 @@ if (role && root) {
     const result = await applyCodexCliUpdate(plan.planId, { ...f.deps, commitWindow,
       startWindowsChild(invocation) {
         if (invocation.policy !== "installer") throw new Error("unexpected_fixture_child");
+        writeFileSync(join(root, "native-starting"), "starting");
         const child = startWindowsCliChild({ ...invocation, executable: process.execPath,
           args: [script], cwd: root, env: { SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root } });
         writeFileSync(join(root, "identity.json"), JSON.stringify(windowsRecoveryFixtureIdentity(child)));

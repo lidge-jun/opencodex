@@ -77,4 +77,9 @@ export function observeWindowsRecoveryFixture(root: string) {
   } catch (error) { return { error: String(error) }; }
 }
 
-export type WindowsRecoveryProbe = { entered: boolean; recovery: ReturnType<typeof observeWindowsRecoveryFixture> };
+export type WindowsRecoveryProbe = {
+  entered: boolean;
+  // False only after the owner exits without reaching the native-start marker.
+  guardianStarted?: boolean;
+  recovery: ReturnType<typeof observeWindowsRecoveryFixture>;
+};
