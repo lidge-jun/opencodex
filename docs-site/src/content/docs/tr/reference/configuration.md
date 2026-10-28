@@ -32,6 +32,12 @@ Dosya ayrıştırılamazsa opencodex dosyayı `config.json.invalid-<zaman-damgas
 olarak yedekler, konsolda uyarır ve varsayılanlarla başlar. Eksik bir dosya da
 yeni yükleme varsayılanını kullanır: bir `openai` iletme sağlayıcısı.
 
+Yerel `ocx config set`, `unset`, `import`, çevrimdışı `ocx effort`, özel modeller için add/remove
+ve sağlayıcılar için add/remove/set-default işlemleri, mevcut `config.json` geçersiz veya okunamaz
+olduğunda dosyanın baytlarını değiştirmeden işlemi reddeder. Yeniden denemeden önce
+`ocx config validate` komutunu çalıştırıp dosyayı onarın. Yapılandırma zaten varsa import işlemi de
+okunabilir ve geçerli bir hedef dosya gerektirir.
+
 ## Öncelik ve varsayılanlar
 
 `config.json` içindeki geçerli değerler yerleşik varsayılanları geçersiz kılar.

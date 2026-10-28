@@ -32,7 +32,7 @@ Automatic activation retains its existing settings controls; dashboard quota que
 The companion settings contract in `src/companion/` persists menu-bar and widget preferences.
 `src/server/management/companion-routes.ts` exposes them and the usage timeline from
 `src/usage/timeline.ts`; its query and missing-measurement behavior follows [companion usage](companion.md).
-Only `/api/advisor/settings` and the read-only `/api/advisor/activity` lazily load `advisor-routes.ts`, refreshing the config-scoped factory after a successful settings save; default requests stay outside [the optional Advisor subsystem](advisor.md). The Advisor page adds the adaptive policy/task allowance and a visible-page activity poll using the shared data-surface contract, and its model selector follows the [catalog selection contract](advisor.md#dashboard-model-selection), preserving unknown saved selectors and catalog failure feedback. Activity metadata retention and reasoning evidence follow that subsystem's contract.
+Only `/api/advisor/settings` and the read-only `/api/advisor/activity` lazily load `advisor-routes.ts`, refreshing the config-scoped factory after a successful settings save; default requests stay outside [the optional Advisor subsystem](advisor.md). The Advisor page adds the adaptive policy/task allowance and a visible-page activity poll using the shared data-surface contract, and its model selector follows the [catalog selection contract](advisor.md#dashboard-model-selection), preserving unknown saved selectors and catalog failure feedback. Activity metadata retention and reasoning evidence follow that subsystem's contract. Advisor settings in `src/server/management/advisor-routes.ts` apply the [config admission contract](config.md) before live edits, save and activation. The route arms a detached merge baseline on its fresh disk candidate, patches and passes that same object to the saver, then adopts the saved Advisor subtree and only its live merge baseline, retaining known absence, and captures its response inside admission. Concurrent disk edits, including new fields, are reconciled before persistence. Fallback diagnostics, file diagnostics carrying an error, or a refused deadline returns the existing `write_failed` response; successful response shapes are unchanged.
 
 Native reasoning controls follow [the shared retention contract](transports/native-reasoning-retention.md#configuration-and-management). Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
@@ -57,7 +57,7 @@ linked sources after the quota await to reject revoked or rotated captures.
 
 ## Compact desktop usage
 
-The standalone `/#/tray` GUI route presents local usage and account limits without the
+The standalone `/#/tray` GUI route presents local usage and account limits without
 full dashboard navigation. It reuses the existing API session and fetch wrapper; it
 has no Tauri IPC capability. Companion settings control its sections and chart. Account
 limits use account-level management reads rather than attributing aggregate provider
