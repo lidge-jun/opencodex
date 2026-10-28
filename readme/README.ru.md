@@ -116,7 +116,7 @@ ocx start                         # прокси + панель управлен
 | Платформа | Файл | Примечания |
 |---|---|---|
 | macOS 13+ (Apple Silicon и Intel) | `OpenCodex-<version>-macos.dmg` | Универсальная сборка, подписана Developer ID и нотариализована |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Пока без цифровой подписи: SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Подпись кода через SignPath Foundation внедряется ([политика подписи кода](https://opencodex.me/ru/reference/code-signing/)); пока релиз не подписан, SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` или `-linux-amd64.deb` | Для трея нужен рабочий стол с поддержкой AppIndicator |
 
 Рядом с каждым файлом на странице релиза есть `.sha256`. На macOS 14+ приложение также
@@ -485,6 +485,16 @@ bun run test
 Работа контрибьюторов, которая попала через перенос или реимплементацию мейнтейнером,
 если коммит не называет исходного автора, записана в
 **[CREDITS.md](../CREDITS.md)**.
+
+## Политика подписи кода (Code signing policy)
+
+Исполняемые файлы для Windows переводятся на подпись Authenticode ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). Ход внедрения, проверка подписи и полная политика описаны в [руководстве по подписи кода Windows](https://opencodex.me/ru/reference/code-signing/).
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Отказ от ответственности
 

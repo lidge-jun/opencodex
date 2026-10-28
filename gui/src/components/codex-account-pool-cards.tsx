@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatAccountPauseTooltip } from "../account-pause-display";
 import { useT, useI18n } from "../i18n/shared";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
@@ -118,7 +119,7 @@ export function CodexAccountPoolCards({
                 </span>
               )}
               {a.paused && (
-                <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
+                <span className="badge badge-muted" title={a.pauseDetails ? formatAccountPauseTooltip(t, locale, a.pauseDetails) : t("codexAuth.pausedHint")}>
                   {t("codexAuth.paused")}
                 </span>
               )}

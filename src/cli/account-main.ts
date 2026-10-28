@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { redactSecretArgs } from "./secret-args";
 import { codexExecInvocation } from "../codex/exec-invocation";
+import { validatedCodexExecInvocationAsync, type CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
 import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
 import {
@@ -45,6 +46,41 @@ interface PublicProfile {
 export type NativeMainCodexLoginInvocationDeps =
   & ResolveDeps
   & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">;
+
+export type NativeMainCodexLoginValidatedDeps =
+  & NativeMainCodexLoginInvocationDeps
+  & CodexExecBoundaryAsyncDeps;
+
+/**
+ * Resolve+persist the runtime selection, then let the exec boundary produce the
+ * invocation that is spawned. Validating the raw command matters: re-wrapping
+ * the already-prepared invocation would launch cmd.exe as if it were Codex and
+ * drop windowsVerbatimArguments.
+ */
+export async function nativeMainCodexLoginValidatedInvocation(
+  platform: NodeJS.Platform = process.platform,
+  deps: NativeMainCodexLoginValidatedDeps = {},
+): Promise<SpawnInvocation> {
+  const env = deps.env ?? process.env;
+  const command = resolveAndPersistCodexRuntime({
+    env,
+    platform,
+    existsSync: deps.existsSync,
+    execFileSync: deps.execFileSync,
+    configDir: deps.configDir,
+    readFileSync: deps.readFileSync,
+    discoverAlternatives: false,
+  }).runtime.command || "codex";
+  return validatedCodexExecInvocationAsync(command, ["login"], {
+    env,
+    platform,
+    exists: deps.exists,
+    executable: deps.executable,
+    realpath: deps.realpath,
+    macBundleTrustReasonAsync: deps.macBundleTrustReasonAsync,
+    signal: deps.signal,
+  });
+}
 
 function flag(args: string[], name: string): boolean {
   const index = args.indexOf(name);
@@ -92,14 +128,16 @@ export function nativeMainCodexLoginInvocation(
   return codexExecInvocation(command, ["login"], platform, deps);
 }
 
-function spawnOfficialCodexLogin(codexHome: string): NativeMainLoginChild {
-  const invocation = nativeMainCodexLoginInvocation();
-  const child = Bun.spawn([invocation.file, ...invocation.args], {
+async function spawnOfficialCodexLogin(codexHome: string): Promise<NativeMainLoginChild> {
+  // The boundary validates the raw resolved command and returns the invocation
+  // to spawn; the prepared-invocation builder above stays trust-free on purpose.
+  const validated = await nativeMainCodexLoginValidatedInvocation();
+  const child = Bun.spawn([validated.file, ...validated.args], {
     env: { ...process.env, CODEX_HOME: codexHome },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
-    ...(invocation.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    ...(validated.options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   return child;
 }
@@ -323,7 +361,7 @@ export async function cmdNativeMainAccount(args: string[], deps: AccountDeps): P
         ? deps.spawnCodexLoginImpl(stagingHome)
         : deps.runCodexLoginImpl
           ? { exited: deps.runCodexLoginImpl(stagingHome), kill: () => {} }
-          : spawnOfficialCodexLogin(stagingHome);
+          : await spawnOfficialCodexLogin(stagingHome);
       const heartbeatAbort = new AbortController();
       const heartbeat = maintainStageLease(
         deps,

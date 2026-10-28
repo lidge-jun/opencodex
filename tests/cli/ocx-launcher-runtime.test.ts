@@ -1,16 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledBunPath } from "../../src/lib/bun-runtime";
 import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
 import { REAL_BUN_MIN_BYTES } from "../../src/lib/bun-binary-validator.mjs";
 import { killProxy } from "../../src/lib/process-control";
 import { repoPath } from "../helpers/repo-root";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, moduleGraphSpecifiers, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { trustedFixtureRoot } from "../helpers/trusted-fixture-root";
 
 const BIN_OCX = repoPath("bin", "ocx.mjs");
 const nodeAvailable = spawnSync("node", ["--version"], {
@@ -48,18 +49,6 @@ type WindowsProcessIdentity = {
   creationDate: string;
 };
 
-function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolvePort(port) : reject(new Error("no port"))));
-    });
-  });
-}
-
 async function healthAt(port: number): Promise<Health | null> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -80,15 +69,18 @@ async function healthAt(port: number): Promise<Health | null> {
 }
 
 async function waitForHealth(
-  port: number,
+  runtimeRecord: string,
   deadlineMs: number,
   launcher: ChildProcess,
 ): Promise<Health | null> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     if (launcher.exitCode !== null) return null;
-    const health = await healthAt(port);
-    if (health) return health;
+    try {
+      const record = JSON.parse(readFileSync(runtimeRecord, "utf8")) as { port: number; pid: number };
+      const health = await healthAt(record.port);
+      if (health?.pid === record.pid) return health;
+    } catch { /* runtime publication has not finished */ }
     await Bun.sleep(200);
   }
   return null;
@@ -206,18 +198,23 @@ async function effectiveRuntime(override: string): Promise<string> {
   let hasPrimaryError = false;
   let primaryError: unknown;
   try {
-    port = await freePort();
-    launcher = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
+    const env = isolatedLauncherEnv(root, override);
+    // CLI --port requires a positive pin; configured zero requests allocation.
+    writeFileSync(join(root, "opencodex", "config.json"), JSON.stringify({
+      port: 0, providers: {}, defaultProvider: "openai",
+    }));
+    launcher = spawn("node", [BIN_OCX, "start"], {
       stdio: "ignore",
       windowsHide: true,
-      env: isolatedLauncherEnv(root, override),
+      env,
     });
     if (!launcher.pid) throw new Error("Node launcher has no process id");
     launcherPid = launcher.pid;
     ownedLauncher = captureWindowsProcessIdentity(launcherPid);
 
-    const health = await waitForHealth(port, PROXY_HEALTH_TIMEOUT_MS, launcher);
+    const health = await waitForHealth(join(root, "opencodex", "runtime-port.json"), PROXY_HEALTH_TIMEOUT_MS, launcher);
     if (!health) throw new Error("proxy did not become healthy");
+    port = health.port;
     const identity = windowsProcessIdentity(health.pid);
     if (!identity || identity.parentPid !== launcher.pid) {
       throw new Error("health PID is not the spawned Node launcher's direct Bun child");
@@ -396,16 +393,12 @@ describe.skipIf(!runnable)("ocx package launcher effective Bun runtime", () => {
 });
 
 function pathFixtureRoot(prefix: string): string {
-  if (process.platform === "win32") return mkdtempSync(join(tmpdir(), prefix));
-  // A trusted-executable fixture cannot live beneath a shared temp ancestor whose
-  // owner is neither root nor this user (common in user-namespace sandboxes).
-  // Keep the launcher package isolated from this checkout's installed Bun.
-  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
-  mkdirSync(base, { recursive: true, mode: 0o700 });
-  return mkdtempSync(join(base, prefix));
+  // A trusted-executable fixture needs an ancestry the product check accepts and no
+  // ancestor node_modules/bun; the helper picks such a base per host (#7402).
+  return trustedFixtureRoot(prefix);
 }
 
-function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.0\n") {
+function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.2\n") {
   const calls: Array<{ path: string; args: string[]; timeout: number; shell: boolean; maxBuffer: number }> = [];
   let clock = 0;
   const io: PathBunIo = {
@@ -434,7 +427,7 @@ function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.0\n
 }
 
 describe("validated PATH Bun policy", () => {
-  test.each(["1.4.0", "1.4.2", "1.5.0", "1.99.999", "1.4.0+build.1"])("accepts stable %s on the pinned major", version => {
+  test.each(["1.4.2", "1.4.3", "1.5.0", "1.99.999", "1.4.2+build.1"])("accepts stable %s on the pinned major", version => {
     const fixture = pathProbeFixture("linux", version + "\n");
     expect(fixture.find({ PATH: "/trusted/bin" })).toEqual({ path: "/trusted/bin/bun", version });
     expect(fixture.calls).toEqual([
@@ -442,7 +435,7 @@ describe("validated PATH Bun policy", () => {
       { path: "/trusted/bin/bun", args: ["-e", "process.stdout.write(String(typeof Bun==='object'&&Bun.version))"], timeout: 750, shell: false, maxBuffer: 4096 },
     ]);
   });
-  test.each(["1.3.99", "2.0.0", "0.99.0", "1.4.0-canary", "v1.4.0", "1.4", "01.4.0", "1.4.0\nnoise", "1.4.0\u001b[31m"])("rejects %s", version => {
+  test.each(["1.3.99", "2.0.0", "0.99.0", "1.4.0", "1.4.1", "1.4.1+build.1", "1.4.0-canary", "v1.4.0", "1.4", "01.4.0", "1.4.0\nnoise", "1.4.0\u001b[31m"])("rejects %s", version => {
     expect(pathProbeFixture("linux", version).find({ PATH: "/trusted/bin" })).toBeNull();
   });
   test("skips empty relative and tilde PATH entries before filesystem access", () => {
@@ -488,7 +481,7 @@ describe("validated PATH Bun policy", () => {
     fixture.io.spawnSync = (path, args, options) => {
       fixture.calls.push({ path, args, timeout: options.timeout, shell: options.shell, maxBuffer: options.maxBuffer });
       fixture.advance(100);
-      return { status: 0, stdout: path === "/last/bun" ? "1.4.0" : "1.3.0" };
+      return { status: 0, stdout: path === "/last/bun" ? "1.4.2" : "1.3.0" };
     };
     expect(fixture.find({ PATH: "/first:/alias:/last" })?.path).toBe("/last/bun");
     expect(fixture.calls.map(call => call.timeout)).toEqual([750, 650, 550]);
@@ -500,7 +493,28 @@ describe("validated PATH Bun policy", () => {
   });
   test("threshold changes derive from the package pin", () => {
     expect(pathProbeFixture("linux", "1.4.0").find({ PATH: "/bin" }, "1.5.2")).toBeNull();
-    expect(pathProbeFixture("linux", "2.0.0").find({ PATH: "/bin" }, "2.0.9")?.version).toBe("2.0.0");
+    expect(pathProbeFixture("linux", "1.4.2").find({ PATH: "/bin" }, "1.4.4")).toBeNull();
+    expect(pathProbeFixture("linux", "1.4.4").find({ PATH: "/bin" }, "1.4.4")?.version).toBe("1.4.4");
+    expect(pathProbeFixture("linux", "2.0.0").find({ PATH: "/bin" }, "2.0.9")).toBeNull();
+    expect(pathProbeFixture("linux", "2.0.9").find({ PATH: "/bin" }, "2.0.9")?.version).toBe("2.0.9");
+    expect(pathProbeFixture("linux", "2.1.0").find({ PATH: "/bin" }, "2.0.9")?.version).toBe("2.1.0");
+  });
+
+  // Pin 1.4.4 is the shipped security floor: below-pin patch releases are refused.
+  test.each(["1.4.0", "1.4.1", "1.4.2", "1.4.3", "1.4.3+build.1"])("pin 1.4.4 rejects below-floor %s", version => {
+    expect(pathProbeFixture("linux", version).find({ PATH: "/trusted/bin" }, "1.4.4")).toBeNull();
+  });
+  test.each(["1.4.4", "1.4.4+build.1", "1.5.0"])("pin 1.4.4 accepts at-or-above %s", version => {
+    expect(pathProbeFixture("linux", version).find({ PATH: "/trusted/bin" }, "1.4.4")?.version).toBe(version);
+  });
+  test("pin 1.4.4 skips a below-floor first PATH entry and selects the next", () => {
+    const fixture = pathProbeFixture();
+    fixture.io.spawnSync = (path, args, options) => {
+      fixture.calls.push({ path, args, timeout: options.timeout, shell: options.shell, maxBuffer: options.maxBuffer });
+      return { status: 0, stdout: path === "/old/bun" ? "1.4.2" : "1.4.4" };
+    };
+    expect(fixture.find({ PATH: "/old:/new" }, "1.4.4")).toEqual({ path: "/new/bun", version: "1.4.4" });
+    expect(fixture.calls.map(call => call.path)).toEqual(["/old/bun", "/new/bun", "/new/bun"]);
   });
 });
 
@@ -527,7 +541,7 @@ describe("real PATH Bun validation", () => {
   test("normalizes case-variant macOS PATH spelling after validating its ancestry", () => {
     const fixture = pathProbeFixture("darwin");
     fixture.io.realpath = path => path.replace("/OPT/fixture", "/opt/fixture");
-    expect(fixture.find({ PATH: "/OPT/fixture/bin" })).toEqual({ path: "/opt/fixture/bin/bun", version: "1.4.0" });
+    expect(fixture.find({ PATH: "/OPT/fixture/bin" })).toEqual({ path: "/opt/fixture/bin/bun", version: "1.4.2" });
     expect(fixture.calls).toHaveLength(2);
   });
 
@@ -597,19 +611,19 @@ describe("real PATH Bun validation", () => {
   test("Windows does not interpret POSIX write mode bits", () => {
     const fixture = pathProbeFixture("win32");
     fixture.io.stat = () => ({ isFile: () => true, mode: 0o777 });
-    expect(fixture.find({ Path: "C:\\trusted" })?.version).toBe("1.4.0");
+    expect(fixture.find({ Path: "C:\\trusted" })?.version).toBe("1.4.2");
   });
 
   test.each(["false", "1.4.1", "1.4.0\nnoise", ""])("rejects a mismatched identity response %j", identity => {
     const fixture = pathProbeFixture();
-    fixture.io.spawnSync = (_path, args) => ({ status: 0, stdout: args[0] === "--version" ? "1.4.0" : identity });
+    fixture.io.spawnSync = (_path, args) => ({ status: 0, stdout: args[0] === "--version" ? "1.4.2" : identity });
     expect(fixture.find({ PATH: "/candidate" })).toBeNull();
   });
 
   test.each(["exit", "signal", "error", "overflow", "throw"])("rejects a failed %s identity probe", kind => {
     const fixture = pathProbeFixture();
     fixture.io.spawnSync = (_path, args) => {
-      if (args[0] === "--version") return { status: 0, stdout: "1.4.0" };
+      if (args[0] === "--version") return { status: 0, stdout: "1.4.2" };
       if (kind === "throw") throw new Error("spawn failure");
       if (kind === "exit") return { status: 1, stdout: "1.4.0" };
       if (kind === "signal") return { status: null, signal: "SIGKILL", stdout: "1.4.0" };
@@ -624,7 +638,7 @@ describe("real PATH Bun validation", () => {
     fixture.io.spawnSync = (path, args, options) => {
       fixture.calls.push({ path, args, timeout: options.timeout, shell: options.shell, maxBuffer: options.maxBuffer });
       fixture.advance(200);
-      return { status: 0, stdout: args[0] === "--version" || path === "/last/bun" ? "1.4.0" : "false" };
+      return { status: 0, stdout: args[0] === "--version" || path === "/last/bun" ? "1.4.2" : "false" };
     };
     expect(fixture.find({ PATH: "/first:/last" })).toBeNull();
     expect(fixture.calls.map(call => call.timeout)).toEqual([750, 550, 350, 150]);
@@ -635,9 +649,9 @@ describe("real PATH Bun validation", () => {
     fixture.io.spawnSync = (path, args, options) => {
       fixture.calls.push({ path, args, timeout: options.timeout, shell: options.shell, maxBuffer: options.maxBuffer });
       fixture.advance(100);
-      return { status: 0, stdout: "1.4.0" };
+      return { status: 0, stdout: "1.4.2" };
     };
-    expect(fixture.find({ PATH: "/trusted" })?.version).toBe("1.4.0");
+    expect(fixture.find({ PATH: "/trusted" })?.version).toBe("1.4.2");
     expect(fixture.calls.map(call => call.timeout)).toEqual([750, 650]);
   });
 
@@ -653,7 +667,7 @@ describe("real PATH Bun validation", () => {
     const fixture = pathProbeFixture("win32");
     fixture.io.spawnSync = (path, args, options) => {
       fixture.calls.push({ path, args, timeout: options.timeout, shell: options.shell, maxBuffer: options.maxBuffer });
-      return { status: 0, stdout: path.startsWith("\\\\") ? "1.4.0" : "1.3.0" };
+      return { status: 0, stdout: path.startsWith("\\\\") ? "1.4.2" : "1.3.0" };
     };
     expect(fixture.find({ Path: "C:\\first;c:\\FIRST;\\\\host\\share" })?.path).toBe("\\\\host\\share\\bun.exe");
     expect(fixture.calls.map(call => call.path)).toEqual(["C:\\first\\bun.exe", "\\\\host\\share\\bun.exe", "\\\\host\\share\\bun.exe"]);
@@ -663,7 +677,7 @@ describe("real PATH Bun validation", () => {
     const root = pathFixtureRoot("ocx-path-identity-");
     try {
       const path = join(root, "bun");
-      writeFileSync(path, '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "1.4.0\\n"; else exit 1; fi\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
+      writeFileSync(path, '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "1.4.2\\n"; else exit 1; fi\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(path, 0o755);
       expect(findPathBun({ env: { PATH: root }, pinnedVersion: "1.4.2", deadlineMs: 2000 })).toBeNull();
     } finally { removeTree(root); }
@@ -673,7 +687,7 @@ describe("real PATH Bun validation", () => {
     const root = pathFixtureRoot("ocx-path-mode-");
     try {
       const path = join(root, "bun");
-      writeFileSync(path, '#!/bin/sh\nprintf "1.4.0\\n"\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
+      writeFileSync(path, '#!/bin/sh\nprintf "1.4.2\\n"\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(path, 0o777);
       const find = () => findPathBun({ env: { PATH: root }, pinnedVersion: "1.4.2", deadlineMs: 2000 });
       expect(find()).toBeNull();
@@ -752,7 +766,7 @@ describe("real PATH Bun validation", () => {
       const name = process.platform === "win32" ? "bun.exe" : "bun";
       writeFileSync(join(first, name), "not bun");
       if (process.platform === "win32") copyFileSync(process.execPath, join(last, name));
-      else writeFileSync(join(last, name), '#!/bin/sh\ncase "$1" in --version|-e) printf "1.4.0\\n";; *) exit 1;; esac\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
+      else writeFileSync(join(last, name), '#!/bin/sh\ncase "$1" in --version|-e) printf "1.4.2\\n";; *) exit 1;; esac\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(join(first, name), 0o755); chmodSync(join(last, name), 0o755);
       const env = { ...process.env, PATH: [first, last].join(process.platform === "win32" ? ";" : ":") };
       // Windows keeps the inherited variable under its stored case (e.g. `Path`);
@@ -765,38 +779,79 @@ describe("real PATH Bun validation", () => {
   });
 });
 
-function warmCopiedBun(path: string): void {
-  if (process.platform !== "win32") return;
-  const warmed = spawnSync(path, ["--version"], {
-    encoding: "utf8",
-    timeout: WINDOWS_COLD_SPAWN_MS,
-    windowsHide: true,
+/**
+ * The one real Bun copy every PATH-fallback case puts on PATH, created and run once in setup.
+ *
+ * The first exec of a freshly copied bun binary is held by the OS's first-run scan: about 1s on an
+ * idle macOS host (later execs of the same path take ~3ms) and well over that for a cold win32
+ * bun.exe. A copy per case put that scan inside each case's 5s budget and inside the launcher's own
+ * 5s PATH probe, so the verdict tracked host load (#7578). The scan is keyed by path, so a hardlink
+ * does not inherit it; sharing the warmed path is what keeps it out of the measured window.
+ * The launcher only reads and executes this file, so sharing it changes nothing a case asserts.
+ */
+let sharedPathBun: { root: string; dir: string; bun: string } | undefined;
+
+async function createWarmPathBun(): Promise<void> {
+  const root = realpathSync.native(pathFixtureRoot("ocx-path-launcher-bun-"));
+  const dir = join(root, "path"); mkdirSync(dir);
+  const bun = join(dir, process.platform === "win32" ? "bun.exe" : "bun");
+  copyFileSync(process.execPath, bun);
+  chmodSync(bun, 0o755);
+  sharedPathBun = { root, dir, bun };
+  await warmColdSpawn("bun/launcher-path-fallback-copy", deadlineMs => {
+    const warmed = spawnSync(bun, ["--version"], { encoding: "utf8", timeout: deadlineMs, windowsHide: true });
+    if (warmed.status !== 0) throw new Error(`[cold-spawn-warmup] PATH Bun copy did not run: status=${String(warmed.status)} ${warmed.stderr}`);
   });
-  expect(warmed.status, warmed.stderr).toBe(0);
 }
 
+/** The Node launcher needs its imported modules, not the whole TypeScript proxy tree. */
+function copyLauncherModuleFixture(root: string): void {
+  const repository = repoPath();
+  const pending = moduleGraphSpecifiers(readFileSync(BIN_OCX, "utf8"), dirname(BIN_OCX));
+  const copied = new Set<string>();
+  while (pending.length) {
+    const source = pending.pop()!;
+    if (copied.has(source)) continue;
+    const path = relative(repository, source);
+    if (isAbsolute(path) || path === ".." || path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+      throw new Error("launcher fixture import escapes the repository");
+    }
+    const destination = join(root, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+    copied.add(source);
+    if (source.endsWith(".mjs")) {
+      pending.push(...moduleGraphSpecifiers(readFileSync(source, "utf8"), dirname(source)));
+    }
+  }
+}
+
+// Every mode runs the real Node launcher: missing/broken/inspection/override
+// select the PATH Bun copy warmed once in beforeAll, while bundled and repair
+// use a fresh copy of the real ~100MB binary in this fixture's own node_modules;
+// repair gets it from the fixture's synthetic install.js running as a real Node
+// child, and bundled and repair then execute their new copy. Unchanged limits:
+// the launcher's 5s PATH-Bun probe and the 30s spawnSync bound below.
 function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broken" | "override" | "none" | "inspection" | "rejected") {
   const root = realpathSync.native(pathFixtureRoot("ocx-path-launcher-"));
   try {
     const node = spawnSync("node", ["-p", "process.execPath"], { encoding: "utf8", windowsHide: true }).stdout.trim();
     const version = spawnSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true }).stdout.trim();
     expect(version).toMatch(/^1\.(?:[4-9]|[1-9]\d+)\./);
-    cpSync(repoPath("src"), join(root, "src"), { recursive: true });
+    copyLauncherModuleFixture(root);
     mkdirSync(join(root, "bin"));
     copyFileSync(BIN_OCX, join(root, "bin", "ocx.mjs"));
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.81.0", dependencies: { bun: "1.4.2" } }));
+    mkdirSync(join(root, "src", "cli"), { recursive: true });
     writeFileSync(join(root, "src", "cli", "index.ts"), 'console.log(JSON.stringify({source:process.env.OCX_BUN_RUNTIME_SOURCE,path:process.env.OCX_BUN_RUNTIME_PATH}));');
-    const pathDir = join(root, "path"); mkdirSync(pathDir);
+    const shared = mode !== "none" && mode !== "rejected";
+    if (shared && !sharedPathBun) throw new Error("the shared PATH Bun is created by the activation suite's beforeAll");
+    const pathDir = shared ? sharedPathBun!.dir : join(root, "path");
+    if (!shared) mkdirSync(pathDir);
     const pathBun = join(pathDir, process.platform === "win32" ? "bun.exe" : "bun");
     if (mode === "rejected") {
       writeFileSync(pathBun, '#!/bin/sh\nprintf "2.0.0\\n"\n#' + "x".repeat(REAL_BUN_MIN_BYTES));
       chmodSync(pathBun, 0o755);
-    } else if (mode !== "none") {
-      copyFileSync(process.execPath, pathBun);
-      chmodSync(pathBun, 0o755);
-      // The product PATH probe is 5s for both execs together. Warm the copy first so
-      // that budget measures a scanned binary; a cold win32 bun.exe is the flake.
-      warmCopiedBun(pathBun);
     }
     const bundleDir = join(root, "node_modules", "bun");
     if (["bundled", "repair", "broken", "inspection"].includes(mode)) {
@@ -823,6 +878,8 @@ function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broke
 }
 
 describe.skipIf(!nodeAvailable)("Node launcher PATH fallback activation", () => {
+  beforeAll(async () => { await createWarmPathBun(); }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+  afterAll(() => { if (sharedPathBun) removeTree(sharedPathBun.root); sharedPathBun = undefined; });
   test.each(["missing", "broken", "inspection"] as const)("%s bundle reaches validated PATH Bun", mode => {
     const result = launcherFallbackFixture(mode);
     expect(result.status).toBe(0);

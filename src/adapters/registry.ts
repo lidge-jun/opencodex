@@ -1,4 +1,5 @@
 import { createAnthropicAdapter } from "./anthropic";
+import { createWorkBuddyAdapter } from "./workbuddy";
 import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
@@ -74,6 +75,10 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  "workbuddy-ai": {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createWorkBuddyAdapter(provider)),
+  },
   codebuddy: {
     wire: "codebuddy",
     mutation: "codex-owned",
@@ -138,7 +143,7 @@ export const ADAPTER_REGISTRY = {
   zed: {
     wire: "zed",
     mutation: "codex-owned",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createZedAdapter(provider),
+    create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createZedAdapter(provider, context.cacheRetention),
   },
   "mimo-free": {
     contractParent: "openai-chat",

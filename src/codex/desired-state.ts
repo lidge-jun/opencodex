@@ -258,7 +258,7 @@ export async function syncCodexOnStartIfEnabled(
   config: LocalClientSyncConfig,
   sync: CodexStartupSync = defaultStartupSync,
   readinessGate?: ReadinessGate,
-): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean }> {
+): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean; published?: boolean }> {
   if (!shouldSyncCodexOnStart(config)) {
     // The user explicitly turned Codex off: there is nothing to sync, so the
     // proxy is ready as soon as it is up. The gate is driven here so /readyz
@@ -277,10 +277,15 @@ export async function syncCodexOnStartIfEnabled(
   const outcome = readinessGate
     ? await runStartupReadinessSync(readinessGate, async () => (await sync(port)) ?? null)
     : await sync(port).catch(() => undefined);
+  // #7423: "published" means this proxy now owns what Codex reads: the sync succeeded and
+  // wrote config and catalog (or the catalog, when an external provider owns config.toml).
+  // A skipped sync (sibling, hub gate, desired OFF) published nothing of its own.
+  const status = (outcome as { status?: unknown } | null | undefined)?.status;
   return {
     ran: true,
     catalogWritten: outcome?.catalogWritten === true,
     cacheSynced: outcome?.cacheSynced === true,
+    published: outcome?.ok === true && (status === "applied" || status === "catalog-only"),
   };
 }
 

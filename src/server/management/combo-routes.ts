@@ -63,7 +63,7 @@ import {
 } from "../../vision/eligibility";
 import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
-import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
+import { notifyLiveConfigObservers, reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -162,6 +162,7 @@ function parseVisionSidecarTargets(
   return { targets };
 }
 
+/** Handle the `/api/combos` management routes (list, save, delete and related combo endpoints), validating and preserving the opt-in quota signal fields; null when no route matches. */
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -207,7 +208,6 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const {
       clearComboSelectionState,
       clearComboTargetCooldowns,
-      comboConfigError,
       comboDisabledModelId,
       comboDisabledModelSelectors,
       comboModelId,
@@ -222,6 +222,14 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      // Clients that do not expose this opt-in must preserve it on unrelated edits.
+      ...(!Object.hasOwn(requestedCombo, "cooldownReprobe") && previous?.cooldownReprobe !== undefined
+        ? { cooldownReprobe: previous.cooldownReprobe }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
+      // The dashboard does not edit the session pin (#7525): an omitted field keeps it on a JEV save.
+      ...(!Object.hasOwn(requestedCombo, "sessionPin") && requestedCombo.strategy === "jev" && previous?.sessionPin != null ? { sessionPin: previous.sessionPin } : {}),
       ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
         ? { allowMeteredTargets: true }
         : {}),
@@ -244,12 +252,17 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
         ? { imageInput: previous.imageInput }
         : {}),
+      // #7229: the dashboard does not edit the row description, so a round trip that omits it
+      // (including a rename) keeps it. An explicit empty string still clears it.
+      ...(!Object.hasOwn(requestedCombo, "description") && previous?.description !== undefined
+        ? { description: previous.description }
+        : {}),
       // `lastResort` rides on each target, so a GUI that re-sends the target list without the
       // flag would strip it. Carry it over per target, matched on provider+model.
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)
         ? {
             targets: requestedCombo.targets.map(target => {
-              // A non-record entry stays as the client sent it so comboConfigError reports it.
+              // A non-record entry stays as the client sent it so comboConfigIssues reports it.
               // Reading `lastResort` off it here would throw in place of that structured 400.
               if (!isPlainRecord(target)) return target;
               if (["lastResort", "metered"].every(key => Object.hasOwn(target, key))) return target;
@@ -323,8 +336,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       excludeComboId: sourceId,
       normalizeDecisionModel: (model: string) => normalizeDecisionModelSelector(prospectiveConfig, model),
     };
-    const error = comboConfigError(id, effectiveCombo, config.providers, validationOptions);
-    if (error) return jsonResponse({ error }, 400);
+    // `field` names the top-level combo field of the first issue, so a client can tell a target or
+    // JEV-setting refusal from an alias or rename one without parsing the message (#7579).
+    const invalid = comboConfigIssues(id, effectiveCombo, config.providers, validationOptions)[0];
+    if (invalid) {
+      const field = invalid.path[0];
+      return jsonResponse({ error: invalid.message, ...(typeof field === "string" ? { field } : {}) }, 400);
+    }
     for (const [otherId, combo] of Object.entries(nextCombos)) {
       if (typeof combo.decisionModel !== "string") continue;
       const issue = otherId === id ? undefined : comboConfigIssues(otherId, combo, config.providers, {
@@ -516,6 +534,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ConfigWritePublishedError)) {
         return jsonResponse({ error: "combo could not be saved" }, 500);
       }
+      // Published but bookkeeping failed: live observers (JEV quota activation) still follow the saved combo.
+      notifyLiveConfigObservers(config);
       throw error;
     }
     reconcileLiveStateStores();
@@ -548,7 +568,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../combos");
     delete config.combos![id];
     if (Object.keys(config.combos!).length === 0) deleteConfigTopLevelKey(config, "combos");
-    saveConfigPreservingClaudeCode(config);
+    try {
+      saveConfigPreservingClaudeCode(config);
+    } catch (error) {
+      if (error instanceof ConfigWritePublishedError) notifyLiveConfigObservers(config);
+      throw error;
+    }
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);

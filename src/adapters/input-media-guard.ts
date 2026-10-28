@@ -10,7 +10,8 @@ import type { OcxParsedRequest } from "../types";
  * out because it uses the original body rather than the lossy normalized content.
  *
  * Two of the three checks are wire-scoped, and that is the point. A constraint the normalized
- * request CAN carry — a caller restriction on a tool, an attached document's bytes — still has
+ * request CAN carry — a caller restriction on a tool, an attached document's bytes, or inline
+ * audio in the translated Chat content model — still has
  * to reach a wire that can express it. Leaving that to each adapter means an adapter that never
  * learned about the carrier rebuilds without it and answers normally, so the allowlist in
  * `declaration-carrier.ts` is default-deny and this is the one place every registered adapter
@@ -18,7 +19,9 @@ import type { OcxParsedRequest } from "../types";
  */
 export function withInputMediaGuard<T extends ProviderAdapter>(adapter: T, wire: AdapterWire): T {
   const refusal = (parsed: OcxParsedRequest): string | undefined => {
-    const kind = untranslatedResponsesInputMedia(parsed._rawBody);
+    // Chat Completions has a native input_audio user-content part. The adapter promotes
+    // tool-result audio into a follow-up user message, so these blocks no longer lose bytes.
+    const kind = untranslatedResponsesInputMedia(parsed._rawBody, { allowAudio: wire === "openai-chat" });
     return kind ? untranslatedInputMediaMessage(kind) : unrepresentableDeclaration(parsed, wire);
   };
   const build = adapter.buildRequest.bind(adapter);

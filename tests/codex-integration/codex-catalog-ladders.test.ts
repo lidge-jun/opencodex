@@ -215,6 +215,10 @@ describe("catalog ultra (always-on)", () => {
 });
 
 describe("mock-max wire clamp (nativeEffortClamp)", () => {
+  test("native model rejects none and selects its lowest supported effort", () => {
+    expect(nativeEffortClamp("gpt-6.1-sol", "none")).toBe("low");
+  });
+
   test("gpt-5.5 max/ultra clamp to its real top rung (xhigh)", () => {
     expect(nativeEffortClamp("gpt-5.5", "max")).toBe("xhigh");
     expect(nativeEffortClamp("gpt-5.5", "ultra")).toBe("xhigh");
@@ -223,6 +227,14 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
   test("real-max natives are untouched", () => {
     expect(nativeEffortClamp("gpt-5.6-sol", "max")).toBe(null);
     expect(nativeEffortClamp("gpt-5.6-luna", "max")).toBe(null);
+  });
+
+  test("ultra folds to max even where the pinned ladder lists it (#7590)", () => {
+    // The ChatGPT backend accepts none..max only; ultra is the client-facing delegation choice.
+    for (const slug of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-future"]) {
+      expect(nativeEffortClamp(slug, "ultra")).toBe("max");
+      expect(nativeEffortClamp(slug, "max")).toBe(null);
+    }
   });
 
   test("only the canonical built-in OpenAI forward route enters the native clamp gate", () => {

@@ -230,7 +230,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
-`--display-name` 和 `--rename-from`。将 `--effort`、`--alias` 或 `--display-name` 的值设为
+`--display-name`、`--description` 和 `--rename-from`。将 `--effort`、`--alias`、`--display-name` 或 `--description` 的值设为
 `-` 可清除该字段。`--native-alias` 必须配合当前受支持的裸原生 alias 和非空显示名称使用。
 `create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过
 `ocx route combo` 使用。
@@ -278,6 +278,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
 | `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级；绝不会根据 alias 自动推断。 |
 | `displayName` | 否 | 无 | 仅用于 catalog 展示的有界标签；`nativeAlias` 为 true 时必须非空。 |
+| `description` | 否 | 无 | 仅用于 catalog 展示的行描述，限制与 `displayName` 相同。未设置时保留生成的 `Routed via opencodex → combo (combo).` 文本。 |
 
 ## 故障排查
 
@@ -302,3 +303,7 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## 冷却恢复预约
+
+通过 `cooldownReprobe: { enabled: true }` 启用的恢复尝试只属于预约它的请求；其他请求仍受已保存的冷却限制。预约会在冷却等待和 JEV 选择期间保留。目标在等待期间重新可用时，只要其冷却记录没有变化，就仍可重试；新的冷却记录会使该目标的预约失效。成功后，只清除实际响应目标未改变的冷却记录；未尝试的目标和新的失败仍保留冷却。提供方禁用、配额、请求资格和取消检查仍然生效。请参阅[设置与限制](/guides/combos/#retry-all-cooled-targets-opt-in)。

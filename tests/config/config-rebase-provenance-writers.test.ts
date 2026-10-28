@@ -4,10 +4,11 @@ import { repoPath } from "../helpers/repo-root";
 
 const writerContracts: Record<string, string[]> = {
   "src/server/management/agent-settings-routes.ts": [
-    "clientIntegrations", "multiAgentMode", "keepNativeChatGptOnV1",
+    "multiAgentMode", "keepNativeChatGptOnV1",
     "syncCodexSubagentDefaults", "injectionModel", "injectionEffort", "injectionPrompt",
     "subagentModelFallback", "subagentModelFallbackPollMs", "grokExcludedModels",
   ],
+  "src/server/management/claude-desktop-config-writers.ts": ["clientIntegrations"],
   "src/server/management/config-routes.ts": [
     "streamMode", "codexAutoStart", "appOwnedMemoryBudgetMb", "codexAccountNamespaces",
     "codexAccountPickerEnabled", "oauthOpenBrowser",

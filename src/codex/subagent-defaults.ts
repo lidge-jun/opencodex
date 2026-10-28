@@ -1,4 +1,4 @@
-import { splitSourceLines, type SourceLine } from "./toml-source-lines";
+import { sourceAssignment, splitSourceLines, type SourceLine } from "./toml-source-lines";
 
 /**
  * Pure, ownership-aware edits for Codex's native `[agents]` defaults.
@@ -20,6 +20,16 @@ export interface ManagedSubagentDefaults {
   model: string;
   reasoningEffort?: string;
 }
+
+/**
+ * The exact values the last injection wrote under a marker, as recorded in the
+ * injection journal. A marker proves only that OpenCodex once wrote the line;
+ * this record proves which value it wrote. A marked value that no longer
+ * matches it was edited by someone else — the user, or a Codex settings writer
+ * that keeps comments — and is adopted as user-owned instead of reverted.
+ * Absent (`null`/`undefined`) means no evidence, and the marker alone decides.
+ */
+export type WrittenSubagentDefaults = Partial<Record<ManagedSubagentDefaultKey, string>>;
 
 export interface ManagedSubagentDefaultsConflict {
   key: ManagedSubagentDefaultKey;
@@ -304,14 +314,41 @@ function invalidInput(content: string, error: string): ManagedSubagentDefaultsTr
 }
 
 /**
+ * Marker lines whose value differs from what OpenCodex recorded writing. The
+ * marker is dropped so the line reads as what it now is: a user-owned value.
+ */
+function userEditedMarkers(
+  lines: readonly SourceLine[],
+  shape: TomlShape,
+  written: WrittenSubagentDefaults | null | undefined,
+): number[] {
+  if (!written) return [];
+  const stale: number[] = [];
+  for (const definition of shape.definitions.values()) {
+    const recorded = written[definition.key];
+    if (!definition.owned || typeof recorded !== "string") continue;
+    // The whole assignment, so a value rewritten as a multiline string still decodes. An
+    // undecodable value is not edit evidence; the single-line replace step rejects it later.
+    const current = sourceAssignment(lines, definition.index, shape.agentsEnd ?? lines.length)?.value;
+    if (typeof current === "string" && current !== recorded) stale.push(definition.index - 1);
+  }
+  return stale;
+}
+
+/**
  * Add/update opencodex-owned native subagent defaults, or remove them with
  * `defaults = null`. Unmarked target keys are user-owned: they are retained and
  * returned as conflicts rather than overwritten. Ambiguous TOML is rejected
  * byte-for-byte so callers never have to guess what was changed.
+ *
+ * `written` is the journal's record of the values the last injection wrote.
+ * When supplied, a marked value that differs from it is user-edited: its marker
+ * is dropped and the value is treated exactly like any other user-owned key.
  */
 export function transformManagedSubagentDefaults(
   content: string,
   defaults: ManagedSubagentDefaults | null,
+  written?: WrittenSubagentDefaults | null,
 ): ManagedSubagentDefaultsTransformResult {
   if (defaults !== null) {
     if (typeof defaults.model !== "string" || defaults.model.length === 0) {
@@ -329,14 +366,20 @@ export function transformManagedSubagentDefaults(
     }
   }
 
-  const lines = splitSourceLines(content);
+  let lines = splitSourceLines(content);
   if (defaults === null && !lines.some(line =>
     markerLine(line, MANAGED_SUBAGENT_DEFAULT_MARKER)
       || markerLine(line, MANAGED_AGENTS_TABLE_MARKER))) {
     return { ok: true, changed: false, content, conflicts: [] };
   }
-  const analysis = analyzeToml(lines);
+  let analysis = analyzeToml(lines);
   if ("error" in analysis) return invalidInput(content, analysis.error);
+  const stale = new Set(userEditedMarkers(lines, analysis.shape, written));
+  if (stale.size > 0) {
+    lines = lines.filter((_, index) => !stale.has(index));
+    analysis = analyzeToml(lines);
+    if ("error" in analysis) return invalidInput(content, analysis.error);
+  }
   const { shape } = analysis;
   const eol = dominantEol(lines);
   const desired = new Map<ManagedSubagentDefaultKey, string>();
@@ -361,8 +404,10 @@ export function transformManagedSubagentDefaults(
     // Model and effort are one effective native-default pair. A partial write
     // could apply a newly managed effort to a user's model (or vice versa), so
     // any desired-key ownership conflict makes the whole enable/update a no-op.
+    // Only an adopted user edit's stale marker is dropped from the result.
     if (conflicts.length > 0) {
-      return { ok: true, changed: false, content, conflicts };
+      const adopted = joinSourceLines(lines);
+      return { ok: true, changed: adopted !== content, content: adopted, conflicts };
     }
   }
 

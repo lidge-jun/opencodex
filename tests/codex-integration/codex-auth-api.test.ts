@@ -1,3 +1,4 @@
+import { registerMainCollisionCases } from "../helpers/codex-main-collision";
 import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
 import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
@@ -122,11 +123,9 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     ...overrides,
   };
 }
-
 function enableManualImport(): void {
   process.env[MANUAL_IMPORT_ENV] = "1";
 }
-
 function manualImportBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "manual-test",
@@ -142,7 +141,7 @@ async function completeMockCodexOAuth(options: {
   config: OcxConfig;
   requestBody: { id: string; reauth?: boolean };
   oauthAccountId: string;
-  email: string;
+  email?: string; accessToken?: string;
   onWarmup: () => void;
   warmupResponse?: () => Response;
   usageResponse?: () => Response;
@@ -163,7 +162,7 @@ async function completeMockCodexOAuth(options: {
   const oauthStore = await import("../../src/oauth/store");
   const openUrlMod = await import("../../src/lib/open-url");
   await oauthStore.saveCredential("chatgpt", {
-    access: `access-${options.requestBody.id}`,
+    access: options.accessToken ?? `access-${options.requestBody.id}`,
     refresh: `refresh-${options.requestBody.id}`,
     expires: Date.now() + 5 * 60_000,
     email: options.email,
@@ -5547,6 +5546,7 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential("quota-unknown")).toBeNull();
   });
 
+  registerMainCollisionCases(makeConfig, completeMockCodexOAuth);
   registerWarmupRateLimitCases(makeConfig, completeMockCodexOAuth);
 
   test("OAuth creation reports a durable add when catalog convergence is pending", async () => {

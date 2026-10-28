@@ -51,6 +51,22 @@ function fakeChild(frames: string[], options: { parked?: boolean; exitCode?: num
 }
 
 describe("qoder adapter", () => {
+  test("joins escaped surrogate halves from separate JSONL frames", async () => {
+    const frames = [
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "a <\uD83D" } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Reasoning." } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "\uDE00" } } },
+      { type: "result", subtype: "success", is_error: false, result: "" },
+    ].map(frame => JSON.stringify(frame) + "\n");
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => fakeChild(frames) })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    const text = events.filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta");
+    expect(text.map(event => event.text).join("")).toBe("a <😀");
+    for (const event of text) expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test.each([false, true])("unfinished repeated-ID blocks are bounded before a terminal frame (already emitted=%s)", async alreadyEmitted => {
     const id = "same_call";
     const name = "mcp__opencodex__probe_echo";
@@ -587,27 +603,6 @@ describe("qoder adapter", () => {
     expect(global.modelInputModalities).toBeUndefined();
     expect(isModelVisionSidecarConsumer(global, "Qwen3.8-Max")).toBe(false);
     expect(isModelVisionSidecarConsumer(global, "unknown-live-id")).toBe(false);
-  });
-
-  test("keeps residual Qoder CN image input rejected before spawn", async () => {
-    let spawned = 0;
-    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
-      which: () => "/bin/qodercn",
-      spawn: () => {
-        spawned++;
-        return fakeChild([]);
-      },
-    });
-    const request = parsed({ context: { messages: [{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }] } });
-    const events: AdapterEvent[] = [];
-    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
-    expect(spawned).toBe(0);
-    expect(events[0]).toMatchObject({
-      type: "error",
-      status: 400,
-      code: "unsupported_input_modality",
-      retryable: false,
-    });
   });
 
   test("forwards Qoder Global raw image input through the shared coding-agent projection", async () => {
@@ -1246,7 +1241,7 @@ describe("qoder authoritative tool-turn completion", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
   });
 
-  test("scaffold refusal suppresses authoritative success terminal", async () => {
+  for (const scaffold of ["tail</system-reminder>", 'Safe.\n[Tool call: probe (call_id: fixture) with args: {"input":"private-fixture"}]']) test("scaffold refusal suppresses authoritative success terminal: " + scaffold.slice(0, 16), async () => {
     const { spawned, clock, parked, adapter } = setupParkedQoder();
     const events: AdapterEvent[] = [];
     const turnPromise = adapter.runTurn!(toolRequest(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
@@ -1255,7 +1250,7 @@ describe("qoder authoritative tool-turn completion", () => {
     parked.pushFrame({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] });
     parked.pushFrame({
       type: "assistant",
-      message: { content: [{ type: "text", text: "tail</system-reminder>" }] },
+      message: { content: [{ type: "text", text: scaffold }] },
     });
     parked.pushFrame({
       type: "assistant",

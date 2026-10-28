@@ -16,6 +16,7 @@ import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MODEL = "deepseek-v4-flash";
+const PLACEHOLDER = JSON.stringify({ type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: " " }] });
 let releaseSpendHome: (() => void) | undefined;
 
 function deepseekProvider(): ReturnType<typeof providerConfigSeed> & { apiKey: string } {
@@ -52,7 +53,14 @@ describe("stateless Responses wire repairs orphaned tool calls", () => {
       config,
       { model: "", provider: "" },
     );
-    return requests[0] ?? { url: "", body: {} };
+    const sent = requests[0] ?? { url: "", body: {} };
+    // A bare call turn also gains the fixed plaintext reasoning placeholder on this strict wire
+    // (#7298, covered in deepseek-bare-tool-call-replay.test.ts). These cases pin call/output
+    // repair, so read the input without that one item; real reasoning items are kept.
+    if (Array.isArray(sent.body.input)) {
+      sent.body.input = (sent.body.input as unknown[]).filter(item => JSON.stringify(item) !== PLACEHOLDER);
+    }
+    return sent;
   }
 
   test("synthesizes a function_call_output after a dangling function_call", async () => {

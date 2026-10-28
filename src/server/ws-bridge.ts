@@ -12,6 +12,7 @@ import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
+import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -63,7 +64,7 @@ export interface WsData {
   liveUpstreamHandoff?: LiveSidebandUpstreamHandoff;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
-  /** Schedules one bounded close retry without surrendering native-main ownership. */
+  /** Terminates a stalled close without releasing ownership before transport closure. */
   liveCloseFallback?: ReturnType<typeof setTimeout>;
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
@@ -131,6 +132,10 @@ export function selectForwardHeaders(
   if (codexOverride) {
     selected.set("authorization", `Bearer ${codexOverride.accessToken}`);
     selected.set("chatgpt-account-id", codexOverride.chatgptAccountId);
+  } else {
+    // Kept for the WS turn pipeline, which drops it again everywhere except first-party Direct.
+    const assertion = headers.get(AGENT_ASSERTION_HEADER);
+    if (assertion) selected.set(AGENT_ASSERTION_HEADER, assertion);
   }
   return selected;
 }

@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # удалить прежние управляемые pre-push и post-merge
 bun run dev:proxy    # прокси-API в режиме разработки
 bun run dev:gui      # dev-сервер дашборда (другой терминал)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # полный набор тестов (по умолчанию)
 ```
 
@@ -123,7 +123,7 @@ Pull request'ы с ребейзом приветствуются: ребейз �
 
 ## Конвенции
 
-- **Только ES Modules** (`import`/`export`), TypeScript, режим `strict`. Держите `bun x tsc --noEmit`
+- **Только ES Modules** (`import`/`export`), TypeScript, режим `strict`. Держите `bun run typecheck`
   без ошибок.
 - **Не более ~500 строк на файл** — разделяйте по ответственности (сайдкары `web-search/` и
   `vision/` — хорошие примеры небольших сфокусированных модулей за единым `index.ts`).
@@ -179,6 +179,11 @@ Pull request'ы с ребейзом приветствуются: ребейз �
 заявления на основе fixture укажите точные assertion id, которые его доказывают. Добавьте request
 vector без секретов в `tests/fixtures/compatibility/` и сфокусированный тест, выполняющий его через
 production adapter.
+Claim `passthrough` может ссылаться только на assertion `equals` по selector, привязанному к этой
+feature в manifest test, чей ожидаемый результат совпадает с собственным значением вызывающей стороны в
+том же месте. Поэтому удалённое, переписанное или не относящееся к делу поле нельзя пометить как
+lossless. Аспекты, которые маршрут может сохранить по отдельности, например custom tool и его grammar,
+оформляйте отдельными claim.
 
 Манифесты совместимости являются пассивными данными. Обычные router, Responses handler и server
 startup path не должны импортировать каталог манифестов или активировать Compatibility Lab.

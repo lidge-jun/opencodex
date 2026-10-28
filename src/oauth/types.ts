@@ -54,7 +54,16 @@ export interface MuseOAuthMetadata {
   tierName?: string;
 }
 
+export interface WorkBuddyOAuthMetadata {
+  uid: string;
+  domain: string;
+  enterpriseId?: string;
+  refreshExpiresAt?: number;
+}
+
 export type OAuthCredentials = {
+  /** Account-scoped WorkBuddy identity, kept inside the protected credential store. */
+  workbuddy?: WorkBuddyOAuthMetadata;
   refresh: string;
   access: string;
   /** Epoch ms after any small provider-specific early-refresh margin; the shared gate adds 1 minute. */
@@ -96,6 +105,8 @@ export interface ProviderAccount {
   refreshAttentionGeneration?: string;
   /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
   paused?: boolean;
+  pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
+  pauseRevision?: string;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */
   autoSwitchThresholdOverride?: number;
   /**

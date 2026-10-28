@@ -25,13 +25,13 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 13 |
+| [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 49 |
 | [accounts](01_surface_accounts.md) | 42 |
-| [agents-routing](01_surface_agents-routing.md) | 51 |
+| [agents-routing](01_surface_agents-routing.md) | 67 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 96 |
-| [access-remote](01_surface_access-remote.md) | 32 |
+| [observe-system](01_surface_observe-system.md) | 98 |
+| [access-remote](01_surface_access-remote.md) | 33 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -82,6 +82,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx link reconnect`
 
 [State-changing task](01_surface_access-remote.md#ocx-link-reconnect)
+
+### `ocx link cleanup`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-cleanup)
 
 ### `ocx remote-workspace pair`
 
@@ -274,6 +278,14 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx system codex-cli-update plan`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-plan)
+
+### `ocx system codex-cli-update apply`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-codex-cli-update-apply)
+
+### `ocx system codex-cli-update status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-status)
 
 ### `ocx system codex-restart`
 
@@ -659,6 +671,50 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_agents-routing.md#ocx-advisor)
 
+### `ocx message enable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-enable)
+
+### `ocx message disable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-disable)
+
+### `ocx message status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-status)
+
+### `ocx message serve`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-serve)
+
+### `ocx message hosts probe`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-probe)
+
+### `ocx message hosts add`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-add)
+
+### `ocx message hosts allow-inbound`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-allow-inbound)
+
+### `ocx message hosts deny-inbound`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-deny-inbound)
+
+### `ocx message hosts list`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-list)
+
+### `ocx message hosts remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-remove)
+
+### `ocx message hosts abandon`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-abandon)
+
 ### `ocx agent status`
 
 [Read-oriented task](01_surface_agents-routing.md#ocx-agent-status)
@@ -706,6 +762,26 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx agent sidecar vision`
 
 [State-changing task](01_surface_agents-routing.md#ocx-agent-sidecar-vision)
+
+### `ocx fallback`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-fallback)
+
+### `ocx fallback off`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-off)
+
+### `ocx fallback on`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-on)
+
+### `ocx fallback clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-clear)
+
+### `ocx fallback local`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-local)
 
 ### `ocx effort`
 
@@ -930,6 +1006,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx integration native cursor local-installer`
 
 [Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
+
+### `ocx stop`
+
+[State-changing task](01_surface_lifecycle.md#ocx-stop)
 
 ### `ocx logs filter`
 
@@ -1429,6 +1509,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 345
-- of those, state-changing: 209
+- declared capabilities: 365
+- of those, state-changing: 223
 - head-resolved invocations: 2

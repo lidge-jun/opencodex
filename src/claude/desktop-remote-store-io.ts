@@ -2,7 +2,7 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync, unlinkSync } from "node:
 import { basename, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
-import { isRecord, readDesktopLibraryBytes, resolveDesktop3pConfigLibraryPath, SAFE_DESKTOP_PROFILE_ID, type Desktop3pMetadata } from "./desktop-3p-library";
+import { isRecord, MAX_DESKTOP_PROFILE_FILE_BYTES, readDesktopLibraryBytes, resolveDesktop3pConfigLibraryPath, SAFE_DESKTOP_PROFILE_ID, type Desktop3pMetadata } from "./desktop-3p-library";
 import { DesktopStoreError, digest } from "./desktop-remote-store-state";
 
 export const MAX_DESKTOP_METADATA_ENTRIES = 256;
@@ -45,7 +45,7 @@ export class StoreIO {
     try {
       // The shared verified regular-file read keeps a swapped FIFO from parking this
       // open before the post-read identity recheck below can run.
-      const bytes = readDesktopLibraryBytes(path);
+      const bytes = readDesktopLibraryBytes(path, Math.min(maxBytes, MAX_DESKTOP_PROFILE_FILE_BYTES));
       if (bytes.byteLength > maxBytes || identity(lstatSync(path)) !== identity(stat)) throw new DesktopStoreError("conflict");
       const value: unknown = JSON.parse(bytes.toString("utf8"));
       if (!isRecord(value)) throw new DesktopStoreError("unsafe");

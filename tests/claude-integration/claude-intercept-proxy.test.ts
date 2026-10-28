@@ -180,18 +180,22 @@ test("pending async choice holds pipelined bytes, then connects; rejection falls
   const echo = await startEchoUpstream();
   cleanups.push(echo.close);
   let settle!: (choice: { kind: "intercept"; port: number }) => void;
+  // Resolved inside selectTunnel itself: the proxy has parsed CONNECT and is now holding the
+  // pipelined bytes. A fixed sleep only guessed at that moment and called an unset settle when
+  // the proxy had not consulted the choice yet.
+  const consulted = Promise.withResolvers<void>();
   let dialCount = 0;
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
     authToken: AUTH_TOKEN,
     selectTunnel: host => host === "claude.ai"
-      ? new Promise(resolve => { settle = resolve; })
+      ? new Promise(resolve => { settle = resolve; consulted.resolve(); })
       : Promise.reject(new Error("decision failed")),
     dialUpstream: () => { dialCount += 1; return connect({ host: "127.0.0.1", port: echo.port }); },
   });
   cleanups.push(proxy.close);
   const delayed = tunnelPayload(proxy.port, "claude.ai", "pending");
-  await Bun.sleep(20);
+  await consulted.promise;
   expect(dialCount).toBe(0);
   settle({ kind: "intercept", port: echo.port });
   expect(await delayed).toContain("echo:pending");

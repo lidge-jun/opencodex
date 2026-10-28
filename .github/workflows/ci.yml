@@ -1,6 +1,6 @@
 # ============================================================================
 # CI POLICY (maintainer decision — do not change in a contributor PR)
-#  * Pull requests run ONLY the fast Ubuntu subset.
+#  * Pull requests run ONLY the fast Ubuntu subset (default: gates + `test changed`).
 #  * Full cross-platform (macOS/Windows) CI runs ONLY via manual
 #    workflow_dispatch and on push to main/preview (release lines).
 #  * NEVER add a dev push trigger or pull_request runs for macOS/Windows jobs.
@@ -25,10 +25,8 @@ on:
     # carry contributor prefixes (`fix/`, `feat/`, `agent/`) as readily as
     # `codex/`, and contributor stacks need CI most. The `changes` job below is
     # the real scope gate, using the same allowlist as the push trigger. Safe to
-    # widen here
-    # because this workflow is `pull_request` (not `pull_request_target`),
+    # widen here because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
-    #
     #
     # Pull requests run only the fast Ubuntu subset. Every macOS and Windows
     # job (and the macOS/Windows legs of the keyring, npm-global, setup-action
@@ -94,7 +92,6 @@ on:
 permissions:
   contents: read
 
-# Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
   # `push` and `pull_request` want supersession: a newer head on the same ref
   # makes the older one irrelevant, and cancelling it saves an hour of runners
@@ -216,6 +213,7 @@ jobs:
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
       desktop: ${{ steps.scope.outputs.desktop }}
+      fast: ${{ steps.lane.outputs.fast }} # true: `test changed` replaces the four shards
       native: ${{ steps.matrices.outputs.native }}
       # Matrix include lists for keyring-smoke and npm-global-smoke, built and
       # shape-checked by the same validation step as `native`.
@@ -233,6 +231,10 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Pull-request scope for the two smoke jobs that used to ride the whole ci filter.
+      # Push, dispatch and schedule run both regardless; see the docker/keyring filters.
+      docker: ${{ steps.narrow.outputs.docker }}
+      keyring: ${{ steps.narrow.outputs.keyring }}
       # Whether this pull request needs the nine Windows shards: the windows path
       # filter below OR an added src/tests line naming a Windows marker. Computed
       # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
@@ -388,6 +390,44 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
+            # ci filter matched, which is nearly all of them, while each proves something narrow:
+            # the image builds, starts and survives recreation with its volume; the OS keyring
+            # binding creates, reads and deletes a secret. A pull request now runs each only when
+            # its own inputs move. Push to main/preview, workflow_dispatch and the nightly still
+            # request both unconditionally, so the release gate's push run always carries them.
+            # ci.yml is listed so an edit to either job verifies itself. The setup action is left to
+            # its own setup-action job, as the docs and structure filters leave it.
+            docker:
+              - 'Dockerfile'
+              - 'compose.yaml'
+              - '.dockerignore'
+              - 'docker/**'
+              - 'scripts/ci/docker-smoke.ts'
+              - 'scripts/generate-compatibility-version.ts'
+              - 'scripts/model-metadata.source.json'
+              # The image copies and runs src/, then builds the GUI with tsc and Vite.
+              # Include their inputs without selecting GUI tests or documentation alone.
+              - 'src/**'
+              - 'package.json'
+              - 'bun.lock'
+              - 'tsconfig.json'
+              - 'gui/package.json'
+              - 'gui/bun.lock'
+              - 'gui/src/**'
+              - 'gui/public/**'
+              - 'gui/index.html'
+              - 'gui/vite.config.ts'
+              - 'gui/tsconfig*.json'
+              - '.github/workflows/ci.yml'
+            # scripts/keyring-smoke.ts imports only src/lib/keyring-native.ts; the native binding
+            # itself arrives through package.json and bun.lock.
+            keyring:
+              - 'src/lib/keyring-native.ts'
+              - 'scripts/keyring-smoke.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             # Paths whose change selects the nine Windows suite shards on a pull
             # request. These carry the Windows service, update, shim, intercept,
             # ACL and process code, and the harness every Windows shard runs.
@@ -532,9 +572,11 @@ jobs:
         env:
           SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
           REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
+          DOCKER_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docker }}
+          KEYRING_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.keyring }}
         run: |
           set -euo pipefail
-          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER" "docker=$DOCKER_SCOPE" "keyring=$KEYRING_SCOPE"; do
             case "${pair#*=}" in
               true|false)
                 printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
@@ -545,6 +587,15 @@ jobs:
                 ;;
             esac
           done
+
+      - name: Choose the pull request test lane
+        id: lane
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CI_SCOPE: ${{ steps.scope.outputs.ci }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: bash scripts/ci/select-test-lane.sh
 
       - name: Decide whether the Windows shards run
         id: windows
@@ -578,12 +629,10 @@ jobs:
           printf 'Scheduled run: workflow from %s, testing dev at %s\n' "$GITHUB_SHA" "$sha" >> "$GITHUB_STEP_SUMMARY"
           printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
 
-  # Bun roles (#6713): runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming;
-  # the test runner skipped 1.4.2's multi-file --isolate preload segfault (#4821
-  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9) and runs
-  # 1.4.3, whose oven-sh/bun#44581 stops Bun.spawnSync losing a child's exit (#4956).
-  # Rejoin after the upstream runner crash is fixed and a green lane=all dispatch
-  # proves the unified version, then delete testRunnerBun and the action's role input.
+  # Bun runtime and test-runner roles both read their 1.4.4 defaults from package.json.
+  # Keep role validation after the historical isolate preload and spawnSync failures
+  # (#6713, #4956). Promotion requires a green full cross-platform lane=all run on
+  # the exact candidate head; focused local results do not replace that proof.
   # The suite, split by file across four Linux runners.
   #
   # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
@@ -605,7 +654,7 @@ jobs:
   test:
     name: test ${{ matrix.shard }}/4
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
     runs-on: ubuntu-latest
     # A quarter of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
@@ -647,10 +696,7 @@ jobs:
       # gui/package.json. Without this the affected shards die on
       # `Cannot find module 'react/jsx-dev-runtime'` while the other shards pass.
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       # Nor is the build. Tests that fetch the served dashboard read the session
       # bootstrap meta tags out of `gui/dist/index.html`, so without a build the
@@ -667,6 +713,27 @@ jobs:
         env:
           TEST_SHARD: ${{ matrix.shard }}/4
         run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
+
+  # Fast lane: import-graph tests for the diff; the batched dev dispatch is the backstop.
+  test-changed:
+    name: test changed
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.fast == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.changes.outputs.checkout_ref }}
+          fetch-depth: 2 # merge commit + base tip, which the selection diffs against
+      - uses: ./.github/actions/setup-project-bun
+        with:
+          role: test-runner # See the Bun roles contract above test.
+      - name: Install dependencies and build the GUI the tests serve
+        run: bash scripts/ci/bun-install-frozen.sh . gui && cd gui && bun run build
+      - name: Test the files this pull request reaches
+        run: bash scripts/ci/run-changed-tests.sh
 
   # Bun 1.3.14 has shown a Linux isolate/epoll race around the storage-policy
   # harness. Keep the entire six-file family in one fresh process so a runtime
@@ -690,10 +757,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: Build GUI
         run: |
@@ -732,10 +796,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: Build GUI
         run: |
@@ -770,10 +831,7 @@ jobs:
           role: test-runner # See the Bun roles contract above test.
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+        run: bash scripts/ci/bun-install-frozen.sh . gui
 
       - name: GUI lint
         if: needs.changes.outputs.gui == 'true'
@@ -997,12 +1055,15 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   #
-  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
-  # green pull-request CI while breaking Windows, and the breakage surfaced days
-  # later on a manual dispatch. So a pull request whose changes job reports
-  # windows=true (a Windows path, or an added src/tests line naming a Windows
-  # marker; see scripts/ci/windows-sensitive-diff.sh) now runs the nine shards,
-  # and the daily schedule catches whatever that filter misses.
+  # Pull requests never run these shards (AGENTS.md "CI policy", a maintainer
+  # decision): Windows runs on the nightly schedule and on a lane=all dispatch.
+  # The changes job still computes windows=true for a Windows-sensitive pull
+  # request (a Windows path, or an added src/tests line naming a Windows marker;
+  # see scripts/ci/windows-sensitive-diff.sh). That verdict does not schedule
+  # these jobs; it posts a non-blocking notice, and a maintainer dispatches
+  # lane=all on the branch before merging. #6639, #6556, #6605, #6606 and #7468
+  # each landed with green pull-request CI while breaking Windows, which is why
+  # that dispatch is part of merging a Windows-sensitive pull request.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
     needs: [changes, select-windows-runner]
@@ -1145,7 +1206,7 @@ jobs:
   keyring-smoke:
     name: keyring ${{ matrix.name }}
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.keyring == 'true')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 8
     strategy:
@@ -1208,7 +1269,7 @@ jobs:
   docker-smoke:
     name: docker smoke
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.docker == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1705,7 +1766,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
+    needs: [changes, select-windows-runner, test, test-changed, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1721,11 +1782,14 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           LANE: ${{ github.event.inputs.lane }}
           CHANGES_CI: ${{ needs.changes.outputs.ci }}
+          CHANGES_FAST: ${{ needs.changes.outputs.fast }}
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
+          CHANGES_DOCKER: ${{ needs.changes.outputs.docker }}
+          CHANGES_KEYRING: ${{ needs.changes.outputs.keyring }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
           CHANGES_WINDOWS: ${{ needs.changes.outputs.windows }}
@@ -1748,6 +1812,12 @@ jobs:
           scoped=requested
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
+          fi
+          full_tests=$scoped # the fast lane swaps the shards for test changed; unset = full
+          changed_tests=not-requested
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$scoped" = requested ] && [ "${CHANGES_FAST:-false}" = "true" ]; then
+            full_tests=not-requested
+            changed_tests=requested
           fi
           # platform-macos and widget never run on a pull request (macOS runs after merge).
           # desktop-shell (ubuntu) carries the ordinary scope gate AND the native or
@@ -1782,6 +1852,16 @@ jobs:
           if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
             remote_helper=requested
           fi
+          # docker-smoke and keyring-smoke follow the ci scope, narrowed on a pull request to
+          # their own filters. Mirrors their `if:` exactly, like desktop_shell above.
+          docker=$scoped
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_DOCKER" != "true" ]; then
+            docker=not-requested
+          fi
+          keyring=$scoped
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_KEYRING" != "true" ]; then
+            keyring=not-requested
+          fi
           # privacy-gate runs exactly where `gates` (scoped) does not, on every
           # pull request the ci filter declines. Deriving it from `scoped` keeps
           # the two scans complementary here as they are in the jobs' own
@@ -1809,7 +1889,7 @@ jobs:
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow
           # without adding it here fails the gate by name rather than passing unnoticed.
-          GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
+          GATED_JOBS="changes select-windows-runner test test-changed storage-policy api-usage gates"
           GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
           GATED_JOBS="$GATED_JOBS structure-gate widget"
@@ -1820,8 +1900,12 @@ jobs:
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
-              test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
+              test) echo "$full_tests" ;;
+              test-changed) echo "$changed_tests" ;;
+              storage-policy|api-usage|gates)
                 echo "$scoped" ;;
+              docker-smoke) echo "$docker" ;;
+              keyring-smoke) echo "$keyring" ;;
               platform-macos|widget)
                 echo "$native" ;;
               desktop-shell) echo "$desktop_shell" ;;

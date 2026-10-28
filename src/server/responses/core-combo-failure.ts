@@ -11,12 +11,16 @@ import {
   isCyberPolicyMessage,
   CYBER_POLICY_ERROR_CODE,
   CYBER_POLICY_FALLBACK_MESSAGE,
+  isModelNotInPlanRefusal,
+  markVerifiedModelNotInPlanResponse,
+  namesModelNotInPlanCode,
 } from "../../lib/errors";
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
-import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -38,6 +42,7 @@ export async function consumeComboFailure(
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
   const nonReplayable = isNonReplayableResponse(response);
+  const replayRefusal = isReplayRefusalResponse(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
@@ -54,6 +59,7 @@ export async function consumeComboFailure(
   // A local key-scope refusal is already the client's answer: rebuilding it as an upstream_error
   // would hide the stable model_not_allowed_for_key type clients branch on.
   let scopeRefusalBody: string | undefined;
+  let verifiedPlanRefusal = false;
   try {
     const body = await readBoundedResponseBody(response, { signal, reportUtf8Validity: serverError });
     // A 5xx body counts as quota or classification evidence only when it decoded as valid
@@ -72,7 +78,12 @@ export async function consumeComboFailure(
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
-        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
+        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text)
+          ?? upstreamCodeForComboFailure(response, normalized.code);
+        // Only the adapter's own normalized refusal may claim the plan-refusal hop; another
+        // upstream echoing the code in any spelling keeps the meaning it had before, which was none.
+        if (namesModelNotInPlanCode(upstreamCode) && !isModelNotInPlanRefusal(response, upstreamCode)) upstreamCode = undefined;
+        verifiedPlanRefusal = isModelNotInPlanRefusal(response, upstreamCode);
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
       }
@@ -85,7 +96,8 @@ export async function consumeComboFailure(
     classificationText = fallback;
   }
   const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
-  const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE : upstreamCode;
+  const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE
+    : replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : upstreamCode;
   const message = cyberFailure
     ? upstreamMessage
       ?? (isCyberPolicyCode(upstreamCode) ? CYBER_POLICY_FALLBACK_MESSAGE : classificationText)
@@ -101,13 +113,13 @@ export async function consumeComboFailure(
     : upstreamRetryAfter;
   // Client response may get the synthetic "2" fallback; cooldown metadata must not —
   // otherwise coolComboTarget treats it as a 2s cooldown instead of the 60s default.
-  const clientRetryAfter = resolveClientRetryAfter({
+  const clientRetryAfter = replayRefusal ? undefined : resolveClientRetryAfter({
     status: response.status,
     message,
     upstreamRetryAfter: effectiveRetryAfter,
     now,
   });
-  const cooldownRetryAfter = resolveClientRetryAfter({
+  const cooldownRetryAfter = replayRefusal ? undefined : resolveClientRetryAfter({
     status: response.status,
     message,
     upstreamRetryAfter: effectiveRetryAfter,
@@ -126,10 +138,13 @@ export async function consumeComboFailure(
     },
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
+  carryReplayRefusal(response, failureResponse);
+  if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
   return {
     response: failureResponse,
     ...(nonReplayable ? { nonReplayable: true } : {}),
+    ...(verifiedPlanRefusal ? { verifiedPlanRefusal: true } : {}),
     classificationText,
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
@@ -140,7 +155,7 @@ export async function consumeComboFailure(
     // refusal in a 5xx still carries `x-codex-*-reset-at`, and gating on 402/429 alone threw
     // those away, so the combo target came back up immediately instead of waiting for the
     // window it was told about. `cyberFailure` stays excluded: a policy block is not a quota.
-    ...(!cyberFailure
+    ...(!cyberFailure && !replayRefusal
       && (response.status === 429 || response.status === 402 || quotaConfirmedByBody)
       ? { resetAt: codexQuotaOutcomeMeta(response).resetAt }
       : {}),

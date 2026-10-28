@@ -10,6 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
+import { runCliAction } from "./runtime-api";
 import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
@@ -82,9 +83,10 @@ export function selectDefaultGuiUrl(
   const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
   if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
 
+  // Keep literal loopback addresses: standalone pairing admits the configured
+  // origin, so replacing 127.0.0.1 with localhost strands its browser flow.
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
-  const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;
-  return `http://${hostname}:${live?.port ?? config.port ?? 10100}`;
+  return `http://${guiHost}:${live?.port ?? config.port ?? 10100}`;
 }
 
 const commandRunners: Record<string, CommandRunner> = {
@@ -404,6 +406,14 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   sync: async deps => {
     const syncArgs = deps.args.slice(1);
+    // #7694: parse the expected identity before anything else reads or writes state.
+    const { parseSyncExpectation, reportSyncExpectationMismatch, SYNC_EXPECTATION_USAGE_EXIT } = await import("./sync-expectation");
+    const parsedExpectation = parseSyncExpectation(syncArgs);
+    if (!parsedExpectation.ok) {
+      console.error(parsedExpectation.message);
+      return SYNC_EXPECTATION_USAGE_EXIT;
+    }
+    const expectation = parsedExpectation.expectation;
     const restartScope = readRestartScope(syncArgs, console);
     // The wire field keeps APP-SERVER-ONLY meaning and is deliberately not widened. A
     // remote hub must not end a local user's conversations because a field name acquired
@@ -412,15 +422,24 @@ const commandRunners: Record<string, CommandRunner> = {
     const restartCodex = restartScope.appServers;
     const { readClientConnectionState } = await import("../client/state");
     const clientState = readClientConnectionState();
-    if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
+    // With an expectation the unlocked read decides nothing: the connected sync re-reads under its
+    // lock and refuses there, so a state that changes in between can never reach the local path.
+    if (!expectation && (clientState.kind === "invalid" || clientState.kind === "mismatched")) {
       console.error(`Client state is ${clientState.kind}: ${clientState.reason}`);
       return 1;
     }
-    if (clientState.kind === "connected") {
+    if (expectation || clientState.kind === "connected") {
       try {
         const { syncConnectedClient } = await import("../client/connect");
-        const result = await syncConnectedClient({ restartCodex });
-        const link = clientState.value.transport === "link";
+        const result = await syncConnectedClient(expectation ? { restartCodex, expect: expectation } : { restartCodex });
+        if (expectation) {
+          // The root preflight skipped the shim repair for a pinned sync; the identity held, so
+          // run it now, as an unpinned sync would have.
+          const { runCodexShimAutoRestore } = await import("./codex-shim-autorestore");
+          runCodexShimAutoRestore();
+        }
+        // The connection the sync ran under, read inside its lock; the read above may be stale.
+        const link = result.connection.transport === "link";
         console.log(result.stale
           ? `${link ? "Home" : "Hub"} unavailable; retained and applied the last-known-good remote catalog (stale).`
           : link ? "Remote Link Home catalog synchronized." : "Remote hub catalog synchronized.");
@@ -437,6 +456,32 @@ const commandRunners: Record<string, CommandRunner> = {
           }
         }
         await handleConnectedSyncCatalogWrite(result, restartScope);
+        if (result.applyRecordFailed) {
+          console.error("The Home's Codex settings were applied, but the apply record could not be written; the client runtime was not restarted. Run 'ocx sync' again.");
+          process.exitCode = 1;
+        }
+        // OCX-6: a link Child's runtime must have started after the apply it serves under.
+        if (link && result.appliedRecord) {
+          const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
+          const { sameClientConnectionOwner } = await import("../client/state");
+          const applied = result.connection;
+          const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
+            restart: startWhenStopped => deps.handleProxyRestart(startWhenStopped),
+            recoveryStart: recovering => deps.handleRestartStartWhenStopped(recovering),
+            connectionUnchanged: () => {
+              const current = readClientConnectionState();
+              return current.kind === "connected" && sameClientConnectionOwner(current.value, applied)
+                && current.value.link?.linkId === applied.link?.linkId;
+            },
+          });
+          const message = applyRestartMessage(outcome);
+          if (outcome.kind === "failed" || outcome.kind === "connection-changed") {
+            console.error(message);
+            process.exitCode = 1;
+          } else {
+            console.log(message);
+          }
+        }
         // `process.exitCode` rather than a literal 0, for the same reason every other
         // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper
         // drives app-server restarts, and one of those recording a failure must not be
@@ -444,6 +489,8 @@ const commandRunners: Record<string, CommandRunner> = {
         // types it as `number | string`; only a numeric code means anything here.
         return typeof process.exitCode === "number" ? process.exitCode : 0;
       } catch (error) {
+        const { ClientSyncExpectationError } = await import("../client/sync-expectation");
+        if (error instanceof ClientSyncExpectationError) return reportSyncExpectationMismatch(error, console);
         // The refresh path reaches the same hub catalog `ocx connect` validates, so a rejected
         // reasoning level arrives here as hub-supplied text. Rendering it through the shared
         // terminal boundary is what keeps the routine refresh from forging output; the domain
@@ -501,7 +548,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -824,12 +871,12 @@ const commandRunners: Record<string, CommandRunner> = {
     // Reset first, like the service runner below: reading process.exitCode only
     // reports THIS command's outcome if nothing earlier in the process set it.
     process.exitCode = 0;
-    await handleProviderCommand(deps.args.slice(1));
+    const code = await runCliAction(() => handleProviderCommand(deps.args.slice(1)));
     // handleProviderCommand reports failure through process.exitCode, which it sets
     // from handleProviderRuntimeCommand. Returning a literal 0 here made index.ts
     // call process.exit(0) and erase it, so `ocx provider quota` against a stopped
     // proxy printed an error and still exited 0 (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   account: async deps => {
     const { cmdAccount } = await import("./account");
@@ -838,10 +885,10 @@ const commandRunners: Record<string, CommandRunner> = {
   models: async deps => {
     const { handleModels } = await import("./models");
     process.exitCode = 0;
-    await handleModels(deps.args.slice(1));
+    const code = await runCliAction(() => handleModels(deps.args.slice(1)));
     // Same as the provider runner above: handleModels sets process.exitCode from
     // handleModelsRuntimeCommand, and a literal 0 discarded it (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   alias: async deps => {
     const { handleAliasCommand } = await import("./alias");
@@ -875,6 +922,10 @@ const commandRunners: Record<string, CommandRunner> = {
   effort: async deps => {
     const { handleEffortCommand } = await import("./effort");
     return await handleEffortCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
+  },
+  fallback: async deps => {
+    const { handleFallbackCommand } = await import("./fallback");
+    return await handleFallbackCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   agent: async deps => {
     const { handleAgentCommand } = await import("./agent");
@@ -988,6 +1039,10 @@ const commandRunners: Record<string, CommandRunner> = {
       return await handleClaudeConfigCommand(deps.args.slice(2));
     }
     return await cmdClaude(deps.args.slice(1));
+  },
+  codex: async deps => {
+    const { cmdCodex } = await import("./codex-launcher");
+    return await cmdCodex(deps.args.slice(1));
   },
   opencode: async deps => {
     const { cmdOpencode } = await import("./opencode");

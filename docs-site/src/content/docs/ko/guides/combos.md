@@ -209,9 +209,9 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`,
+`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`, `--description`,
 `--rename-from`도 받습니다. `--native-alias`에는 현재 지원되는 bare native alias와 비어 있지 않은 display name이 필요합니다. `--effort`, `--alias`,
-`--display-name`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
+`--display-name`, `--description`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
 별칭이고 `delete`는 `remove`의 별칭입니다. 모든 combo 하위 명령은 `ocx route combo ...`에서도 사용할 수 있습니다.
 
 ### Management API
@@ -256,6 +256,7 @@ ocx combo remove <id> --yes
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |
 | `displayName` | 아니요 | 없음 | catalog 표시 전용 label입니다. `nativeAlias`가 true이면 필수입니다. |
+| `description` | 아니요 | 없음 | catalog 행에 표시되는 설명입니다. `displayName`과 같은 제한이 적용됩니다. 설정하지 않으면 생성된 `Routed via opencodex → combo (combo).` 문구가 유지됩니다. |
 
 ## 문제 해결
 
@@ -288,3 +289,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## 쿨다운 복구 예약
+
+`cooldownReprobe: { enabled: true }`로 활성화한 복구 시도는 이를 예약한 요청에만 속하며, 다른 요청에는 저장된 쿨다운이 계속 적용됩니다. 예약은 쿨다운 대기와 JEV 선택을 거쳐 유지됩니다. 대기 중 다시 사용 가능해진 대상은 기존 쿨다운이 바뀌지 않았다면 재시도할 수 있지만, 새 쿨다운 기록은 그 대상의 예약을 무효화합니다. 성공하면 응답한 대상의 변경되지 않은 쿨다운만 해제하며, 시도하지 않은 대상과 새로운 실패의 쿨다운은 유지합니다. 공급자 비활성화, 할당량, 요청 적격성 및 취소 검사는 계속 적용됩니다. [설정과 제한](/guides/combos/#retry-all-cooled-targets-opt-in)을 참고하세요.

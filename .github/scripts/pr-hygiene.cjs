@@ -293,6 +293,109 @@ const HYGIENE_GATE_LABELS = [
 ];
 
 /**
+ * Exception approvals vouch for one revision of the change. Each counts only
+ * while the head the hygiene workflow last recorded is still the head being
+ * evaluated and nothing has rewritten the branch since. Sponsorship
+ * (`maintainer-sponsored`) is about which surfaces change, not about one
+ * revision, so it is not head-bound.
+ */
+const HEAD_BOUND_APPROVAL_LABELS = [
+  "test-exception-approved",
+  "suppression-approved",
+  "generated-change-approved",
+  "dependency-change-approved",
+  "attribution-approved",
+];
+
+/** Issue events after which the head can point at an earlier commit again. */
+const HEAD_REWRITE_EVENTS = ["head_ref_force_pushed", "head_ref_restored"];
+
+const APPROVAL_RECORD_TOKEN = "pr-hygiene-approvals";
+const APPROVAL_RECORD_LINE = /^<!-- pr-hygiene-approvals (\{.*\}) -->$/;
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function isRewriteCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Read the head binding the hygiene workflow wrote as the last line of its
+ * own section. The token must occur exactly once in `source` and sit on that
+ * last line, so echoed text (a changed path can contain newlines) can only
+ * make the record unreadable, never stand in for it.
+ * @returns {{ head: string, headRewrites: number | null } | null}
+ */
+function parseApprovalRecord(source) {
+  if (typeof source !== "string") return null;
+  if (source.split(APPROVAL_RECORD_TOKEN).length !== 2) return null;
+  const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
+  const match = lines.at(-1)?.match(APPROVAL_RECORD_LINE);
+  if (!match) return null;
+  let value;
+  try {
+    value = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Object.keys(value).sort().join(",") !== "head,headRewrites") return null;
+  if (typeof value.head !== "string" || !FULL_SHA.test(value.head)) return null;
+  if (value.headRewrites !== null && !isRewriteCount(value.headRewrites)) return null;
+  return { head: value.head, headRewrites: value.headRewrites };
+}
+
+/** `headRewrites` is null when the history read failed: nothing is confirmed. */
+function formatApprovalRecord({ head, headRewrites }) {
+  const value = { head, headRewrites: isRewriteCount(headRewrites) ? headRewrites : null };
+  return "<!-- " + APPROVAL_RECORD_TOKEN + " " + JSON.stringify(value) + " -->";
+}
+
+function countHeadRewrites(events) {
+  return (events ?? []).filter((entry) => HEAD_REWRITE_EVENTS.includes(entry?.event)).length;
+}
+
+function presentHeadBoundApprovals(labels) {
+  return HEAD_BOUND_APPROVAL_LABELS.filter((label) => labels.includes(label));
+}
+
+/** True when a current rewrite count could still confirm an approval. */
+function needsHeadRewriteCount({ labels = [], headSha, record = null, eventAction }) {
+  return (
+    eventAction !== "synchronize" &&
+    record !== null &&
+    record.head === headSha &&
+    isRewriteCount(record.headRewrites) &&
+    presentHeadBoundApprovals(labels).length > 0
+  );
+}
+
+/**
+ * Split the head-bound approvals on the pull request into the ones that still
+ * describe the evaluated head and the ones that do not. They are kept only
+ * when the last recorded evaluation saw this same head and the rewrite count,
+ * read before that evaluation's snapshot and again after this one's, has not
+ * changed. Without a rewrite, fast-forward pushes cannot bring the recorded
+ * head back, so the head has not moved since that evaluation, which removed
+ * every approval it could not confirm. A synchronize event, a missing record,
+ * or an unknown count confirms nothing.
+ * @returns {{ kept: string[], stale: string[] }}
+ */
+function reconcileHeadBoundApprovals({
+  labels = [],
+  headSha,
+  record = null,
+  eventAction,
+  headRewriteCount = null,
+}) {
+  const present = presentHeadBoundApprovals(labels);
+  const current =
+    needsHeadRewriteCount({ labels, headSha, record, eventAction }) &&
+    isRewriteCount(headRewriteCount) &&
+    headRewriteCount === record.headRewrites;
+  return current ? { kept: present, stale: [] } : { kept: [], stale: present };
+}
+
+/**
  * Combine patch-hygiene and sponsored-surface failures into one list so the
  * hygiene workflow and the PR quality gate cannot disagree about Ready.
  */
@@ -340,6 +443,10 @@ module.exports = {
   addedLines,
   assessHygiene,
   collectDeterministicHygieneFailures,
+  countHeadRewrites,
+  formatApprovalRecord,
+  HEAD_BOUND_APPROVAL_LABELS,
+  HEAD_REWRITE_EVENTS,
   HYGIENE_FAILURE_HINTS,
   HYGIENE_GATE_LABELS,
   hasEmptyCatch,
@@ -347,6 +454,9 @@ module.exports = {
   isBehaviorPath,
   isGeneratedPath,
   isTestPath,
+  needsHeadRewriteCount,
+  parseApprovalRecord,
+  reconcileHeadBoundApprovals,
   resultLines,
   resultLinesByHunk,
 };

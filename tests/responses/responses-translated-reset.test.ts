@@ -17,6 +17,8 @@ import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplay
 import { requestLogDto } from "../../src/server/management/shared";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import { sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
+import { createTranslatorBudget, finalizeTranslatorBudgetResponse } from "../../src/lib/translator-budget";
+import { finalizeAccountLease, finalizeOwnedTranslatorBudget } from "../../src/server/responses/core-lifetime";
 
 async function probe(options: {
   provider?: Partial<OcxProviderConfig>;
@@ -621,11 +623,17 @@ function expectAttribution(entry: RequestLogEntry, cause: string, permission: st
   expect((dto.attempts as Record<string, unknown>[]).at(-1)?.resendPermission).toBe(permission);
 }
 
-describe("deferred replay refusal attribution", () => {
+for (const [name, finalize] of [
+  ["unwrapped", (response: Response) => response],
+  ["translator budget", (response: Response) => finalizeTranslatorBudgetResponse(response, createTranslatorBudget())],
+  ["account lease", (response: Response) => finalizeAccountLease(response, () => {})],
+  ["owned budget and account lease", (response: Response) => finalizeAccountLease(finalizeOwnedTranslatorBudget(response, createTranslatorBudget()), () => {})],
+] as const) describe(`deferred replay refusal attribution: ${name}`, () => {
+  const track = (response: Response) => tracked(finalize(response));
   test("synthetic refusal records ambiguous execution without changing the client response", async () => {
     const original = replayRefusalResponse();
     const payload = await original.clone().text();
-    const { result, entries, attempt } = tracked(original);
+    const { result, entries, attempt } = track(original);
     expect(entries).toHaveLength(0);
     expect(result.status).toBe(429);
     expect([...result.headers]).toEqual([...original.headers]);
@@ -644,7 +652,7 @@ describe("deferred replay refusal attribution", () => {
 
   test("marker wins when the refusal message is unfamiliar", async () => {
     const payload = JSON.stringify({ error: { message: "Fixture diagnostic without replay keywords" } });
-    const { result, entries } = tracked(retainReplayRefusal(new Response(payload, {
+    const { result, entries } = track(retainReplayRefusal(new Response(payload, {
       status: 429, headers: { "content-type": "application/json" },
     })));
     expect(await result.text()).toBe(payload);
@@ -656,7 +664,7 @@ describe("deferred replay refusal attribution", () => {
 
   test("a bodyless marked refusal still supplies closed attribution facts", () => {
     const original = retainReplayRefusal(new Response(null, { status: 429 }));
-    const { result, entries } = tracked(original);
+    const { result, entries } = track(original);
     expect(result).toBe(original);
     expect(entries).toHaveLength(1);
     expectAttribution(entries[0]!, "transport-ambiguous", "refused-ambiguous");
@@ -665,7 +673,7 @@ describe("deferred replay refusal attribution", () => {
   });
 
   test("an empty marked refusal supplies attribution without JSON diagnostics", async () => {
-    const { result, entries } = tracked(retainReplayRefusal(new Response("", {
+    const { result, entries } = track(retainReplayRefusal(new Response("", {
       status: 429, headers: { "content-type": "application/json" },
     })));
     expect(await result.text()).toBe("");
@@ -680,7 +688,7 @@ describe("deferred replay refusal attribution", () => {
       code: "upstream_reset_replay_refused",
       message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
     } });
-    const { result, entries, logCtx } = tracked(new Response(payload, {
+    const { result, entries, logCtx } = track(new Response(payload, {
       status: 429, headers: { "content-type": "application/json", "retry-after": "7" },
     }));
     expect(isReplayRefusalResponse(result)).toBe(false);
@@ -699,7 +707,7 @@ describe("deferred replay refusal attribution", () => {
       const original = new Response(payload, {
         status: 429, headers: { "content-type": "application/json", "retry-after": "7" },
       });
-      const { result, entries, logCtx } = tracked(original);
+      const { result, entries, logCtx } = track(original);
       expect(isReplayRefusalResponse(result)).toBe(false);
       expect(result.status).toBe(429);
       expect(result.headers.get("retry-after")).toBe("7");
@@ -713,7 +721,7 @@ describe("deferred replay refusal attribution", () => {
   }
 
   test("client cancellation retains precedence over a marked refusal", async () => {
-    const { result, entries } = tracked(replayRefusalResponse());
+    const { result, entries } = track(replayRefusalResponse());
     await result.body!.cancel();
     expect(entries).toHaveLength(1);
     expect(entries[0]!.status).toBe(499);

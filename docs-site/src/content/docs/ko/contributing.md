@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # 기존 관리형 pre-push·post-merge 제거
 bun run dev:proxy    # 개발 모드 프록시 API
 bun run dev:gui      # 대시보드 dev 서버(다른 터미널)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # 전체 테스트 스위트 (기본)
 ```
 
@@ -121,7 +121,7 @@ Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 
 
 ## 컨벤션
 
-- **ES Modules 전용**(`import`/`export`), TypeScript, `strict` 모드. `bun x tsc --noEmit`을 깨끗하게
+- **ES Modules 전용**(`import`/`export`), TypeScript, `strict` 모드. `bun run typecheck`을 깨끗하게
   유지하세요.
 - **파일당 최대 약 500줄** — 책임별로 나누세요. 단일 `index.ts` 뒤에 작고 집중된 모듈을 둔
   `web-search/`와 `vision/` 사이드카가 좋은 예입니다.
@@ -173,6 +173,10 @@ wire format을 쓴다는 이유만으로 다른 프로바이더 또는 목적지
 `passthrough`가 아닌 주장에는 구체적인 제한을 적고, fixture 기반 주장에는 이를 입증하는 정확한 assertion id를
 명시하세요. 비밀정보가 없는 request vector를 `tests/fixtures/compatibility/`에 추가하고 production adapter를
 대상으로 실행하는 집중 테스트를 작성합니다.
+`passthrough` claim은 manifest test에서 그 feature에 묶인 selector 위의 `equals` assertion 가운데,
+기대값이 같은 위치의 호출자 값 그대로인 것만 인용할 수 있습니다. 그래서 제거되거나 바뀌었거나 관계없는
+필드를 무손실로 표시할 수 없습니다. custom tool과 그 grammar처럼 한쪽만 보존될 수 있는 측면은 별도
+claim으로 나누세요.
 
 호환성 매니페스트는 수동적인 데이터입니다. 일반 router, Responses handler, server startup path가 manifest
 catalog를 import하거나 Compatibility Lab을 활성화해서는 안 됩니다.

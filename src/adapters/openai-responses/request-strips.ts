@@ -27,6 +27,66 @@ export function stripProviderInputItemMetadata(body: unknown): unknown {
   return input ? { ...body, input } : body;
 }
 
+function isUrlCitationIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Coerce a replayed citation index to a non-negative safe integer, falling back to 0. */
+function repairUrlCitationIndex(value: unknown): number {
+  if (isUrlCitationIndex(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const index = Number(value);
+    if (isUrlCitationIndex(index)) return index;
+  }
+  return 0;
+}
+
+/**
+ * OpenAI Responses requires `title` (string) and integer `start_index`/`end_index` on every
+ * `url_citation` annotation of a replayed `output_text` part. History written by an older bridge
+ * (title omitted when the search source had none) or a lossy client otherwise fails every later
+ * request carrying it, most visibly remote compaction, with a deterministic HTTP 400
+ * (`Missing required parameter: input[N].content[M].annotations[K].title`).
+ * Repair only those fields on `url_citation` annotations of assistant message content; other
+ * annotation types, unknown keys and every other item are untouched. Copy on write: an already
+ * valid body is returned by reference.
+ */
+export function repairUrlCitationAnnotations(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let input: unknown[] | undefined;
+  for (let itemIndex = 0; itemIndex < body.input.length; itemIndex += 1) {
+    const item = body.input[itemIndex];
+    if (!isPlainObject(item) || !Array.isArray(item.content)) continue;
+    let content: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < item.content.length; partIndex += 1) {
+      const part = item.content[partIndex];
+      if (!isPlainObject(part) || part.type !== "output_text" || !Array.isArray(part.annotations)) continue;
+      let annotations: unknown[] | undefined;
+      for (let annIndex = 0; annIndex < part.annotations.length; annIndex += 1) {
+        const ann = part.annotations[annIndex];
+        if (!isPlainObject(ann) || ann.type !== "url_citation") continue;
+        const titleOk = typeof ann.title === "string";
+        const startOk = isUrlCitationIndex(ann.start_index);
+        const endOk = isUrlCitationIndex(ann.end_index);
+        if (titleOk && startOk && endOk) continue;
+        const next: Record<string, unknown> = { ...ann };
+        if (!titleOk) next.title = typeof ann.url === "string" ? ann.url : "";
+        if (!startOk) next.start_index = repairUrlCitationIndex(ann.start_index);
+        if (!endOk) next.end_index = repairUrlCitationIndex(ann.end_index);
+        annotations ??= [...part.annotations];
+        annotations[annIndex] = next;
+      }
+      if (!annotations) continue;
+      content ??= [...item.content];
+      content[partIndex] = { ...part, annotations };
+    }
+    if (!content) continue;
+    input ??= [...body.input];
+    input[itemIndex] = { ...item, content };
+  }
+  return input ? { ...body, input } : body;
+}
+
 export function stripInvalidItemIds(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
@@ -185,6 +245,38 @@ export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
   const next = { ...body };
   for (const field of CANONICAL_ONLY_TOP_LEVEL_FIELDS) delete next[field];
   return next;
+}
+
+/**
+ * OpenAI-private input item TYPES, the item-level sibling of the two tables above.
+ *
+ * Each one is a positional control the OpenAI Responses backend interprets where it sits in
+ * history, never a turn of the conversation, so dropping it leaves every message, call and output
+ * in place. Codex gates sending one on its own `is_openai` provider check, which loopback
+ * injection always satisfies, so a gateway this proxy does not operate can still receive one and
+ * reject the whole body as an unknown item type.
+ *
+ * Same rule as the top-level table: only types a client is OBSERVED to send.
+ */
+const CANONICAL_ONLY_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
+  // Codex 0.164 `ResponseItem::ConfigurationUpdate` ({type, reasoning: {effort}}): a durable
+  // reasoning-effort change recorded at its position in history. codex-rs sends it only for a
+  // catalog row with `supports_reasoning_effort_updates`, and keeps it in saved history after a
+  // model switch. Mapping the effort onto another provider is out of scope (#6895).
+  "configuration_update",
+]);
+
+/**
+ * Remove OpenAI-private input items. The caller decides the boundary, exactly as for
+ * {@link stripCanonicalOnlyTopLevelFields}; the canonical and OpenAI-operated destinations keep
+ * the items verbatim and in order. Returns the input unchanged when none is present.
+ */
+export function stripCanonicalOnlyInputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const isPrivate = (item: unknown): boolean => isPlainObject(item)
+    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
+  if (!body.input.some(isPrivate)) return body;
+  return { ...body, input: body.input.filter(item => !isPrivate(item)) };
 }
 
 /**

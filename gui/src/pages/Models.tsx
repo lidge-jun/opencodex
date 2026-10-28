@@ -83,18 +83,18 @@ import {
   type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
-  type ShadowCallData,
   type V2Status,
 } from "./models-shared";
 import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hints";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
 import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
-import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { ShadowCallSettingsRow } from "./shadow-call-settings-row";
 import { ModelCatalogDelivery } from "./models-catalog-state";
 import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
 import { useAutoReviewSettings } from "./use-auto-review-settings";
+import { useShadowCallSettings } from "./use-shadow-call-settings";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -444,8 +444,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [contextError, setContextError] = useState("");
   const [hoveredModel, setHoveredModel] = useState<{ namespaced: string; rect: DOMRect } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
-  const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  const { shadowCall, shadowCallSaving, loadShadowCall, saveShadowCall } = useShadowCallSettings({ apiBase, publishFeedback, t });
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -471,16 +470,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     () => [{ value: "", label: "—" }, ...routedModelOptions(shadowModelOptions, models, autoReview?.model)],
     [models, shadowModelOptions, autoReview?.model],
   );
-
-  const loadShadowCall = useCallback(async () => {
-    const bounded = createBoundedFetch(15_000);
-    try {
-      const r = await fetch(`${apiBase}/api/shadow-call-settings`, { signal: bounded.signal });
-      const data = await readJsonIfOk<ShadowCallData>(r);
-      if (data) setShadowCall(data);
-    } catch { /* old server / network: keep the section disabled */ }
-    finally { bounded.clear(); }
-  }, [apiBase]);
 
   const loadV2 = useCallback(async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
@@ -1075,21 +1064,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
 
   const setAll = () => { void putCap({ setAll: !allCapped }); };
 
-  const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
-    if (!shadowCall || shadowCallSaving) return;
-    setShadowCallSaving(true);
-    setShadowCall({ ...shadowCall, ...patch });
-    try {
-      await fetch(`${apiBase}/api/shadow-call-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-    } finally {
-      setShadowCallSaving(false);
-    }
-  };
-
   /**
    * Both v2 surface writes adopt the response directly instead of calling
    * `loadV2()`. `loadV2` returns early while `v2BusyRef` is still held by the
@@ -1237,11 +1211,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     : null;
 
   const putV2Threads = async (value: number) => {
-    // Same guards as the flag toggle: single-flight + server-side idempotence
-    // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
-    // value or a double click can never double-write config.toml.
+    // Validate both child and backend units before the single-flight write.
     if (!v2 || v2BusyRef.current) return;
-    if (!Number.isInteger(value) || value < 1) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
+    const threadLimit = childCountToThreadLimit(value, v2.enabled);
+    if (!Number.isSafeInteger(value) || value < 1 || !Number.isSafeInteger(threadLimit)) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
     if (v2ThreadsChildren === value) return;
     setV2Busy(true);
     v2BusyRef.current = true;
@@ -1252,7 +1225,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrentThreadsPerSession: childCountToThreadLimit(value, v2.enabled) }),
+        body: JSON.stringify({ maxConcurrentThreadsPerSession: threadLimit }),
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
@@ -1971,13 +1944,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
         </SettingsRow>
-        <SettingsRow label={t("models.shadowCallIntercept")} hint={<Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip>} busy={!shadowCall}>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
-          <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-          </div>
-        </SettingsRow>
+        <ShadowCallSettingsRow shadowCall={shadowCall} saving={shadowCallSaving} modelOptions={shadowCallOptions} onSave={patch => void saveShadowCall(patch)} />
 
         <SettingsRow label={t("models.autoReviewOverride")} hint={<Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip>} busy={!autoReview}>
           <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />

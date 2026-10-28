@@ -13,6 +13,7 @@ import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
 import { formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
+import { CAPABILITIES, capabilityInvocation } from "../../src/cli/capabilities";
 import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -477,14 +478,18 @@ describe("ocx agent sidecar --list (#2188)", () => {
   });
 });
 
-afterEach(() => {
-  for (const server of servers.splice(0)) server.stop(true);
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => server.stop(true)));
   process.exitCode = 0;
 });
 
 function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
   const requests: Recorded[] = [];
   const server = Bun.serve({
+    // Bind the exact address the CLI dials (#7416). A wildcard bind lets another process on a
+    // loaded host bind 127.0.0.1 on the same port; it then receives this fake's requests, and a
+    // real proxy there answers the management call with 404.
+    hostname: "127.0.0.1",
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
@@ -579,6 +584,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/keys/rotate/commit", "ocx access key rotate commit"],
       ["/api/machine", "ocx connect/status/sync/disconnect"],
       ["/api/session/logout", "(none — GUI current-session logout)"],
+      ["/api/session/remember", "(none — GUI remembered-device exchange; the CLI holds no browser cookie jar)"],
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
@@ -608,6 +614,7 @@ describe("headless GUI parity CLI", () => {
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
       ["/api/routing-profiles", "ocx route policy"],
+      ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is
@@ -633,6 +640,20 @@ describe("headless GUI parity CLI", () => {
       ["/api/v2", "ocx v2/agent"],
       ["/api/windows-tray", "ocx tray"],
     ];
+    // These commands share local owners with the GUI routes; declaring HTTP routes
+    // on the capabilities would falsely claim the CLI sends management requests.
+    // Resolve real capability declarations and require their documented counterpart.
+    for (const [resource, verb, mutates] of [
+      ["/api/codex/cli-update/plan", "plan", false],
+      ["/api/codex/cli-update/apply", "apply", true],
+      ["/api/codex/cli-update/jobs", "status", false],
+    ] as const) {
+      const capability = CAPABILITIES.find(cap => cap.command.join(" ") === `system codex-cli-update ${verb}`);
+      expect(capability, resource).toBeDefined();
+      expect(capability!.mutates).toBe(mutates);
+      expect(capability!.details?.some(detail => detail.includes(resource)), resource).toBe(true);
+      coverage.push([resource, capabilityInvocation(capability!)]);
+    }
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);
   });
@@ -880,14 +901,15 @@ describe("headless GUI parity CLI", () => {
 
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      for (const args of [
-        ["--decision-provider", "ollama-tev1"],
-        ["--strategy", "jev", "--decision-timeout", "999"],
-        ["--decision-timeout", "5000"],
-      ]) {
+      // Without --strategy the stored strategy decides (#7579), so only the read may precede the refusal.
+      for (const [args, methods] of [
+        [["--decision-provider", "ollama-tev1"], ["GET"]],
+        [["--strategy", "jev", "--decision-timeout", "999"], []],
+        [["--decision-timeout", "5000"], ["GET"]],
+      ] as const) {
         const rejected = fakeRuntime();
         expect(await handleComboCommand(["set", "demo", "--targets", "a/m1", ...args], rejected.deps)).toBe(2);
-        expect(rejected.requests).toEqual([]);
+        expect(rejected.requests.map(request => request.method)).toEqual([...methods]);
       }
     } finally {
       errorSpy.mockRestore();
@@ -909,6 +931,8 @@ describe("headless GUI parity CLI", () => {
     const runtime = fakeRuntime(req => req.method === "GET" ? {
       combos: [{
         id: "deep",
+        strategy: "failover",
+        stickyLimit: 1,
         defaultEffort: "max",
         defaultEffortMode: "force",
         targets: [{ provider: "ark", model: "old-model" }],
@@ -1805,6 +1829,19 @@ describe("ownership recovery advice does not assume injection is enabled", () =>
       } finally { log.mockRestore(); }
     });
   }
+});
+
+test("the fake runtime owns the loopback address the CLI dials", async () => {
+  const { deps } = fakeRuntime();
+  const port = Number(new URL(deps.baseUrl).port);
+  let intruder: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    intruder = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null, { status: 404 }) });
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe("EADDRINUSE");
+  }
+  await intruder?.stop(true);
+  expect(intruder).toBeUndefined();
 });
 
 test("Claude intercept start uses the management POST and preserves refusal exit status", async () => {

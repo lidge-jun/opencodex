@@ -1,3 +1,5 @@
+import { codexHomeIsAbsent } from "../codex-home-owner";
+import { getCodexHome } from "../paths";
 import { withNativeMainSharedClaim } from "../native-main-claim";
 import { resolveNativeProfileContext } from "../native-profile-store";
 import { NativeProfileError } from "../native-profile-types";
@@ -5,6 +7,17 @@ import { NativeProfileError } from "../native-profile-types";
 export function isNativeMainClaimUnavailable(error: unknown): error is NativeProfileError {
   return error instanceof NativeProfileError
     && (error.code === "NATIVE_MAIN_CLAIM_BUSY" || error.code === "NATIVE_MAIN_CLAIM_UNAVAILABLE");
+}
+
+/** Missing native homes leave reads unobserved; credential operations still require their claim. */
+export function isNativeMainObservationUnavailable(error: unknown): error is NativeProfileError {
+  if (isNativeMainClaimUnavailable(error)) return true;
+  if (!(error instanceof NativeProfileError) || error.code !== "CODEX_HOME_UNAVAILABLE") return false;
+  try {
+    return codexHomeIsAbsent(getCodexHome());
+  } catch {
+    return false;
+  }
 }
 
 export function withNativeMainCredentialClaim<T>(operation: () => Promise<T>): Promise<T> {

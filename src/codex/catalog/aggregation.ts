@@ -195,6 +195,7 @@ export function deriveComboCatalogModel(
     ...(combo.alias ? { alias: combo.alias } : {}),
     ...(combo.nativeAlias ? { nativeAlias: true } : {}),
     ...(combo.displayName ? { displayName: combo.displayName } : {}),
+    ...(combo.description ? { description: combo.description } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
@@ -398,6 +399,20 @@ export function exactComboCatalogSlugs(
     const comboDisabled = comboDisabledModelSelectors(id, raw ?? {})
       .some(selector => disabled.has(selector));
     return comboDisabled ? [] : [publicSlug];
+  }));
+}
+
+/** Current combo row descriptions by public catalog slug, for retained-row re-projection (#7229). */
+export function comboCatalogDescriptions(
+  config: Pick<OcxConfig, "combos" | "disabledModels">,
+): Map<string, string> {
+  const current = exactComboCatalogSlugs(config);
+  return new Map(listComboIds(config).flatMap(id => {
+    const raw = config.combos?.[id];
+    const alias = typeof raw?.alias === "string" ? raw.alias.trim() : "";
+    const publicSlug = alias || comboModelId(id);
+    const description = typeof raw?.description === "string" ? raw.description.trim() : "";
+    return description && current.has(publicSlug) ? [[publicSlug, description] as const] : [];
   }));
 }
 

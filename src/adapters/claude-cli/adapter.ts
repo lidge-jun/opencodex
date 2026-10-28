@@ -15,7 +15,7 @@ import {
   CODEBUDDY_TOOL_LIMITS,
 } from "../codebuddy/tool-bridge";
 import { CLAUDE_CLI_PROFILES, type ClaudeCliProfile } from "./profiles";
-import { checkClaudeUsageAdmission, recordClaudeUsageRefusal, type ClaudeAdmission } from "./usage-admission";
+import { checkClaudeUsageAdmission, containsClaudeResetClock, recordClaudeUsageRefusal, type ClaudeAdmission } from "./usage-admission";
 import { buildStableClaudeConversationInput, CLAUDE_REPLAY_SYSTEM_PROMPT, stableClaudeToolBridge } from "./stable-replay";
 
 // The coding-agent bridge is protocol-level infrastructure shared with CodeBuddy. Its MCP server
@@ -286,12 +286,18 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
           provider,
           parsed,
           incoming,
-          emit: withClaudeLoginHint(event => {
-            if (event.type === "error") {
-              void Promise.resolve((deps.usageRefusal ?? recordClaudeUsageRefusal)(event.message)).catch(() => {});
-            }
-            emit(event);
-          }),
+          emit: withClaudeLoginHint(emit),
+          onCliOutputError: message => {
+            // The model id is caller input that reaches the CLI verbatim, and the CLI may reflect it
+            // inside its own error wording. When the model id itself carries the reset-clock
+            // phrase the refusal parser honors, a parsed reset cannot be attributed to the
+            // account — it may be the model string echoed back rather than a limit Claude
+            // reported — so this turn's output records nothing. The error still reaches the
+            // client and limits the preflight already knows still gate; a genuine limit seen
+            // only on such a turn is delivered but deliberately not cached.
+            if (containsClaudeResetClock(parsed.modelId)) return;
+            void Promise.resolve().then(() => (deps.usageRefusal ?? recordClaudeUsageRefusal)(message)).catch(() => {});
+          },
           ...(toolBridge ? { toolBridge } : {}),
           conversationInput: buildStableClaudeConversationInput,
           buildArgs: (profile, req, prov) => buildArgs(profile as ClaudeCliProfile, req, prov, promptFile),

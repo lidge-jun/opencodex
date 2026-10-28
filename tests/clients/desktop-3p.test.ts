@@ -4,7 +4,7 @@ import { withClientLifecycleSync } from "../../src/client/lifecycle-lock";
 import { applyRemoteDesktopStore } from "../../src/claude/desktop-remote-store";
 import type { OcxConfig } from "../../src/types";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import {
@@ -24,6 +24,7 @@ import {
   writeRemoteDesktop3pConfig,
   type Desktop3pModelEntry,
 } from "../../src/claude/desktop-3p";
+import { assertDesktopLibraryTextSize, MAX_DESKTOP_PROFILE_FILE_BYTES } from "../../src/claude/desktop-3p-library";
 import { moveDesktopRoute, reconcileDesktopProfile, setDesktopFamilyDefault } from "../../src/claude/desktop-profile";
 import { resolveInboundModel } from "../../src/claude/inbound";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -677,3 +678,71 @@ test("Desktop FAST base validation preserves exact catalog IDs and clears stale 
     expect(isUnresolvedDesktop3pAlias(unknown)).toBe(true);
   } finally { buildDesktop3pRegistry([], []); }
 });
+
+// Multi-MiB real-file fixtures plus ACL-hardened writes need extra Windows wall-clock budget.
+test("oversized Desktop replacement is refused before writing a backup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-bound-"));
+  const path = join(dir, "profile.json");
+  try {
+    writeFileSync(path, '{"original":true}');
+    expect(() => atomicReplaceDesktopConfig(path, "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + 1), Buffer.from('{"original":true}')))
+      .toThrow("desktop_config_too_large");
+    expect(readFileSync(path, "utf8")).toBe('{"original":true}');
+    expect(existsSync(path + ".bak")).toBe(false);
+    expect(() => assertDesktopLibraryTextSize("é".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES / 2))).not.toThrow();
+    expect(() => assertDesktopLibraryTextSize("é".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES / 2 + 1)))
+      .toThrow("desktop_config_too_large");
+  } finally { removeTreeWithRetry(dir); }
+}, 20_000);
+
+test.each(["profile", "metadata"] as const)("oversized Desktop %s output refuses before file mutation", kind => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-write-bound-"));
+  const previous = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  const previousHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = join(dir, "ocx");
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = dir;
+  try {
+    saveConfig({
+      providers: { test: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1",
+        allowPrivateNetwork: true, liveModels: false, models: ["fixture-model"] } },
+      defaultProvider: "test", port: 4096,
+    } as OcxConfig);
+    const id = "owned-profile";
+    const metadata = {
+      appliedId: id, entries: [{ id, name: "opencodex" }],
+      ...(kind === "metadata" ? { foreignRows: Array(500_000).fill("x") } : {}),
+    };
+    const profile = {
+      inferenceProvider: "gateway", inferenceCredentialKind: "static",
+      inferenceGatewayBaseUrl: "http://127.0.0.1:1", inferenceGatewayApiKey: "old-key",
+      modelDiscoveryEnabled: false, inferenceModels: [],
+      ...(kind === "profile" ? { foreignPad: "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES - 512) } : {}),
+    };
+    const metadataPath = join(dir, "_meta.json");
+    const profilePath = join(dir, `${id}.json`);
+    const beforeMeta = JSON.stringify(metadata);
+    const beforeProfile = JSON.stringify(profile);
+    expect(Buffer.byteLength(beforeMeta)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    expect(Buffer.byteLength(beforeProfile)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    if (kind === "metadata") {
+      expect(Buffer.byteLength(JSON.stringify(metadata, null, 2) + "\n")).toBeGreaterThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    }
+    writeFileSync(metadataPath, beforeMeta);
+    writeFileSync(profilePath, beforeProfile);
+    const models = Array.from({ length: 100 }, (_, index) => ({ provider: "test", id: `fixture-${index}` }));
+    const result = writeDesktop3pConfig(4096, [], models, "new-key", "static", undefined, undefined, {
+      lockPath: join(dir, "locks", "desktop.sqlite"),
+    });
+    expect(result.written).toBe(false);
+    expect(result.reason).toBe("desktop_config_too_large");
+    expect(readFileSync(profilePath, "utf8")).toBe(beforeProfile);
+    expect(readFileSync(metadataPath, "utf8")).toBe(beforeMeta);
+    expect(existsSync(profilePath + ".bak")).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+    else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previous;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(dir);
+  }
+}, 20_000);

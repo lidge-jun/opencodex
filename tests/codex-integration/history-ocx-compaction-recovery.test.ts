@@ -79,15 +79,17 @@ describe("OpenCodeX compaction history recovery", () => {
     expect(rewriteOcxCompactionsForNativeReplay(source)).toEqual({ content: source, replaced: 0 });
   });
 
-  test("backs up and atomically repairs one database-selected rollout", () => {
+  test.each([false, true])("backs up and atomically repairs one database-selected rollout (long paths: %s)", longPaths => {
     const root = mkdtempSync(join(tmpdir(), "ocx-compaction-recovery-"));
     try {
       const codexHome = join(root, "codex");
-      const rolloutDir = join(codexHome, "sessions", "2026", "09", "07");
-      const backupRoot = join(root, "backups");
+      const segment = longPaths ? "long-path-".repeat(18) : "07";
+      const rolloutDir = join(codexHome, "sessions", "2026", "09", segment);
+      const backupRoot = join(root, "backups", segment);
       mkdirSync(rolloutDir, { recursive: true });
       const threadId = "01a018e6-242f-7801-81b8-ffc0a5c6d589";
       const rolloutPath = join(rolloutDir, `rollout-fixture-${threadId}.jsonl`);
+      if (longPaths) expect(rolloutPath.length).toBeGreaterThan(260);
       const original = `${JSON.stringify({
         type: "compacted",
         payload: {

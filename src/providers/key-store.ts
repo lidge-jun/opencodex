@@ -32,14 +32,19 @@ export type {
   ProviderKeyStoreKind,
 } from "./api-key-resolve";
 
-/** Shared with routing: a key-mode override is effective only while its key resolves. */
+/**
+ * Shared with routing: a key-mode override is operator intent, not a credential probe.
+ * The configured authMode alone decides the lane; a key that cannot be resolved right now
+ * (paused last key, missing env var, disabled pool) fails closed at the transport and must
+ * never implicitly reclassify the provider to the registry's OAuth lane, where a stored
+ * OAuth account would be billed instead of the operator's key.
+ */
 export function providerUsesKeyAuthOverride(
   entry: Pick<ProviderRegistryEntry, "authKind" | "allowKeyAuthOverride">,
   provider: Pick<OcxProviderConfig, "authMode">,
-  resolvedKey: string | undefined,
 ): boolean {
   return entry.authKind === "oauth" && entry.allowKeyAuthOverride === true
-    && provider.authMode === "key" && typeof resolvedKey === "string" && resolvedKey.trim().length > 0;
+    && provider.authMode === "key";
 }
 
 /**
@@ -115,7 +120,11 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
   return { ok: true, moved: written.length };
 }
 
-/** Reverse of `storeProviderKeyInKeychain`: read every reference back, write plaintext, delete items. */
+/**
+ * Reverse of `storeProviderKeyInKeychain`: read every reference back, persist plaintext, then delete
+ * the items. The config loses its references before any OS entry is removed, so a failed save
+ * deletes nothing and a deletion never races a reference that is still on disk.
+ */
 export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string): { ok: true; restored: number } | { ok: false; error: string; status: number } {
   const provider = config.providers[name];
   if (!provider) return { ok: false, error: "unknown provider", status: 404 };
@@ -149,10 +158,11 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     if (isKeychainReference(entry.key)) entry.key = resolved.get(keychainAccount(entry.key))!;
   }
   if (isKeychainReference(provider.apiKey)) provider.apiKey = resolved.get(keychainAccount(provider.apiKey))!;
+  invalidateResolvedProviderKeyCache();
+  saveConfigPreservingClaudeCode(config);
   for (const account of resolved.keys()) {
     try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
   }
   invalidateResolvedProviderKeyCache();
-  saveConfigPreservingClaudeCode(config);
   return { ok: true, restored: resolved.size };
 }

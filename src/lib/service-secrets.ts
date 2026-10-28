@@ -268,18 +268,53 @@ export function removeServiceApiTokenFileIfOwned(
  * token file into the environment). Pure: returns the token or null — the CALLER
  * assigns it to process.env.OPENCODEX_API_AUTH_TOKEN. Loads only when the env token
  * is empty and OCX_API_TOKEN_FILE names a readable file.
+ *
+ * OCX_API_TOKEN_FILE is inherited from the environment, so the path is untrusted: the read
+ * goes through one no-follow, nonblocking descriptor, accepts only a regular file of at most
+ * MAX_SERVICE_API_TOKEN_BYTES, and returns only a single-line printable token. Anything else
+ * (a FIFO, device, symlink, oversized or multi-line file) loads nothing.
  */
 export function loadServiceTokenFromFile(env: Record<string, string | undefined>): string | null {
   if (env.OPENCODEX_API_AUTH_TOKEN?.trim()) return null;
   const file = env.OCX_API_TOKEN_FILE?.trim();
   if (!file) return null;
+  const flags = process.platform === "win32"
+    ? constants.O_RDONLY
+    : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let fd: number | undefined;
   try {
-    const token = readFileSync(file, "utf8").trim();
-    return token || null;
+    // Windows has no O_NOFOLLOW: refuse a link up front, then bind the opened descriptor to the
+    // entry by identity so a link swapped in between lstat and open is still refused.
+    const entry = process.platform === "win32" ? lstatSync(file, { bigint: true }) : undefined;
+    if (entry?.isSymbolicLink()) return null;
+    fd = openSync(file, flags);
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.size > BigInt(MAX_SERVICE_API_TOKEN_BYTES)) return null;
+    if (entry) {
+      const after = lstatSync(file, { bigint: true });
+      if (after.isSymbolicLink() || after.dev !== stat.dev || after.ino !== stat.ino || entry.ino !== stat.ino || entry.dev !== stat.dev) return null;
+    }
+    const buffer = Buffer.alloc(MAX_SERVICE_API_TOKEN_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    if (length > MAX_SERVICE_API_TOKEN_BYTES) return null;
+    const token = buffer.subarray(0, length).toString("utf8").trim();
+    return SERVICE_TOKEN_FILE_SHAPE.test(token) ? token : null;
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
+
+/** One line of printable, non-space ASCII: never JSON with newlines, binary, or a second line. */
+const SERVICE_TOKEN_FILE_SHAPE = /^[\x21-\x7e]{1,4096}$/;
 
 /**
  * The data-plane token a boot should export, or null when the environment already has one

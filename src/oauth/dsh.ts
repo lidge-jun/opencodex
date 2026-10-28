@@ -9,12 +9,27 @@
  */
 
 import type { OAuthController, OAuthCredentials } from "./types";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 
 export const DSH_PLATFORM_ORIGIN = "https://platform.deepseek.com";
 export const DSH_INFERENCE_ORIGIN = "https://api.deepseek.com/anthropic";
+
+/**
+ * Byte ceiling for the profile document returned by /auth-api/v0/users/current.
+ *
+ * A legitimate profile is a small fixed-shape JSON object (code, data.biz_code,
+ * biz_data.id/email/id_profile{name,picture}) well under a few KiB; 64 KiB matches
+ * the shared bounded-body ceiling and still leaves orders of magnitude of
+ * headroom. Anything larger is rejected before parsing so a hostile or broken
+ * upstream cannot turn an import validation into unbounded memory work.
+ */
+export const DSH_PROFILE_MAX_BYTES = 64 * 1024;
+
+/** Wall-clock budget for the profile request and its body read, in milliseconds. */
+const DSH_PROFILE_FETCH_TIMEOUT_MS = 10_000;
 
 export interface DshAccountDetectionResult {
   detected: boolean;
@@ -80,7 +95,7 @@ export async function validateDshAccountToken(
   signal?: AbortSignal,
 ): Promise<DshValidatedAccountIdentity> {
   try {
-    const timeoutSignal = AbortSignal.timeout(10_000);
+    const timeoutSignal = AbortSignal.timeout(DSH_PROFILE_FETCH_TIMEOUT_MS);
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(`${DSH_PLATFORM_ORIGIN}/auth-api/v0/users/current`, {
       method: "GET",
@@ -99,7 +114,35 @@ export async function validateDshAccountToken(
       return { valid: false, error: `Platform returned HTTP ${response.status}` };
     }
 
-    const body = (await response.json()) as {
+    // A declared length past the cap is rejected without touching the stream.
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > DSH_PROFILE_MAX_BYTES) {
+      try {
+        void response.body?.cancel(
+          new DOMException("DSH profile response is too large", "QuotaExceededError"),
+        ).catch(() => undefined);
+      } catch {
+        // Best-effort cancellation only.
+      }
+      return { valid: false, error: "PROFILE_VALIDATION_FAILED" };
+    }
+
+    // Missing or understated Content-Length still meets the cap on the decoded
+    // stream itself: once an over-limit byte is observed the retained buffer is
+    // discarded and cancellation is requested on the body. Malformed UTF-8 fails
+    // closed so a replacement character can never alter the authoritative ID.
+    const bounded = await readBoundedResponseBody(response, {
+      signal: combinedSignal,
+      maxBytes: DSH_PROFILE_MAX_BYTES,
+      totalTimeoutMs: DSH_PROFILE_FETCH_TIMEOUT_MS,
+      inactivityTimeoutMs: DSH_PROFILE_FETCH_TIMEOUT_MS,
+      fatalUtf8: true,
+    });
+    if (bounded.oversized || bounded.truncated || !bounded.displaySafe) {
+      return { valid: false, error: "PROFILE_VALIDATION_FAILED" };
+    }
+
+    const body = JSON.parse(bounded.text) as {
       code?: number;
       data?: {
         biz_code?: number;

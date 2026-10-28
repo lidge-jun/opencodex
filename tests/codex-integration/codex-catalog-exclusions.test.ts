@@ -7,9 +7,9 @@ describe("routed catalog compatibility exclusions", () => {
     // Issue #2330: uncallable or stale OpenCode Go models
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(false);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(false);
-    expect(shouldExposeRoutedModel({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(false);
+    // First-party retirement was withdrawn; gateway availability remains independent.
+    expect(shouldExposeRoutedModel({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "deepseek-v4-pro" })).toBe(false);
-    expect(shouldExposeRoutedModel({ provider: "opencode-free", id: "deepseek-v4-flash-free" })).toBe(true);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "grok-4.6" })).toBe(true);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "glm-5.2" })).toBe(true);
   });

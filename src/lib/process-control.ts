@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { isIP } from "node:net";
 import { loadConfig } from "../config";
 import { readRuntimePort } from "../config/process-state";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { configuredAdminToken } from "./admin-secrets";
 
 export function isProcessAlive(pid: number): boolean {
@@ -40,6 +41,18 @@ export interface GracefulStopIo {
    * and keep the self-contained behaviour.
    */
   deferSharedTeardownNonce?: string;
+  /**
+   * Whether a `sharedTeardown: "not-owned"` answer confirms this stop's teardown.
+   *
+   * A sibling's `not-owned` is a truthful final answer: it owns no shared teardown, so
+   * nothing is left for this caller either. `ocx stop` of a connected Link Child sets this
+   * false — only an old build answers `not-owned` for a link connection, and it says so
+   * while preserving the loopback route this caller must restore itself. The caller decides
+   * from the connection state read at the POST: a connect or disconnect committed mid-stop
+   * changes what the answer means for it. Defaults to true; the option only narrows a stop
+   * that sent no deferral nonce.
+   */
+  acceptNotOwnedTeardown?: boolean;
   /**
    * Endpoint the caller already resolved for this pid.
    *
@@ -203,6 +216,17 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
  */
 type StopRefusal = { message: string | null; code: string | null };
 
+export async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  let status: number | undefined;
+  try {
+    return await directLocalHttpFetch(input, init, { onResponseStatus: value => { status = value; } });
+  } catch (error) {
+    // A received refusal forbids forced stop even if its explanatory body fails.
+    if (status === 409) return new Response(null, { status });
+    throw error;
+  }
+}
+
 async function stopProxyGracefullyDetailed(
   pid: number,
   io: GracefulStopIo = {},
@@ -217,7 +241,7 @@ async function stopProxyGracefullyDetailed(
   const headers: Record<string, string> = {};
   const token = configuredAdminToken(env.OPENCODEX_HOME?.trim() || undefined, env as NodeJS.ProcessEnv);
   if (token) headers["x-opencodex-api-key"] = token;
-  const fetchFn = io.fetchFn ?? fetch;
+  const fetchFn = io.fetchFn ?? stopRequestFetch;
   let sharedTeardownConfirmed = false;
   try {
     // `ocx stop` asks the proxy NOT to restore shared client config: it does that itself,
@@ -263,12 +287,16 @@ async function stopProxyGracefullyDetailed(
     const expectedTeardown = io.deferSharedTeardownNonce ? "deferred" : "performed";
     // A sibling instance answers `not-owned`: it has no shared teardown to perform, so there is
     // nothing left over for this caller either. A deferral it was sent is still not confirmed.
+    // A connected Link Child's stop refuses the same answer: only an old build sends it for a
+    // link connection, and it preserves the route this caller must restore.
     sharedTeardownConfirmed = body !== null
       && typeof body === "object"
       && !Array.isArray(body)
       && "success" in body && body.success === true
       && "sharedTeardown" in body && (body.sharedTeardown === expectedTeardown
-        || (!io.deferSharedTeardownNonce && body.sharedTeardown === "not-owned"));
+        || (!io.deferSharedTeardownNonce
+          && (io.acceptNotOwnedTeardown ?? true)
+          && body.sharedTeardown === "not-owned"));
   } catch {
     return done(false);
   }
@@ -339,22 +367,31 @@ async function waitForStoppedPort(
   }
 }
 
-export function killProxy(pid: number): void {
+export function killProxy(pid: number, mayTerminate?: () => boolean): void {
   if (!isProcessAlive(pid)) return;
+  const authorize = () => {
+    if (mayTerminate && mayTerminate() !== true) throw Object.assign(new Error("Process termination refused"), { code: "EUPDATEAUTHORITY" });
+  };
   if (process.platform === "win32") {
     // Windows process.kill(SIGTERM/SIGINT) is TerminateProcess — not a graceful signal.
     // Graceful drain happens only via stopProxyGracefully() (POST /api/stop). This path
     // is the hard fallback: taskkill /T /F so the process tree exits (ghost LISTEN /
     // CLOSE_WAIT are then cleared by reclaimListenPort / SetTcpEntry).
     const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+    const args = ["/PID", String(pid), "/T", "/F"];
+    authorize();
     try {
-      execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], { stdio: "pipe", windowsHide: true });
+      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true });
     } catch (err) {
       if (isProcessAlive(pid)) throw err;
     }
   } else {
+    authorize();
     process.kill(pid, "SIGTERM");
-    if (!waitForExit(pid, 5000)) process.kill(pid, "SIGKILL");
+    if (!waitForExit(pid, 5000)) {
+      authorize();
+      process.kill(pid, "SIGKILL");
+    }
   }
   if (!waitForExit(pid, 5000)) throw new Error(`process ${pid} did not exit`);
 }

@@ -150,8 +150,11 @@ jobs:
             dependency_cpu: arm64
             smoke: false
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # The Windows leg can wait up to an hour for a release-signing approval in SignPath.
+    timeout-minutes: ${{ matrix.target == 'bun-windows-x64' && 90 || 25 }}
     permissions:
+      # actions: read lets the SignPath action read this job and download the unsigned artifact.
+      actions: read
       contents: read
     steps:
       - name: Checkout
@@ -161,6 +164,23 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+
+      # Windows Authenticode signing through SignPath Foundation (#7207). Decided before the build, so
+      # a broken SignPath configuration fails in seconds instead of after the build. The rules
+      # (no token: skip; partial configuration: fail; test-signing: dry runs only) live in
+      # scripts/ci/windows-signing-plan.sh, where tests/ci-workflows/release-windows-signing.test.ts
+      # exercises them.
+      - name: Decide Windows code signing
+        id: windows-signing
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: bash scripts/ci/windows-signing-plan.sh
 
       - name: Install dependencies
         run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
@@ -200,6 +220,58 @@ jobs:
             Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/healthz | Select-Object -ExpandProperty Content
             Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/ | Out-Null
           } finally { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+
+      # Signed after the smoke test and before the archive, so the zip and its checksum are built
+      # from the signed binary. The artifact holds ocx.exe alone at its root, which is the shape the
+      # windows-standalone-zip artifact configuration expects. The keyring addons beside it are
+      # third-party builds that the SignPath Foundation policy forbids signing with its certificate.
+      - name: Upload the unsigned Windows binary for signing
+        id: unsigned-ocx
+        if: steps.windows-signing.outputs.mode == 'sign'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signpath-unsigned-${{ matrix.target }}
+          path: dist/standalone/${{ matrix.target }}/ocx.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      # continue-on-error on every signing step: a SignPath outage, timeout or rejection must never
+      # fail a release. The apply step reads this outcome and keeps the unsigned binary with a
+      # warning. Under release-signing every request waits for a maintainer's manual approval in
+      # app.signpath.io, hence the hour.
+      - name: Sign the Windows binary through SignPath
+        id: sign-ocx
+        if: steps.windows-signing.outputs.mode == 'sign' && steps.unsigned-ocx.outcome == 'success'
+        continue-on-error: true
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        timeout-minutes: 65
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ steps.windows-signing.outputs.policy }}
+          artifact-configuration-slug: windows-standalone-zip
+          github-artifact-id: ${{ steps.unsigned-ocx.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signpath-signed-ocx
+
+      - name: Swap in the verified signed Windows binary
+        if: steps.windows-signing.outputs.mode == 'sign'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          STANDALONE_TARGET: ${{ matrix.target }}
+          SIGNPATH_OUTCOME: ${{ steps.sign-ocx.outcome }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+        run: |
+          ./scripts/ci/apply-signed-windows-artifact.ps1 `
+            -Target "dist/standalone/$env:STANDALONE_TARGET/ocx.exe" `
+            -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-ocx") `
+            -SubmitOutcome "$env:SIGNPATH_OUTCOME" `
+            -Trust $env:SIGNING_TRUST
+
 
       - name: Archive standalone release
         shell: bash
@@ -262,8 +334,11 @@ jobs:
             sidecar-targets: x86_64-unknown-linux-gnu
             artifact-suffixes: linux-x86_64.AppImage,linux-amd64.deb
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # The Windows leg can wait up to an hour for a release-signing approval in SignPath.
+    timeout-minutes: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 105 || 45 }}
     permissions:
+      # actions: read lets the SignPath action read this job and download the unsigned artifact.
+      actions: read
       contents: read
     env:
       # Whether this run holds the Developer ID material at all. A run without it still builds
@@ -277,6 +352,23 @@ jobs:
 
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
+
+      # Windows Authenticode signing through SignPath Foundation (#7207). Decided before the build, so
+      # a broken SignPath configuration fails in seconds instead of after the build. The rules
+      # (no token: skip; partial configuration: fail; test-signing: dry runs only) live in
+      # scripts/ci/windows-signing-plan.sh, where tests/ci-workflows/release-windows-signing.test.ts
+      # exercises them.
+      - name: Decide Windows code signing
+        id: windows-signing
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: bash scripts/ci/windows-signing-plan.sh
 
       # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
       # plist inherits it), not from package.json or this input, while the updater manifest is
@@ -484,6 +576,80 @@ jobs:
         # linuxdeploy suppresses its own stderr at the default verbosity. Keep
         # diagnostics on the first attempt; Apple signing commands stay non-verbose.
         run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
+
+      # The Windows installer goes to SignPath after the build and before the asset rename, so the
+      # renamed asset, its checksum and its updater signature all describe the signed MSI. The
+      # windows-msi-zip artifact configuration signs every .exe inside the installer (the app and
+      # the bundled ocx.exe sidecar) and then the MSI itself.
+      - name: Locate the Windows installer for signing
+        id: windows-msi
+        if: steps.windows-signing.outputs.mode == 'sign'
+        continue-on-error: true
+        shell: bash
+        env:
+          DESKTOP_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=("desktop/src-tauri/target/$DESKTOP_TARGET/release/bundle/msi/"*.msi)
+          if [ "${#installers[@]}" -ne 1 ]; then
+            echo "::warning::Expected one MSI to sign, found ${#installers[@]}; the installer ships unsigned."
+            exit 1
+          fi
+          echo "path=${installers[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the unsigned Windows installer for signing
+        id: unsigned-msi
+        if: steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signpath-unsigned-${{ matrix.target }}
+          path: ${{ steps.windows-msi.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+      # continue-on-error, as for the standalone binary: an outage, timeout or rejection keeps the
+      # unsigned installer and its original updater signature.
+      - name: Sign the Windows installer through SignPath
+        id: sign-msi
+        if: steps.windows-signing.outputs.mode == 'sign' && steps.unsigned-msi.outcome == 'success'
+        continue-on-error: true
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        timeout-minutes: 65
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ steps.windows-signing.outputs.policy }}
+          artifact-configuration-slug: windows-msi-zip
+          github-artifact-id: ${{ steps.unsigned-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signpath-signed-msi
+
+      # Authenticode rewrites the MSI, so the Tauri updater signature made during the build no
+      # longer matches it. The apply script regenerates <msi>.sig over the signed bytes with the
+      # same key before swapping both in; verify-release then checks that signature against the
+      # final MSI and writes latest.json from it.
+      - name: Swap in the verified signed Windows installer
+        if: steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.windows-msi.outputs.path }}
+          SIGNPATH_OUTCOME: ${{ steps.sign-msi.outcome }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          ./scripts/ci/apply-signed-windows-artifact.ps1 `
+            -Target "$env:MSI_PATH" `
+            -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-msi") `
+            -SubmitOutcome "$env:SIGNPATH_OUTCOME" `
+            -Trust $env:SIGNING_TRUST `
+            -Installer `
+            -UpdaterSignature
 
       - name: Verify the packaged universal macOS runtime
         if: runner.os == 'macOS'

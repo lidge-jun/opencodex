@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 32.
+Declared capabilities: 33.
 
 ### `ocx link probe`
 
@@ -149,6 +149,24 @@ State-changing: yes. JSON mode: `envelope`.
 - Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
 - A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
 - Always emits {linkId} JSON.
+
+### `ocx link cleanup`
+
+Usage: `ocx link cleanup [--link-id <id>] [--json]`
+
+Inspect Remote Link Child platforms and show disconnect guidance.
+
+State-changing: no. JSON mode: `payload`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Check only this link. |
+| `--json` | boolean | Emit {links, changed:false} as JSON. |
+
+- Runs on the Home from its local link store. Asks each Home-initiated Child for its platform over the link's pinned SSH trust (the fixed %OS% probe, then uname -s) and reports Windows Children with disconnect guidance.
+- Never revokes, disconnects or edits a link. An ordinary ocx link revoke --yes disconnects a Windows Child through PowerShell over the recorded SSH trust.
 
 ### `ocx remote-workspace pair`
 

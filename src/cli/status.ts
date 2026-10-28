@@ -36,6 +36,10 @@ export type { ListenTarget } from "./status-probes";
 import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./status-probes";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
+import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
+import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
+import { collectLocalCredentials, type LocalCredentialSnapshot } from "../local-credentials/inventory";
+import { collectLinkConnectionGeneration } from "./status-link";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -117,7 +121,17 @@ export type CliRemoteHubStatus = {
 };
 
 export type CliStatusJson = {
+  /**
+   * This installation's stored provider credentials, counted passively, with an opaque generation
+   * that changes on every credential publication. Omitted when the count cannot be proven complete
+   * or no live runtime observes the stores; absence never means zero.
+   */
+  localCredentials?: LocalCredentialSnapshot;
+  /** On a Remote Link Child: the current tunnel connection (`src/cli/status-link.ts`). Omitted when unknown. */
+  link?: { connectionGeneration: string };
   mainAccountHardLock?: CodexMainAccountPolicyHealth;
+  /** OCX-11 fallback state; see src/cli/status-fallback.ts. */
+  fallback?: import("./status-fallback").StatusFallback;
   schemaVersion: 1;
   /**
    * This machine's topology role, named rather than inferred (#4236).
@@ -229,8 +243,10 @@ export type CliStatusJson = {
    */
   versionSkew: VersionSkew;
   cliCommand: CliPathDiagnostics;
+  /** Installer ownership from the updater's detector (OCX-10); additive, `schemaVersion` stays 1. */
+  install: InstallDetectionStatus;
   startupSource: "live" | "local" | "local-supervision-override";
-};
+} & CliAppliedCodexSettingsStatus;
 
 export type CliStatusView = {
   json: CliStatusJson;
@@ -709,12 +725,34 @@ export function resolveStatusPid(
  * unused", but startupHealthSummary already renders both as AT RISK with a
  * remedy command, and `custom-remote` is a deliberate operator choice. Warning
  * on all four would teach operators to skip the line that matters.
+ *
+ * A connected client (hub client or Remote Link Child) needs a different remedy (#7563): its
+ * runtime never writes Codex routing on start, so `ocx start` cannot re-point it — with the
+ * proxy up it only answers "already running". `ocx sync --restart-codex` writes the routing
+ * and restarts Codex. A client whose proxy is also down is told to start it first, because
+ * nothing else in the not-running report mentions that its routing is native.
  */
 export function unusedProxyWarningLines(input: {
   proxyUp: boolean;
   routingKind: StartupHealth["routingKind"];
+  connectedClient?: { transport: "hub" | "link"; serviceInstalled: boolean };
 }): string[] {
-  if (!input.proxyUp || input.routingKind !== "native") return [];
+  if (input.routingKind !== "native") return [];
+  const client = input.connectedClient;
+  if (client) {
+    const peer = client.transport === "link" ? "the Home" : "the hub";
+    if (input.proxyUp) {
+      return [
+        "⚠️  Codex routing is native — this client's proxy is unused.",
+        `   Codex requests go to OpenAI, not ${peer}. Re-point with: ocx sync --restart-codex`,
+      ];
+    }
+    return [
+      `⚠️  Codex routing is native, so Codex requests go to OpenAI, not ${peer}.`,
+      `   Start this client's proxy with '${client.serviceInstalled ? "ocx service start" : "ocx start"}', then re-point with: ocx sync --restart-codex`,
+    ];
+  }
+  if (!input.proxyUp) return [];
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
     "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
@@ -740,11 +778,47 @@ export function unusedProxyWarningLines(input: {
 export function deadProxyRoutingAdviceLines(input: {
   proxyUp: boolean;
   routingKind: StartupHealth["routingKind"];
+  /** #7563: on a connected client nothing but `ocx sync` writes the routing back after a restore. */
+  connectedClient?: boolean;
 }): string[] {
   if (input.proxyUp || input.routingKind !== "opencodex-local") return [];
   return [
     "Codex is still pointed at this proxy, so sign-in and model requests both fail while it is down.",
     "To hand Codex back to its own account and endpoints without starting anything: ocx restore",
+    ...(input.connectedClient ? ["After a restore, 'ocx sync --restart-codex' points Codex back at this client."] : []),
+  ];
+}
+
+type StatusRoutingView = Pick<CliStatusJson, "proxy" | "startup" | "remoteHub" | "connection">;
+
+export function statusProxyUp(json: StatusRoutingView): boolean {
+  return json.remoteHub.connected && json.connection.transport === "link"
+    ? json.proxy.health.ok : Boolean(json.proxy.pid || json.proxy.health.ok);
+}
+
+/** `unusedProxyWarningLines` for the human `ocx status` report, role taken from the report itself. */
+export function statusUnusedProxyLines(json: StatusRoutingView): string[] {
+  return unusedProxyWarningLines({
+    proxyUp: statusProxyUp(json),
+    routingKind: json.startup.routingKind,
+    ...(json.remoteHub.connected ? { connectedClient: {
+      transport: json.connection.transport === "link" ? "link" as const : "hub" as const,
+      serviceInstalled: json.startup.serviceInstalled && !json.startup.serviceConflict,
+    } } : {}),
+  });
+}
+
+/** `deadProxyRoutingAdviceLines` for the not-running half of the human `ocx status` report. */
+export function statusDeadProxyLines(json: StatusRoutingView): string[] {
+  return [
+    json.startup.routingKind === "native"
+      ? "↳ Not running — Claude requests will fail with connection errors."
+      : "↳ Not running — Codex/Claude requests will fail with connection errors.",
+    ...deadProxyRoutingAdviceLines({
+      proxyUp: false,
+      routingKind: json.startup.routingKind,
+      connectedClient: json.remoteHub.connected,
+    }),
   ];
 }
 
@@ -853,12 +927,25 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   const mainAccountHardLock = options.mainAccountPolicy && live
     ? (await (await import("../oauth/health")).fetchCodexHealthFromLiveProxy(undefined, async () => live)).mainAccountHardLock
     : undefined;
+  // Same `--json`-only gate as the hard-lock read above: the human report stays one probe.
+  const fallback = options.mainAccountPolicy
+    ? await (await import("./status-fallback")).collectStatusFallback(config, {
+      live: Boolean(live), linkChild: config.client?.transport === "link",
+      deps: { findLiveProxy: async () => live },
+    })
+    : undefined;
+  // Child attestations for GOAT; local reads only, never the Home's projection.
+  const localCredentials = options.mainAccountPolicy ? await collectLocalCredentials() : undefined;
+  const connectionGeneration = options.mainAccountPolicy ? await collectLinkConnectionGeneration(live) : undefined;
   const pidFile = readPid();
   // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
   // No extra request: findLiveProxy's identity probe already parsed and validated the
   // healthz body, so the version came back with the liveness result.
   const versionSkew = computeVersionSkew(packageVersion(), live?.version);
+  // OCX-6: what this machine applied and, on a Child, when its runtime started. Additive and
+  // always present (null when unknown), so `schemaVersion` stays 1.
+  const appliedCodexSettings = await collectAppliedCodexSettingsStatus(config, live);
   const listen = live
     ? {
       port: live.port,
@@ -1005,6 +1092,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     healthLabel: formatCliStatusHealthLabel(health.label, cliCommand, remoteHub.connected),
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
+      ...(fallback ? { fallback } : {}),
+      ...(localCredentials === undefined ? {} : { localCredentials }),
+      ...(connectionGeneration === undefined ? {} : { link: { connectionGeneration } }),
       schemaVersion: 1,
       runtimeRole: config.runtimeRole ?? "standalone",
       proxy: {
@@ -1067,7 +1157,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // print it under the wrong heading (#2701).
       versionSkew,
       cliCommand,
+      install: installDetectionStatus(),
       startupSource,
+      ...appliedCodexSettings,
     },
   };
 }

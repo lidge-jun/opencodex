@@ -171,13 +171,14 @@ describe("JEV decisionProvider usability at save time", () => {
         id: "auto", combo: { strategy: "jev", targets, decisionProvider: "off" },
       });
       expect(disabled.status).toBe(400);
-      expect(await disabled.json()).toEqual({ error: 'decisionProvider "off" is disabled' });
+      expect(await disabled.json()).toEqual({ error: 'decisionProvider "off" is disabled', field: "decisionProvider" });
       const modelless = await api(cfg, "PUT", "/api/combos", {
         id: "auto", combo: { strategy: "jev", targets, decisionProvider: "nomodel" },
       });
       expect(modelless.status).toBe(400);
       expect(await modelless.json()).toEqual({
         error: 'decisionProvider "nomodel" has no model (set defaultModel or models)',
+        field: "decisionProvider",
       });
       expect(cfg.combos?.auto).toBeUndefined();
     });
@@ -239,6 +240,7 @@ describe("JEV decisionProvider management round-trip", () => {
       expect(rejected.status).toBe(400);
       expect(await rejected.json()).toEqual({
         error: 'decisionProvider "a" is not a decision service (adapter must be "jev-decision")',
+        field: "decisionProvider",
       });
     });
   });

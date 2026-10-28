@@ -50,11 +50,14 @@ import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
+import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
+import { WORKBUDDY_CONFIG_URL, workBuddyHeaders } from "../providers/workbuddy";
 import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
+import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
@@ -97,6 +100,7 @@ import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
+  workbuddy?: import("./types").WorkBuddyOAuthMetadata;
   provider: string;
   accountId: string;
   generation: string;
@@ -245,6 +249,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "workbuddy-ai": {
+    login: loginWorkBuddy, refresh: refreshWorkBuddyToken,
+    providerConfig: oauthConfig("workbuddy-ai"), defaultModel: oauthDefaultModel("workbuddy-ai"),
+    defaultRefreshPolicy: "lazy-only",
+  },
   "dsh-account": {
     ...DSH_ACCOUNT_AUTH,
     providerConfig: oauthConfig("dsh-account"),
@@ -560,6 +569,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(oauthProvider === "workbuddy-ai" && cred.workbuddy ? { workbuddy: { ...cred.workbuddy } } : {}),
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
@@ -716,10 +726,12 @@ export async function getValidAccessTokenSnapshot(
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set([
+  "workbuddy-ai",
   "xai",
   "github-copilot",
   "kiro",
   "google-antigravity",
+  "cursor",
   "orcarouter-oauth",
   "devin",
   "dsh-account",
@@ -1176,6 +1188,7 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
  * `/models` + Bearer with a `{ data: [{ id, owned_by? }] }` response.
  */
 export interface ModelsRequestObservedAuth {
+  readonly workbuddy?: import("./types").WorkBuddyOAuthMetadata;
   readonly oauthApiBaseUrl?: string;
 }
 
@@ -1185,6 +1198,10 @@ export function buildModelsRequest(
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
 ): { method?: "POST"; url: string; headers: Record<string, string> } {
+  if (providerName === "workbuddy-ai" || prov.adapter === "workbuddy-ai") {
+    const allowed = mayResolveModelsOAuth(providerName, prov);
+    return { url: WORKBUDDY_CONFIG_URL, headers: workBuddyHeaders(allowed && observedAuth?.workbuddy ? apiKey : undefined, observedAuth?.workbuddy) };
+  }
   const authorizedTarget = captureModelsOAuthTarget(providerName, prov);
   if (prov.authMode === "oauth" && !mayResolveModelsOAuth(providerName, prov)) apiKey = undefined;
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
@@ -1513,36 +1530,6 @@ export function reconcileOAuthProviders(config: OcxConfig, persist = true): bool
   return true;
 }
 
-/** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
-function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
-  const ids = new Set<string>();
-  const keys = new Set<string>();
-  for (const entry of value as unknown[]) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const candidate = entry as Record<string, unknown>;
-    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-    const key = sanitizeApiKeyValue(candidate.key);
-    if (!id || !key || ids.has(id) || keys.has(key)) continue;
-    const label = typeof candidate.label === "string" ? candidate.label : undefined;
-    const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
-      ? candidate.addedAt
-      : undefined;
-    ids.add(id);
-    keys.add(key);
-    pool.push({
-      id,
-      key,
-      ...(label !== undefined ? { label } : {}),
-      ...(addedAt !== undefined ? { addedAt } : {}),
-    });
-  }
-  // `apiKey` remains the routing source of truth. Keep valid alternate slots even when a
-  // hand-edited config left the pool out of sync, rather than deleting usable credentials.
-  return pool.length > 0 ? pool : undefined;
-}
-
 const OAUTH_LOGIN_OWNED_PROVIDER_FIELDS = [
   "adapter",
   "baseUrl",
@@ -1597,11 +1584,10 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
     const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
-    // Unsafe/blank active key with a usable pool: promote the first safe pool entry so
-    // key billing keeps working instead of falling back to oauth while pool keys remain.
-    if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
-      storedApiKey = storedApiKeyPool[0]!.key;
-    }
+    // Retain all-paused pools without activating any paused credential during login.
+    if (storedApiKeyPool?.some(entry => entry.key === storedApiKey && entry.disabled)) storedApiKey = undefined;
+    if (storedApiKey === undefined) storedApiKey = storedApiKeyPool?.find(entry => !entry.disabled)?.key;
+    if (storedApiKeyPool) next.apiKeyPool = storedApiKeyPool;
     if (storedApiKey !== undefined) {
       const pool = storedApiKeyPool ? [...storedApiKeyPool] : [];
       // Keep routing and listProviderApiKeys in sync: never leave a hidden active key that
@@ -1702,7 +1688,7 @@ export async function runLogin(
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
           : existing.email && cred.email
-            ? existing.email.toLowerCase() === cred.email.toLowerCase()
+            ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;
       if (!identityMatches) {
         throw new OAuthReauthIdentityMismatchError();

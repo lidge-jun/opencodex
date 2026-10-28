@@ -60,8 +60,8 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: false,
     why:
       "Its children run scripts/typecheck-gui-if-changed.ts, which imports only node builtins, "
-      + "or git itself, so an import scan has no repository module graph to warm and a registered "
-      + "warm-up would fail closed. The spawnSync bounds exist because an unbounded child pinned "
+      + "git itself, or type checkers on synthetic projects, so there is no repository graph to warm. "
+      + "The spawnSync bounds exist because an unbounded child pinned "
       + "Linux test 1/4 batch 4 until the 120s shard deadline cut it (run 37730984813).",
   },
   "tests/ci-workflows/test-runner.test.ts": {
@@ -108,6 +108,15 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
       + "launcher, so the cold cost is shell and process startup rather than a repository module "
       + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
       + "module in the child: the point of the file is what the shell does with an exit status.",
+  },
+  "tests/codex-integration/codex-shim-bypass-token.test.ts": {
+    warmed: false,
+    why:
+      "Its children are the generated POSIX shim run by /bin/sh plus two throwaway /bin/sh scripts "
+      + "standing in for Bun's ensure and for the real Codex launcher, so the cold cost is shell and "
+      + "process startup rather than a repository module graph, and an import scan has nothing to "
+      + "warm. No repository module loads in the child: the file asserts only which environment the "
+      + "shell hands to the fake Codex under OCX_SHIM_BYPASS.",
   },
 };
 

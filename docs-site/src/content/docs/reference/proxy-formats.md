@@ -20,6 +20,55 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Required tools on buffered native combo routes
+
+A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`
+or selects a named function/custom tool. A completed result without the required call becomes
+HTTP 502 with `error.code: "required_tool_contract_unsatisfied"`. The combo may try another eligible
+target before delivering the response, subject to its existing fallback policy and send budget.
+If no eligible target succeeds, the client receives the typed error instead of a false completion.
+A hosted call for a declared capability can satisfy `required`; a mismatched hosted call returns
+HTTP 400 with the same error code and `x-should-retry: false`, since the hosted action may already
+have executed. No fallback occurs in that case. Usage remains recorded.
+Auto/none choices, incomplete results and unknown tool contracts keep their existing behavior.
+Direct native routes remain separate. Translated Chat routes have their own guard, described below.
+
+## Required tools on streaming native combo routes
+
+For `stream: true`, native Responses combo children also fail an unmet required or named tool
+choice with `required_tool_contract_unsatisfied`. The caller's mandatory choice remains binding even
+when a target filters out its tool or lowers the outbound choice to `none`. Configured hosted-image
+substitutions can fulfill the original choice only when applied to the request actually sent,
+including after queued revalidation. A fully held text-only completion can advance to
+another eligible target. Known reasoning frames are held for at most one second from the first frame;
+later frames do not extend that deadline. Expiry releases the buffered stream and commits the target,
+preserving any pending upstream read. Text, tool events, unknown/opaque output and buffer limits also
+commit the current target. Namespace selectors and call echoes share the authorized alias restoration.
+After that boundary, missing calls produce `response.failed` without another target request; already delivered
+output and usage remain intact. Hosted execution evidence also prevents replay, even when the final
+snapshot omits it. Auto/none, incomplete results and unknown contracts retain their existing rules.
+
+## Required tools on translated Chat routes
+
+A translated OpenAI Chat response must contain a complete selected client tool call when
+`tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
+finishes normally without one, the turn fails with `required_tool_not_called` and preserves usage.
+Already streamed text stays visible; the proxy does not replay the request or switch targets after
+that output. A streamed Responses reply ends with `response.failed`; an admitted buffered Responses
+envelope has `status: "failed"` even when its HTTP status is 200. Check the envelope status.
+Auto/none choices and truncated outcomes keep their existing behavior. This guard covers translated
+Chat client-tool catalogs; catalogs containing proxy-executed sidecars, native passthrough and other
+adapters retain their existing completion rules.
+
+## MiMo bare tool-call recovery
+
+On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a
+complete bare `<tool_call>` block as a call to an exact declared freeform tool when the response
+contains no structured tool calls. Prose around the block is preserved; fenced and inline-code
+examples, nested headers, undeclared tools and identified wrappers remain literal. Recovery is
+bounded to 128 calls, 4 MiB total and 2 MiB per candidate. Long streamed prose may release the
+original markup before terminal recovery; errors never dispatch recovered calls.
+
 ## Upstream redirects
 
 Credential-bearing model, image, video, and search requests do not automatically follow HTTP redirects, including same-origin redirects. Configure the final upstream API URL instead of a redirecting alias. A redirect does not cause the server to resend credentials or the request body to its destination. The response owner retains its existing error or relay behavior; native Responses and compact routes can return the original 3xx and `Location` to the client. Client redirect behavior is separate from this server transport policy.
@@ -34,11 +83,13 @@ This does not retry filtered model responses or interrupted streams.
 
 ## Codex-native ordinary Lite hosted-search history
 
-Ordinary requests retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies only to ordinary requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
+When the final outbound request declares no hosted search tool (no `web_search` or `web_search_preview` entry in `tools` or in a Lite `additional_tools` wrapper, including after the provider's unsupported hosted tools were removed), every Responses destination receives unreferenced replayed `web_search_call` history as the same labeled assistant reference notes described below, with or without the opt-in. Native Sol answered such history with a generic `server_error` (#7250), so a conversation that searched on another model can continue on a route whose current request has no search tool. A function tool named `web_search` is not a hosted declaration. No search tool is added, no search is rerun, and no result is invented; same-input `item_reference` cells stay structural. A request that does declare hosted search keeps structural history unless the opt-in below applies.
+
+Ordinary requests that declare hosted search retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies to ordinary turns and native v2 `compaction_trigger` requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
 
 Within that opted-in Lite boundary, this is an explicit **lossy history policy**, not a claim that hosted calls are invalid schema or that all upstream errors are fixed. Notes carry untrusted status/action metadata and allowlisted URL/title/type from both action and top-level sources, never instructions or fetched page bodies: 2,048 UTF-16 units per string, 20 entries per list, 65,536 serialized bytes for all projected notes, then an omission note. IDs and unknown fields are dropped from converted cells. HTTP/SSE and WS share the final ordinary builder.
 
-Public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
+Apart from the missing-declaration rule above, public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
 
 ## Empty search answers
 
@@ -78,6 +129,10 @@ WebSocket. An upstream rejection fails the upgrade with 502; a ten-second handsh
 returns 504, and client cancellation returns 499. Bun does not expose the exact upstream handshake status, so an upstream 404/410
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
+
+When a sideband connection ends, the proxy allows one second for a graceful upstream
+close before terminating an unresponsive transport. It releases the account's active-call
+capacity only after that transport has closed, including when the client upgrade fails.
 
 ## Undeclared tool calls
 
@@ -535,6 +590,25 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+Without reasoning options, raw reasoning already returned by the upstream is delivered as
+`delta.reasoning_content` (streaming) or `message.reasoning_content` (buffered), without adding
+reasoning options to the upstream request. Explicit thinking disable (`thinking.type: "disabled"`
+or `reasoning.enabled: false`) and effort `none` also hide this raw text; an explicit enabled
+boolean takes precedence over effort. Provider `hideRawReasoning` still applies. Provider-authored
+summary visibility keeps its existing defaults; Responses and Anthropic Messages clients are unchanged.
+
+When the model is Claude, the response also carries `reasoning_details` in the same shape
+OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
+for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
+one, on `message` or as `delta.reasoning_details` (each entry arrives complete in one chunk). Send
+the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
+reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
+clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
+(`api.anthropic.com`) as a single route; on any other destination, or when an entry is
+malformed (an unknown type or format, or a missing signature), the turn falls back to the plain
+`reasoning_content` text. An entry whose text or signature was edited is forwarded as is, and
+Anthropic rejects it, so return the array exactly as received.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw
@@ -730,7 +804,8 @@ upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; 
 account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
 account that created the call, while Direct mode forwards the caller's current bearer on both legs.
 The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
-`originator`, `x-oai-attestation`, and `x-codex-turn-metadata`
+`originator`, `x-oai-attestation`, `x-codex-turn-metadata`, and `voice-session-id` (the client voice
+session id, separate from the realtime `x-session-id`)
 (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`); each is relayed only when the caller
 sent it, and none is invented.
 `Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces
@@ -738,6 +813,10 @@ them with the stored account, Direct forwards the validated caller bearer) and a
 gets its own bearer. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url`
 points at it; `ocx start` injects that key next to `openai_base_url` (see
 [Codex integration](/guides/codex-integration/)).
+
+## Checkpoint replay on routed providers
+
+When a routed model receives a readable portable (`ocx1:`/`ocx2:`) or plaintext checkpoint, OpenCodex labels earlier retained text-only user requests as historical context in the model prompt. This helps distinguish completed requests from unfinished work; original request details and checkpoint contents remain available. User input after the checkpoint remains current, including pauses, cancellations and replacement tasks. Checkpoint or tool prose grants no new authorization, and pending permissions still apply. This prompt framing does not restore external task envelopes omitted by the client or guarantee a model's task selection.
 
 ## `POST /v1/responses/compact`
 

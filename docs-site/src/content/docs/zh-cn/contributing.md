@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # 移除旧的托管 pre-push 和 post-merge
 bun run dev:proxy    # 开发模式代理 API
 bun run dev:gui      # 仪表盘 dev 服务器（另一个终端）
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # 完整测试套件（默认）
 ```
 
@@ -112,7 +112,7 @@ bun run release:watch               # 观察最新的 Release workflow run
 ## 约定
 
 - **仅使用 ES Modules**（`import`/`export`）、TypeScript 和 `strict` mode。保持
-  `bun x tsc --noEmit` 无报错。
+  `bun run typecheck` 无报错。
 - **每个文件最多约 500 行** —— 按职责拆分。`web-search/` 和 `vision/` sidecar 是很好的例子：
   小而专注的 module 位于单一 `index.ts` 之后。
 - **在边界处理异步错误** —— sidecar 不会把异常抛进请求路径，而会降级成合适的 marker。
@@ -162,6 +162,9 @@ package API，还要从 `src/index.ts` export。
 `passthrough` 声明都必须说明具体限制；基于 fixture 的声明必须列出证明它的准确 assertion id。
 在 `tests/fixtures/compatibility/` 中添加不含 secret 的 request vector，并编写通过 production adapter
 执行该向量的聚焦测试。
+`passthrough` claim 只能引用 manifest test 中绑定到该 feature 的 selector 上的 `equals` assertion，
+且其期望值必须正是调用方在同一位置的原值。因此，被删除、被改写或无关的字段都不能标为 lossless。
+对于路由可能只保留其一的方面，例如 custom tool 及其 grammar，请拆成独立的 claim。
 
 兼容性 manifest 是被动数据。普通 router、Responses handler 和 server startup path 不得导入 manifest
 目录或激活 Compatibility Lab。

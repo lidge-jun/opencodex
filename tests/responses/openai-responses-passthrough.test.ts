@@ -2007,7 +2007,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       stream: true,
       options: {},
       _rawBody: {
-        model: "provider-model",
+        model: "provider-model", tools: [{ type: "web_search" }],
         input: [
           { type: "web_search_call", id: "ws_legacy", status: "completed", action: { type: "search", query: "legacy" } },
           { type: "web_search_call", id: "ws_batch", status: "completed", action: { type: "search", queries: ["a", "b"] } },
@@ -2037,7 +2037,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       stream: true,
       options: {},
       _rawBody: {
-        model: "provider-model",
+        model: "provider-model", tools: [{ type: "web_search" }],
         input: [
           { type: "web_search_call", id: "ws_num", status: "completed", action: { type: "search", queries: [42] } },
           { type: "web_search_call", id: "ws_obj", status: "completed", action: { type: "search", queries: [{ q: "x" }] } },
@@ -2063,7 +2063,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       stream: true,
       options: {},
       _rawBody: {
-        model: "provider-model",
+        model: "provider-model", tools: [{ type: "web_search" }],
         input: [
           { type: "web_search_call", id: "ws_mixed", status: "completed", action: { type: "search", queries: ["a", 42] } },
           { type: "web_search_call", id: "ws_qempty", status: "completed", action: { type: "search", query: "legacy", queries: [] } },
@@ -2102,7 +2102,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       context: { messages: [] },
       stream: true,
       options: {},
-      _rawBody: { model: "gpt-5.5", input },
+      _rawBody: { model: "gpt-5.5", tools: [{ type: "web_search" }], input },
     }, { headers: new Headers({ authorization: "Bearer token" }) });
     const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
     cases.forEach(({ expectedId }, index) => {

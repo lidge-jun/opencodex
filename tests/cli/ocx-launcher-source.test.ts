@@ -19,7 +19,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     const start = source.indexOf("function resolveBun(");
     const end = source.indexOf("// `ocx update --help`", start);
     const resolver = source.slice(start, end);
-    expect(resolver.indexOf("bunDir = bunBinDir()")).toBeGreaterThan(resolver.indexOf('source: "override"'));
+    expect(resolver.indexOf("bunDir = bunBinDir(launcherPath)")).toBeGreaterThan(resolver.indexOf('source: "override"'));
     expect(resolver.indexOf("findPathBun(")).toBeGreaterThan(resolver.indexOf("spawnSync(process.execPath, [installJs]"));
     expect(resolver.indexOf("fail(bunDir ?")).toBeGreaterThan(resolver.indexOf("findPathBun("));
     expect(resolver).toContain('source: "process"');
@@ -28,7 +28,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
 
   test("fallback derives its compatibility floor from the package dependency", () => {
     expect(source).toContain('typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : ""');
-    expect(source).toContain("pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS");
+    expect(source).toContain("pinnedVersion: pinnedBunVersion(launcherPath), deadlineMs: PATH_BUN_PROBE_BUDGET_MS");
     // Bounded, but sized for a cold first run of a scanned bun.exe on Windows.
     expect(source).toContain("const PATH_BUN_PROBE_BUDGET_MS = 5_000;");
     expect(source).not.toContain('pinnedVersion: "1.4.2"');
@@ -59,7 +59,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(source).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,");
 
     // The stamp must sit inside the spawn's env object, not merely somewhere in the file.
-    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath");
+    const spawnStart = source.indexOf("const child = probeSpawn(bun, [cliPath");
     expect(spawnStart).toBeGreaterThanOrEqual(0);
     const spawnCall = source.slice(spawnStart, source.indexOf("});", spawnStart));
     expect(spawnCall).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source");
@@ -67,7 +67,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     // Path and source come from one resolution, so the marker cannot describe another binary.
     expect(source).toContain("const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });");
     expect(source).toContain("const bun = bunRuntime.path;");
-    expect(source).toContain('return { path: bin, source: "bundled" };');
+    expect(source).toContain('return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };');
 
     // The launcher's literal name must match the TypeScript constant it mirrors.
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
@@ -84,7 +84,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
   });
 
   test("the long-running Bun child stays hidden under a headless Windows launcher (#1236)", () => {
-    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath");
+    const spawnStart = source.indexOf("const child = probeSpawn(bun, [cliPath");
     expect(spawnStart).toBeGreaterThanOrEqual(0);
     const spawnCall = source.slice(spawnStart, source.indexOf("});", spawnStart));
 
@@ -100,11 +100,11 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(source).toContain("pnpmOwnerInvocation(owner, args)");
     expect(source).toContain("const latestInvocation = managerInvocation(");
     expect(source).toContain("const installInvocation = managerInvocation(installArgs);");
-    expect(source).toContain("spawnSync(latestInvocation.file, latestInvocation.args");
+    expect(source).toContain("probeSpawnSync(latestInvocation.file, latestInvocation.args");
     // #1942: the staged install spawns through the same hardened npmInvocation resolver
     // inside the transactional runNpm callback.
     expect(source).toContain("const invocation = npmInvocation(args);");
-    expect(source).toContain("spawnSync(invocation.file, invocation.args");
+    expect(source).toContain("guardedSpawnSync(homePolicy.authorizeMutation, \"package\", invocation.file, invocation.args");
     expect(source).not.toContain("shell: true");
     expect(source).not.toContain('"npm.cmd"');
   });
@@ -138,11 +138,16 @@ describe("ocx.mjs package launcher (source invariants)", () => {
    */
   test("the inspection child does not inherit a duplicate copy of the snapshotted values", () => {
     expect(source).toContain("const inheritedEnv = { ...process.env };");
-    expect(source).toContain("...inheritedEnv,");
+    // The de-duplicated environment reaches the child; only its transpiler cache is scoped (#7362).
+    expect(source).toContain("...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),");
     // Windows spells the variable `Path` in practice, so an upper-case-only delete would
     // leave the duplicate behind. The match must be on the lowercase form of every key.
     expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
-    expect(source).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
+    expect(source).toContain('...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())');
+    expect(source).toContain("const preBunTransportEnv = captureCodexCliTransportEnv(process.env);");
+    expect(source).toContain("transportEnv: preBunTransportEnv,");
+    // The backing arch is the Node launcher's, bound before Bun (possibly another arch) starts.
+    expect(source).toContain("arch: process.arch,");
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
@@ -150,9 +155,11 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(guard).toBeGreaterThan(-1);
 
     // The spawn must no longer splat the raw environment, or the deletes above are pointless.
-    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
+    const spawnStart = source.indexOf("const child = probeSpawn(bun, [cliPath,");
     expect(spawnStart).toBeGreaterThan(-1);
     expect(source.slice(spawnStart)).not.toContain("...process.env,");
+    expect(source.slice(spawnStart, source.indexOf("});", spawnStart)))
+      .toContain("...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),");
   });
 
   /**
@@ -173,10 +180,10 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(source).toContain("const overridePath = resolve(override);");
     expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
-    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true } = {}) {");
+    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } = {}) {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
     const overrideResolve = source.indexOf("resolve(override)", overrideCheck);
-    const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);
+    const bundledLookup = source.indexOf("bunDir = bunBinDir(launcherPath)", resolveStart);
     expect(resolveStart).toBeGreaterThanOrEqual(0);
     expect(overrideCheck).toBeGreaterThan(resolveStart);
     expect(overrideResolve).toBeGreaterThan(overrideCheck);
@@ -204,8 +211,8 @@ test("Desktop supervision is freshly checked before Node stop and both package-m
   expect(source.match(/createSupervisionLatch\(\)/g)).toHaveLength(1);
   const initial = source.indexOf("supervision: observeSupervision()", source.indexOf("const initialOwnership"));
   const gate = source.indexOf("const preStopPlan = planUpdateRuntimeHandling({");
-  const stop = source.indexOf('const stopRes = spawnSync(process.execPath, [launcher, "stop"]');
-  const npm = source.indexOf("const tx = transactionalNpmUpdate({");
+  const stop = source.indexOf('const stopRes = guardedSpawnSync(homePolicy.authorizeMutation, serviceWasInstalled ? "service" : "runtime", process.execPath, [launcher, "stop"]');
+  const npm = source.indexOf("const tx = await transactionalNpmUpdate({");
   const pnpm = source.indexOf("const update = runPnpmGlobalUpdate({");
   expect(initial).toBeGreaterThan(0); expect(gate).toBeGreaterThan(initial);
   expect(stop).toBeGreaterThan(gate); expect(npm).toBeGreaterThan(stop); expect(pnpm).toBeGreaterThan(stop);

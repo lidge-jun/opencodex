@@ -1,5 +1,6 @@
 import type { OcxConfig, StorageCleanupPolicy } from "../types";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
+import { resolveLowQuotaDesktopSink } from "../codex/low-quota-desktop-notifier";
 import type { LowQuotaEvent } from "../codex/low-quota-events";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
@@ -31,6 +32,7 @@ import {
   startMemoryWatchdog,
   type MemoryWatchdog,
 } from "./memory-watchdog";
+import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -203,13 +205,16 @@ export function acquireServerBackgroundLifecycle(
   if (cleanupInProgress) {
     throw new Error("server background lifecycle cleanup is still in progress");
   }
+  // The quota-pool identity (homeId and the accountRef key) is minted here, per server and off
+  // the request path, so GET /api/quota-pool only ever reads it.
+  try { ensureQuotaPoolIdentity(); } catch { /* the read reports quota_pool_identity_unavailable */ }
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
     fanoutRevoked: false,
     applyPolicy,
     resources: acquireServerResourceOwner(),
-    lowQuota: registerCodexLowQuotaProtection(config),
+    lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
   };
   try {
     if (!processLoops) {

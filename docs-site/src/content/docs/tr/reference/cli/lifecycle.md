@@ -54,6 +54,10 @@ ocx start --socks5-off
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
 
+Bağlı bir hub istemcisinde `ocx stop`, API üzerinden başarılı durdurma dahil, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur; `ocx start` bunları yeniden sunar. Remote Link Child açıkça durdurulduğunda ise paylaşılan geri yükleme başarılıysa yerel Codex yönlendirmesi, katalog ve yedeklenmiş oturum sürdürme geçmişi meta verileri geri yüklenir, yönetilen Grok yapılandırması kaldırılır. Kayıtlı Home bağlantısı korunur; `ocx disconnect` ile kaldırılır.
+
+Geri yüklemeden sonra Codex'ten Home'u yeniden kullanmak için `ocx start` (servis kuruluysa `ocx service start`), ardından `ocx sync --restart-codex` çalıştırın. Yalnızca başlatmak yönlendirmeyi yeniden uygulamaz; sync Grok bloğunu yeniden oluşturmaz. Servis durdurulmadan önce bağlantı sahipliği doğrulanamıyorsa durdurma API'si HTTP 409 ve `sharedTeardown: "refused"` döndürür; proxy ve servis yöneticisi çalışmaya devam eder. Devam eden bağlanma veya bağlantıyı kesme işlemi bitince yeniden deneyin.
+
 ### `ocx restart`
 
 Bir proxy çalışırken bu tam onaylanmış PID ve porttan yerinde yeniden
@@ -206,7 +210,7 @@ takdirde 1 ile çıkar, bu da onu servis probları için uygun hale getirir.
 Kimliği doğrulanmamış `GET /readyz` uç noktası aracılığıyla senkronizasyon
 sonrası hazırlığı kontrol edin. Hazır olduğunda `200` veya `pending` ve terminal
 `failed` için `Retry-After: 1` ile `503` döndürür. Temizlenmiş HTTP kimliği
-`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}` şeklindedir. `protocol` hub'ın güncel uzak protokolünü, `minimumClientProtocol` uyumlu en düşük istemci protokolünü ve `managementUrl` tarayıcıya görünen kanonik yönetim origin'ini belirtir. `/readyz` içermeyen
+`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}` şeklindedir. `protocol` hub'ın güncel uzak protokolünü, `minimumClientProtocol` uyumlu en düşük istemci protokolünü ve `managementUrl` tarayıcıya görünen kanonik yönetim origin'ini belirtir. `/readyz` içermeyen
 eski proxy'ler `unreachable` olarak kapalı başarısız olur; `/healthz` hazırlık
 değil, ayrı bir canlılıktır. Komut varsayılan olarak bir prob gerçekleştirir;
 `--wait`, hazır olana veya zaman aşımına kadar yoklar, ancak terminal `failed`
@@ -237,6 +241,8 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 ## Katalog senkronizasyonu
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Remote Link Child:** `ocx sync` Home'un Codex ayarlarını da uygular ve istemci çalışma zamanı bu uygulamadan önce başlamışsa, yeniden başlatma bayrağı olmadan da onu yeniden başlatır. Yeniden başlatma başarısız olursa önceki çalışma zamanı hizmet vermeye devam eder ve komut sıfırdan farklı bir kodla çıkar. `ocx status --json` ve `ocx link status --json` içindeki ilgili alanlar için [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (İngilizce) bölümüne bakın.
 
 Açıkça istenen yeniden başlatma, katalog ve önbellek baytları değişmese bile `config.toml` değişikliği başarıyla kaydedildikten sonra da çalışır. Yalnızca yapılandırmayı işleyen bir işlem değişiklik yapmadığında, reddedildiğinde, ön kontrolde kaldığında veya yazma geri alındığında yeniden başlatma tetiklenmez. Yeniden başlatma bayrağı olmadan sync, Codex’i otomatik olarak yeniden başlatmaz.
 
@@ -273,6 +279,8 @@ alınamaz, eski bir seçici ise alınabilir.
 
 Komut Codex uygulamasının içinden çalıştırıldığında yeniden başlatma ayrılmış
 bir yardımcıya devredilir ve bu oturum uygulamayla birlikte sona erer.
+
+**Sabitlenmiş eşitleme.** `ocx sync --expect-link <linkId>` (Remote Link Child) ve `ocx sync --expect-hub-key <apiKeyId>` (hub istemcisi), yalnızca bu makine hâlâ o bağlantıya veya o anahtarla bağlıysa eşitler. Aksi halde hiçbir şey değişmez, yerel sağlayıcılar eşitlenmez, komut 5 koduyla çıkar ve stderr'in son satırı `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}` olur. Hatalı veya tekrarlanan bir bayrak 2 koduyla çıkar. Ayrıntılar: [İngilizce başvuru](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key).
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -511,7 +519,7 @@ Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimd�
 
 ### `ocx gui`
 
-Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
+Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://127.0.0.1:<port>`
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme

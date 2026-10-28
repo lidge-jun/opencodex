@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 51.
+Declared capabilities: 67.
 
 ### `ocx agent subagents force`
 
@@ -145,7 +145,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx message sessions`
 
-Discover already-loaded local Codex sessions without reading conversation history.
+Discover already-loaded Codex sessions locally or on an explicitly enrolled peer.
 
 State-changing: no. JSON mode: `envelope`.
 
@@ -153,13 +153,14 @@ Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit a versioned local session directory. |
+| `--json` | boolean | Emit a versioned session directory. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; requires a live foreground owner. |
 
-- Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
+- Linux/macOS only. Local discovery uses the effective CODEX_HOME Unix socket; --host uses the live foreground owner's authenticated loopback route. Starts no daemon and returns no partial directory.
 
 ### `ocx message send`
 
-Submit one correlated peer message to an exact loaded local Codex destination.
+Submit one correlated peer message to an exact loaded Codex destination.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -173,10 +174,11 @@ Drives no management route.
 | `--kind` | string | request (default), response or notification. |
 | `--in-reply-to` | string | Request message UUID; required only for a response. |
 | `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
+| `--host` | string | Exact enrolled peer alias or machine UUID; omit for the unchanged local path. |
 
 - Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
-- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
+- Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No Claude transport, native lifecycle mutation or skill installation.
 
 ### `ocx advisor`
 
@@ -200,6 +202,155 @@ State-changing: yes. JSON mode: `payload`.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
 - `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
+
+### `ocx message enable`
+
+Explicitly enable private remote messaging state, without starting a listener.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--port` | number | Unprivileged IPv4-loopback port; defaults to 39176 on first enable. |
+| `--json` | boolean | Emit configuration without credentials. |
+
+### `ocx message disable`
+
+Disable remote admission and retire the foreground owner generation.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration. |
+
+### `ocx message status`
+
+Read enabled, running and leased/initiated route states without activation.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe configuration and owner observations. |
+
+### `ocx message serve`
+
+Own a foreground listener and optional duplex SSH peer routes; no automatic reconnect.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--host` | string | Exact initiating peer; repeat for at most four distinct peers. |
+| `--json` | boolean | Emit the startup observation without credentials. |
+
+### `ocx message hosts probe`
+
+Offer an SSH host fingerprint without enrollment or persistent changes.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--json` | boolean | Emit the offered fingerprint. |
+
+### `ocx message hosts add`
+
+Usage: `ocx message hosts add <alias> --ssh <destination> --fingerprint <SHA256> [--json]`
+
+Enroll outbound delivery and correlated return replies after SSH fingerprint confirmation.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--ssh` | string | OpenSSH destination/alias. |
+| `--fingerprint` | string | Explicitly confirmed offered SSH host-key fingerprint. |
+| `--json` | boolean | Emit enrollment metadata, never credentials. |
+
+### `ocx message hosts allow-inbound`
+
+Usage: `ocx message hosts allow-inbound <alias-or-machine-uuid> [--json]`
+
+Explicitly allow this enrolled peer to send any message kind to local loaded sessions.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the local inbound grant, without credentials. |
+
+### `ocx message hosts deny-inbound`
+
+Usage: `ocx message hosts deny-inbound <alias-or-machine-uuid> [--json]`
+
+Restrict this peer to correlated replies on locally opened reply routes.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the narrowed local inbound grant. |
+
+### `ocx message hosts list`
+
+List exact peer identities without credentials or listener activation.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit safe peer metadata. |
+
+### `ocx message hosts remove`
+
+Usage: `ocx message hosts remove <alias-or-machine-uuid> [--transaction <uuid>] [--json]`
+
+Revoke local admission first and report any unconfirmed remote cleanup explicitly.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--transaction` | string | Remove only this exact enrollment; refuse a replacement transaction. |
+| `--json` | boolean | Emit local and remote revocation outcomes. |
+
+### `ocx message hosts abandon`
+
+Usage: `ocx message hosts abandon --transaction <uuid> [--json]`
+
+Abandon an exact pending local enrollment; remote cleanup remains unconfirmed (exit 3).
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--transaction` | string | Exact pending UUID from hosts list or status; never an alias. |
+| `--json` | boolean | Emit local abandonment and explicit remote-cleanup guidance. |
 
 ### `ocx agent status`
 
@@ -438,6 +589,109 @@ State-changing: yes. JSON mode: `payload`.
 
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
 - Stream-routed-output belongs only to web. Timeout changes preserve siblings; native apply and saved state are distinct.
+
+### `ocx fallback`
+
+Usage: `ocx fallback [status] [--json]`
+
+Show which model and provider fallbacks are allowed, per-device local fallback, and the last fallback taken or refused.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the ocx.fallback/1 state. |
+
+- Reads the live proxy. On a Remote Link Child it reads the Home's state over the link (aliases omitted). The last event is in memory and resets on restart.
+
+### `ocx fallback off`
+
+Usage: `ocx fallback off [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Refuse model or provider fallback globally or for one provider, route or device.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to the provider a request started on. |
+| `--route` | string | Scope to an exact selector such as combo/<id> or policy/<id>. |
+| `--device` | string | Scope to a Remote Link id or alias, or a Hub data key id; device off always refuses. |
+| `--json` | boolean | Emit the resulting state. |
+
+- A refused hop answers fallback_refused with the triggering failure's status. Rotation among accounts or keys of one provider pool is not a fallback and stays on.
+
+### `ocx fallback on`
+
+Usage: `ocx fallback on [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Allow model or provider fallback at one scope, overriding a broader off.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to a provider. |
+| `--route` | string | Scope to an exact selector. |
+| `--device` | string | Scope to a device. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Route beats provider beats global. A device setting can only refuse: on for a device records the value but never reopens a hop another scope refuses.
+
+### `ocx fallback clear`
+
+Usage: `ocx fallback clear [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Remove a fallback override so the scope inherits again.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to a provider. |
+| `--route` | string | Scope to an exact selector. |
+| `--device` | string | Scope to a device. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Clearing every override restores today's behavior: every fallback allowed.
+
+### `ocx fallback local`
+
+Usage: `ocx fallback local <on|off> --device <id|alias> [--json]`
+
+Record whether a device may use its own providers while the Home is unreachable.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Remote Link id or alias, or Hub data key id. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Run on the Home. A permission GOAT reads; OpenCodex itself keeps answering home_unreachable on the device and never serves it from local providers.
 
 ### `ocx effort`
 
@@ -704,7 +958,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -721,13 +975,19 @@ State-changing: yes. JSON mode: `payload`.
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |
 | `--sticky` | string | Round-robin limit 1-100; - resets. |
+| `--cooldown-reprobe` | string | Opt into one recovery pass when all eligible targets cool; off by default. |
+| `--cooldown-reprobe-interval` | string | Minimum interval between recovery passes in ms (1000..86400000); default 300000. |
 | `--effort` | string | Default effort; - clears. |
 | `--effort-mode` | string | fallback or force; - resets to fallback. |
 | `--alias` | string | Alias; - clears. |
 | `--display-name` | string | Label; - clears. |
+| `--description` | string | Catalog row description; - clears. |
 | `--decision-provider` | string | JEV provider; - clears. |
 | `--decision-model` | string | JEV route; - clears; exclusive with provider. |
 | `--decision-timeout` | string | JEV deadline 1000-120000 ms; - clears. |
+| `--decision-quota-signals` | string | JEV advisory quota on/off; - clears. |
+| `--decision-quota-tiers` | string | Partial JSON thresholds; - clears. |
+| `--session-pin` | string | JEV session pin idle window 1m-24h (90s, 20m, 1h); - clears. |
 | `--rename-from` | string | Existing combo ID to rename. |
 | `--json` | boolean | Emit structured JSON. |
 | `--native-alias` | string | Bare legacy flag means on; explicit on/off preserves presence, including false. |
@@ -735,7 +995,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
 | `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
 
-- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets.
+- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets. Without --strategy an existing combo keeps its stored strategy and JEV policy; a new combo defaults to failover.
 - force overrides valid client effort and may increase cost and latency.
 - Only the implemented target grammar is supported; full GUI target metadata and routing-profile writes are separate tasks.
 - New file/flag conflicts refuse before transport. Partial edits preserve target metadata; explicit false/default values override server carry. Turning a native alias off may also require clearing its incompatible alias.

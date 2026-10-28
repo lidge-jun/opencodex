@@ -1,4 +1,5 @@
 import type { NativeResponseControl } from "./native-response-control";
+import { PROVIDER_HEADER_DEADLINE as HEADER_DEADLINE, type ProviderHeaderDeadline as HeaderDeadline } from "../../lib/provider-admission-wait";
 import type { CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 import type { Server } from "bun";
 import {
@@ -31,6 +32,7 @@ import {
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
+import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 
 export { withUpstreamHttpVersion };
 
@@ -48,11 +50,19 @@ const EGRESS_DECIDED = Symbol.for("opencodex.provider-egress.decided");
 const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 // Survives queued credential rebuilds and executor replacement without importing budget owners.
 const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
+// Final destination and headers after plugin rewrites and queued rebuilds, for observers that
+// must attribute a response to the credential that actually reached the wire.
+const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
+  physical?: (sameDestination: boolean, headers: Headers) => void;
+};
+/** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+  const physical = observer?.physical;
+  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+}
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
-// Replacement admission waits on the client signal, outside the response-header deadline.
-const HEADER_DEADLINE = Symbol("header-deadline");
-type HeaderDeadline = { clientSignal: AbortSignal; pause(): void; resume(): void };
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the
@@ -206,18 +216,27 @@ export function sendWithConnectionPolicy(
   // Bun can reset large native Codex string uploads before receiving headers while
   // the identical UTF-8 buffer succeeds. Convert only at the final HTTP send so
   // WebSocket selection still sees the serialized string and no retry is added.
+  // Opt-in compression (#7247) takes precedence at the same boundary and also yields bytes. Every
+  // retry and HTTP fallback re-enters here with the caller's original string, so each send derives
+  // its own coded bytes; `headers` is already this send's private copy.
   const target = input instanceof Request ? input.url : String(input);
   const body = init?.body;
-  const largeCodexBody = typeof body === "string"
-    && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
+  const compressed = compressUpstreamRequestBody(target, body, headers);
+  if (compressed) {
+    headers.set("Content-Encoding", compressed.encoding);
+    headers.delete("Content-Length");
+  }
+  const largeCodexBody = !compressed && typeof body === "string"
+    && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
   outboundCredentials().remember(headers);
   return physicalFetch(input, {
     ...init,
-    ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
+    ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
@@ -227,7 +246,22 @@ export function sendWithConnectionPolicy(
   });
 }
 
+interface CodexWsExecutor { provider: OcxProviderConfig; http: typeof globalThis.fetch }
+const codexWsExecutors = new WeakMap<object, CodexWsExecutor>();
+const codexWsExecutor = (send: (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => Promise<Response>, binding: CodexWsExecutor) => {
+  codexWsExecutors.set(send, binding);
+  return send as typeof globalThis.fetch;
+};
+/**
+ * Set for the executor a `dispatchOverride` receives on the WS branch: it must not get HTTP-only
+ * send policy. `provider` is the one WS eligibility was checked against; a dispatch-time
+ * replacement was not, so it sends through `http` (the same fallback) instead.
+ */
+export const codexWsExecutorBinding = (execute: unknown): CodexWsExecutor | undefined =>
+  typeof execute === "function" ? codexWsExecutors.get(execute) : undefined;
+
 export interface ProviderFetchOptions {
+  accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => AccountAutoPauseObserver | undefined;
   /**
    * Keep this send on HTTP even where the WebSocket upstream would normally be selected.
    *
@@ -308,7 +342,9 @@ export function providerFetch(
   ) as typeof globalThis.fetch);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
-      reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+      reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,
+      // False only for the HTTP fallback of a WS send the override already wrapped: one logical send.
+      override: ProviderFetchOptions["dispatchOverride"] | null = options.dispatchOverride) => {
       // Refuse before any dispatch side effect where that is sound. `beforeDispatch` commits
       // attempt accounting and consumes admission state, so a refusal firing after it would
       // charge an attempt for a send that never happens, and a throwing hook would mask the
@@ -318,7 +354,7 @@ export function providerFetch(
       // full decision can be made now. With an override, only the configured value is checked:
       // the override may rebuild against a different host and select a different transport, and
       // refusing on this destination would reject a request whose real route is fine.
-      if (options.dispatchOverride) egressFor(input);
+      if (override) egressFor(input);
       else providerEgressSendInit(egressBinding, transport, input);
       // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
       // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
@@ -335,8 +371,8 @@ export function providerFetch(
           else if (!notified) { options.onPhysicalDispatch!(); notified = true; }
         } } : {}),
       };
-      return options.dispatchOverride
-        ? options.dispatchOverride(input, dispatchInit, dispatch, reacquirePacing)
+      return override
+        ? override(input, dispatchInit, dispatch, reacquirePacing)
         : dispatch(input, dispatchInit);
     },
     { preconnect },
@@ -344,7 +380,7 @@ export function providerFetch(
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
-  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+  const unobserved = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
@@ -375,11 +411,26 @@ export function providerFetch(
         options.onPhysicalDispatch?.();
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
-        httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing)) as typeof globalThis.fetch;
-      return codexWsUpstreamFetch(input, init, fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
-        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold);
+        httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;
+      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url), wsInit ?? init,
+        fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
+        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold),
+        { provider, http: markEgressTransparentExecutor(fallback) });
+      // A WS frame is a physical send like any other, so it runs the same override: that is where a
+      // key-auth send is committed to its attempt row and the send budget is rebound to the
+      // credential that left. Without it a key-auth WS turn logged `sendCount: 0`.
+      return options.dispatchOverride ? options.dispatchOverride(input, init, wsSend, reacquirePacing) : wsSend(input, init);
     }
     return httpFetch(input, init, reacquirePacing);
+  };
+  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+    reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+    const observe = options.accountAutoPause?.(providerName, provider,
+      new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+    const observedInit = observe?.physical
+      ? { ...init, ...physicalSendObserverInit(observe, input instanceof Request ? input.url : String(input)) } : init;
+    const response = await unobserved(input, observedInit, reacquirePacing);
+    return observe ? observe(response) : response;
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = async (signal?: AbortSignal): Promise<ProviderRequestSlot | undefined> => {
@@ -507,7 +558,7 @@ export async function fetchWithHeaderTimeout(
   _manualRedirect = false,
 ): Promise<Response> {
   const pacing = executor as ProviderFetch;
-  const slot = await pacing.waitForPacing?.(abortSignal);
+  const slot = pacing.waitForPacing ? await pacing.waitForPacing(abortSignal) : undefined;
   const fetchExecutor = pacing.unpacedFetch ?? executor;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -517,6 +568,10 @@ export async function fetchWithHeaderTimeout(
       pause() { if (timer) clearTimeout(timer); timer = undefined; },
       resume() {
         this.pause();
+        // A non-positive budget disables the header deadline: a local upstream (LM Studio, Ollama)
+        // can stay silent for minutes during prompt prefill, so the request is bounded only by the
+        // caller's own abort signal. See resolveConnectTimeoutMs in src/stall-timeout.ts.
+        if (timeoutMs <= 0) return;
         timer = setTimeout(() => {
           if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
         }, timeoutMs);

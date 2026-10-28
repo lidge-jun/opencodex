@@ -32,6 +32,12 @@ import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import * as configModule from "../../src/config";
 import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
 import { clearAllManualPreferences, manualPreferenceBlocks, resetCodexRoutingForManualSelection } from "../../src/codex/routing/active-account";
+import {
+  failureWindowSteersNewThreads,
+  forgetCodexFailureWindow,
+  isCodexFailureWindowDegraded,
+  noteCodexFailureWindowSample,
+} from "../../src/codex/routing/failure-window";
 import { POOL_KEY_CODEX } from "../../src/oauth/pool-kernel";
 import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { OcxConfig } from "../../src/types";
@@ -427,6 +433,58 @@ describe("Codex account delete persistence ordering", () => {
       expect(manualPreferenceBlocks(POOL_KEY_CODEX, "other-account")).toBe(false);
     } finally {
       clearAllManualPreferences();
+    }
+  });
+
+  test("deleting the account forgets its failure-window degradation but keeps sibling state", () => {
+    const config = seededConfig();
+    const now = Date.now();
+    const degrade = (accountId: string): void => {
+      for (let index = 0; index < 24; index += 1) noteCodexFailureWindowSample(config, accountId, true, now - index);
+    };
+    degrade(ACCOUNT_ID);
+    degrade("sibling-account");
+    expect(isCodexFailureWindowDegraded(ACCOUNT_ID, now)).toBe(true);
+    expect(isCodexFailureWindowDegraded("sibling-account", now)).toBe(true);
+    try {
+      expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(true);
+      expect(isCodexFailureWindowDegraded(ACCOUNT_ID, now)).toBe(false);
+      expect(failureWindowSteersNewThreads(config, ACCOUNT_ID, now)).toBe(false);
+      // A different account's window is untouched by the deletion.
+      expect(isCodexFailureWindowDegraded("sibling-account", now)).toBe(true);
+    } finally {
+      forgetCodexFailureWindow(ACCOUNT_ID);
+      forgetCodexFailureWindow("sibling-account");
+    }
+  });
+
+  test("deleting the account forgets its pinned-degrade warning", () => {
+    const config = seededConfig();
+    const now = Date.now();
+    const degrade = (): void => {
+      for (let index = 0; index < 24; index += 1) noteCodexFailureWindowSample(config, ACCOUNT_ID, true, now - index);
+    };
+    forgetCodexFailureWindow(ACCOUNT_ID);
+    degrade();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // The seeded config pins ACCOUNT_ID under the default "hold" policy, so steering
+      // logs the pin-degraded warning exactly once per process-lifetime of the state.
+      expect(failureWindowSteersNewThreads(config, ACCOUNT_ID, now)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      failureWindowSteersNewThreads(config, ACCOUNT_ID, now);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(true);
+      // Deletion clears the pin as well; re-pin to model a recreated same-id account the
+      // operator selects again. If the warned set survived the purge, a re-degraded
+      // same-id pinned account would stay silent forever; the forget lets it fire again.
+      config.activeCodexAccountPinned = ACCOUNT_ID;
+      degrade();
+      failureWindowSteersNewThreads(config, ACCOUNT_ID, now);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
+      forgetCodexFailureWindow(ACCOUNT_ID);
     }
   });
 });

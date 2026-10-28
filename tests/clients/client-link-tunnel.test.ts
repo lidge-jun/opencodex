@@ -455,7 +455,7 @@ function supervisorHarness(overrides: Partial<ClientLinkSupervisorDeps> = {}) {
     random: () => 0.5,
     readProcessStartTime: pid => `fixture-start-${pid}`,
     linkKey: () => LINK_KEY,
-    ownsLoopbackListener: async (_port, pid) => ssh.live().some(item => item.child.pid === pid),
+    inspectLoopbackListener: async (_port, pid) => ({ kind: ssh.live().some(item => item.child.pid === pid) ? "match" : "mismatch", elapsedMs: 1 }),
     fetchImpl: (async (input, init) => {
       probes.push({ url: String(input), keyed: new Headers(init?.headers).get("x-opencodex-api-key") === LINK_KEY, cache: init?.cache });
       if (view.readyz === "refused") throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
@@ -503,7 +503,7 @@ test("a competing listener cannot receive the probe key or relayed traffic befor
   } });
   const h = supervisorHarness({
     fetchImpl: fetch,
-    ownsLoopbackListener: async () => false,
+    inspectLoopbackListener: async () => ({ kind: "mismatch", elapsedMs: 1 }),
   });
   h.view.sidecar = { ...sidecar(), tunnelPort: competing.port! };
   try {
@@ -513,7 +513,7 @@ test("a competing listener cannot receive the probe key or relayed traffic befor
       method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"private"}',
     }), { tunnelPort: competing.port!, admissionKey: LINK_KEY }, { tunnel: h.supervisor, holdMs: 10, fetchImpl: fetch });
     expect(response.status).toBe(503);
-    expect(await h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "unavailable" });
     expect(received).toEqual([]);
   } finally {
     await h.close();
@@ -556,6 +556,77 @@ test("after a six-minute outage the tunnel is back within a minute of the Home r
     await h.close();
   }
 }, 30_000);
+
+/** A harness whose ssh spawn throws while `spawnError` is set, as when ssh is missing or the pidfile cannot be written. */
+function failingSpawnHarness() {
+  const control = { spawnError: null as Error | null };
+  const h = supervisorHarness({
+    runner: {
+      async run() { return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel(argv) {
+        if (control.spawnError) throw control.spawnError;
+        return h.ssh.runner.spawnTunnel(argv);
+      },
+    },
+  });
+  const tunnel = () => {
+    const status = h.supervisor.status();
+    if (status.kind !== "tunnel" || status.state.kind !== "failed") throw new Error(`expected a failed tunnel, got ${JSON.stringify(status)}`);
+    return status.state;
+  };
+  /** Move the clock to the scheduled retry and run that check; returns the delay to the next one. */
+  const toRetry = async (): Promise<number> => {
+    await h.step(tunnel().retryAt! - h.view.clock);
+    return tunnel().retryAt! - h.view.clock;
+  };
+  return { h, control, tunnel, toRetry };
+}
+
+test("a due retry that cannot start ssh counts as a failed retry, so the Child's backoff keeps doubling", async () => {
+  const { h, control, tunnel, toRetry } = failingSpawnHarness();
+  try {
+    await h.start();
+    await h.step();
+    expect(h.state()).toBe("connected");
+    h.ssh.children[0]!.exit(255, "bind [127.0.0.1]:19001: Address already in use\nCould not request local forwarding.");
+    await h.settle();
+    const failedAt = h.view.clock;
+    expect(tunnel()).toMatchObject({ reason: "forward", since: failedAt, retryAt: failedAt + 60_000 });
+
+    control.spawnError = new Error("spawn ssh ENOENT");
+    const delays: number[] = [];
+    for (let retry = 0; retry < 4; retry += 1) delays.push(await toRetry());
+    expect(delays).toEqual([120_000, 240_000, 300_000, 300_000]);
+    expect(tunnel()).toMatchObject({ reason: "forward", since: failedAt, retries: 4, inFlight: false });
+    expect(h.ssh.children).toHaveLength(1);
+
+    control.spawnError = null;
+    await toRetry();
+    expect(h.ssh.children).toHaveLength(2);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a spawn failure on an authentication retry keeps the five-minute cadence", async () => {
+  const { h, control, tunnel, toRetry } = failingSpawnHarness();
+  try {
+    await h.start();
+    await h.step();
+    h.ssh.children[0]!.exit(255, "home@example: Permission denied (publickey).");
+    await h.settle();
+    expect(tunnel()).toMatchObject({ reason: "auth", retryAt: h.view.clock + 300_000 });
+
+    control.spawnError = new Error("pidfile is not writable");
+    // The attempt never reached the Home's sshd, yet it must not open a faster lane to it.
+    expect(await toRetry()).toBe(300_000);
+    expect(tunnel()).toMatchObject({ reason: "auth", retries: 1 });
+    expect(await toRetry()).toBe(300_000);
+    expect(tunnel()).toMatchObject({ reason: "auth", retries: 2 });
+  } finally {
+    await h.close();
+  }
+});
 
 test("a reconnect is promoted by a keyed readyz and the healthy ssh is never cut afterwards", async () => {
   const h = supervisorHarness();
@@ -824,7 +895,7 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
     platform: "darwin",
     isAlive: pid => pid === 42 || pid === process.pid,
     readProcessInfo: pid => pid === 42 ? { ppid: process.pid, args: argv.join(" "), startTime: "adopted-start" } : null,
-    ownsLoopbackListener: async (_port, pid) => pid === 42,
+    inspectLoopbackListener: async (_port, pid) => ({ kind: pid === 42 ? "match" : "mismatch", elapsedMs: 1 }),
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
   writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
@@ -833,7 +904,7 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
     await h.start();
     expect(h.ssh.children).toHaveLength(0);
     await h.step();
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
     expect(h.probes).toHaveLength(1);
     expect(h.probes[0]?.keyed).toBe(true);
   } finally {
@@ -853,7 +924,7 @@ test("one unreadable adopted identity denies only this admission and recovers", 
       if (unreadable) { unreadable = false; return null; }
       return { ppid: process.pid, args: argv.join(" "), startTime: "adopted-start" };
     },
-    ownsLoopbackListener: async (_port, pid) => pid === 42,
+    inspectLoopbackListener: async (_port, pid) => ({ kind: pid === 42 ? "match" : "mismatch", elapsedMs: 1 }),
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
   writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
@@ -868,7 +939,7 @@ test("one unreadable adopted identity denies only this admission and recovers", 
   try {
     await h.start();
     await h.step();
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
     unreadable = true;
     expect((await relay()).status).toBe(503);
     expect(forwarded).toBe(0);
@@ -893,7 +964,7 @@ test("an adopted PID with changed start identity cannot receive another probe or
     isAlive: pid => pid === 42 || pid === process.pid,
     readProcessInfo: pid => pid === 42
       ? { ppid: process.pid, args: argv.join(" "), startTime: currentStart } : null,
-    ownsLoopbackListener: async (_port, pid) => pid === 42 || pid >= 31_000,
+    inspectLoopbackListener: async (_port, pid) => ({ kind: pid === 42 || pid >= 31_000 ? "match" : "mismatch", elapsedMs: 1 }),
     signal: (_pid, signal) => { signals.push(signal); },
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
@@ -903,7 +974,7 @@ test("an adopted PID with changed start identity cannot receive another probe or
   try {
     await h.start();
     await h.step();
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
     expect(h.probes).toHaveLength(1);
     currentStart = "reused-start";
     h.view.clock += 1_500;
@@ -928,13 +999,13 @@ test("an adopted PID with changed start identity cannot receive another probe or
 
 test("a connected tunnel stops relaying when another PID takes its port", async () => {
   let owners: number[] = [];
-  const h = supervisorHarness({ ownsLoopbackListener: async (_port, pid) => owners.includes(pid) });
+  const h = supervisorHarness({ inspectLoopbackListener: async (_port, pid) => ({ kind: owners.includes(pid) ? "match" : "mismatch", elapsedMs: 1 }) });
   let forwarded = 0;
   try {
     await h.start();
     owners = [h.ssh.children[0]!.child.pid];
     await h.step();
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
     owners = [process.pid];
     const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
       method: "POST", body: '{"input":"private"}',
@@ -944,7 +1015,7 @@ test("a connected tunnel stops relaying when another PID takes its port", async 
     });
     expect(response.status).toBe(503);
     expect(forwarded).toBe(0);
-    expect(await h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "mismatch" });
   } finally {
     await h.close();
   }
@@ -953,7 +1024,7 @@ test("a connected tunnel stops relaying when another PID takes its port", async 
 test("each relayed request obtains a fresh asynchronous owner proof", async () => {
   let lookups = 0;
   const h = supervisorHarness({
-    ownsLoopbackListener: async () => { lookups += 1; await Bun.sleep(1); return true; },
+    inspectLoopbackListener: async () => { lookups += 1; await Bun.sleep(1); return { kind: "match", elapsedMs: 1 }; },
   });
   const relay = () => relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/models"),
     { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
@@ -977,7 +1048,7 @@ test("each relayed request obtains a fresh asynchronous owner proof", async () =
 
 test("a replacement SSH child needs a new ownership proof before its first keyed probe", async () => {
   let lookups = 0;
-  const h = supervisorHarness({ ownsLoopbackListener: async () => { lookups += 1; return true; } });
+  const h = supervisorHarness({ inspectLoopbackListener: async () => { lookups += 1; return { kind: "match", elapsedMs: 1 }; } });
   try {
     await h.start();
     await h.step();
@@ -1040,19 +1111,19 @@ test("an unreadable read does not end the link; three in a row or an explicit di
 test("requests wait on a reconnect only while it lasts and are released when it connects or fails", async () => {
   const h = supervisorHarness();
   try {
-    expect(await h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "unavailable" });
     expect(h.supervisor.pending()).toBe(false);
     await h.start();
     expect(h.supervisor.pending()).toBe(true);
     await h.step();
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(true);
 
     h.view.readyz = "refused";
     h.ssh.children[0]!.exit(255, "Connection reset by peer");
     await h.settle();
-    expect(await h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "unavailable" });
     expect(h.supervisor.pending()).toBe(true);
     let released: boolean | undefined;
     const waiting = h.supervisor.waitForConnected(15_000).then(value => { released = value; return value; });
@@ -1062,7 +1133,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     h.view.readyz = 200;
     await h.step();
     expect(await waiting).toBe(true);
-    expect(await h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "match" });
 
     h.ssh.children[1]!.exit(255, "Connection reset by peer");
     await h.settle();
@@ -1072,7 +1143,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     await h.settle();
     expect(await failing).toBe(false);
     expect(h.supervisor.status()).toMatchObject({ state: { kind: "failed", reason: "hostkey" } });
-    expect(await h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "unavailable" });
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(false);
   } finally {
@@ -1123,4 +1194,198 @@ test("the supervisor's own reads parse a file again only after it changed", () =
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+for (const kind of ["match", "mismatch", "deadline"] as const) {
+  test(`fresh ${kind} owner proof reports correlated timing and admits only a match`, async () => {
+    let result: Awaited<ReturnType<NonNullable<ClientLinkSupervisorDeps["inspectLoopbackListener"]>>> = { kind: "match", elapsedMs: 1 };
+    const checks: import("../../src/client/link-relay").LinkAdmissionResult[] = [];
+    const events: import("../../src/link/diagnostics").LinkDiagnosticRecord[] = [];
+    const h = supervisorHarness({ inspectLoopbackListener: async () => result, diagnostic: event => { events.push(event); } });
+    try {
+      await h.start();
+      await h.step();
+      expect(h.state()).toBe("connected");
+      events.length = 0;
+      result = { kind, elapsedMs: 2_003.25 };
+      for (let request = 0; request < 2; request += 1) {
+        checks.push(await h.supervisor.connected({ requestId: `request-${request}` }));
+      }
+      expect(checks).toHaveLength(2);
+      expect(events).toHaveLength(kind === "match" ? 0 : 2);
+      for (const [index, check] of checks.entries()) {
+        expect(check).toMatchObject({ kind, elapsedMs: 2_003.25, state: "connected" });
+        expect(check.checkId).toEqual(expect.any(String));
+        expect(check.checkId!.length).toBeGreaterThan(0);
+        expect(Number.isSafeInteger(check.generation)).toBe(true);
+        expect(check.generation!).toBeGreaterThan(0);
+        if (kind !== "match") expect(events[index]).toEqual({ event: "owner_lookup", outcome: kind, requestId: `request-${index}`,
+          checkId: check.checkId, generation: check.generation, state: "connected", elapsedMs: 2_003.25 });
+      }
+      expect(checks[1]!.checkId).not.toBe(checks[0]!.checkId);
+      expect(checks[1]!.generation).toBe(checks[0]!.generation);
+    } finally {
+      await h.close();
+    }
+  });
+}
+
+for (const transition of ["stop", "replacement", "sidecar failure"] as const) {
+  for (const kind of ["match", "deadline"] as const) {
+    test(`a delayed ${kind} after ${transition} is stale and cannot admit or report a deadline`, async () => {
+      type OwnerResult = Awaited<ReturnType<NonNullable<ClientLinkSupervisorDeps["inspectLoopbackListener"]>>>;
+      const delayed = deferred<OwnerResult>();
+      const entered = deferred<void>();
+      let delayNext = false;
+      const events: import("../../src/link/diagnostics").LinkDiagnosticRecord[] = [];
+      const h = supervisorHarness({
+        inspectLoopbackListener: async () => {
+          if (delayNext) {
+            delayNext = false;
+            entered.resolve();
+            return delayed.promise;
+          }
+          return { kind: "match", elapsedMs: 1 };
+        },
+        diagnostic: event => { events.push(event); },
+      });
+      try {
+        await h.start();
+        await h.step();
+        expect(h.state()).toBe("connected");
+        const baseline = await h.supervisor.connected();
+        expect(baseline.kind).toBe("match");
+        events.length = 0;
+        delayNext = true;
+        const admission = h.supervisor.connected({ requestId: "delayed-request" });
+        await entered.promise;
+        if (transition === "stop") {
+          await h.supervisor.stop();
+          expect(h.state()).toBe("idle");
+        } else if (transition === "sidecar failure") {
+          h.view.sidecar = "unreadable";
+          await h.step();
+          await h.step();
+          expect(h.state()).toBe("connected");
+          await h.step();
+          expect(h.supervisor.status()).toEqual({ kind: "failed", reason: "sidecar_invalid" });
+        } else {
+          h.ssh.children[0]!.exit(255, "Connection reset by peer");
+          await h.settle();
+          for (let tick = 0; tick < 10 && h.ssh.children.length < 2; tick += 1) await h.step();
+          expect(h.ssh.children).toHaveLength(2);
+          await h.step();
+          expect(h.state()).toBe("connected");
+        }
+        delayed.resolve({ kind, elapsedMs: 2_004.5 });
+        const check = await admission;
+        expect(check).toMatchObject({ kind: "stale", elapsedMs: 2_004.5,
+          generation: baseline.generation, state: transition === "replacement" ? "connected" : "idle" });
+        expect(check.checkId).not.toBe(baseline.checkId);
+        expect(events.filter(event => event.requestId === "delayed-request")).toEqual([
+          { event: "owner_lookup", outcome: "stale", requestId: "delayed-request", checkId: check.checkId,
+            generation: baseline.generation, state: transition === "replacement" ? "connected" : "idle", elapsedMs: 2_004.5 },
+        ]);
+        if (transition === "replacement") {
+          const fresh = await h.supervisor.connected();
+          expect(fresh.kind).toBe("match");
+          expect(fresh.generation!).toBeGreaterThan(check.generation!);
+        }
+      } finally {
+        delayed.resolve({ kind: "match", elapsedMs: 1 });
+        await h.close();
+      }
+    });
+  }
+}
+
+for (const kind of ["match", "mismatch", "deadline"] as const) {
+  test(`throwing diagnostic sinks preserve ${kind} admission`, async () => {
+    let result: "match" | "mismatch" | "deadline" = "match";
+    let diagnostics = 0;
+    const h = supervisorHarness({
+      inspectLoopbackListener: async () => ({ kind: result, elapsedMs: 7 }),
+      diagnostic: () => { diagnostics += 1; throw new Error("diagnostic sink unavailable"); },
+    });
+    try {
+      await h.start();
+      await h.step();
+      expect(h.state()).toBe("connected");
+      diagnostics = 0;
+      result = kind;
+      expect(await h.supervisor.connected({ requestId: "throwing-sinks" })).toMatchObject({ kind, elapsedMs: 7 });
+      expect(diagnostics).toBe(kind === "match" ? 0 : 1);
+      expect(h.state()).toBe("connected");
+    } finally {
+      await h.close();
+    }
+  });
+}
+
+test("a stop triggered by failure diagnostics leaves admission closed", async () => {
+  let result: "match" | "mismatch" = "match";
+  let stopping: Promise<void> | undefined;
+  const h = supervisorHarness({
+    inspectLoopbackListener: async () => ({ kind: result, elapsedMs: 1 }),
+    diagnostic: () => { stopping = h.supervisor.stop(); },
+  });
+  try {
+    await h.start();
+    await h.step();
+    expect(h.state()).toBe("connected");
+    expect(stopping).toBeUndefined();
+    result = "mismatch";
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "mismatch" });
+    expect(stopping).toBeDefined();
+    await stopping;
+    expect(h.state()).toBe("idle");
+    expect(await h.supervisor.connected()).toMatchObject({ kind: "unavailable" });
+  } finally {
+    await stopping;
+    await h.close();
+  }
+});
+
+test("a reconnect with the same link and listener ids names a new connection generation, and a steady tunnel keeps it", async () => {
+  const h = supervisorHarness();
+  try {
+    await h.start();
+    expect(h.supervisor.connectionGeneration()).toBeUndefined();
+    await h.step();
+    expect(h.state()).toBe("connected");
+    const first = h.supervisor.connectionGeneration();
+    expect(first).toEqual(expect.any(String));
+    for (let tick = 0; tick < 12; tick += 1) await h.step(5_000);
+    expect(h.state()).toBe("connected");
+    expect(h.supervisor.connectionGeneration()).toBe(first);
+    h.ssh.children[0]!.exit(255, "client_loop: send disconnect: Broken pipe");
+    await h.settle();
+    expect(h.supervisor.connectionGeneration()).toBeUndefined();
+    for (let tick = 0; tick < 10 && h.state() !== "connected"; tick += 1) await h.step();
+    expect(h.state()).toBe("connected");
+    const second = h.supervisor.connectionGeneration();
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a supervisor rebuilt by a restart rollback in the same process never repeats a connection generation", async () => {
+  // startClientRuntime's serve() builds a fresh supervisor when a failed restart rolls back.
+  const seen: string[] = [];
+  for (let round = 0; round < 2; round += 1) {
+    const h = supervisorHarness();
+    try {
+      await h.start();
+      await h.step();
+      expect(h.state()).toBe("connected");
+      seen.push(h.supervisor.connectionGeneration()!);
+    } finally {
+      await h.close();
+    }
+  }
+  expect(seen[0]).toEqual(expect.any(String));
+  expect(seen[1]).toEqual(expect.any(String));
+  expect(seen[1]).not.toBe(seen[0]);
 });

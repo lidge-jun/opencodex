@@ -124,6 +124,24 @@ describe("OAuth account-scoped reauth", () => {
     expect(getAccountSet("xai")?.accounts[0]?.loginId).not.toBe(loginId);
   });
 
+  test("runLogin reauthAccountId matches an email-only identity across case and surrounding whitespace", async () => {
+    await saveCredential("xai", {
+      access: "a1", refresh: "r1", expires: Date.now() + 60_000, email: "  Slot-A@Example.Test  ",
+    });
+    const slotId = getAccountSet("xai")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async () => ({
+      access: "a2", refresh: "r2", expires: Date.now() + 60_000, email: " sLoT-a@example.test ",
+    });
+    try {
+      await runLogin("xai", {} as OAuthController, { reauthAccountId: slotId });
+    } finally {
+      OAUTH_PROVIDERS.xai.login = original;
+    }
+    expect(getAccountCredential("xai", slotId)?.access).toBe("a2");
+    expect(getAccountSet("xai")?.accounts).toHaveLength(1);
+  });
+
   test("runLogin reauth keeps an unobserved plan and clears it on an observed unknown", async () => {
     await saveCredential("xai", {
       access: "a1", refresh: "r1", expires: Date.now() + 60_000,

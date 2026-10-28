@@ -1,5 +1,6 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
@@ -13,6 +14,7 @@ import { resolvePolicyProfileId } from "../../routing/profile";
 import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
+import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -23,6 +25,23 @@ export interface PolicyFallbackDeps {
 
 function candidateKey(candidate: Pick<RouteCandidateTrace, "provider" | "model">): string {
   return `${candidate.provider}\u0000${candidate.model}`;
+}
+
+/**
+ * OCX-11: the destination a candidate physically dispatches to, after provider aliases and
+ * blockedModelRedirects, so the fallback guard compares where requests really go. A candidate
+ * that does not resolve keeps its own selector.
+ */
+function resolvedPolicyTarget(
+  config: OcxConfig,
+  candidate: Pick<RouteCandidateTrace, "provider" | "model">,
+): { provider: string; model: string } {
+  try {
+    const routed = routeConcreteModel(config, `${candidate.provider}/${candidate.model}`);
+    return { provider: routed.providerName, model: routed.modelId };
+  } catch {
+    return { provider: candidate.provider, model: candidate.model };
+  }
 }
 
 function staysWithinPolicyAfterRedirect(
@@ -112,7 +131,11 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe && !inspected.truncated ? inspected.text : "";
-    return comboFailureDecision(response.status, text, { code: errorCodeFromText(text) }) === "hop";
+    return comboFailureDecision(response.status, text, {
+      code: errorCodeFromText(text),
+      // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
+      verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
+    }) === "hop";
   } catch {
     return false;
   }
@@ -219,12 +242,32 @@ export async function handleResponsesWithPolicyFallback(
   policyScope.triedDestinations.add(policyScope.preparedDestination ?? policyWireDestination({
     providerName: initialTrace.selected.provider, modelId: initialTrace.selected.model,
   }));
+  let current = resolvedPolicyTarget(config, initialTrace.selected);
+  const policyRoute = `policy/${initialTrace.profile!.id}`;
 
   while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
     if (req.signal.aborted) return response;
     const next = rankPolicyFallbackCandidates(initialTrace, tried)
       .find(candidate => staysWithinPolicyAfterRedirect(config, policyEligibility, candidate, policyScope.triedDestinations));
     if (!next) return response;
+    // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent, on the
+    // redirected destination the guard above already validated.
+    const nextTarget = resolvedPolicyTarget(config, next);
+    const hop = guardFallbackHop(config, {
+      site: "routing-profile",
+      route: policyRoute,
+      aliases: [initialRequestedModel ?? initialTrace.requestedModel],
+      from: current,
+      to: nextTarget,
+      trigger: fallbackTriggerForStatus(response.status),
+      admission: options.admission,
+      failureStatus: response.status,
+      retryAfter: response.headers.get("retry-after"),
+    });
+    if (!hop.ok) {
+      try { await response.body?.cancel(); } catch { /* the refusal replaces this body */ }
+      return hop.response;
+    }
     tried.add(candidateKey(next));
 
     // Retain the failed response's log owner until a candidate actually replaces it. This is
@@ -243,7 +286,12 @@ export async function handleResponsesWithPolicyFallback(
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
-        } else response = nextResponse;
+        } else {
+          // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
+          hop.commit();
+          response = nextResponse;
+          current = nextTarget;
+        }
         if (policyScope.preparedDestination) policyScope.triedDestinations.add(policyScope.preparedDestination);
       } catch (error) {
         const overload = requestPacingOverloadResponse(error);

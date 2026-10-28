@@ -144,3 +144,36 @@ export function isQuotaExhaustedBody(payloadText: string): boolean {
   if (status && status !== "RESOURCE_EXHAUSTED") return false;
   return isGoogleQuotaExhaustedText(message ?? payloadText);
 }
+
+/**
+ * Extract a server-stated retry delay (seconds) from a Google 429 JSON error body's
+ * RetryInfo.retryDelay or ErrorInfo.metadata.quotaResetDelay (e.g. "42.5s" -> "43").
+ */
+export function extractGoogleRetryAfterSeconds(payloadText: string): string | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(payloadText); } catch { return undefined; }
+  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (Array.isArray((parsed as { error?: unknown }).error)
+        ? (parsed as { error: unknown[] }).error[0]
+        : ((parsed as { error?: unknown }).error ?? parsed))
+    : undefined;
+  if (!root || typeof root !== "object" || Array.isArray(root)) return undefined;
+  const details = (root as { details?: unknown }).details;
+  if (!Array.isArray(details)) return undefined;
+  for (const item of details) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const raw = typeof rec.retryDelay === "string"
+      ? rec.retryDelay
+      : (rec.metadata && typeof rec.metadata === "object" && !Array.isArray(rec.metadata)
+          && typeof (rec.metadata as { quotaResetDelay?: unknown }).quotaResetDelay === "string"
+          ? (rec.metadata as { quotaResetDelay: string }).quotaResetDelay
+          : undefined);
+    if (!raw) continue;
+    const match = /^\s*(\d+(?:\.\d+)?)\s*s\s*$/i.exec(raw);
+    if (!match) continue;
+    const seconds = Math.ceil(Number(match[1]));
+    if (Number.isFinite(seconds) && seconds > 0) return String(seconds);
+  }
+  return undefined;
+}

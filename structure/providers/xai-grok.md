@@ -205,7 +205,7 @@ transport behavior.
 The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is likewise scoped to
 the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
 overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
-`deepseek-v4-flash` remain sidecar-backed by default. The Zen tiers (`opencode-zen`, `opencode-free`) could not be measured (HTTP 402) and keep their existing classifications.
+`deepseek-v4-flash` remain sidecar-backed by default. The keyed Zen tier (`opencode-zen`) could not be measured (HTTP 402) and keeps its existing classifications.
 OpenCode Go's `deepseek-v4.1-flash` was reclassified as native vision on 2026-09-19 (probed on
 that gateway); its sibling `deepseek-v4-flash` stays sidecar-backed. None of this alters xAI
 metadata or routing.
@@ -217,7 +217,7 @@ do not alter xAI discovery, model metadata, or transport behavior.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

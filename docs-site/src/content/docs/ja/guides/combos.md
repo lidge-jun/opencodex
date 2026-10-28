@@ -201,9 +201,9 @@ ocx combo remove <id> --yes
 ```
 
 `set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
-`--display-name`、および `--rename-from` も受け入れます。`--native-alias` には現在
+`--display-name`、`--description`、および `--rename-from` も受け入れます。`--native-alias` には現在
 サポートされている bare native alias と空でない display name が必要です。`--effort`、`--alias`、
-`--display-name` に `-` を指定すると、その値をクリアできます。`create` および `update` は `set` の
+`--display-name`、`--description` に `-` を指定すると、その値をクリアできます。`create` および `update` は `set` の
 エイリアス、`delete` は `remove` のエイリアスです。すべてのコンボ サブコマンドは `ocx route combo ...` からも利用できます。
 
 ### 管理 API
@@ -248,6 +248,7 @@ ocx combo remove <id> --yes
 | `alias` |いいえ |なし |オプションのトリミングされたパブリック モデル ID。上記のエイリアス ルールを使用します。空の値はエイリアスなしで保存されます。 |
 | `nativeAlias` |いいえ | `false` | 現在サポートされている bare native alias に routing/catalog の優先権を明示的に与えます。 |
 | `displayName` |いいえ |なし | catalog 表示専用ラベル。`nativeAlias` が true の場合は必須です。 |
+| `description` |いいえ |なし | catalog 行の表示専用の説明。制限は `displayName` と同じです。未設定の場合は生成された `Routed via opencodex → combo (combo).` が使われます。 |
 
 ## トラブルシューティング
 
@@ -272,3 +273,7 @@ ocx combo remove <id> --yes
 通常の 400 エラーは終了扱いですが、`user` の明示的な拒否、`reasoning.effort`/`reasoning_effort` の非対応値、モデル固有の画像入力拒否（`param: input`）、またはルートが読み取れない入力メディアの拒否（`unsupported_input_modality`）を示す構造化エラーでは、出力開始前に次の適格なターゲットへ進めます。この不一致ではクールダウンを記録しません。安全ポリシーによる拒否、キャンセル、出力開始後の再実行は禁止のままです。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## クールダウン回復の予約
+
+`cooldownReprobe: { enabled: true }` で有効にした回復試行は、予約したリクエストだけに属し、他のリクエストには保存済みのクールダウンが引き続き適用されます。予約はクールダウン待機と JEV 選択を経ても維持されます。待機中に再び利用可能になったターゲットは、クールダウンが変わっていなければ再試行できますが、新しいクールダウンの記録はそのターゲットの予約を無効にします。成功時は応答したターゲットの変更されていないクールダウンだけを解除し、未試行のターゲットや新しい失敗のクールダウンは残します。プロバイダーの無効化、クォータ、リクエストの適格性、キャンセルの確認は引き続き有効です。[設定と制限](/guides/combos/#retry-all-cooled-targets-opt-in)を参照してください。

@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
 import type { CodexAuthContext, CodexAuthPolicyConfig } from "../../codex/auth-context";
 import type { CodexUpstreamOutcome } from "../../codex/routing";
@@ -10,6 +11,7 @@ import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, renewMainQuotaDis
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isCodexAccountGenerationLive } from "../../codex/account-store";
+import { codexFailureWindowOutcomeMeta } from "../../codex/routing/failure-window";
 import { applyAccountQuotaFromUpstreamHeaders as applyCapturedCodexQuota } from "../../codex/quota";
 import type { RouteResult } from "../../router";
 import {
@@ -92,20 +94,19 @@ export function sidecarOutcomeRecorder(
   config: OcxConfig,
   authCtx: CodexAuthContext,
 ): ((outcome: CodexUpstreamOutcome) => void) | undefined {
-  return authCtx.kind === "pool" || authCtx.kind === "main-pool"
-    ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-      threadId: authCtx.affinityKey,
-      fixedAccount: authCtx.fixedAccount,
-      probeLeaseId: authCtx.probeLeaseId,
-      probeQuotaScope: authCtx.probeQuotaScope,
-      writerGeneration: authCtx.writerGeneration,
-      // A vision or web-search sidecar can return 401/403, and that is evidence about the exact
-      // stored credential it used. Without the generation it becomes an account-wide quarantine
-      // that a replacement inherits (#2892 gap 4). `main-pool` has no stored-record generation, so
-      // it keeps the unfenced account-wide semantics.
-      ...(authCtx.kind === "pool" ? { credentialGeneration: authCtx.generation } : {}),
-    })
-    : undefined;
+  if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return undefined;
+  const windowMeta = codexFailureWindowOutcomeMeta(authCtx);
+  return outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+    ...windowMeta,
+    threadId: authCtx.affinityKey,
+    fixedAccount: authCtx.fixedAccount,
+    probeLeaseId: authCtx.probeLeaseId,
+    probeQuotaScope: authCtx.probeQuotaScope,
+    writerGeneration: authCtx.writerGeneration,
+    // Quarantine retains its stored-credential fence. main-pool has no stored-record
+    // generation; its separate dispatch proof above fences only failure-window samples.
+    ...(authCtx.kind === "pool" ? { credentialGeneration: authCtx.generation } : {}),
+  });
 }
 
 
@@ -144,9 +145,10 @@ export function recordCodexPreOutputRefusalOutcome(
   modelId: string,
 ): void {
   if (!isCodexWsPreOutputRefusal(response) || codexWsPreOutputRefusalOutcomeRecorded(response)) return;
-  if (!usesCodexForwardPoolAuth(authCtx, provider)) return;
+  if (!usesCodexForwardPoolAuth(authCtx, provider) || wasPermanentAccountRefusal(response)) return;
   noteCodexWsPreOutputRefusalOutcome(response);
   recordCodexUpstreamOutcome(config, authCtx.accountId, response.status, {
+    ...codexFailureWindowOutcomeMeta(authCtx),
     threadId: authCtx.affinityKey,
     fixedAccount: authCtx.fixedAccount,
     modelId,
@@ -675,6 +677,7 @@ export async function retryCodexPoolOnAlternateAccount(
     if (codexWsPreOutputRefusalOutcomeRecorded(firstResponse)) return;
     noteCodexWsPreOutputRefusalOutcome(firstResponse);
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+      ...codexFailureWindowOutcomeMeta(firstAuthCtx),
       threadId: firstAuthCtx.affinityKey,
       fixedAccount: firstAuthCtx.fixedAccount,
       modelId: route.modelId,
@@ -692,6 +695,7 @@ export async function retryCodexPoolOnAlternateAccount(
     if (outcomeStatus === firstResponse.status || (outcomeStatus !== 429 && outcomeStatus !== 402)) return;
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...codexQuotaOutcomeMeta(firstResponse),
+      ...codexFailureWindowOutcomeMeta(firstAuthCtx),
       threadId: firstAuthCtx.affinityKey,
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
@@ -855,8 +859,13 @@ export async function retryCodexPoolOnAlternateAccount(
     options.deferCodexResetDerivedCooldown,
   );
   const recordFirstOutcome = (): void => {
+    if (wasPermanentAccountRefusal(firstResponse)) {
+      noteCodexWsPreOutputRefusalOutcome(firstResponse);
+      return;
+    }
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...quotaMeta,
+      ...codexFailureWindowOutcomeMeta(firstAuthCtx),
       threadId: firstAuthCtx.affinityKey,
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
@@ -909,6 +918,7 @@ export async function retryCodexPoolOnAlternateAccount(
     if (binding) {
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
+        headers: retryHeaders,
         parsed,
         preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(retryProvider)
           && parsed._nativeReasoningRetention?.accountSwitch === true,
@@ -1032,6 +1042,7 @@ export async function retryCodexPoolOnAlternateAccount(
             providerName: route.providerName,
             modelId: route.modelId,
             preOutputRefusalHold: args.preOutputRefusalHold,
+            accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: retryAuthCtx }, headers),
             onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),
             beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
               ? createCodexAuthDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1143,6 +1154,7 @@ export function codexForwardTerminalOutcomeRecorder(
   logCtx?: RequestLogContext,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
   if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
+  const windowMeta = codexFailureWindowOutcomeMeta(authCtx);
   return (status, httpStatusOverride) => {
     const quotaStatus = [httpStatusOverride, logCtx?.terminalHttpStatus]
       .find(value => value === 429 || value === 402);
@@ -1151,6 +1163,7 @@ export function codexForwardTerminalOutcomeRecorder(
       // request. Don't penalize account health; record success to clear any
       // prior soft-avoid so a healthy account isn't stuck avoided.
       recordCodexUpstreamOutcome(config, authCtx.accountId, 200, {
+        ...windowMeta,
         threadId: authCtx.affinityKey,
         fixedAccount: authCtx.fixedAccount,
         modelId,
@@ -1174,6 +1187,7 @@ export function codexForwardTerminalOutcomeRecorder(
       ? 200
       : (quotaStatus ?? httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
     recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
+      ...windowMeta,
       threadId: authCtx.affinityKey,
       fixedAccount: authCtx.fixedAccount,
       modelId,

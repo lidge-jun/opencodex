@@ -22,7 +22,7 @@ import { NAV_GROUPS, groupForPage, visibleGroupPages } from "./nav-groups";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
-import { bootstrapApiSession, configureApiTargets, hasApiSession, installApiAuthFetch, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
+import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
 import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
@@ -163,8 +163,20 @@ export default function App() {
         setSharedSessionReady(false);
       }
     };
+    // A change only ever reveals a session (Remember/Forget controls). Target discovery clears the
+    // session transiently, and dropping readiness there would cancel the requests that recover it.
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared" && hasApiSession("shared")) {
+        setSharedSessionReady(true);
+      }
+    };
     window.addEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
-    return () => window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
+    window.addEventListener(SESSION_CHANGED_EVENT, changed);
+    const proofChanged = (event: Event) => {
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared") setSharedSessionEpoch(epoch => epoch + 1);
+    };
+    window.addEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged);
+    return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged); };
   }, []);
 
   useEffect(() => {
@@ -359,8 +371,10 @@ export default function App() {
     const loggedOut = await logoutApiSession("shared");
     setSessionLoggingOut(false);
     if (loggedOut) setSharedSessionReady(false);
-    else report(t("connection.sessionLogoutFailed"), "err");
+    else report(t(hasRememberedDashboardDevice("shared") ? "connection.forgetDeviceFailed" : "connection.sessionLogoutFailed"), "err");
   };
+  const deviceForgetAvailable = hasRememberedDashboardDevice("shared");
+  const endSessionLabel = t(deviceForgetAvailable ? "connection.forgetDevice" : "connection.sessionLogout");
 
   /*
    * The brand is the control users reach for first when they want out of a deep page,
@@ -413,9 +427,9 @@ export default function App() {
         </button>
         {brand}
         <div className="mobile-topbar-actions">
-          {targets.connected && sharedSessionReady && (
+          {(targets.connected || deviceForgetAvailable) && sharedSessionReady && (
             <button type="button" className="sidebar-orb" onClick={() => { void handleSessionLogout(); }} disabled={sessionLoggingOut}
-              aria-label={t(sessionLoggingOut ? "connection.sessionLoggingOut" : "connection.sessionLogout")} title={t("connection.sessionLogout")}>
+              aria-label={sessionLoggingOut ? t("connection.sessionLoggingOut") : endSessionLabel} title={endSessionLabel}>
               <IconX />
             </button>
           )}
@@ -507,10 +521,10 @@ export default function App() {
           <div className="sidebar-action-row">
             <span className="sidebar-action-label">{t("dash.actions")}</span>
             <div className="sidebar-action-orbs">
-              {targets.connected && sharedSessionReady && (
+              {(targets.connected || deviceForgetAvailable) && sharedSessionReady && (
                 <button type="button" className="sidebar-orb" onClick={() => { void handleSessionLogout(); }} disabled={sessionLoggingOut}
-                  aria-label={t(sessionLoggingOut ? "connection.sessionLoggingOut" : "connection.sessionLogout")}
-                  title={t("connection.sessionLogout")}>
+                  aria-label={sessionLoggingOut ? t("connection.sessionLoggingOut") : endSessionLabel}
+                  title={endSessionLabel}>
                   <IconX />
                 </button>
               )}
@@ -609,7 +623,7 @@ export default function App() {
                     setSharedSessionEpoch(epoch => epoch + 1);
                   }} />
                 )}
-                {page === "dashboard" && <Dashboard apiBase={sharedBase} connected={targets.connected}
+                {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}

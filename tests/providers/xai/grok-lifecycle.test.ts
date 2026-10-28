@@ -111,15 +111,17 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("isServiceOwnershipError(err)");
     expect(stopFn).toContain("ownershipBlocked = true");
     // Ownership is one reason to skip the restore; others are an inherited obligation whose
-    // proxy could not be confirmed down (#3008) and a sibling runtime, whose shared client
-    // routing belongs to the live proxy it ran beside.
-    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
-    expect(stopFn).toContain("if (!restoreBlocked) {");
+    // proxy could not be confirmed down (#3008), a sibling runtime, whose shared client
+    // routing belongs to the live proxy it ran beside, and a connected client, whose routing,
+    // catalog and Grok config belong to its connection and are never written back on start (#7563).
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
+    expect(stopFn).toContain("if (!restoreBlocked && boundary === \"restore\") {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
-    expect(restoreFn).toContain("restoreNativeCodexAsync()");
+    expect(restoreFn).toContain("restoreNativeCodexAsync({ withWriteGuard: guard.run })");
+    expect(restoreFn).toContain("guard.run(() => stripGrokConfig())");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
-    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked) {"));
+    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked && boundary === \"restore\") {"));
   });
 
   test("graceful stop skips caller restore only when the proxy performed it", () => {
@@ -257,11 +259,15 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid)");
     expect(stopFn).not.toContain("isPendingTeardownAbandoned(read, isProcessAlive)");
     expect(stopFn.indexOf("listPendingTeardowns()")).toBeLessThan(claimAt);
-    expect(stopFn).toContain("clearPendingTeardown(nonce)");
+    expect(stopFn).toContain("clearRestoredStopReceipts(record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces)");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)"))
-      .toBeLessThan(stopFn.indexOf("clearPendingTeardown(nonce)"));
+      .toBeLessThan(stopFn.indexOf("clearRestoredStopReceipts(record,"));
     // A receipt that survives its discharge would re-trigger recovery forever.
-    expect(stopFn).toContain("if (!clearPendingTeardown(nonce)) {");
+    const receiptSource = readFileSync(repoPath("src", "cli", "stop-restore-guard.ts"), "utf8");
+    expect(receiptSource).toContain("if (!clearPendingTeardown(nonce)) {");
+    expect(receiptSource).toContain("return withConfigMutationLockSync(() => {");
+    expect(receiptSource.indexOf("const boundary = inspectStopRestoreOwnership();"))
+      .toBeLessThan(receiptSource.indexOf("clearPendingTeardown(nonce)"));
   });
 
   test("an unconfirmed inherited obligation blocks the restore, it does not merely warn", () => {
@@ -271,7 +277,7 @@ describe("Grok fence lifecycle wiring", () => {
     // attempt at this only logged a warning and then restored anyway, which is not a gate.
     expect(stopFn).toContain("await abandonedTeardownIsSafeToFinish(read.receipt.endpoint)");
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks");
-    expect(stopFn).toContain("if (!restoreBlocked) {");
+    expect(stopFn).toContain("if (!restoreBlocked && boundary === \"restore\") {");
     // The restore is reached only through that gate — no other call site may bypass it.
     const restoreCalls = stopFn.split("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)").length - 1;
     expect(restoreCalls).toBe(1);
@@ -332,10 +338,11 @@ describe("Grok fence lifecycle wiring", () => {
     const updateSource2 = readFileSync(repoPath("src", "update", "index.ts"), "utf8");
     expect(updateSource2).toContain("teardownOutstanding: pendingTeardownOutstanding()");
     const decisionSource = readFileSync(repoPath("src", "update", "stop-decision.mjs"), "utf8");
-    // The gate has exactly one exemption, and it is the child saying it kept those
-    // receipts on purpose after the Codex history preflight refused (#4718). Anything
-    // else — including a stop that merely exited 0 — still aborts the install.
-    expect(decisionSource).toContain('if (teardownOutstanding && !historyDeferred) return { proceed: false, reason: "teardown-outstanding" };');
+    // The gate has exactly two exemptions, both the child saying it kept its own receipt on
+    // purpose: after the Codex history preflight refused (#4718), and when an update hands
+    // its teardown to the proxy it restarts (#7423). Anything else — including a stop that
+    // merely exited 0 — still aborts the install.
+    expect(decisionSource).toContain('if (teardownOutstanding && !historyDeferred && !handedOver) return { proceed: false, reason: "teardown-outstanding" };');
     expect(decisionSource).toContain("const historyDeferred = status === STOP_HISTORY_DEFERRED_EXIT_CODE;");
     const receiptSource = readFileSync(repoPath("src", "config", "pending-teardown.ts"), "utf8");
     expect(receiptSource).toContain('from "./pending-teardown-names.mjs"');
@@ -441,7 +448,8 @@ describe("POST /api/stop teardown", () => {
     expect(handler).toContain("performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt })");
     const teardownSource = readFileSync(repoPath("src", "server", "stop-teardown.ts"), "utf8");
     expect(teardownSource).toContain('await import("../grok/inject")');
-    expect(teardownSource).toContain("stripGrokConfig()");
+    expect(teardownSource).toContain("grok = guard.run(() => strip())");
+    expect(teardownSource).toContain("restoreNativeCodexAsync(options)");
   });
 
   test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {

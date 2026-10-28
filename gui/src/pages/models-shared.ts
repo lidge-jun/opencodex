@@ -2,6 +2,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
+import type { ShadowCallSourceOption } from "./shadow-call-source";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -166,6 +167,23 @@ export interface ShadowCallData {
   model: string;
   /** Source models the runtime actually intercepts. Older runtimes omit it. */
   sourceModels?: string[];
+  /** Runtime-owned source inventory; older runtimes omit it. */
+  sourceModelOptions?: ShadowCallSourceOption[];
+}
+
+/**
+ * Message for a rejected shadow-call save.
+ *
+ * The endpoint returns HTTP 400 for several distinct validation failures, so the status alone
+ * cannot tell the operator what to change. The stable `code` decides the message; an older
+ * runtime or a proxy error page without one falls back to the neutral save failure instead of
+ * claiming the replacement target is wrong. A failed fetch stays a network error and never
+ * reaches this mapping.
+ */
+export function shadowCallSaveErrorKey(code: unknown): TKey {
+  if (code === "shadow_call_target_invalid") return "models.shadowCallTargetInvalid";
+  if (code === "shadow_call_source_invalid") return "models.shadowCallSourceInvalid";
+  return "models.shadowCallSaveFailed";
 }
 
 /** The global auto-review (approval reviewer) override the Models settings panel writes. */
@@ -199,12 +217,12 @@ export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
  * units: the [agents] keys (v1/base/hybrid, enabled:false) count child agents, while
  * the V2 storage counts the root agent's own slot too (total = children + 1). The
  * control always presents the logical child count, so only the V2-total case translates
- * across the root slot — the same boundary v2TotalLimitToV1ChildLimit /
- * v1ChildLimitToV2TotalLimit keep in src/codex/features.ts. A stored V2 total of 1
- * (root only) has no representable child count >= 1 and clamps to 1, matching upstream.
+ * across the root slot. A stored V2 total of 1 is root-only and displays zero
+ * children, even though new child-limit edits must be at least 1. This display
+ * conversion is independent of the backend's V2-to-V1 migration clamp.
  */
 export function threadLimitToChildCount(limit: number, v2Enabled: boolean): number {
-  return v2Enabled ? Math.max(1, limit - 1) : limit;
+  return v2Enabled ? Math.max(0, limit - 1) : limit;
 }
 
 export function childCountToThreadLimit(children: number, v2Enabled: boolean): number {

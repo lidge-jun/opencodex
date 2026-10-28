@@ -34,11 +34,12 @@ test("every Integrations row has a mark that resolves to a committed file", () =
  * client was added without a mark decision, and both look like a rendering bug
  * from the outside.
  */
-test("only Gentle Shell deliberately falls back to its own monogram", () => {
+// The two WorkBuddy editions also take the monogram until a mark is wired for each (#7665).
+test("only Gentle Shell and the WorkBuddy editions deliberately fall back to a monogram", () => {
   const monogram = Object.entries(INTEGRATION_MARKS)
     .filter(([, src]) => src === null)
     .map(([id]) => id);
-  expect(monogram).toEqual(["gentle-shell"]);
+  expect(monogram).toEqual(["gentle-shell", "workbuddy", "workbuddy-ai"]);
 });
 
 /*

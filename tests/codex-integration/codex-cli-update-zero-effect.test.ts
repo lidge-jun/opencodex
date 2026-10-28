@@ -1,11 +1,11 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { COLD_SPAWN_BUDGET_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -15,7 +15,7 @@ afterEach(() => {
 describe("Codex CLI updater zero-effect boundary", () => {
   (process.platform === "win32" && process.arch === "x64" ? test : test.skip)(
     "published Node launcher attest observes explicit files without executing targets or changing state", () => {
-      const root = mkdtempSync(join(tmpdir(), "ocx-codex-attest-zero-effect-"));
+      const root = createCodexCliTestRoot("ocx-codex-attest-zero-effect-");
       roots.push(root);
       const prefix = join(root, "explicit-prefix");
       const codexRoot = join(prefix, "node_modules", "@openai", "codex");
@@ -43,15 +43,15 @@ describe("Codex CLI updater zero-effect boundary", () => {
       }));
       const stateFiles = ["codex-shim.json", "codex-runtime.json", "config.json"].map(name => join(home, name));
       for (const path of stateFiles) writeFileSync(path, "{broken");
-      // This first Node -> Bun inspection also loads the Windows native reader cold.
-      // Dev run 38697651428 exhausted 15s; the next attest took 4.6s (previously 0.5–0.8s).
-      // Keep the real launcher and every zero-effect assertion; use the shared cold budget
-      // only here, leaving 5s for assertions/cleanup before the surrounding test deadline.
+      // Dev run 38697651428 exhausted 15s here: the launcher's bundled Bun shared the shard's
+      // transpiler cache with the differently versioned test runner, and each evicted the other's
+      // entries, so this child re-transpiled the CLI graph cold. The launcher now scopes that
+      // cache per runtime version (tests/cli/bun-transpiler-cache-scope.test.ts).
       const result = spawnSync("node", [
         repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "attest",
         "--candidate", candidate, "--npm-prefix", prefix, "--npm-cli", npmCli, "--node", node, "--json",
       ], {
-        cwd: repoRoot(), encoding: "utf8", timeout: COLD_SPAWN_BUDGET_MS - 5_000, windowsHide: true,
+        cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, windowsHide: true,
         env: {
           ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home, CODEX_CLI_PATH: selectedCandidate,
           npm_config_registry: "http://127.0.0.1:9", npm_config_offline: "true",
@@ -70,13 +70,13 @@ describe("Codex CLI updater zero-effect boundary", () => {
       expect(result.stdout).not.toContain("ocx-codex-attest-zero-effect-");
       for (const path of stateFiles) expect(readFileSync(path, "utf8")).toBe("{broken");
       for (const marker of [candidateMarker, npmMarker, selectedMarker]) expect(existsSync(marker)).toBe(false);
-    }, COLD_SPAWN_BUDGET_MS,
+    }, SPAWN_BUDGET_MS,
   );
 
   (process.platform === "win32" && process.arch === "x64" ? test : test.skip)(
     "bare attest identifies the configured candidate through the proof-bound snapshot, without explicit paths",
     () => {
-      const root = mkdtempSync(join(tmpdir(), "ocx-codex-attest-selected-"));
+      const root = createCodexCliTestRoot("ocx-codex-attest-selected-");
       roots.push(root);
       const prefix = join(root, "npm");
       const codexRoot = join(prefix, "node_modules", "@openai", "codex");
@@ -141,7 +141,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
   });
 
   test("published Node launcher check neither executes the candidate launcher nor rewrites invalid state", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-codex-check-zero-effect-"));
+    const root = createCodexCliTestRoot("ocx-codex-check-zero-effect-");
     roots.push(root);
     const launcher = join(root, process.platform === "win32" ? "codex.cmd" : "codex");
     const marker = join(root, "executed.txt");
@@ -180,7 +180,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
   });
 
   test("published Node launcher rejects malformed updater input before any repair or candidate command", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-codex-invalid-zero-effect-"));
+    const root = createCodexCliTestRoot("ocx-codex-invalid-zero-effect-");
     roots.push(root);
     const launcher = join(root, process.platform === "win32" ? "codex.cmd" : "codex");
     const marker = join(root, "executed.txt");
@@ -203,7 +203,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("codex-cli-update action must be check, attest or plan");
+    expect(result.stderr).toContain("codex-cli-update action must be check, attest, plan, apply or status");
     expect(readFileSync(statePath)).toEqual(before);
     expect(existsSync(marker)).toBe(false);
   });

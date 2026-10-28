@@ -19,9 +19,10 @@ import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../../src/types";
 
 const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
+  clientPrincipalId: "principal-batch",
   clientThreadId: "thread-batch",
   current: {
-    providerName: "opencode-free",
+    providerName: "opencode-zen",
     providerDestinationIdentity: "destination:provider",
     adapterName: "openai-chat",
     modelId: "deepseek-v4-flash-free",
@@ -31,7 +32,7 @@ const SCOPE: OcxReasoningReplayScopeRef = {
 const GLOBAL_SCOPE: OcxReasoningReplayScopeRef = { ...SCOPE, clientThreadId: "global" };
 
 function batchOutput(events: AdapterEvent[]): Record<string, unknown> {
-  return buildResponseJSON(events, "opencode-free/deepseek-v4-flash-free", {
+  return buildResponseJSON(events, "opencode-zen/deepseek-v4-flash-free", {
     replayCacheScope: SCOPE,
   });
 }
@@ -45,7 +46,7 @@ async function streamFrames(
   }
   const reader = bridgeToResponsesSSE(
     replay(events),
-    "opencode-free/deepseek-v4-flash-free",
+    "opencode-zen/deepseek-v4-flash-free",
     undefined,
     undefined,
     undefined,
@@ -85,7 +86,7 @@ describe("reasoning replay survives empty text deltas (both wire modes)", () => 
   });
 
   test("batch: an unscoped bridge never writes a global replay entry", () => {
-    buildResponseJSON(toolRoundEvents(), "opencode-free/deepseek-v4-flash-free", {});
+    buildResponseJSON(toolRoundEvents(), "opencode-zen/deepseek-v4-flash-free", {});
     expect(peekReasoningForCall("call_batch_1", GLOBAL_SCOPE)).toBeUndefined();
   });
 

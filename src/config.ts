@@ -1,3 +1,4 @@
+import { normalizeAccountAutoPauseRevisions, observeAccountAutoPauseRevisions, observeLoadedAutoPauseConfig } from "./config/account-auto-pause-revisions";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OcxConfig } from "./types";
@@ -155,14 +156,13 @@ import {
   mergeConfigDefaults,
   validateConfigCandidate,
 } from "./config/diagnostics";
-
 // replace path — never publishInitialConfigNoReplace
 import { persistConfigUnlocked, readRawConfigJson } from "./config/persist-unlocked";
-
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./config/mutation-lock";
 import { getDefaultConfig } from "./config/proxy-env";
 import { configSchema } from "./config/schema/config-schema";
 import { sanitizeOpenCodeOverridesForLoad } from "./config/opencode-wire-upgrade";
+import { projectRemovedOpenCodeFreeSnapshot } from "./config/removed-opencode-free-backup";
 import {
   hardenExistingSecret,
   normalizeApiKeyIds,
@@ -211,7 +211,7 @@ import {
  * until a valid config or a genuinely missing file is observed. A partially-
  * invalid config is merged with defaults so providers and pool accounts survive.
  */
-export function loadConfig(): OcxConfig {
+function loadConfigUnobserved(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
   hardenConfigDir();
@@ -221,8 +221,9 @@ export function loadConfig(): OcxConfig {
     return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
-    const parsed = JSON.parse(raw);
+    const bytes = readFileSync(configPath);
+    const parsed = JSON.parse(bytes.toString("utf-8").replace(/^\uFEFF/, ""));
+    projectRemovedOpenCodeFreeSnapshot(parsed, { path: configPath, bytes });
     sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeAliasesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
@@ -332,6 +333,10 @@ export function loadConfig(): OcxConfig {
   }
 }
 
+export function loadConfig(): OcxConfig {
+  return observeLoadedAutoPauseConfig(loadConfigUnobserved());
+}
+
 export type PersistedConfigInitializationOutcome = "created" | "exists" | "invalid";
 
 /** Initialize only a missing config; ordinary explicit updates still use saveConfig. */
@@ -348,11 +353,13 @@ export function initializePersistedConfigIfMissing(
       const current = observeInitialConfigState();
       if (current !== "missing") return current;
       const projected = projectCustomModelCatalogMigration(undefined, projectConfigRebaseProvenance(config));
+      normalizeAccountAutoPauseRevisions(undefined, projected);
       if (!validateConfigCandidate(projected).ok) throw new Error("Initial configuration is invalid.");
       if (!publishInitialConfigNoReplace(getConfigPath(), JSON.stringify(projected, null, 2) + "\n", io)) {
         return observeInitialConfigState() === "exists" ? "exists" : "invalid";
       }
       published = true;
+      observeAccountAutoPauseRevisions(projected);
       recordOwnedConfigPath(getConfigDir(), getConfigPath());
       bumpGenerationForCooperatingConfigWrite();
       return projected;

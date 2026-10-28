@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as filesystem from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { readDesktopLibraryText, parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
+import { readDesktopLibraryText, readDesktopLibraryBytes, MAX_DESKTOP_PROFILE_FILE_BYTES, parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
+import { StoreIO } from "../../src/claude/desktop-remote-store-io";
+import { DesktopStoreError } from "../../src/claude/desktop-remote-store-state";
 import { saveConfig, readConfigDiagnostics } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -281,3 +283,265 @@ test.skipIf(process.platform === "win32")("a regular-to-symlink replacement betw
     expect(filesystem.lstatSync(path).isSymbolicLink()).toBe(true);
   } finally { opening.mockRestore(); }
 });
+
+test("Desktop library reads accept the byte boundary and refuse a larger file", () => {
+  const path = join(fixtureHome, "bounded.json");
+  const source = "{}" + " ".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES - 2);
+  writeFileSync(path, source);
+  expect(readDesktopLibraryText(path)).toBe(source);
+  writeFileSync(path, source + " ");
+  expect(() => readDesktopLibraryText(path)).toThrow("desktop_config_too_large");
+  expect(readFileSync(path, "utf8")).toBe(source + " ");
+});
+
+test("Desktop library reads bound growth after descriptor validation", () => {
+  const path = join(fixtureHome, "growing.json");
+  writeFileSync(path, "0");
+  const read = filesystem.readSync;
+  let grew = false;
+  let consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) {
+      grew = true;
+      filesystem.appendFileSync(path, "0".repeat(65));
+    }
+    const count = read(fd, buffer, offset, length, position);
+    consumed += count;
+    return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path, 64)).toThrow("desktop_config_too_large");
+    expect(grew).toBe(true);
+    expect(consumed).toBe(65);
+  } finally { reading.mockRestore(); }
+});
+
+test("Desktop library reads refuse a path removed after descriptor validation", () => {
+  const path = join(fixtureHome, "removed-during-read.json");
+  writeFileSync(path, "{}");
+  const read = filesystem.readSync;
+  let removed = false;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    const count = read(fd, buffer, offset, length, position);
+    if (!removed) { removed = true; unlinkSync(path); }
+    return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+    expect(removed).toBe(true);
+  } finally { reading.mockRestore(); }
+});
+
+// Both the selected gateway pivot and foreign-selected residue cleanup must preflight
+// serialized metadata before creating a standard row or deleting any profile/backup.
+test.each([true, false])("oversized removal metadata preserves all files with selected gateway=%s", selectedGateway => {
+  const library = join(fixtureHome, "oversized-removal");
+  mkdirSync(library);
+  const owned = "owned-profile";
+  const foreign = "foreign-profile";
+  const metadata = {
+    appliedId: selectedGateway ? owned : foreign,
+    entries: [{ id: owned, name: "opencodex" }, { id: foreign, name: "Personal" }],
+    foreignRows: Array(500_000).fill("x"),
+  };
+  const metadataBefore = JSON.stringify(metadata);
+  expect(Buffer.byteLength(metadataBefore)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+  expect(Buffer.byteLength(JSON.stringify(metadata, null, 2) + "\n")).toBeGreaterThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+  const originals: Array<[string, string]> = [
+    ["_meta.json", metadataBefore],
+    [`${owned}.json`, JSON.stringify({
+      inferenceProvider: "gateway", inferenceCredentialKind: "static",
+      inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
+    })],
+    [`${owned}.json.bak`, '{"originalBackup":true}\n'],
+    [`${foreign}.json`, '{"foreign":true}\n'],
+  ];
+  for (const [name, content] of originals) writeFileSync(join(library, name), content);
+  const options = { env: envFor(library), appliedFingerprint: appliedFingerprint(join(library, `${owned}.json`)) };
+  expect(inspectDesktop3pConfigLibrary(options).kind).toBe(selectedGateway ? "gateway_ours" : "foreign");
+  const namesBefore = filesystem.readdirSync(library).sort();
+  const unlinked: string[] = [];
+  const result = removeDesktop3pStandardPivot({
+    ...options, unlink: path => { unlinked.push(path); unlinkSync(path); },
+  });
+  expect(result).toMatchObject({ ok: false, changed: false, kind: "write_failed", reason: "desktop_mutation_failed" });
+  expect(unlinked).toEqual([]);
+  expect(filesystem.readdirSync(library).sort()).toEqual(namesBefore);
+  for (const [name, content] of originals) expect(readFileSync(join(library, name), "utf8")).toBe(content);
+}, 20_000);
+
+test("StoreIO limits a growing read to its tighter cap plus one sentinel byte", () => {
+  const path = join(fixtureHome, "store-growing.json");
+  const maxBytes = 64;
+  const original = "{}\n";
+  const appended = " ".repeat(maxBytes + 1);
+  writeFileSync(path, original);
+  const read = filesystem.readSync;
+  let grew = false;
+  let consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) { grew = true; filesystem.appendFileSync(path, appended); }
+    const count = read(fd, buffer, offset, length, position);
+    consumed += count;
+    return count;
+  });
+  try {
+    let failure: unknown;
+    try { new StoreIO().read(path, maxBytes); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(DesktopStoreError);
+    expect(failure).toMatchObject({ reason: "unsafe" });
+    expect(grew).toBe(true);
+    expect(consumed).toBe(maxBytes + 1);
+  } finally { reading.mockRestore(); }
+  expect(readFileSync(path, "utf8")).toBe(original + appended);
+});
+
+test("bounded reader accepts an empty regular file unchanged", () => {
+  const path = join(fixtureHome, "empty.json");
+  writeFileSync(path, "");
+  expect(readDesktopLibraryBytes(path, 64)).toEqual(Buffer.alloc(0));
+  expect(readDesktopLibraryText(path)).toBe("");
+  expect(filesystem.statSync(path).size).toBe(0);
+});
+
+test("bounded reader caps growth from an empty file at limit plus one", () => {
+  const path = join(fixtureHome, "empty-growing.json");
+  writeFileSync(path, "");
+  const read = filesystem.readSync;
+  let grew = false, consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) { grew = true; filesystem.appendFileSync(path, "x".repeat(80)); }
+    const count = read(fd, buffer, offset, length, position); consumed += count; return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path, 64)).toThrow("desktop_config_too_large");
+    expect(grew).toBe(true); expect(consumed).toBe(65);
+    expect(readFileSync(path, "utf8")).toBe("x".repeat(80));
+  } finally { reading.mockRestore(); }
+});
+
+for (const timing of ["before open", "after read"] as const) {
+  // Windows refuses rename-over-open with EPERM before the intended identity recheck.
+  test.skipIf(process.platform === "win32" && timing === "after read")(`bounded reader refuses a same-byte regular inode replacement ${timing}`, () => {
+    const path = join(fixtureHome, "inode.json"), replacement = join(fixtureHome, "other-inode.json");
+    writeFileSync(path, "{}"); writeFileSync(replacement, "{}");
+    const original = filesystem.statSync(path, { bigint: true });
+    const next = filesystem.statSync(replacement, { bigint: true });
+    expect(next.ino).not.toBe(original.ino);
+    const open = filesystem.openSync, read = filesystem.readSync;
+    let changed = false;
+    const swap = () => { if (!changed) { filesystem.renameSync(replacement, path); changed = true; } };
+    const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+      if (target === path && timing === "before open") swap();
+      return open(target, flags, mode);
+    });
+    const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+      const count = read(fd, buffer, offset, length, position);
+      if (timing === "after read") swap();
+      return count;
+    });
+    try {
+      expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+      expect(changed).toBe(true); expect(filesystem.statSync(path, { bigint: true }).ino).toBe(next.ino);
+    } finally { reading.mockRestore(); opening.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("{}");
+  });
+}
+
+// Deterministic comparison coverage: inject only ctimeNs, avoiding filesystem clock granularity.
+// This does not attest a real OS ctime transition or POSIX metadata behavior on Windows.
+for (const timing of ["descriptor", "path recheck"] as const) {
+  test(`bounded reader refuses a ctime-only observation change at ${timing}`, () => {
+    const path = join(fixtureHome, "ctime.json"); writeFileSync(path, "{}");
+    const original = filesystem.lstatSync(path, { bigint: true });
+    const changed = { ...original, ctimeNs: original.ctimeNs + 1n, isFile: () => true };
+    expect(changed.dev).toBe(original.dev); expect(changed.ino).toBe(original.ino);
+    expect(changed.size).toBe(original.size);
+    const fstat = filesystem.fstatSync, lstat = filesystem.lstatSync;
+    let pathCalls = 0, injected = false;
+    const descriptor = spyOn(filesystem, "fstatSync").mockImplementation(((fd: number, options: any) => {
+      if (timing === "descriptor") { injected = true; return changed; }
+      return fstat(fd, options);
+    }) as typeof filesystem.fstatSync);
+    const observing = spyOn(filesystem, "lstatSync").mockImplementation(((target: filesystem.PathLike, options: any) => {
+      if (target === path && ++pathCalls > 1 && timing === "path recheck") { injected = true; return changed; }
+      return lstat(target, options);
+    }) as typeof filesystem.lstatSync);
+    try {
+      expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+      expect(injected).toBe(true);
+    } finally { observing.mockRestore(); descriptor.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("{}");
+    expect(filesystem.statSync(path, { bigint: true }).ino).toBe(original.ino);
+  });
+}
+
+// Windows timestamp update/share semantics are not a POSIX ctime receipt. Keep the
+// portable injected comparisons above; execute this real timestamp case on POSIX.
+// Re-applying the same atime/mtime moves ctime only when the kernel clock has ticked since the
+// last metadata change; on coarse-tick filesystems one immediate call often leaves it unchanged.
+// Repeat the identical utimes until ctime has really advanced, so the reader always faces a real
+// ctime-only transition and never a no-op that would rightly read back "{}".
+test.skipIf(process.platform === "win32")("bounded reader refuses a real ctime-only change after read on POSIX", () => {
+  const path = join(fixtureHome, "real-ctime.json"); writeFileSync(path, "{}");
+  filesystem.utimesSync(path, 1, 1);
+  const before = filesystem.statSync(path, { bigint: true }), read = filesystem.readSync;
+  let changed = false;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    const count = read(fd, buffer, offset, length, position);
+    if (!changed) {
+      const deadline = Date.now() + 5_000;
+      do filesystem.utimesSync(path, 1, 1);
+      while (filesystem.statSync(path, { bigint: true }).ctimeNs === before.ctimeNs && Date.now() < deadline);
+      changed = filesystem.statSync(path, { bigint: true }).ctimeNs !== before.ctimeNs;
+    }
+    return count;
+  });
+  let outcome: unknown;
+  try { outcome = readDesktopLibraryBytes(path); } catch (error) { outcome = error; }
+  finally { reading.mockRestore(); }
+  // Assert the precondition first: a rejection is only owed once ctime really moved.
+  expect(changed).toBe(true);
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("desktop_config_not_regular");
+  const after = filesystem.statSync(path, { bigint: true });
+  expect(after.ctimeNs).not.toBe(before.ctimeNs);
+  for (const key of ["dev", "ino", "size", "mode", "mtimeNs"] as const) expect(after[key]).toBe(before[key]);
+  expect(readFileSync(path, "utf8")).toBe("{}");
+});
+
+for (const selectedGateway of [true, false]) for (const extra of [0, 1]) {
+  test(`standard removal preflights exact output limit+${extra}, selected gateway=${selectedGateway}`, () => {
+    const library = join(fixtureHome, "boundary-removal"); mkdirSync(library);
+    const foreign = { id: "foreign", name: "Personal", extension: { tags: ["preserve"] } };
+    const owned = { id: "owned", name: "opencodex" };
+    const metadata = { appliedId: selectedGateway ? owned.id : foreign.id, entries: [owned, foreign], foreignMeta: { nested: [1, "keep"] }, pad: "" };
+    const standard = { id: "0".repeat(36), name: "opencodex-standard" };
+    const expected = selectedGateway
+      ? { ...metadata, appliedId: standard.id, entries: [...metadata.entries, standard] }
+      : { ...metadata, entries: [foreign] };
+    metadata.pad = "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + extra - Buffer.byteLength(JSON.stringify(expected, null, 2) + "\n"));
+    expected.pad = metadata.pad;
+    expect(Buffer.byteLength(JSON.stringify(expected, null, 2) + "\n")).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES + extra);
+    const before = JSON.stringify(metadata); expect(Buffer.byteLength(before)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    writeFileSync(join(library, "_meta.json"), before);
+    writeFileSync(join(library, "owned.json"), '{"inferenceProvider":"gateway","inferenceCredentialKind":"static","inferenceGatewayBaseUrl":"http://127.0.0.1:10100","inferenceGatewayApiKey":"not-a-secret"}');
+    writeFileSync(join(library, "owned.json.bak"), "backup"); writeFileSync(join(library, "foreign.json"), '{"foreign":true}\n');
+    const names = filesystem.readdirSync(library).sort(), snapshots = names.map(n => readFileSync(join(library, n), "utf8"));
+    const unlinked: string[] = [];
+    const result = removeDesktop3pStandardPivot({ env: envFor(library), unlink: path => { unlinked.push(path); unlinkSync(path); } });
+    if (extra) {
+      expect(result).toMatchObject({ ok: false, changed: false, kind: "write_failed" });
+      expect(unlinked).toEqual([]); expect(filesystem.readdirSync(library).sort()).toEqual(names);
+      expect(names.map(n => readFileSync(join(library, n), "utf8"))).toEqual(snapshots);
+    } else {
+      expect(result).toMatchObject({ ok: true, changed: true, kind: "removed" });
+      const after = JSON.parse(readFileSync(join(library, "_meta.json"), "utf8"));
+      expect(after.foreignMeta).toEqual(metadata.foreignMeta); expect(after.entries.find((e: any) => e.id === foreign.id)).toEqual(foreign);
+      expect(readFileSync(join(library, "foreign.json"), "utf8")).toBe('{"foreign":true}\n');
+      expect(existsSync(join(library, "owned.json"))).toBe(false);
+      if (selectedGateway) expect(JSON.parse(readFileSync(join(library, `${after.appliedId}.json`), "utf8"))).toEqual({});
+      else expect(after.appliedId).toBe(foreign.id);
+    }
+  }, 20_000);
+}

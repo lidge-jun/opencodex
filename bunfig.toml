@@ -16,8 +16,10 @@ root = "tests"
 #
 # That qualifier is load-bearing. Bun resolves bunfig.toml from the CURRENT WORKING
 # DIRECTORY, so `cd /tmp && bun test <repo>/tests/x.test.ts` loads no preload at all: nothing
-# is sandboxed, the guard stays disarmed, and every `getConfigDir()` in that process returns
-# the developer's real `~/.opencodex`. On 2026-09-15 such a run deleted one. A test that needs
-# a config directory pins its own OPENCODEX_HOME instead of trusting this line, and
-# `tests/ci-workflows/test-home-guard.test.ts` enforces that for the destructive case.
+# is sandboxed, and every `getConfigDir()` in that process returns the developer's real
+# `~/.opencodex`. On 2026-09-15 such a run deleted one, and in #7407 another wrote auth.json.
+# The write guard now arms itself from the test-file entry in that case (src/lib/test-home-guard.ts),
+# so such writes throw instead of landing, but a test that needs a config directory still pins its
+# own OPENCODEX_HOME instead of trusting this line, and `tests/ci-workflows/test-home-guard.test.ts`
+# enforces that for the destructive case.
 preload = ["./tests/preload.ts"]

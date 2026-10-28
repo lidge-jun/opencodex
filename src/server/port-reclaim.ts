@@ -64,9 +64,16 @@ export type ReclaimListenPortOptions = WaitForPortOptions & {
   listListenPidsFn?: (port: number) => ListenPidScan | number[];
   isAliveFn?: (pid: number) => boolean;
   verifyOcxFn?: (pid: number) => number | null;
-  killFn?: (pid: number) => void;
-  dropTcpFn?: (port: number) => number | { dropped: number; skippedIpv6: number };
+  killFn?: (pid: number, mayMutate?: () => boolean) => void;
+  dropTcpFn?: (port: number, mayMutate?: () => boolean) => number | { dropped: number; skippedIpv6: number };
   isAvailableFn?: (port: number, hostname?: string) => Promise<boolean>;
+  /**
+   * Synchronous authority gate re-checked after each availability await and
+   * immediately before every destructive action (killFn / dropTcpFn). Returning
+   * false denies the mutation and ends the reclaim: the port is reported
+   * not-freed without touching processes or TCP rows. A throwing gate denies too.
+   */
+  mayMutateFn?: () => boolean;
   sleepMs?: (ms: number) => Promise<void>;
 };
 
@@ -405,22 +412,37 @@ async function runOwnerLookup(file: string, args: string[], timeoutMs: number): 
   return stdout;
 }
 
+export type LoopbackOwnerLookupResult = {
+  kind: "match" | "mismatch" | "lookup_error" | "deadline";
+  elapsedMs: number;
+};
+
 export interface LoopbackOwnerLookupIo {
   platform?: NodeJS.Platform;
+  nowMs?: () => number;
+  scheduleDeadline?: (callback: () => void, timeoutMs: number) => () => void;
   readProc?: (path: string) => Promise<string>;
   listFds?: (path: string) => Promise<string[]>;
   readFdLink?: (path: string) => Promise<string>;
   run?: (file: string, args: string[], timeoutMs: number) => Promise<string>;
 }
 
-/** Async, bounded proof that this PID owns the IPv4 loopback LISTEN socket used by the relay. */
-export async function ownsIpv4LoopbackListener(
+/**
+ * Classify fresh IPv4 loopback LISTEN ownership within the bounded lookup deadline.
+ * Only match proves the expected PID; mismatch, inspection failure and timeout remain distinct.
+ * elapsedMs uses a monotonic clock by default, and no raw OS output is returned.
+ */
+export async function inspectIpv4LoopbackListener(
   port: number,
   expectedPid: number,
   io: LoopbackOwnerLookupIo = {},
-): Promise<boolean> {
+): Promise<LoopbackOwnerLookupResult> {
+  const now = io.nowMs ?? (() => performance.now());
+  const startedAt = now();
+  const result = (kind: LoopbackOwnerLookupResult["kind"]): LoopbackOwnerLookupResult =>
+    ({ kind, elapsedMs: Math.max(0, now() - startedAt) });
   if (!Number.isInteger(port) || port < 1 || port > 65535
-    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return false;
+    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return result("mismatch");
   const platform = io.platform ?? process.platform;
   const lookup = async (): Promise<boolean> => {
     if (platform === "linux") {
@@ -458,13 +480,40 @@ export async function ownsIpv4LoopbackListener(
     }
     return false;
   };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<false>(resolve => {
-    timer = setTimeout(() => resolve(false), OWNER_LOOKUP_TIMEOUT_MS);
+  const scheduleDeadline = io.scheduleDeadline ?? ((callback, timeoutMs) => {
+    const timer = setTimeout(callback, timeoutMs);
     timer.unref?.();
+    return () => clearTimeout(timer);
   });
-  try { return await Promise.race([lookup().catch(() => false), deadline]); }
-  finally { if (timer) clearTimeout(timer); }
+  let cancelDeadline: (() => void) | undefined;
+  const deadline = new Promise<LoopbackOwnerLookupResult["kind"]>(resolve => {
+    cancelDeadline = scheduleDeadline(() => resolve("deadline"), OWNER_LOOKUP_TIMEOUT_MS);
+  });
+  const inspected = lookup().then(
+    matches => matches ? "match" as const : "mismatch" as const,
+    error => {
+      const failure = error as {
+        killed?: boolean; signal?: string | null; code?: unknown; stdout?: unknown; stderr?: unknown;
+      } | null;
+      // lsof exits 1 with no output when no socket matches its selectors.
+      if (platform === "darwin" && failure?.code === 1 && !failure.killed
+        && failure.signal == null && failure.stdout === "" && failure.stderr === "") return "mismatch" as const;
+      // execFile's timeout kills with SIGTERM; other spawn/exit/buffer errors are lookup failures.
+      return failure?.killed === true && failure.signal === "SIGTERM" && failure.code === null
+        ? "deadline" as const : "lookup_error" as const;
+    },
+  );
+  try { return result(await Promise.race([inspected, deadline])); }
+  finally { cancelDeadline?.(); }
+}
+
+/** Boolean compatibility API: only a proven match admits the listener. */
+export async function ownsIpv4LoopbackListener(
+  port: number,
+  expectedPid: number,
+  io: LoopbackOwnerLookupIo = {},
+): Promise<boolean> {
+  return (await inspectIpv4LoopbackListener(port, expectedPid, io)).kind === "match";
 }
 
 /**
@@ -474,6 +523,8 @@ export async function ownsIpv4LoopbackListener(
  * revalidates immediately before each kill.
  * Never overrides a rejected ocx verifier result. Never drops TCP rows while a
  * rejected live or protected ocx listener owns the port, or when the scan failed.
+ * A denied `mayMutateFn` ends the wait: no kill or TCP-row drop may run under
+ * an authority that no longer holds.
  */
 export async function reclaimListenPort(
   port: number,
@@ -497,13 +548,21 @@ export async function reclaimListenPort(
   const dropTcpFn = opts.dropTcpFn ?? dropWindowsTcpRowsForLocalPort;
   const isAvailableFn = opts.isAvailableFn ?? isPortAvailable;
   const sleep = opts.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  let denied = false;
+  const mayMutate = (): boolean => {
+    try { denied ||= opts.mayMutateFn !== undefined && opts.mayMutateFn() !== true; } catch { denied = true; }
+    return !denied;
+  };
 
   const deadline = Date.now() + timeoutMs;
   let lastScan = 0;
   const killed = new Set<number>();
 
   for (;;) {
-    if (await isAvailableFn(port, hostname)) return true;
+    const available = await isAvailableFn(port, hostname);
+    // The authority may have changed while the availability probe was in flight.
+    if (!mayMutate()) return false;
+    if (available) return true;
     if (Date.now() >= deadline) return false;
 
     if (Date.now() - lastScan >= scanIntervalMs) {
@@ -544,10 +603,13 @@ export async function reclaimListenPort(
         if (!killed.has(pid)) {
           // Revalidate immediately before termination.
           if (isAliveFn(pid) && verifyOcxFn(pid) === pid && mayKillThis) {
+            if (!mayMutate()) return false;
             try {
-              killFn(pid);
+              if (opts.mayMutateFn) killFn(pid, mayMutate);
+              else killFn(pid);
               killed.add(pid);
             } catch {
+              if (denied) return false;
               // Kill failed: keep waiting and never reset this listener's TCP rows.
               protectedOcxListener = true;
             }
@@ -577,9 +639,13 @@ export async function reclaimListenPort(
       // Reset those IPv4 TCBs (and ghost LISTEN rows) so the configured port can bind again —
       // without killing the browser process. Only safe when no live foreign/protected listener remains.
       if (dropTcpRows) {
+        // Same gate as the kill path: denied authority never runs SetTcpEntry.
+        if (!mayMutate()) return false;
         try {
-          dropTcpFn(port);
+          if (opts.mayMutateFn) dropTcpFn(port, mayMutate);
+          else dropTcpFn(port);
         } catch {
+          if (denied) return false;
           /* access denied / unsupported — keep waiting */
         }
       }

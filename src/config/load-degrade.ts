@@ -7,6 +7,7 @@ import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-r
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
+import { fallbackPolicyError } from "./schema/fallback-policy";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import {
   modelPinnedEffortsConfigError,
@@ -15,6 +16,7 @@ import {
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   modelCapabilitiesConfigError,
+  providerInputModalitiesConfigError,
   sanitizeModelCapabilitiesForLoad,
   modelDisplayNamesConfigError,
 } from "./provider-validation";
@@ -142,6 +144,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   if (mainAccountHardLockFallbackError(rawParsed)) console.warn("⚠️  invalid codexMainAccountHardLockFallback ignored; the main-account hard lock still refuses while blocked");
+  if (fallbackPolicyError(rawParsed)) console.warn("⚠️  invalid fallback leaves ignored; those scopes keep today's fallback behavior");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnDegradedStreamMode(rawParsed, validated);
@@ -357,6 +360,10 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
   for (const [name, value] of Object.entries(providers)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const provider = value as Record<string, unknown>;
+    if (providerInputModalitiesConfigError(provider.inputModalities) !== null) {
+      console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed inputModalities; restricting input modalities to text`);
+      provider.inputModalities = ["text"];
+    }
     if (provider.modelCapabilities === undefined) continue;
     if (modelCapabilitiesConfigError(provider.modelCapabilities) !== null) {
       console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilities; retaining valid axes and restricting malformed input modalities to text`);

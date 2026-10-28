@@ -12,6 +12,7 @@ import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-
 export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } from "./api-key-cooldowns";
 import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import { RequestPacingQueueOverloadError } from "./request-pacing";
+import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "./routed-config";
 import { getProviderRegistryEntry } from "./registry";
@@ -493,9 +494,9 @@ export function selectProactiveApiKey(
 
   const activeEntry = pool.find(entry => entry.key === provider.apiKey);
   // A healthy committed key wins, whether the operator chose it or a previous rotation did.
-  if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
+  if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
 
-  const eligible = pool.filter(entry => !isKeyInCooldown(providerName, entry.id, now));
+  const eligible = pool.filter(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now));
   if (eligible.length === 0) return null;
 
   let chosen = eligible[0]!;
@@ -504,7 +505,7 @@ export function selectProactiveApiKey(
     const lastIndex = lastId ? pool.findIndex(entry => entry.id === lastId) : -1;
     for (let offset = 1; offset <= pool.length; offset += 1) {
       const candidate = pool[(lastIndex + offset) % pool.length]!;
-      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      if (candidate.disabled || isKeyInCooldown(providerName, candidate.id, now)) continue;
       chosen = candidate;
       break;
     }
@@ -518,11 +519,11 @@ export function selectProactiveApiKey(
   const outcome = commitProviderApiKeySelection<string | null>(config, providerName, freshProvider => {
     const freshPool = freshProvider.apiKeyPool ?? [];
     const target = freshPool.find(entry => entry.id === chosen.id);
-    if (!target) return { changed: false, value: null };
+    if (!target || target.disabled) return { changed: false, value: null };
     if (freshProvider.apiKey === target.key) return { changed: false, value: null };
     const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey);
     // Re-check under the lock: a concurrent manual selection may have landed a healthy key.
-    if (freshActive && !isKeyInCooldown(providerName, freshActive.id, now)) {
+    if (freshActive && !freshActive.disabled && !isKeyInCooldown(providerName, freshActive.id, now)) {
       return { changed: false, value: null };
     }
     freshProvider.apiKey = target.key;
@@ -564,7 +565,7 @@ export function selectProactiveApiKeyTransport(
 
 const dispatchKeyCursor = new Map<string, string>();
 function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
-  const pool = (provider.apiKeyPool ?? []).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
+  const pool = (provider.apiKeyPool ?? []).filter(entry => !entry.disabled).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
   const previous = dispatchKeyCursor.get(providerName);
   const start = pool.findIndex(entry => entry.id === previous);
   for (let offset = 1; offset <= pool.length; offset++) {
@@ -575,7 +576,7 @@ function allocateDistributedKey(providerName: string, provider: OcxProviderConfi
       entryId: entry.id, reference: entry.key, revision: provider.apiKeySelectionRevision, distributed: true,
     } };
   }
-  const next = Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000));
+  const next = pool.length ? Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000)) : now + 1000;
   throw new RequestPacingQueueOverloadError(providerName, "keys_exhausted", Math.max(1, Math.ceil((next - now) / 1000)));
 }
 
@@ -585,7 +586,7 @@ function allocateDistributedKey(providerName: string, provider: OcxProviderConfi
  * (subscription traffic such as Muse Spark) falls back to a patient same-key policy so a
  * burst 429 waits and replays instead of surfacing to the client and aborting a long
  * session; key-auth Command Code at its canonical endpoints gets the same fallback (#5180), and
- * every other provider without the knob keeps today's fail-fast behavior.
+ * canonical Mistral Chat uses a slower fallback; other destinations stay fail-fast.
  * OAuth/forward/local credentials are never replayed on the same token. The returned
  * policy is fully defaulted so callers never re-check fields.
  */
@@ -609,8 +610,15 @@ export function rateLimitRetryPolicyFor(
       respectRetryAfter: policy.respectRetryAfter ?? DEFAULT_RATE_LIMIT_RETRY.respectRetryAfter,
     };
   }
-  // No explicit knob: patient fallback for OpenCode Go and canonical Command Code only.
+  // No explicit knob: destination-specific fallbacks, never OAuth or local credentials.
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  // Mistral's token-throughput and temporary capacity refusals both use HTTP 429.
+  // Keep relays and other wire adapters opt-in, and reuse the existing send budget.
+  if (typeof provider.baseUrl === "string" && typeof provider.adapter === "string" && isCanonicalMistralChat({
+    adapter: provider.adapter, authMode: provider.authMode, baseUrl: provider.baseUrl,
+  })) {
+    return { ...DEFAULT_RATE_LIMIT_RETRY, attempts: 6, intervalMs: 10_000 };
+  }
   if (isOpenCodeGoDestination(provider)) return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
   // Command Code's Provider API rate-limits long muse-spark turns the same way (#5180): a single
   // key cannot fail over, and the Codex client does not retry a 429, so the turn aborts. The key
@@ -711,7 +719,7 @@ export function recordDistributedKeyFailure(
   const provider = config.providers[providerName];
   if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
   const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
-  if (!failed || provider.apiKeySelectionRevision !== selection.revision) return false;
+  if (!failed || failed.disabled || provider.apiKeySelectionRevision !== selection.revision) return false;
   const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
     ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
@@ -739,7 +747,7 @@ function rotateKeyAfterFailure(
   if (attemptedSelection?.distributed) {
     if (acceptsFreshProvider && !acceptsFreshProvider(provider)) return null;
     if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
-    if (!(provider.apiKeyPool ?? []).some(entry => !isKeyInCooldown(providerName, entry.id, now))) return null;
+    if (!(provider.apiKeyPool ?? []).some(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now))) return null;
     return allocateDistributedKey(providerName, provider, now);
   }
 
@@ -764,7 +772,7 @@ function rotateKeyAfterFailure(
 
     if (freshProvider.apiKey !== failedKey) {
       const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey);
-      if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) {
+      if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) {
         return {
           changed: false,
           value: { failedId: failedEntry?.id },
@@ -776,7 +784,7 @@ function rotateKeyAfterFailure(
     const candidateCount = failedEntry ? pool.length - 1 : pool.length;
     for (let offset = 1; offset <= candidateCount; offset += 1) {
       const candidate = pool[(currentIndex + offset) % pool.length]!;
-      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      if (candidate.disabled || isKeyInCooldown(providerName, candidate.id, now)) continue;
       freshProvider.apiKey = candidate.key;
       return {
         changed: true,

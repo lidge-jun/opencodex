@@ -236,7 +236,7 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 與 `--rename-from`。用 `-` 作為 `--effort` 或 `--alias` 的值可清除該欄位。`create` 與 `update` 為 `set` 的別名；`delete` 為 `remove` 的別名；且相同子指令在 `ocx route combo` 下也可用。
+`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--display-name`、`--description` 與 `--rename-from`。用 `-` 作為 `--effort`、`--alias`、`--display-name` 或 `--description` 的值可清除該欄位。`create` 與 `update` 為 `set` 的別名；`delete` 為 `remove` 的別名；且相同子指令在 `ocx route combo` 下也可用。
 
 ### 管理 API
 
@@ -275,6 +275,7 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；選擇混合能力交集及目標層級控制正規化。 |
 | `alias` | 否 | 無 | 可選的修剪後公開模型 id；使用上述別名規則。空值儲存為無別名。 |
+| `description` | 否 | 無 | 僅供 catalog 顯示的列描述，最多 128 個字元且不含控制字元。未設定時保留產生的 `Routed via opencodex → combo (combo).` 文字。 |
 
 ## 疑難排解
 
@@ -299,3 +300,7 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 一般 400 錯誤仍會終止請求，但明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，可讓 combo 在輸出開始前嘗試下一個符合條件的目標，而不記錄冷卻時間。安全政策拒絕、取消及已開始的輸出仍不可重播。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## 冷卻復原預約
+
+透過 `cooldownReprobe: { enabled: true }` 啟用的復原嘗試只屬於預約它的請求；其他請求仍受已儲存的冷卻限制。預約會在冷卻等待與 JEV 選擇期間保留。目標在等待期間重新可用時，只要其冷卻紀錄沒有變更，就仍可重試；新的冷卻紀錄會使該目標的預約失效。成功後，只清除實際回應目標未變更的冷卻紀錄；未嘗試的目標與新的失敗仍保留冷卻。供應商停用、配額、請求資格與取消檢查仍然生效。請參閱[設定與限制](/guides/combos/#retry-all-cooled-targets-opt-in)。

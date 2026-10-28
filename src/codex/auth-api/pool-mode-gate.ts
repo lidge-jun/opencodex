@@ -2,7 +2,7 @@ import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "../ac
 import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
-import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
+import { getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
 import { getAccountQuota, getMainPolicyQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota";
 import { isCodexAccountPaused } from "../account-pause";
 import { hasSpendableCodexCredits } from "../quota-types";
@@ -10,10 +10,10 @@ import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimDueCodexQuotaRecoveryProbes, settleCodexQuotaRecoveryProbe } from "../routing";
 import { readCodexTokens } from "../auth-collision";
 import { isAccountNeedsReauth } from "../account-runtime-state";
-import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
+import { getValidMainAccountToken, mainAccountTokenIsCurrent, mainAccountTokenQuotaWriter, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
 import { observeMainQuotaCredential, getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
-import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
+import { getMainAccountHardLockStatus, latestMainBlockingResetAt } from "../main-account-hard-lock";
 import type { OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -22,7 +22,7 @@ import type { AdmissionLease } from "../../lib/admission";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
 import type { PoolQuotaResult } from "./pool-quota-probe";
-import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, MAIN_CACHE_TTL } from "./main-account-probe";
+import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, prepareMainAccountInfoToken, MAIN_CACHE_TTL } from "./main-account-probe";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_CACHE_TTL, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
 import { trackBackgroundWork } from "../../lib/background-work";
@@ -78,8 +78,62 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
 
 const MAIN_CREDIT_RENEWAL_AGE_MS = 3 * 60_000;
 
+/** Traffic headers renew usage, never the independent credit observation (#7377). */
+function poolCreditRenewalDue(config: OcxConfig, accountId: string, now = Date.now()): boolean {
+  const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return false;
+  const mode = providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai);
+  // Direct may renew only explicitly bound stored accounts. Check queued work too:
+  // credit opt-in alone does not authorize reads for every saved login.
+  if (mode !== "pool" && (mode !== "direct"
+    || !Object.values(config.codexAccountNamespaces ?? {}).includes(accountId))) return false;
+  const account = configuredPoolAccount(config, accountId);
+  if (!account || !codexAccountUsesCreditsAfterLimit(config, accountId)
+    || isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
+  const quota = getAccountQuota(accountId);
+  if (codexUsageLimitResetAt(quota, account.plan, now) === undefined) return false;
+  const observedAt = quota?.credits?.observedAt;
+  if (observedAt !== undefined && Number.isFinite(observedAt)
+    && now - observedAt >= 0 && now - observedAt < MAIN_CREDIT_RENEWAL_AGE_MS) return false;
+  const attempt = poolQuotaPrimeAttemptedAt.get(accountId);
+  return !attempt || attempt.generation !== readCodexAccountRecord(accountId)?.generation
+    || now - attempt.at >= MAIN_CREDIT_RENEWAL_AGE_MS;
+}
+
 let mainHardLockRecoveryInFlight: Promise<void> | null = null;
-let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number; delay: number } | undefined;
+/** `floor` and `resetBound` apply only while a predicted reset is (or just was) holding the lock. */
+type MainRecoveryAttempt = { identity: number; credential: number; after: number; delay: number; floor?: number; resetBound?: number };
+let mainHardLockRecoveryAttempt: MainRecoveryAttempt | undefined;
+/** The identity/credential that already waited out its first hold interval. */
+let mainHardLockHoldSeen: { identity: number; credential: number } | undefined;
+const MAIN_HOLD_MIN_INTERVAL_MS = nextQuotaQueryDelay();
+
+/** The predicted reset of a blocked main, or undefined when no future reset is known. */
+function predictedMainResetHold(status: ReturnType<typeof getMainAccountHardLockStatus>): number | undefined {
+  return status.state === "blocked" && status.resetAt !== undefined && status.resetAt > Date.now()
+    ? status.resetAt : undefined;
+}
+
+/**
+ * A hold read is due at its backoff deadline, pulled in to the latest known predicted reset (even
+ * one that moved earlier or just passed) but never sooner than one base interval after the last read.
+ */
+function mainRecoveryDueAt(attempt: MainRecoveryAttempt, holdResetAt: number | undefined, config: OcxConfig): number {
+  // Once a hold elapses the status omits its reset; current evidence may still name a revised one.
+  const bound = holdResetAt ?? (attempt.resetBound === undefined ? undefined
+    : Math.min(attempt.resetBound, latestMainBlockingResetAt(config) ?? Infinity));
+  return bound === undefined ? attempt.after : Math.max(attempt.floor ?? 0, Math.min(attempt.after, bound));
+}
+
+/** First sight of a hold for this credential waits one base interval; transient retries do not re-arm it. */
+function armMainResetHold(identity: number, credential: number, holdResetAt: number): void {
+  const at = Date.now() + MAIN_HOLD_MIN_INTERVAL_MS;
+  mainHardLockHoldSeen = { identity, credential };
+  mainHardLockRecoveryAttempt = { identity, credential, delay: MAIN_HOLD_MIN_INTERVAL_MS, after: at, floor: at, resetBound: holdResetAt };
+}
+
+const mainHoldSeenFor = (identity: number, credential: number): boolean =>
+  mainHardLockHoldSeen?.identity === identity && mainHardLockHoldSeen.credential === credential;
 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
@@ -98,10 +152,14 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         || (observedAt !== undefined && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS));
   };
   const status = getMainAccountHardLockStatus(config);
+  if (status.state !== "blocked") mainHardLockHoldSeen = undefined;
   if (status.state !== "blocked" && !creditRecoveryNeeded()) { mainHardLockRecoveryAttempt = undefined; return; }
   if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
-  // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted.
-  if (status.state === "blocked" && status.resetAt !== undefined && status.resetAt > Date.now()) return;
+  // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted. The
+  // hold is rechecked on the capped WHAM schedule so an early reset redeemed elsewhere is
+  // learned from metadata (#7312); a paused main receives no hold rechecks.
+  const holdResetAt = predictedMainResetHold(status);
+  if (holdResetAt !== undefined && isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)) return;
   // Reconcile the owned physical credential before skipping work for an older one.
   reconcileMainCodexAccountRuntimeState();
   const physical = readCodexTokens();
@@ -109,9 +167,14 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   const identity = captureMainAccountIdentityGeneration();
   const credential = getMainQuotaCredentialGeneration();
   const previous = mainHardLockRecoveryAttempt;
+  if (holdResetAt !== undefined && !mainHoldSeenFor(identity, credential)) {
+    armMainResetHold(identity, credential, holdResetAt);
+    return;
+  }
+  const sameAttempt = previous?.identity === identity && previous.credential === credential;
+  if (sameAttempt && holdResetAt !== undefined) previous.resetBound = holdResetAt;
   const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
-  if ((previous?.identity === identity && previous.credential === credential
-    && previous.after > Date.now()) || queryAfter > Date.now()) return;
+  if ((sameAttempt && mainRecoveryDueAt(previous, holdResetAt, config) > Date.now()) || queryAfter > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -120,26 +183,33 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
     const identityGeneration = captureMainAccountIdentityGeneration();
     const passive = getMainAccountHardLockStatus(config).state !== "blocked";
+    let prepared: Awaited<ReturnType<typeof getValidMainAccountToken>>;
     try {
       // Refresh can require an exclusive credential claim: never hold WHAM's shared
       // claim while obtaining a valid token. The runtime lease spans both operations.
-      const prepared = await getValidMainAccountToken({ preserveReauth: true });
+      prepared = await getValidMainAccountToken({ preserveReauth: true });
       if (!prepared) return;
-      observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
+      if (mainAccountTokenQuotaWriter(prepared)) {
+        if (!mainAccountTokenIsCurrent(prepared)) return;
+      } else observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
     } catch {
       // Native refresh retains its own grant-scoped refusal; global quarantine would outlive it.
       return;
     }
-    const currentStatus = getMainAccountHardLockStatus(config);
+    const currentHold = predictedMainResetHold(getMainAccountHardLockStatus(config));
     if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
       || !isMainAccountIdentityGenerationLive(identityGeneration)
       || (passive && !creditRecoveryNeeded())
-      || (currentStatus.state === "blocked" && currentStatus.resetAt !== undefined
-        && currentStatus.resetAt > Date.now())) return;
+      || (currentHold !== undefined && isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID))) return;
     const credential = getMainQuotaCredentialGeneration();
+    // A hold that appeared during preparation is first seen now and waits its base interval.
+    if (currentHold !== undefined && !mainHoldSeenFor(identityGeneration, credential)) {
+      armMainResetHold(identityGeneration, credential, currentHold);
+      return;
+    }
     // Reconcile the physical bearer before consulting the previous credential's delay.
     if (previous?.identity === identityGeneration && previous.credential === credential
-      && previous.after > Date.now()) return;
+      && mainRecoveryDueAt(previous, currentHold, config) > Date.now()) return;
     const currentQueryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
     if (currentQueryAfter > Date.now()) {
       mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,
@@ -147,7 +217,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         after: currentQueryAfter };
       return;
     }
-    const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config, { passive });
+    const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config, { passive, preparedToken: prepared });
     // Never charge a replacement credential for a late result from its predecessor.
     if (isMainAccountIdentityGenerationLive(identityGeneration)
       && credential === getMainQuotaCredentialGeneration()) {
@@ -162,8 +232,10 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         if (transientAuth) mainHardLockRecoveryAttempt = undefined;
         else {
           const delay = nextQuotaQueryDelay(previousDelay || undefined);
+          const hold = predictedMainResetHold(getMainAccountHardLockStatus(config));
           mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked" || creditRecoveryNeeded()
-            ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
+            ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter),
+              ...(hold !== undefined ? { floor: Date.now() + MAIN_HOLD_MIN_INTERVAL_MS, resetBound: hold } : {}) }
             : undefined;
         }
       } else if (queryAfter > Date.now()) {
@@ -186,6 +258,7 @@ export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): voi
     afterTick: () => {
       void runCodexCooldownRecoveryProbes(config);
       void runMainAccountHardLockRecovery(config);
+      void primeCodexPoolQuotas(config, "credit-renewal");
     },
   });
 }
@@ -250,7 +323,9 @@ export async function primeCodexPoolQuotas(
     !openai
     || openai.disabled === true
     || !isCanonicalOpenAiForwardProvider(openai)
-    || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
+    || (providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
+      && !(reason === "credit-renewal"
+        && providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) === "direct"))
   ) return;
   if (primeInFlight) return primeInFlight;
   // Count attempted passes, including failed reads; incoming traffic must not flood WHAM.
@@ -265,6 +340,7 @@ export async function primeCodexPoolQuotas(
   primeInFlight = trackBackgroundWork(`codex-pool-quota-prime:${reason}`, (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
+      if (reason === "credit-renewal") return poolCreditRenewalDue(runtimeConfig, a.id);
       const q = getAccountQuota(a.id);
       const observationStale = reason === "priority-failback" && q
         && !codexQuotaHasFreshUsage(q, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
@@ -278,26 +354,34 @@ export async function primeCodexPoolQuotas(
       if (lastAttempt.generation !== readCodexAccountRecord(a.id)?.generation) return true;
       return Date.now() - lastAttempt.at >= POOL_CACHE_TTL;
     });
+    if (reason === "credit-renewal" && stale.length === 0) return;
     const primeMain = async () => {
+      // Main renewal owns its physical-identity claims and passive probe separately.
+      if (reason === "credit-renewal") return;
       const mainLease = tryAcquireNativeMainPrimeLease();
       if (!mainLease) return;
       try {
         try {
+          // The Codex RPC owns an exclusive claim; finish it before WHAM's shared claim.
+          const preparedToken = await prepareMainAccountInfoToken();
           await withNativeMainCredentialClaim(async () => {
             // Keep one local owner and one cross-process reader from physical
             // identity reconciliation through WHAM and all quota publication.
-            (options.reconcileMainAccount ?? reconcileMainCodexAccountRuntimeState)();
+            if (preparedToken) {
+              if (!mainAccountTokenIsCurrent(preparedToken)) return;
+            } else (options.reconcileMainAccount ?? reconcileMainCodexAccountRuntimeState)();
             const quota = getAccountQuota(MAIN_CODEX_ACCOUNT_ID);
             const observationStale = reason === "priority-failback" && quota
               && !codexQuotaHasFreshUsage(quota, getMainAccountPlan(), Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
             if (quota && (reason !== "priority-failback"
               || (!observationStale && Date.now() - quota.updatedAt < MAIN_CACHE_TTL))) return;
-            if (!(options.readMainTokens ?? readCodexTokens)()) return;
+            if (!(options.readMainTokens ?? readCodexTokens)()
+              && !(preparedToken && mainAccountTokenIsCurrent(preparedToken))) return;
             const bypassCachedQuota = !!observationStale;
             if (options.fetchMainInfo) await options.fetchMainInfo(bypassCachedQuota);
             // Cache bypass is passive observation, never an explicit reauthentication recovery.
             else await fetchMainAccountInfoAttempt(bypassCachedQuota, 1, mainLease, true,
-              false, false, config);
+              false, false, config, { preparedToken });
           });
         } catch (error) {
           if (!isNativeMainClaimUnavailable(error)) throw error;
@@ -311,12 +395,17 @@ export async function primeCodexPoolQuotas(
         primeMain(),
         mapWithConcurrency(stale, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
           if (!getCodexAccountCredential(a.id)) return;
+          if (reason === "credit-renewal" && !poolCreditRenewalDue(getRuntimeConfig(config), a.id)) return;
           let result: PoolQuotaResult;
           try {
             const quota = getAccountQuota(a.id);
-            const bypassCachedQuota = reason === "priority-failback" && quota !== null
-              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
-            result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime);
+            const bypassCachedQuota = reason === "credit-renewal" || (reason === "priority-failback" && quota !== null
+              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS));
+            result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime,
+              false, undefined, undefined, false, reason === "credit-renewal"
+                ? generation => isCodexAccountGenerationLive(a.id, generation)
+                  && poolCreditRenewalDue(getRuntimeConfig(config), a.id)
+                : undefined);
           } catch (error) {
             // Local quota-flight saturation proves no WHAM request existed for this account.
             // Consume it per item so sibling workers remain inside the shared prime lifetime.

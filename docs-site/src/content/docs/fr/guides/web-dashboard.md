@@ -13,9 +13,11 @@ catalogue, les services auxiliaires, les réglages des sous-agents et le trafic 
 ocx gui
 ```
 
-Cette commande ouvre `http://localhost:<port>` dans votre navigateur — ou
-`http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre d'abord automatiquement le
-proxy si nécessaire. En développement, vous pouvez lancer séparément le serveur de développement de
+Cette commande ouvre l’adresse du proxy actif dans votre navigateur : `http://127.0.0.1:<port>` par défaut,
+ou `http://[::1]:<port>` pour une liaison à l’adresse de bouclage IPv6 littérale `::1`. Ces adresses conservent
+l’origine configurée nécessaire à l’appairage local du navigateur. Lorsque l’ingress de gestion du hub est activé,
+elle ouvre `http://127.0.0.1:<port de gestion>`. Le proxy démarre d’abord automatiquement si nécessaire.
+En développement, vous pouvez lancer séparément le serveur de développement de
 l'interface contre un proxy déjà actif :
 
 ```bash
@@ -36,6 +38,12 @@ ce qui permet au gestionnaire de mots de passe du navigateur de proposer son enr
 remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en mémoire et ne l'écrit ni
 dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
 gestionnaire de mots de passe.
+
+**Mémoriser cet appareil** est désactivé par défaut. Sur un tableau de bord HTTPS direct (ou en boucle locale), le serveur échange le jeton administrateur contre un cookie d’appareil HttpOnly, SameSite=Strict et une preuve distincte stockée dans le localStorage de ce site. Le cookie est Secure en HTTPS et limité à l’hôte. Ni le cookie ni la preuve ne sont le jeton administrateur, et aucun ne fonctionne seul. Les cookies sont partagés entre les ports d’un même nom d’hôte ; la preuve, limitée à l’origine, lie l’appareil mémorisé à l’origine de ce tableau de bord. Préférez tout de même un nom d’hôte dédié. Le jeton administrateur n’est jamais écrit dans localStorage ou sessionStorage. Si le stockage du navigateur est indisponible ou ne peut enregistrer la preuve, la mémorisation est signalée comme indisponible.
+
+Le fichier privé dashboard-sessions.json conserve les empreintes du cookie, de la preuve, du jeton administrateur et de l’identité du navigateur, l’origine du serveur et une expiration fixe de 30 jours. La relance de l’application Safari reprend une session courte tant que cet appareil reste autorisé. Les sessions mémorisées ne peuvent pas approuver les actions de consentement : étoile GitHub, consommation de crédits de réinitialisation, modification des couches de prompt, connexion Meta Muse, changements de compatibilité du bureau ou validation des quotas. Utilisez une nouvelle session locale ou appairée pour ces actions. Les tableaux de bord relayés, inter-origines ou HTTP distant ne prennent pas en charge la mémorisation. L’expiration, un changement d’identité du navigateur ou la rotation du jeton suivie d’un redémarrage imposent une nouvelle connexion.
+
+Une action **Oublier cet appareil** réussie, dans la barre latérale ou les actions mobiles, ainsi que la déconnexion réussie, révoque immédiatement l’enregistrement et toutes ses sessions et supprime la preuve du navigateur. Un échec de déconnexion conserve la preuve pour réessayer. Le serveur synchronise le contenu avant de publier le changement ; la persistance de l’entrée de répertoire après un plantage est assurée au mieux. Les anciennes clés de jeton mémorisé sont supprimées sans lecture ni migration. Réservez cette option aux appareils de confiance ; elle ne rétablit pas l’AutoFill de Safari.
 
 ## Barre de résumé des quotas
 

@@ -1,3 +1,5 @@
+import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
+import { normalizeJevSessionPin } from "../combos/jev-session-pin-config";
 import { parseComboTargets } from "./combo-input";
 import { printCatalogResult } from "./catalog-command-result";
 
@@ -7,7 +9,7 @@ const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
 };
-const STRINGS = new Set(["alias", "displayName", "decisionProvider", "decisionModel"]);
+const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);
 const RANGES: Readonly<Record<string, readonly [number, number]>> = {
   stickyLimit: [1, 100], cooldownMs: [1, 600_000], waitForCooldownMs: [0, 600_000],
   decisionTimeoutMs: [1_000, 120_000],
@@ -33,7 +35,24 @@ function publicCombo(value: unknown): Record<string, unknown> {
     } else if (Object.hasOwn(RANGES, key)) {
       const [min, max] = RANGES[key]!;
       if (typeof child !== "number" || !Number.isSafeInteger(child) || child < min || child > max) invalid();
-    } else if (key === "nativeAlias" || key === "allowMeteredTargets") {
+    } else if (key === "decisionQuotaTiers") {
+      const tiers = normalizeJevQuotaTiers(child);
+      if (!tiers) invalid();
+      result[key] = tiers;
+      continue;
+    } else if (key === "cooldownReprobe") {
+      if (!record(child) || typeof child.enabled !== "boolean"
+        || Object.keys(child).some(field => field !== "enabled" && field !== "intervalMs")) invalid();
+      if (child.intervalMs !== undefined && (typeof child.intervalMs !== "number"
+        || !Number.isSafeInteger(child.intervalMs) || child.intervalMs < 1000 || child.intervalMs > 86_400_000)) invalid();
+      result[key] = { enabled: child.enabled, ...(child.intervalMs !== undefined ? { intervalMs: child.intervalMs } : {}) };
+      continue;
+    } else if (key === "sessionPin") {
+      const pin = normalizeJevSessionPin(child);
+      if (!pin) invalid();
+      result[key] = pin;
+      continue;
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
@@ -12,12 +13,15 @@ import {
   backupInvalidConfig,
   hardenConfigDir,
   hardenExistingSecret,
+  loadConfig,
   withConfigMutationLockSync,
 } from "../config";
+import { notifyCodexStoreLoaded } from "../lib/decision-quota-sink";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
+import type { CodexAccount, CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { isValidCodexAccountId } from "./account-id";
+import { codexAccountLogLabel, fallbackCodexAccountLogLabel } from "./account-label";
 import type { PoolQuotaWriter } from "./quota-types";
 import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
 
@@ -53,6 +57,25 @@ export function loadCodexAccountStore(): LegacyCodexAccountStore {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export function inspectLocalCodexCredentialSlots(raw: Record<string, unknown> | null): { count: number; sourcePaths: string[] } {
+  if (raw === null) return { count: 0, sourcePaths: [] };
+  let count = 0;
+  const sourcePaths: string[] = [];
+  for (const value of Object.values(raw)) {
+    let credential: CodexAccountCredentials | undefined;
+    if (isCredentialRecord(value)) {
+      credential = value.credential;
+      if (!credential && value.deletedAt === undefined) throw new Error("Unrecognized Codex credential record");
+    } else if (isCredential(value)) credential = value;
+    else throw new Error("Invalid Codex credential record");
+    if (credential) {
+      count += 1;
+      if (credential.sourceAuthPath) sourcePaths.push(credential.sourceAuthPath);
+    }
+  }
+  return { count, sourcePaths };
 }
 
 function isCredential(value: unknown): value is CodexAccountCredentials {
@@ -113,35 +136,85 @@ function normalizeRecord(value: CodexAccountCredentials | CodexAccountCredential
   return undefined;
 }
 
-function loadCodexAccountRecordStore(): CodexAccountStore {
+/**
+ * Observe-only read for the JEV quota activation owner: the same normalization as the loader,
+ * without hardening, invalid-file backup or slot notification. Absent or invalid stores read as empty.
+ */
+export function peekCodexAccountRecordStore(): Record<string, CodexAccountCredentialRecord> {
   const path = codexAccountsPath();
-  hardenConfigDir();
-  hardenExistingSecret(path);
   if (!existsSync(path)) return {};
+  const normalized: Record<string, CodexAccountCredentialRecord> = {};
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
-    const normalized: CodexAccountStore = {};
     for (const [id, value] of Object.entries(raw)) {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
     }
-    return normalized;
   } catch {
-    backupInvalidConfig(path);
     return {};
   }
+  return normalized;
 }
 
+/** Read the Codex account record store from disk with hardened permissions, and hand it to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
+function loadCodexAccountRecordStore(): CodexAccountStore {
+  const result = loadCodexAccountRecordStoreResult();
+  return result.status === "ok" ? result.records : {};
+}
+
+type CodexAccountRecordStoreResult = { status: "ok"; records: CodexAccountStore } | { status: "failed" };
+
+/** Retain read/parse failure separately for consumers that must preserve existing evidence. */
+function loadCodexAccountRecordStoreResult(): CodexAccountRecordStoreResult {
+  const path = codexAccountsPath();
+  hardenConfigDir();
+  hardenExistingSecret(path);
+  const normalized: CodexAccountStore = {};
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
+    if (!isObject(raw)) throw new Error("invalid Codex account store shape");
+    for (const [id, value] of Object.entries(raw)) {
+      const record = normalizeRecord(value);
+      if (record) normalized[id] = record;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      notifyCodexStoreLoaded({});
+      return { status: "ok", records: {} };
+    }
+    backupInvalidConfig(path);
+    notifyCodexStoreLoaded({});
+    return { status: "failed" };
+  }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  notifyCodexStoreLoaded(normalized);
+  return { status: "ok", records: normalized };
+}
+
+/** Atomically write the Codex account store, then hand it to the opt-in decision-quota slot so active advisory evidence tracks the persisted credentials. */
 function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  publishCredentialSync(() => atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n"));
+  notifyCodexStoreLoaded(store);
 }
 
 function persistCredentialMutation(store: CodexAccountStore): void {
   persist(store);
   advanceCodexCredentialMutationEpoch();
+}
+
+/**
+ * The durable `p<hex6>` label the dashboard and usage log show for this pool account, so a refresh
+ * failure line can be matched to the account row (#7592). The id hash is only the label of a
+ * legacy row that never received one. A config read failure must not replace the refresh error
+ * being reported, so it degrades to that same hash.
+ */
+function poolAccountLogLabel(id: string): string {
+  let account: CodexAccount | undefined;
+  try { account = loadConfig().codexAccounts?.find(row => row.id === id); } catch { account = undefined; }
+  return account ? codexAccountLogLabel(account) : fallbackCodexAccountLogLabel(id);
 }
 
 /**
@@ -373,6 +446,10 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
   return !!record?.credential && record.deletedAt == null && record.generation === generation;
 }
 
+/** Callable for existing liveness consumers; stateful consumers can distinguish unknown snapshots. */
+export type CodexAccountGenerationLiveCheck = ((id: string, generation: number) => boolean)
+  & { readonly snapshotStatus: "ok" | "failed" };
+
 /**
  * The same verdict as {@link isCodexAccountGenerationLive}, over ONE store load.
  *
@@ -382,12 +459,15 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
  * several accounts in one synchronous pass on the request path, so it opens one checker and
  * closes over the snapshot instead.
  */
-export function beginCodexAccountGenerationLiveCheck(): (id: string, generation: number) => boolean {
-  const snapshot = loadCodexAccountRecordSnapshot();
-  return (id, generation) => {
+export function beginCodexAccountGenerationLiveCheck(): CodexAccountGenerationLiveCheck {
+  let result: CodexAccountRecordStoreResult;
+  try { result = loadCodexAccountRecordStoreResult(); }
+  catch { result = { status: "failed" }; }
+  const snapshot = result.status === "ok" ? result.records : {};
+  return Object.assign((id: string, generation: number) => {
     const record = snapshot[id];
     return !!record?.credential && record.deletedAt == null && record.generation === generation;
-  };
+  }, { snapshotStatus: result.status });
 }
 
 export function saveCodexAccountCredentialIfGeneration(
@@ -1009,7 +1089,7 @@ export async function forceRefreshCodexPoolToken(
       if (isTerminalCodexPoolRefreshFailure(error) || isOperationalCodexPoolRefreshFailure(error)) {
         if (isTerminalCodexPoolRefreshFailure(error)) clearCodexPoolRefreshFailure(id);
       } else {
-        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence);
+        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence, poolAccountLogLabel);
       }
       settle({ kind: "failed", error });
     },
@@ -1317,12 +1397,15 @@ async function resolveCodexToken(
     }
     const res = await fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
         client_id: CHATGPT_CLIENT_ID,
+        grant_type: "refresh_token",
         refresh_token: lockedCred.refreshToken,
-      }).toString(),
+      }),
       signal,
     });
     if (!res.ok) {
@@ -1330,10 +1413,13 @@ async function resolveCodexToken(
         .catch(() => undefined);
       const failure = classifyChatgptRefreshFailure(res.status, body?.displaySafe ? body.text : "");
       const { reason } = failure;
-      noteChatgptRefreshFailure("pool", res.status, failure);
+      noteChatgptRefreshFailure("pool", res.status, failure, poolAccountLogLabel(id));
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
-    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+    const data = (await res.json()) as { access_token?: unknown; refresh_token?: string; expires_in?: unknown };
+    if (!data || typeof data !== "object" || typeof data.access_token !== "string" || !data.access_token.trim()) {
+      throw new Error("Codex token refresh response missing access_token");
+    }
     // Guard against a missing/non-finite/negative expires_in (malformed upstream
     // response): a NaN expiry would never compare as expired, and a negative
     // duration would stamp an already-past expiry — both block refresh semantics.

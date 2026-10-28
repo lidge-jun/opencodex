@@ -41,6 +41,7 @@ export {
 export type {
   OcxReasoningReplayIdentity,
   OcxReasoningReplayScopeRef,
+  OcxReplayedWebSearchCell,
   OcxParsedRequest,
   OcxContext,
   OcxMessage,
@@ -50,6 +51,7 @@ export type {
   OcxToolResultMessage,
   OcxTextContent,
   OcxImageContent,
+  OcxAudioContent,
   OcxDocumentContent,
   OcxContentPart,
   OcxThinkingContent,
@@ -77,6 +79,7 @@ export type {
   OcxCustomModel,
   OcxApiKeyEntry,
   OcxClientIntegrationsConfig,
+  OcxOpencodeClientExportConfig,
   OcxConfigRebaseProvenance,
   OcxHubConfig,
   OcxRemoteGuiConfig,
@@ -132,6 +135,7 @@ export type {
   TierDecision,
   OcxProviderConfig,
   ModelCapabilities,
+  ReasoningCapabilities,
 } from "./types/provider";
 
 export { PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS } from "./types/provider";

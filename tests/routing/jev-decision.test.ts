@@ -359,6 +359,68 @@ describe("JEV decision parser", () => {
     });
   });
 
+  test("accepts Vercel decisions array-format answers and array probabilities", () => {
+    const payload = {
+      answers: [
+        {
+          name: "route",
+          type: "choice",
+          value: "openai/gpt-6-astra:high",
+          probabilities: [
+            { value: "openai/gpt-6-astra:medium", probability: 0.1 },
+            { value: "openai/gpt-6-astra:high", probability: 0.7 },
+            { value: "openai/gpt-5.6-sol:low", probability: 0.2 },
+          ],
+        },
+      ],
+    };
+
+    expect(parseJevDecision(payload, candidates)).toEqual({
+      targetKey: "openai/gpt-6-astra",
+      effort: "high",
+      chosenProbability: 0.7,
+    });
+  });
+
+  test("selects the unique route answer when array answers include earlier unrelated choices", () => {
+    const payload = {
+      answers: [
+        {
+          name: "sentiment",
+          type: "choice",
+          value: "positive",
+        },
+        {
+          name: "route",
+          type: "choice",
+          value: "openai/gpt-6-astra:high",
+        },
+      ],
+    };
+
+    expect(parseJevDecision(payload, candidates)).toEqual({
+      targetKey: "openai/gpt-6-astra",
+      effort: "high",
+    });
+  });
+
+  test("rejects array answers with duplicate route choices or without a route answer", () => {
+    const duplicateRoute = {
+      answers: [
+        { name: "route", type: "choice", value: "openai/gpt-6-astra:high" },
+        { name: "route", type: "choice", value: "openai/gpt-5.6-sol:low" },
+      ],
+    };
+    expect(() => parseJevDecision(duplicateRoute, candidates)).toThrow("duplicate JEV route decision");
+
+    const unrelatedOnly = {
+      answers: [
+        { name: "survey", type: "choice", value: "positive" },
+      ],
+    };
+    expect(() => parseJevDecision(unrelatedOnly, candidates)).toThrow("missing JEV route decision");
+  });
+
   test("treats malformed confidence as absent without weakening the route choice", () => {
     expect(parseJevDecision({
       answers: { route: { choice: "openai/gpt-5.6-sol:low", confidence: 2 } },
@@ -390,6 +452,24 @@ describe("JEV decision parser", () => {
     }), candidates)).toThrow();
     expect(() => parseJevDecision(answer("openai/gpt-5.6-sol:low", complete), candidates)).toThrow();
     expect(() => parseJevDecision({ answers: null }, candidates)).toThrow();
+    expect(() => parseJevDecision({
+      answers: [{ name: "route", value: "openai/gpt-6-astra:high", probabilities: [null] }],
+    }, candidates)).toThrow();
+    expect(() => parseJevDecision({
+      answers: [{ name: "route", value: "openai/gpt-6-astra:high", probabilities: [{ probability: 0.7 }] }],
+    }, candidates)).toThrow();
+    expect(() => parseJevDecision({
+      answers: [{
+        name: "route",
+        value: "openai/gpt-6-astra:high",
+        probabilities: [
+          { value: "openai/gpt-6-astra:medium", probability: 0.1 },
+          { value: "openai/gpt-6-astra:high", probability: 0.7 },
+          { value: "openai/gpt-5.6-sol:low", probability: 0.2 },
+          { value: "openai/gpt-6-astra:high", probability: 0.7 },
+        ],
+      }],
+    }, candidates)).toThrow();
   });
 });
 
@@ -949,6 +1029,49 @@ describe("JEV configurable decision provider", () => {
     expect(Object.keys((JSON.parse(String(calls[0]!.init.body)) as {
       questions: { route: { criteria: object } };
     }).questions.route.criteria)).toHaveLength(26);
+  });
+
+  test("Decisions endpoint permits more than 26 choices up to 255", async () => {
+    const calls: Call[] = [];
+    const post = recordingPost(calls, () => Response.json({
+      answers: { route: { choice: "p/m-0:low" } },
+    }));
+    const many: JevCandidate[] = Array.from({ length: 9 }, (_, index) => ({
+      key: `p/m-${index}`,
+      provider: "p",
+      model: `m-${index}`,
+      reasoningEfforts: ["low", "medium", "high"],
+      modelProfile: `profile for m-${index}`,
+    }));
+    const manyFallback = { targetKey: many[0]!.key, effort: "low" as const };
+    const vercelConfig: OcxConfig = {
+      providers: {
+        "vercel-decider": {
+          adapter: "jev-decision",
+          baseUrl: "https://ai-gateway.vercel.sh/v1/systemone",
+          defaultModel: "tev1:4b",
+          apiKey: "fixture-key",
+        },
+      },
+    };
+    const decision = await resolveJevDecision({
+      body: { ...decisionBody, input: [{ role: "user", content: "hello" }, { type: "function_call_output", output: "ok" }] },
+      candidates: many,
+      fallback: manyFallback,
+      config: vercelConfig,
+      decisionProvider: "vercel-decider",
+      post,
+    });
+    expect(decision.gate).toBe("apply");
+    expect(decision.targetKey).toBe("p/m-0");
+    expect(decision.effort).toBe("low");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    const parsed = JSON.parse(String(calls[0]!.init.body));
+    expect(parsed.questions[0].choices).toHaveLength(27);
+    expect(parsed.input).toContain("Task: hello");
+    expect(parsed.input).toContain("Signals: tool_history");
+    expect(parsed.questions[0].choices[0].description).toContain("profile for m-0");
   });
 
   test("a self-hosted row sends only its own key and never a TypeSafe credential", async () => {

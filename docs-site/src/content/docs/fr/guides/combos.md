@@ -294,8 +294,8 @@ ocx combo remove <id> --yes
 ```
 
 `set` accepte également `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name` et `--rename-from`. Utilisez `-` comme valeur de `--effort`, `--alias` ou
-`--display-name` pour effacer ce champ. `--native-alias` exige un alias de modèle natif non qualifié actuellement
+`--display-name`, `--description` et `--rename-from`. Utilisez `-` comme valeur de `--effort`, `--alias`,
+`--display-name` ou `--description` pour effacer ce champ. `--native-alias` exige un alias de modèle natif non qualifié actuellement
 pris en charge et un nom d’affichage non vide. `create` et `update` sont des alias pour `set` ; `delete` est un alias pour
 `remove` ; et les mêmes sous-commandes sont disponibles sous `ocx route combo`.
 
@@ -341,6 +341,7 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | `alias` | Non | aucun | Identifiant de modèle public tronqué facultatif ; utilisez les règles d'alias ci-dessus. Une valeur vide est stockée sans alias. |
 | `nativeAlias` | Non | `false` | Autoriser explicitement un `alias` natif nu actuellement pris en charge à avoir la priorité sur le routage et le catalogue. Jamais déduit de l'alias. |
 | `displayName` | Non | aucun | Étiquette de catalogue délimitée en affichage uniquement. Obligatoire et non vide lorsque `nativeAlias` est vrai. |
+| `description` | Non | aucun | Description de ligne de catalogue en affichage uniquement, avec les mêmes limites que `displayName`. Sans valeur, le texte généré `Routed via opencodex → combo (combo).` est conservé. |
 
 ## Dépannage
 
@@ -373,3 +374,7 @@ gérer un refus de politique ou corriger l’origine de la demande rejetée. Les
 Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## Réservation d’une tentative de récupération
+
+Une tentative de récupération activée par `cooldownReprobe: { enabled: true }` appartient uniquement à la requête qui l’a réservée ; les autres requêtes restent soumises aux délais de refroidissement enregistrés. La réservation est conservée pendant l’attente et la sélection JEV. Une cible redevenue utilisable pendant l’attente peut être réessayée si son délai enregistré n’a pas changé. Un nouvel enregistrement annule la réservation de cette cible. Un succès ne supprime que le délai inchangé de la cible ayant répondu ; les cibles non essayées et les nouveaux échecs conservent leurs délais. La désactivation du fournisseur, les quotas, l’admissibilité de la requête et l’annulation restent vérifiés. Voir les [réglages et limites](/guides/combos/#retry-all-cooled-targets-opt-in).

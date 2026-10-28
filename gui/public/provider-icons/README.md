@@ -402,3 +402,20 @@ committing it.
   (1.75:1, inside the 2.5 lockup limit), pure geometry (`rect`/`path`), drawn in `currentColor`, so it
   is **masked**: as an image `currentColor` resolves to black and vanishes on the dark tile. The site
   favicon `https://opengateway.ai/icon.svg` was rejected: its "OG" is a `<text>` glyph.
+
+## WorkBuddy AI (2026-10-22)
+
+- `workbuddy-color.svg` — unchanged SVG from the international WorkBuddy site's
+  declared favicon (`https://www.workbuddy.ai/`):
+  `https://download.codebuddy.ai/web/workbuddy/2365138d79c29bb1cbce4644f5cbbffd2b561a5c/assets/logo.svg`.
+  The 40×40 artwork retains its green background, gradients and white mark;
+  render it as an image in either theme. Used to identify the `workbuddy-ai`
+  provider, with the same asset embedded by the native tray.
+## T3 Code (2026-10-22)
+
+- `t3code.svg` — `assets/prod/logo.svg` from `pingdotgg/t3code` (MIT, © T3 Tools Inc.), the
+  production app icon the project ships, read at commit `f054d1b8` and committed byte for byte
+  (1048 bytes, MD5 `a2254eaba3e380cbc0b0101301cb5c9f`). `viewBox="0 0 128 128"`, a black rounded
+  plate carrying a white "T3" glyph. **Not masked:** two neutral inks on an opaque plate, the
+  plated case `qoder.svg` and `omo.svg` already record, so masking would fill the tile and
+  discard the glyph. As an image it reads on both surfaces.

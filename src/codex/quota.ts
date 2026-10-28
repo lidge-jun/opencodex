@@ -1,3 +1,5 @@
+import { bindRawCodexDecisionResets, publishCodexDecisionQuota } from "../providers/quota-decision-publication";
+import { clearDecisionAccountQuotas, decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { parseCodexCredits } from "./credits";
 import { forgetMainAccountUsage, observeMainAccountUsage, type FreshWindow } from "./main-account-external-usage";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
@@ -8,7 +10,7 @@ import { isThirtyDayOnlyCodexPlan } from "./plan";
 import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
 import { observeCodexLowQuota } from "./low-quota-observer";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
-import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
+import { getObservedMainQuotaIdentityKey, mainDecisionQuotaWriterGeneration, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
@@ -23,6 +25,8 @@ const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
 /** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
 const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
 const QUOTA_PERSIST_DEBOUNCE_MS = 250;
+/** Match the reset ledger's maximum deferral under sustained quota observations. */
+const QUOTA_PERSIST_MAX_DEFERRAL_MS = 1_000;
 
 type QuotaDiskFile = {
   version: 1;
@@ -37,6 +41,7 @@ type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shor
 let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistStartedAt: number | null = null;
 
 const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
 /**
@@ -301,6 +306,9 @@ export function setAccountQuotaFromParsed(
   // writer: when capture failed before dispatch, an absent writer must fail closed instead
   // of reading as a writer-free legacy/login observation.
   poolRequest = false,
+  decisionObservationPartial = true,
+  // Advisory publication is explicit opt-in evidence: display or policy data never becomes it by default.
+  decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = null,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
@@ -315,12 +323,16 @@ export function setAccountQuotaFromParsed(
     ? historyEvidence.writer.accountId === accountId && isPoolQuotaWriterLive(historyEvidence.writer)
     : !poolRequest;
   if (historyEvidence && livePoolEvidence) {
+    publishCodexDecisionQuota(accountId, historyEvidence.writer.credentialGeneration, historyEvidence.raw, historyEvidence.observedAt, "codex", historyEvidence.source === "response-header");
     quotaHistory.append(historyEvidence.writer, { observedAt: historyEvidence.observedAt, source: historyEvidence.source,
       credentialGeneration: historyEvidence.writer.credentialGeneration, windows: historyWindows(historyEvidence.raw),
     }, updatedAt);
   }
   // Rotation shares validated main-window retirement, but never inherits policy-only
   // evidence that outlived its disk TTL. Policy has a separate, identity-checked base.
+  const mainDecisionGeneration = mainWriter && mainDecisionQuotaWriterGeneration(mainWriter);
+  if (isMain && mainDecisionGeneration !== undefined && decisionRaw)
+    publishCodexDecisionQuota(accountId, mainDecisionGeneration, decisionRaw, updatedAt, "codex-main", decisionObservationPartial);
   const displayQuota: MainPolicyQuotaObservation = isMain && mainWriter && policyQuota?.shortWindowAbsent === true
     ? { ...quota, shortWindowAbsent: true }
     : quota;
@@ -377,8 +389,11 @@ function mergeAccountQuota(
   const creditsOnly = snapshotHasCredits(quota) && !snapshotHasUsage(quota);
   // An explicit empty/invalid credits summary retracts the old balance. Partial headers
   // retain the original observation clock instead of extending its spending authority.
-  if (quota.credits !== undefined) next.credits = quota.credits;
-  else if (existing?.credits !== undefined) next.credits = existing.credits;
+  const creditSource = quota.credits !== undefined ? quota : existing;
+  if (creditSource?.credits !== undefined) next.credits = creditSource.credits;
+  if (creditSource?.credits === null && creditSource.creditObservationUnavailable === true) {
+    next.creditObservationUnavailable = true;
+  }
 
   if (creditsOnly) {
     if (existing?.weeklyPercent !== undefined) next.weeklyPercent = existing.weeklyPercent;
@@ -544,6 +559,7 @@ export function withoutRetiredCodexQuota<T extends Omit<StoredAccountQuota, "upd
   return snapshotHasUsage(next) || snapshotHasCredits(next) ? next as T : null;
 }
 
+/** Parse `x-codex-*` rate-limit headers into a quota observation, binding the raw reset values so decision evidence can keep invalid resets distinct from the display fields. */
 export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?: string }): Omit<StoredAccountQuota, "updatedAt"> | null {
   if (isRetiredCodexSparkModel(options?.modelId)) return null;
   const primaryRaw = headers.get("x-codex-primary-used-percent");
@@ -610,9 +626,15 @@ export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?
     if (tertiaryResetAt !== undefined) quota.monthlyResetAt = tertiaryResetAt;
   }
 
+  if (decisionQuotaSinkActive()) bindRawCodexDecisionResets(quota, {
+    short: primaryResetRaw,
+    weekly: primaryIsMonthly || primaryIsShort || primaryPercent === undefined ? secondaryResetRaw : primaryResetRaw,
+    monthly: primaryIsMonthly && primaryPercent !== undefined ? primaryResetRaw : tertiaryResetRaw,
+  }, Date.now());
   return hasKnownQuotaValue(quota) ? quota : null;
 }
 
+/** Apply upstream rate-limit headers for an account: publish display and policy quota and, only for a valid observation, the advisory decision evidence. */
 export function applyAccountQuotaFromUpstreamHeaders(
   accountId: string,
   headers: Headers,
@@ -629,7 +651,7 @@ export function applyAccountQuotaFromUpstreamHeaders(
     .some(name => isInvalidPolicyUsagePercent(headers.get(name)));
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota,
     options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined,
-    options?.poolResponse === true);
+    options?.poolResponse === true, true, validHistory ? quota : null);
 }
 
 export function updateAccountQuota(
@@ -661,6 +683,8 @@ export function updateAccountQuota(
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
     ...(existing?.resetCredits !== undefined ? { resetCredits: existing.resetCredits } : {}),
     ...(existing?.credits !== undefined ? { credits: existing.credits } : {}),
+    ...(existing?.credits === null && existing.creditObservationUnavailable === true
+      ? { creditObservationUnavailable: true as const } : {}),
     updatedAt: Date.now(),
   };
   assignCarriedShort(quota, existing, quota.updatedAt);
@@ -720,7 +744,10 @@ function readMainPolicyQuota(value: unknown): MainPolicyQuota | null {
   }
   if (quota.monthlyPercent !== undefined && raw.monthlyIsPrimaryWindow === true) quota.monthlyIsPrimaryWindow = true;
   // Retain the independent credit timestamp on restart; it still expires at its original deadline.
-  if (raw.credits === null) quota.credits = null;
+  if (raw.credits === null) {
+    quota.credits = null;
+    if (raw.creditObservationUnavailable === true) quota.creditObservationUnavailable = true;
+  }
   else if (raw.credits && typeof raw.credits === "object" && !Array.isArray(raw.credits)) {
     const stored = raw.credits as Record<string, unknown>;
     if (typeof stored.observedAt === "number" && Number.isFinite(stored.observedAt) && stored.observedAt >= 0) {
@@ -762,9 +789,14 @@ function hydrateAccountQuotasFromDisk(): void {
 }
 
 function schedulePersistAccountQuotas(): void {
+  const now = performance.now();
+  persistStartedAt ??= now;
+  const delay = Math.max(0, Math.min(QUOTA_PERSIST_DEBOUNCE_MS,
+    QUOTA_PERSIST_MAX_DEFERRAL_MS - (now - persistStartedAt)));
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
+    persistStartedAt = null;
     try {
       const quotas: Record<string, StoredAccountQuota> = {};
       for (const [accountId, quota] of accountQuota.entries()) {
@@ -780,7 +812,7 @@ function schedulePersistAccountQuotas(): void {
     } catch {
       // Best-effort persistence only.
     }
-  }, QUOTA_PERSIST_DEBOUNCE_MS);
+  }, delay);
 }
 
 export function getAccountQuota(accountId: string): StoredAccountQuota | null {
@@ -793,6 +825,15 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
   hydrateAccountQuotasFromDisk();
   if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return null;
   return structuredClone(mainPolicyQuota.quota);
+}
+
+/** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
+export function discardMismatchedMainQuota(): void {
+  hydrateAccountQuotasFromDisk();
+  const observedIdentity = getObservedMainQuotaIdentityKey();
+  // Untagged/malformed snapshots and a matching identity retain their existing restrictions.
+  if (observedIdentity !== undefined && mainPolicyQuota
+    && mainPolicyQuota.identityKey !== observedIdentity) clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
 }
 
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
@@ -822,7 +863,10 @@ function forgetCodexQuotaBaseline(accountId?: string): void {
     });
 }
 
+/** Clear stored quota, advisory decision evidence and history for one account, or for all accounts when no id is given. */
 export function clearAccountQuota(accountId?: string): void {
+  clearDecisionAccountQuotas("codex", accountId);
+  if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) clearDecisionAccountQuotas("codex-main");
   if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) forgetMainAccountUsage();
   if (accountId) hydrateAccountQuotasFromDisk();
   quotaHistory.clear(accountId);
@@ -842,6 +886,7 @@ export function clearAccountQuota(accountId?: string): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  persistStartedAt = null;
   try {
     const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
     if (existsSync(path)) unlinkSync(path);
@@ -948,6 +993,9 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
       };
     }
   } else if (data.rate_limit?.allowed === false || creditsAllowed === false) quota.credits = null;
+  // A missing/malformed summary retracts spending authority, but is re-observable.
+  // Explicit spending vetoes and legacy unmarked null retain conservative retry advice.
+  if (quota.credits === null && creditsAllowed !== false) quota.creditObservationUnavailable = true;
   if (!data.rate_limit) return snapshotHasCredits(quota) ? quota : null;
   const thirtyDayOnly = codexQuotaWindowForPlan(data.plan_type) === "monthly";
   const primaryWindow = data.rate_limit.primary_window;
@@ -1009,6 +1057,11 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
 
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
+  if (decisionQuotaSinkActive()) bindRawCodexDecisionResets(quota, {
+    short: primaryWindow?.reset_at,
+    weekly: primaryIsMonthly || weeklyCandidatePercent === undefined ? secondaryWindow?.reset_at : primaryWindow?.reset_at,
+    monthly: primaryIsMonthly && primaryPercent !== undefined ? primaryWindow?.reset_at : tertiaryWindow?.reset_at,
+  }, Date.now());
   return hasKnownQuotaValue(quota) || snapshotHasCredits(quota) ? quota : null;
 }
 
@@ -1074,4 +1127,14 @@ export function getAccountQuotaHistory(accountId: string, limit: number = QUOTA_
   const result = quotaHistory.read(accountId, poolQuotaHistoryIdentity(accountId), Date.now(), limit);
   return { observations: result.samples.map(({ credentialGeneration: _generation, ...sample }) => sample),
     truncated: result.truncated, retention: { maxObservations: QUOTA_HISTORY_LIMITS.perAccount, maxAgeDays: 30 } };
+}
+
+/**
+ * Where the newest stored reading for a pool account came from (a WHAM usage body or upstream
+ * response headers), or undefined when no current history exists. Read-only: unlike
+ * `getAccountQuotaHistory` it never prunes or clears a mismatched bucket.
+ */
+export function latestCodexQuotaObservationSource(accountId: string): "wham" | "response-header" | undefined {
+  hydrateAccountQuotasFromDisk();
+  return quotaHistory.peekLatestSource(accountId, poolQuotaHistoryIdentity(accountId));
 }

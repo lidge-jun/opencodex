@@ -1,4 +1,5 @@
 import { observeSignedInCodexIdentity } from "./signed-in-identity";
+import { observeMainCodexCollisionIdentity } from "./collision-identity";
 import { existsSync, readFileSync } from "node:fs";
 import {
   deleteConfigTopLevelKey,
@@ -9,16 +10,17 @@ import {
 import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
-import { readCodexTokensResult } from "./auth-collision";
+import { readMainAuth } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
-import { clearAccountQuota } from "./quota";
+import { clearAccountQuota, discardMismatchedMainQuota } from "./quota";
 import { forgetManualPreference } from "./routing/active-account";
 import { deleteAllHealthForAccount } from "./routing/health-store";
+import { forgetCodexFailureWindow } from "./routing/failure-window";
 import { clearThreadAccountMapForAccount } from "./routing/thread-affinity";
 
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
-import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "./main-account-cache";
+import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity, type MainQuotaWriter } from "./main-account-cache";
 import { extractAccountId, extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
 import { forgetCodexAccountCreditUse } from "./account-credit-use";
@@ -49,11 +51,15 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
   clearAccountNeedsReauth(accountId);
   clearAccountQuota(accountId);
   clearThreadAccountMapForAccount(accountId);
-  // Deliberately not via `./routing`: the account-delete path only needs the health rows and
-  // the manual preference gone, and importing the router here closed a cycle through
-  // routing/health-store and routing/active-account.
+  // Deliberately not via `./routing`: the account-delete path only needs the health rows
+  // and their sibling routing state gone, and importing the router barrel here closed a
+  // cycle through routing/health-store and routing/active-account. The leaf imports below
+  // carry every per-account forget that barrel helper used to perform — including the
+  // failure window, whose degrade and pin-warning state must not leak into a replacement
+  // account or a new physical login behind __main__.
   deleteAllHealthForAccount(accountId);
   forgetManualPreference(accountId);
+  forgetCodexFailureWindow(accountId);
   clearCodexPoolRefreshFailure(accountId);
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     clearMainAccountInfoCache();
@@ -67,6 +73,28 @@ function purgeMainCodexAccountRuntimeState(): void {
   invalidateCodexWebSocketsForAccount(MAIN_CODEX_ACCOUNT_ID);
 }
 
+function observeMainCodexAccountIdentity(accountId: string): boolean {
+  const previousAccountId = observedMainChatgptAccountId;
+  observedMainChatgptAccountId = accountId;
+  const changed = previousAccountId !== undefined && previousAccountId !== accountId;
+  if (changed) purgeMainCodexAccountRuntimeState();
+  observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
+  return changed;
+}
+
+/** Only the pinned-home, exclusively claimed Codex RPC may supply this credential. */
+export function observeCodexOwnedMainAccountCredential(accessToken: string): MainQuotaWriter | undefined {
+  const identity = extractAccountIdClaims(accessToken);
+  // An opaque or conflicting answer cannot retire a previously verified identity or its policy.
+  if (!identity.accountId || identity.conflict) return undefined;
+  observeMainCodexAccountIdentity(identity.accountId);
+  const tokens = { access_token: accessToken, account_id: identity.accountId };
+  observeSignedInCodexIdentity(tokens);
+  observeMainCodexCollisionIdentity(tokens);
+  return observeMainQuotaCredential(accessToken, identity.accountId);
+}
+
 /**
  * The main Codex login is stored under the stable `__main__` alias, while
  * `~/.codex/auth.json` can be replaced with credentials for another physical
@@ -74,7 +102,8 @@ function purgeMainCodexAccountRuntimeState(): void {
  * cooldown, quota, reauth, and thread affinity do not leak across accounts.
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
-  const read = readCodexTokensResult();
+  const read = readMainAuth();
+  if (read.status === "missing" || read.status === "api-key-only") observeMainCodexCollisionIdentity();
   const currentAccountId = read.status === "ok"
     ? extractAccountId(read.tokens.id_token, read.tokens.access_token) ?? (read.tokens.account_id || null)
     : null;
@@ -82,16 +111,9 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
   // A missing/malformed auth.json is an unknown identity, not a confirmed account switch. Keep the
   // prior observation and its safety state until a real account id can be read again.
   if (currentAccountId === null) return false;
-  const previousAccountId = observedMainChatgptAccountId;
-  observedMainChatgptAccountId = currentAccountId;
-  if (previousAccountId === undefined || previousAccountId === currentAccountId) {
-    observeMainQuotaIdentity(currentAccountId);
-    return false;
-  }
-
-  purgeMainCodexAccountRuntimeState();
-  observeMainQuotaIdentity(currentAccountId);
-  return true;
+  const changed = observeMainCodexAccountIdentity(currentAccountId);
+  if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
+  return changed;
 }
 
 /**
@@ -103,7 +125,8 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
 export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   // Startup observes the pinned owned path inside the exclusive claim: bound the read so a
   // replaced non-regular or oversized file cannot stall startup inside that claim.
-  const result = readCodexTokensResult(authPath, { bounded: true });
+  const result = readMainAuth(authPath);
+  if (result.status === "missing" || result.status === "api-key-only") observeMainCodexCollisionIdentity();
   if (result.status !== "ok") return false;
   const { tokens } = result;
   if (typeof tokens.access_token !== "string" || !tokens.access_token
@@ -124,6 +147,8 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
   observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
+  observeMainCodexCollisionIdentity(tokens);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }
 
@@ -136,6 +161,7 @@ export function applyConfirmedMainCodexAccountTransition(
   toAccountId: string,
 ): boolean {
   observeSignedInCodexIdentity();
+  observeMainCodexCollisionIdentity();
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
     if (toAccountId) {
       observedMainChatgptAccountId = toAccountId;
@@ -150,6 +176,7 @@ export function applyConfirmedMainCodexAccountTransition(
 }
 
 export function resetMainCodexAccountIdentityTrackingForTests(): void {
+  observeMainCodexCollisionIdentity();
   observedMainChatgptAccountId = undefined;
   observeSignedInCodexIdentity();
   clearMainAccountCredentialPresence();

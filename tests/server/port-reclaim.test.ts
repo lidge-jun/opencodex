@@ -9,6 +9,8 @@ import {
   parseListenEntriesFromSs,
   scanListenPidsForAddress,
   ownsIpv4LoopbackListener,
+  inspectIpv4LoopbackListener,
+  type LoopbackOwnerLookupIo,
   parseIpv4LoopbackListenPidsFromNetstat,
   parseProcLoopbackListenInodes,
   reclaimListenPort,
@@ -27,8 +29,14 @@ async function reclaimWithMockClock(options: ReclaimListenPortOptions): Promise<
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     return await reclaimListenPort(10100, "127.0.0.1", {
-      ...options, timeoutMs: 50, intervalMs: 10, scanIntervalMs: 10,
-      sleepMs: async () => { now += 10; },
+      ...options,
+      timeoutMs: options.timeoutMs ?? 50,
+      intervalMs: options.intervalMs ?? 10,
+      scanIntervalMs: options.scanIntervalMs ?? 10,
+      sleepMs: async ms => {
+        now += ms;
+        await options.sleepMs?.(ms);
+      },
     });
   } finally {
     clock.mockRestore();
@@ -85,8 +93,16 @@ describe("exact IPv4 loopback listener ownership", () => {
     };
     expect(await ownsIpv4LoopbackListener(25000, 42, io)).toBe(true);
     expect(paths).toEqual(["/proc/42/fd"]);
+    expect((await inspectIpv4LoopbackListener(25000, 42, io)).kind).toBe("match");
     expect(await ownsIpv4LoopbackListener(25000, 43, { ...io,
       readFdLink: async () => "socket:[44002]" })).toBe(false);
+    expect((await inspectIpv4LoopbackListener(25000, 43, { ...io,
+      readFdLink: async () => "socket:[44002]" })).kind).toBe("mismatch");
+    expect((await inspectIpv4LoopbackListener(25000, 42, { ...io,
+      readProc: async () => { throw new Error("private proc detail"); } })).kind).toBe("lookup_error");
+    expect((await inspectIpv4LoopbackListener(25000, 42, { ...io,
+      readProc: async () => tcp + "1: 0100007F:61A8 00000000:0000 0A 0 0 0 501 0 44003 1\n",
+    })).kind).toBe("mismatch");
   });
 
   test("Windows netstat ignores a foreign IPv6 listener on the same numeric port", () => {
@@ -95,6 +111,119 @@ describe("exact IPv4 loopback listener ownership", () => {
       "  TCP    [::1]:25000            [::]:0                 LISTENING       99",
     ].join("\n");
     expect(parseIpv4LoopbackListenPidsFromNetstat(rows, 25000)).toEqual([42]);
+  });
+
+  test.each(["darwin", "win32"] as const)("%s reports match, mismatch and ambiguous owners with boolean compatibility", async platform => {
+    const row = (pid: number) => platform === "darwin" ? `${pid}\n`
+      : `TCP 127.0.0.1:25000 0.0.0.0:0 LISTENING ${pid}\n`;
+    for (const [stdout, kind] of [[row(42), "match"], [row(43), "mismatch"],
+      [row(42) + row(43), "mismatch"], ["", "mismatch"]] as const) {
+      let now = 100;
+      const io: LoopbackOwnerLookupIo = { platform, nowMs: () => now,
+        run: async (_file, _args, timeoutMs) => {
+          expect(timeoutMs).toBe(2_000);
+          now += 7;
+          return stdout;
+        } };
+      expect(await inspectIpv4LoopbackListener(25000, 42, io)).toEqual({ kind, elapsedMs: 7 });
+      expect(await ownsIpv4LoopbackListener(25000, 42, io)).toBe(kind === "match");
+    }
+  });
+
+  test.each([
+    ["darwin", {}, "mismatch"],
+    ["darwin", { signal: undefined }, "mismatch"],
+    ["darwin", { killed: undefined }, "mismatch"],
+    ["win32", {}, "lookup_error"],
+    ["darwin", { killed: true }, "lookup_error"],
+    ["darwin", { signal: "SIGTERM" }, "lookup_error"],
+    ["darwin", { code: 2 }, "lookup_error"],
+    ["darwin", { code: "1" }, "lookup_error"],
+    ["darwin", { stdout: "42\n" }, "lookup_error"],
+    ["darwin", { stderr: "lsof: permission denied" }, "lookup_error"],
+    ["darwin", { stdout: "\n" }, "lookup_error"],
+    ["darwin", { stderr: "\n" }, "lookup_error"],
+    ["darwin", { stdout: undefined }, "lookup_error"],
+    ["darwin", { stderr: undefined }, "lookup_error"],
+  ] as const)("%s empty lsof exit 1 with overrides %j reports %s", async (platform, overrides, kind) => {
+    const failure = Object.assign(new Error("Command failed: lsof"), {
+      code: 1, killed: false, signal: null, stdout: "", stderr: "", ...overrides,
+    });
+    const io: LoopbackOwnerLookupIo = { platform, nowMs: () => 100,
+      run: async () => { throw failure; } };
+    expect(await inspectIpv4LoopbackListener(25000, 42, io)).toEqual({ kind, elapsedMs: 0 });
+    expect(await ownsIpv4LoopbackListener(25000, 42, io)).toBe(false);
+  });
+
+  test.each([
+    [Object.assign(new Error("private spawn detail"), { code: "ENOENT" }), "lookup_error"],
+    [{ killed: true, signal: "SIGTERM", code: null }, "deadline"],
+    [{ killed: true, signal: "SIGTERM", code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, "lookup_error"],
+    [{ killed: false, signal: "SIGTERM", code: null }, "lookup_error"],
+    [null, "lookup_error"],
+  ] as const)("rejected lookup %j returns only bounded metadata", async (failure, kind) => {
+    const io: LoopbackOwnerLookupIo = { platform: "darwin", nowMs: () => 100,
+      run: async () => { throw failure; } };
+    expect(await inspectIpv4LoopbackListener(25000, 42, io)).toEqual({ kind, elapsedMs: 0 });
+    expect(await ownsIpv4LoopbackListener(25000, 42, io)).toBe(false);
+  });
+
+  test.each(["resolve", "reject"] as const)("deadline stays final after late lookup %s", async completion => {
+    let now = 100;
+    let expire!: () => void;
+    let finish!: (stdout: string) => void;
+    let fail!: (error: Error) => void;
+    let cancelled = 0;
+    const io: LoopbackOwnerLookupIo = { platform: "darwin", nowMs: () => now,
+      run: () => new Promise<string>((resolve, reject) => { finish = resolve; fail = reject; }),
+      scheduleDeadline: (callback, timeoutMs) => {
+        expect(timeoutMs).toBe(2_000);
+        expire = callback;
+        return () => { cancelled += 1; };
+      } };
+    const pending = inspectIpv4LoopbackListener(25000, 42, io);
+    now += 2_000;
+    expire();
+    const result = await pending;
+    expect(result).toEqual({ kind: "deadline", elapsedMs: 2_000 });
+    expect(cancelled).toBe(1);
+    now += 100;
+    if (completion === "resolve") finish("42\n");
+    else fail(new Error("late private error"));
+    await Promise.resolve();
+    expect(await pending).toEqual({ kind: "deadline", elapsedMs: 2_000 });
+    expect(result).toEqual({ kind: "deadline", elapsedMs: 2_000 });
+    const booleanPending = ownsIpv4LoopbackListener(25000, 42, io);
+    expire();
+    expect(await booleanPending).toBe(false);
+    finish("42\n");
+  });
+
+  test("successful lookup cancels the deadline and retains its result", async () => {
+    let expire!: () => void;
+    let cancelled = false;
+    const pending = inspectIpv4LoopbackListener(25000, 42, { platform: "darwin", nowMs: () => 10,
+      run: async () => "42\n", scheduleDeadline: callback => {
+        expire = callback;
+        return () => { cancelled = true; };
+      } });
+    expect(await pending).toEqual({ kind: "match", elapsedMs: 0 });
+    expect(cancelled).toBe(true);
+    expire();
+    expect(await pending).toEqual({ kind: "match", elapsedMs: 0 });
+  });
+
+  test.each([[0, 42], [65536, 42], [1.5, 42], [25000, 0], [25000, NaN]])(
+    "invalid port/PID %j/%j fails closed before lookup", async (port, pid) => {
+      expect(await inspectIpv4LoopbackListener(port, pid, { nowMs: () => 1,
+        run: async () => { throw new Error("must not run"); } })).toEqual({ kind: "mismatch", elapsedMs: 0 });
+    });
+
+  test.skipIf(process.platform !== "darwin")("a closed IPv4 loopback port reports mismatch with real lsof", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
+    const port = server.port!;
+    await server.stop(true);
+    expect((await inspectIpv4LoopbackListener(port, process.pid)).kind).toBe("mismatch");
   });
 
   test.skipIf(process.platform !== "darwin")("a foreign ::1 listener does not veto the owned IPv4 socket", async () => {
@@ -757,16 +886,17 @@ describe("reclaimListenPort", () => {
 
   test("killAllOcxOnPort kills ocx listeners absent from the allowlist snapshot", async () => {
     const killed: number[] = [];
-    let holder = 9001;
+    const holderPid = process.pid === 9001 ? 9002 : 9001;
+    let holder = holderPid;
     let available = false;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
+    await expect(reclaimWithMockClock({
       timeoutMs: 200,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
       killOcxHolders: true,
       killAllOcxOnPort: true,
-      onlyKillPids: [100], // pre-update PID — respawned child is 9001
+      onlyKillPids: [100], // pre-update PID — the respawned holder is deliberately not self
       isAvailableFn: async () => available,
       listListenPidsFn: () => (holder > 0 ? [holder] : []),
       isAliveFn: pid => pid === holder,
@@ -779,7 +909,7 @@ describe("reclaimListenPort", () => {
         if (holder === 0) available = true;
       },
     })).resolves.toBe(true);
-    expect(killed).toEqual([9001]);
+    expect(killed).toEqual([holderPid]);
   });
 
   test("foreign non-ocx claimant survives reclaim without allowlist or ocx identity", async () => {
@@ -896,5 +1026,73 @@ describe("reclaimListenPort", () => {
       },
     })).resolves.toBe(true);
     expect(killed).toEqual([4242, 4242]);
+  });
+
+  test("denied authority during the availability await blocks kill and TCP-row drop", async () => {
+    let authorized = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      // The gate flips while isAvailableFn is in flight — the interleaving a
+      // service-home change has against the update job's real reclaimer.
+      isAvailableFn: async () => {
+        authorized = false;
+        return false;
+      },
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => true,
+      verifyOcxFn: pid => pid,
+      killFn: pid => {
+        killed.push(pid);
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test("a mid-wait authority denial vetoes the TCP-row drop after an authorized kill", async () => {
+    let authorized = true;
+    let alive = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      isAvailableFn: async () => false,
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => alive,
+      verifyOcxFn: pid => pid,
+      // Authority flips while the authorized kill is in flight — the very next
+      // destructive step (the TCP-row drop) must already be denied.
+      killFn: pid => {
+        killed.push(pid);
+        alive = false;
+        authorized = false;
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([4242]);
+    expect(dropped).toEqual([]);
   });
 });

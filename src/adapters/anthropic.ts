@@ -30,11 +30,17 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { CLAUDE_CLI_SDK_PACKAGE_VERSION, CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
+import { resolveThinkingEnabled } from "../clients/reasoning-controls";
+import { resolveReasoningCapabilities } from "../providers/reasoning-capabilities";
+import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
+import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -76,8 +82,12 @@ const COMPAT_TOOL_PREFIX = "cx_";
 type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
 const MAX_CACHE_BREAKPOINTS = 4;
 
-function resolveCacheControl(retention: "none" | "short" | "long" | undefined): CacheControl | undefined {
-  const r = retention ?? "short";
+/** Omitted retention follows the destination default (1h on first-party Anthropic, else 5m). */
+function resolveCacheControl(
+  retention: AnthropicCacheRetention | undefined,
+  provider: OcxProviderConfig,
+): CacheControl | undefined {
+  const r = resolveAnthropicCacheRetention(retention, provider);
   if (r === "none") return undefined;
   return r === "long" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
 }
@@ -286,11 +296,7 @@ function normalizeTtlOrdering(body: Record<string, unknown>): void {
   }
 }
 
-export function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
-  if (typeof signature !== "string" || signature.length < 16) return false;
-  if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(signature)) return false;
-  return /^[A-Za-z0-9+/_=-]+$/.test(signature);
-}
+export { isLikelyRealAnthropicThinkingSignature };
 
 /**
  * Bridge error fidelity (web-search/images loops): extract a display-safe summary from an
@@ -551,7 +557,7 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
     "Content-Type": "application/json",
     "anthropic-version": ANTHROPIC_API_VERSION,
     "Accept": stream ? "text/event-stream" : "application/json",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": `@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`,
   };
 }
 
@@ -562,18 +568,30 @@ export function applyAnthropicKeyAuth(headers: Record<string, string>, provider:
   else headers["x-api-key"] = provider.apiKey;
 }
 
+export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
+  return parsed._codexOwnThreadId?.trim()
+    || parsed._clientThreadId?.trim()
+    || (parsed.options.promptCacheKey?.trim() || undefined)
+    || incoming?.headers?.get("x-claude-code-session-id")?.trim()
+    || incoming?.headers?.get("session_id")?.trim()
+    || incoming?.headers?.get("session-id")?.trim()
+    || incoming?.headers?.get("thread-id")?.trim()
+    || undefined;
+}
+
 /**
  * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
  * Code client fingerprint. Shared by the adapter and the managed native lane.
  */
-export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string, sessionKey?: string | null): void {
   headers["Authorization"] = `Bearer ${accessToken}`;
   headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  headers["User-Agent"] = CLAUDE_CLI_USER_AGENT;
   // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
   // header set is a non-first-party signature. (cch billing-header signing is intentionally
   // out of scope — brittle and version-coupled.)
   Object.assign(headers, CLAUDE_CODE_HEADERS);
-  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken, sessionKey);
   headers["x-client-request-id"] = crypto.randomUUID();
 }
 
@@ -643,6 +661,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   // estimate from visible summaries. Invalid optional detail leaves totals intact.
   const thinking = isAnthropicRecord(usage.output_tokens_details) ? usage.output_tokens_details.thinking_tokens : undefined;
   const reasoningOutputTokens = typeof thinking === "number" && Number.isFinite(thinking) && thinking >= 0 && thinking <= output ? thinking : undefined;
+  const write1h = anthropicCacheWrite1hTokens(usage, write);
   return {
     inputTokens,
     outputTokens: output,
@@ -651,6 +670,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
       cachedInputTokens: read,
       cacheReadInputTokens: read,
       cacheCreationInputTokens: write,
+      ...(write1h !== undefined ? { cacheCreation1hInputTokens: write1h } : {}),
     } : {}),
   };
 }
@@ -1078,16 +1098,33 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // model both defaults to thinking and accepts being told not to.
       const family = claudeFamilyVersion(parsed.modelId);
       progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
-      const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
-      if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
+      const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
+      const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
+      const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
+      const thinkingEnabled = thinkingToggleWire
+        ? resolveThinkingEnabled(provider, parsed.modelId, parsed.options)
+        : undefined;
+      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId)
+        || family?.family === "haiku" || family?.family === "sonnet" || family?.family === "opus";
+      const supportsReasoningEffort = capabilities.supportsReasoningEffort === true;
+      const requestedReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
+      // Native Claude wire constraints outrank a generic toggle declaration. Decode the boolean
+      // into native effort intent, then let the family contract choose budget/adaptive/off shapes.
+      const effectiveReasoning = nativeThinkingContract && thinkingEnabled !== undefined
+        ? thinkingEnabled ? (requestedReasoning && requestedReasoning !== "none" ? requestedReasoning : "high") : "none"
+        : requestedReasoning;
+      if (!reasoningControlsUnsupported && thinkingEnabled !== undefined && !nativeThinkingContract) {
+        body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
+      }
+      if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
-      } else if (effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
+      } else if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
         // Sonnet 5.5 rejects `disabled`; `between_tools` is its lowest setting and turns off up-front
         // thinking. No effort is sent: the API default (high) is inside the range it accepts.
         body.thinking = { type: "between_tools" };
         delete body.temperature;
         delete body.top_p;
-      } else if (typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
+      } else if (!reasoningControlsUnsupported && thinkingEnabled !== false && (thinkingEnabled === undefined || supportsReasoningEffort || nativeThinkingContract) && typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
@@ -1144,7 +1181,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (progressUpdates) body.thinking = { type: "adaptive", display: "updates" };
+      if (progressUpdates && !reasoningControlsUnsupported && thinkingEnabled !== false) body.thinking = { type: "adaptive", display: "updates" };
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1208,6 +1245,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           && settledToolChoice.type !== "none") {
         body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
+      // A routed compaction summary keeps every tools/system byte derived from the caller's
+      // choice above, so only the final execution choice changes.
+      if (parsed._summaryProhibitsToolCalls && body.tools) body.tool_choice = { type: "none" };
 
       const url = resolveAnthropicMessagesUrl(provider);
       // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API
@@ -1216,14 +1256,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
       const headers = anthropicBaseRequestHeaders(parsed.stream);
-      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
-      const cc = resolveCacheControl(cacheRetention);
+      const cc = resolveCacheControl(cacheRetention, provider);
       const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
       if (automaticPromptCaching) body.cache_control = cc;
       const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;

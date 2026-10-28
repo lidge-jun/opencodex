@@ -22,6 +22,9 @@ import {
   saveCodexAccountCredential,
 } from "../../src/codex/account-store";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
+import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
+import * as sweeper from "../../src/lib/state-store-sweeper";
+import { registerCodexCooldownRecoveryProbeWorker } from "../../src/codex/auth-api/pool-mode-gate";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import {
   completeNativeMainRecovery,
@@ -140,6 +143,116 @@ describe("primeCodexPoolQuotas", () => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  });
+
+  test.each([180_000, 360_000])("credit renewal at %d ms reads WHAM despite fresh traffic headers and never touches native main (#7377)", async age => {
+    const config = makeConfig({ creditCodexAccountIds: ["p1"] });
+    seedPoolAccount(config, "p1", "plus");
+    const now = Date.now();
+    setAccountQuotaFromParsed("p1", { shortPercent: 100, shortResetAt: now + 3_600_000,
+      shortObservedAt: now, credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - age } });
+    expect(isCodexAccountHeldForCredits(config, "p1", getAccountQuota("p1"), "plus", now)).toBe(age > 300_000);
+    // A real response header updates usage, not the older credit observation.
+    updateAccountQuota("p1", 10);
+    const originalFetch = globalThis.fetch;
+    const probed: string[] = [];
+    try {
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toContain("/backend-api/wham/usage");
+        probed.push(new Headers(init?.headers).get("chatgpt-account-id")!);
+        return Response.json({ plan_type: "plus", rate_limit: {
+          primary_window: { used_percent: 100, reset_at: Math.floor((now + 3_600_000) / 1000), limit_window_seconds: 18_000 },
+        }, credits: { has_credits: true, balance: 5, overage_limit_reached: false }, spend_control: { reached: false } });
+      }) as typeof fetch;
+      let mainAccesses = 0;
+      const noMain = () => { mainAccesses++; throw new Error("credit renewal must not access native main"); };
+      await primeCodexPoolQuotas(config, "credit-renewal", { reconcileMainAccount: noMain, readMainTokens: noMain, fetchMainInfo: noMain });
+      expect(mainAccesses).toBe(0);
+      expect(probed).toEqual(["acct-p1"]);
+      expect(getAccountQuota("p1")?.credits?.observedAt).toBeGreaterThanOrEqual(now);
+      expect(isCodexAccountHeldForCredits(config, "p1", getAccountQuota("p1"), "plus", Date.now())).toBe(false);
+      let afterTick: (() => void) | undefined;
+      const registration = spyOn(sweeper, "registerStateSweepAfterTick").mockImplementation(entry => {
+        afterTick = entry.afterTick; return () => {};
+      });
+      try {
+        // Stale credit evidence is independently renewable on the existing sweep.
+        clearCodexQuotaPrimeState();
+        setAccountQuotaFromParsed("p1", { credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - age } });
+        registerCodexCooldownRecoveryProbeWorker(config);
+        expect(afterTick).toBeDefined();
+        afterTick!();
+        await primeCodexPoolQuotas(config, "credit-renewal");
+        expect(probed).toHaveLength(2);
+        await primeCodexPoolQuotas(config, "credit-renewal");
+        expect(probed).toHaveLength(2);
+      } finally { registration.mockRestore(); }
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("credit renewal excludes non-opted-in, paused, reauth, below-limit and fresh-credit accounts", async () => {
+    const config = makeConfig({ creditCodexAccountIds: ["paused", "reauth", "below", "fresh"], pausedCodexAccountIds: ["paused"] });
+    const now = Date.now();
+    for (const id of ["off", "paused", "reauth", "below", "fresh"]) {
+      seedPoolAccount(config, id, "plus");
+      setAccountQuotaFromParsed(id, { shortPercent: id === "below" ? 50 : 100, shortResetAt: now + 3_600_000,
+        shortObservedAt: now, credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - (id === "fresh" ? 0 : 180_000) } });
+    }
+    markAccountNeedsReauth("reauth");
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    try {
+      globalThis.fetch = (async () => { calls++; throw new Error("no eligible credit renewal"); }) as typeof fetch;
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(calls).toBe(0);
+      expect(isAccountNeedsReauth("reauth")).toBe(true);
+    } finally { globalThis.fetch = originalFetch; clearAccountNeedsReauth("reauth"); }
+  });
+
+  test("failed credit renewal backs off without making stale credits spendable", async () => {
+    const config = makeConfig({ creditCodexAccountIds: ["p1"] });
+    seedPoolAccount(config, "p1", "plus");
+    const now = Date.now();
+    setAccountQuotaFromParsed("p1", { shortPercent: 100, shortResetAt: now + 3_600_000,
+      shortObservedAt: now, credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - 360_000 } });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    try {
+      globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(calls).toBe(1);
+      expect(getAccountQuota("p1")?.credits?.observedAt).toBe(now - 360_000);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("credit renewal pacing is per credential generation and coalesces concurrent sweeps (#7290 intake)", async () => {
+    const config = makeConfig({ creditCodexAccountIds: ["p1"] });
+    seedPoolAccount(config, "p1", "plus");
+    const now = Date.now();
+    setAccountQuotaFromParsed("p1", { shortPercent: 100, shortResetAt: now + 3_600_000,
+      shortObservedAt: now, credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - 360_000 } });
+    const originalFetch = globalThis.fetch;
+    const tokens: string[] = [];
+    try {
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toContain("/backend-api/wham/usage");
+        expect(init?.method ?? "GET").toBe("GET");
+        tokens.push(new Headers(init?.headers).get("authorization") ?? "");
+        return new Response(null, { status: 503 });
+      }) as typeof fetch;
+      // Two sweeps racing on one generation share one metadata read.
+      await Promise.all([primeCodexPoolQuotas(config, "credit-renewal"), primeCodexPoolQuotas(config, "credit-renewal")]);
+      expect(tokens).toEqual(["Bearer access-p1"]);
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(tokens).toHaveLength(1);
+      // Replacing the credential starts a new generation, which is not bound by the old failure.
+      saveCodexAccountCredential("p1", { accessToken: "access-p1-next", refreshToken: "refresh-p1-next",
+        expiresAt: Date.now() + 5 * 60_000, chatgptAccountId: "acct-p1" });
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(tokens).toEqual(["Bearer access-p1", "Bearer access-p1-next"]);
+      expect(isCodexAccountHeldForCredits(config, "p1", getAccountQuota("p1"), "plus", Date.now())).toBe(true);
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   test("startup may observe pending account quota without inference or validation", async () => {

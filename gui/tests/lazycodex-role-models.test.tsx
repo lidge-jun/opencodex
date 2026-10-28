@@ -4,7 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { validateAgentRoleEffort } from "../../src/codex/agent-role-models";
 
-const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "crypto", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -82,7 +82,8 @@ beforeEach(() => {
           omoJsoncModel: omoWriteStatus === "written" && model !== undefined ? model : row.omoJsoncModel ?? null,
         } : row),
       };
-      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
+      // Like the server, a write without a batch starts one and the response names it.
+      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus }, batch: body.batch ?? `server-${puts.length}` });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
     if (url.endsWith("/api/injection-model")) {
@@ -535,3 +536,74 @@ test("picking a model after a failed effort-only mirror sends both, and only the
   expect(puts.map(entry => entry.body)).toEqual([{ effort: "low" }, { model: "xai/grok-4.5", effort: "low" }]);
   expect(current("librarian")).toBe("xai/grok-4.5 · low");
 });
+
+test("lists the role change history as one entry per batch and restores a batch's earlier values together", async () => {
+  rolesBody = {
+    ...(rolesBody as Record<string, unknown>),
+    history: [
+      { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+      { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+    ],
+  };
+  await mount();
+  const entries = container.querySelectorAll(".lazycodex-role-history > ul > li");
+  expect(entries.length).toBe(1);
+  expect(entries[0]!.textContent).toContain("explorer: gpt-5.5 → xai/grok-4.5 · low");
+  const restore = entries[0]!.querySelector("button") as HTMLButtonElement;
+  await act(async () => { restore.click(); });
+  await settle();
+  expect(puts.map(put => ({ role: put.url.slice(put.url.lastIndexOf("/") + 1), body: put.body }))).toEqual([
+    { role: "librarian", body: { effort: "medium", restores: "apply-all" } },
+    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: "server-1", restores: "apply-all" } },
+  ]);
+  expect(container.textContent).toContain("Restored 2 role(s)");
+});
+
+test("keeps the role table editable and says why Restore is gone when the history cannot be read", async () => {
+  rolesBody = { ...(rolesBody as Record<string, unknown>), history: [], historyUnavailable: true };
+  await mount();
+  expect(container.textContent).toContain("The change history could not be read");
+  expect(container.querySelector(".lazycodex-role-history")).toBeNull();
+  expect(saveButton("explorer")).not.toBeNull();
+});
+
+test("stops a Restore at the first failed role and warns that the batch is only partly back", async () => {
+  rolesBody = {
+    ...(rolesBody as Record<string, unknown>),
+    history: [
+      { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+      { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+    ],
+  };
+  await mount();
+  putFailure = { status: 500, body: { error: "write failed" } };
+  const restore = container.querySelector(".lazycodex-role-history > ul > li button") as HTMLButtonElement;
+  await act(async () => { restore.click(); });
+  await settle();
+  expect(puts).toHaveLength(1);
+  expect(container.textContent).toContain("Restore stopped at librarian: 0 of 2 role(s) went back");
+  expect(container.textContent).not.toContain("Restored 0 role(s)");
+});
+
+for (const availability of ["absent", "throws"] as const) {
+  test(`Restore writes the batch back and frees its button when randomUUID is ${availability}`, async () => {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: availability === "absent" ? {}
+      : { randomUUID: () => { throw new Error("insecure context"); } } });
+    rolesBody = {
+      ...(rolesBody as Record<string, unknown>),
+      history: [
+        { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+        { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+      ],
+    };
+    await mount();
+    const restore = () => container.querySelector(".lazycodex-role-history > ul > li button") as HTMLButtonElement;
+    await act(async () => { restore().click(); });
+    await settle();
+    expect(puts).toHaveLength(2);
+    expect(puts.map(put => (put.body as { batch?: string }).batch)).toEqual([undefined, "server-1"]);
+    expect(container.textContent).toContain("Restored 2 role(s)");
+    expect(restore().disabled).toBe(false);
+    expect(restore().textContent).toBe("Restore");
+  });
+}

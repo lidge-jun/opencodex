@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 /**
  * Read-path for provider key material: env references, keychain references, or the literal
  * value.
@@ -16,6 +17,7 @@
  * Policy: a reference that cannot be resolved fails closed (no key) and is warned once per
  * account; nothing ever rewrites plaintext into config or its backups.
  */
+import { invalidateDecisionKeyQuotas, observeDecisionKeyCredential } from "../lib/decision-quota-sink";
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
 import { isGcpCredentialMaterial } from "../lib/gcp-credential-input";
@@ -52,6 +54,7 @@ export function providerKeyResolutionGeneration(): number {
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
@@ -59,6 +62,7 @@ export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychai
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
 export function invalidateResolvedProviderKeyCache(): void {
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
@@ -84,7 +88,19 @@ export function keychainReferenceBelongsToProvider(reference: string, name: stri
 
 /** Entry for `account` under the provider-key service; read and write paths share the factory. */
 export function providerKeychainEntry(account: string): ProviderKeychainEntry {
-  return entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
+  const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
+  // A failed or unverifiable write keeps its account counted as a local credential.
+  const absent = (): readonly string[] => {
+    try { return entry.getPassword() === null ? [account] : []; } catch { return []; }
+  };
+  return {
+    getPassword: () => entry.getPassword(),
+    setPassword: password => publishCredentialSync(() => entry.setPassword(password), {
+      accounts: [account], absent: completed => completed ? [] : absent(),
+    }),
+    // Registered before the attempt, so a deletion that fails keeps the secret counted.
+    deletePassword: () => publishCredentialSync(() => entry.deletePassword(), { accounts: [account], absent }),
+  };
 }
 
 function readKeychain(account: string, quiet = false): string | undefined {
@@ -114,15 +130,18 @@ function readKeychain(account: string, quiet = false): string | undefined {
  */
 export function resolveProviderApiKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value));
-  return resolveEnvValue(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value)) : resolveEnvValue(value);
+  observeDecisionKeyCredential(value, resolved);
+  return resolved;
 }
 
 /** The same resolution without the unreadable-reference warning, for observe-only callers. */
 export function resolveProviderApiKeyQuietly(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value), true);
-  return resolveEnvValue(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
+  // A quiet read still sees a replaced secret; advisory key evidence published under the old one must not outlive it.
+  observeDecisionKeyCredential(value, resolved);
+  return resolved;
 }
 
 export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";
@@ -135,11 +154,11 @@ export function providerKeyStoreKind(provider: Pick<OcxProviderConfig, "apiKey">
   return "file";
 }
 
-/** Probe the OS keychain with a throwaway account: write, read back, delete. */
+/** Probe the OS keychain with a throwaway account: write, read back, delete. It stores no credential. */
 export function probeProviderKeychain(): { available: true } | { available: false; reason: string } {
   const account = `probe-${process.pid}-${Date.now()}`;
   try {
-    const entry = providerKeychainEntry(account);
+    const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
     entry.setPassword("ok");
     const back = entry.getPassword();
     try { entry.deletePassword(); } catch { /* best effort */ }

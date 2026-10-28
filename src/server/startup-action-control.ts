@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { durableBunPath } from "../lib/bun-runtime";
+import { durableBunChildEnv, durableBunPath } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { isDesktopSupervised } from "../lib/system-restart-contract";
 import { withLoginShellPath } from "./login-shell-path";
@@ -196,7 +196,7 @@ async function runCliInstall(
     isStandaloneExecutable: installLaunch.isStandaloneExecutable,
   });
   const run = installLaunch.execFile ?? execFile;
-  const env = await installChildEnv(action);
+  const env = durableBunChildEnv(await installChildEnv(action));
   return new Promise((resolve, reject) => {
     const timeout = process.platform === "win32" && action === "install-service"
       ? 0

@@ -23,6 +23,8 @@ import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oa
 import { clearAccountQuotaCache, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { handleResponses } from "../../../src/server/responses";
+import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import type { RequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -85,11 +87,11 @@ function configFor(reply: () => Response, poolEnabled = true): OcxConfig {
   };
 }
 
-async function post(config: OcxConfig): Promise<Response> {
+async function post(config: OcxConfig, sendBudget?: RequestExecutionBudget): Promise<Response> {
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "combo/pooled", input: "Answer briefly", stream: false }),
-  }), config, { model: "", provider: "" });
+  }), config, { model: "", provider: "" }, sendBudget ? { sendBudget } : undefined);
   await response.text();
   return response;
 }
@@ -131,7 +133,8 @@ test("a spent pool account does not cool the combo target for the accounts that 
   let refuse = true;
   const config = configFor(() => refuse ? spent() : answered());
 
-  const refused = await post(config);
+  const budget = createRequestExecutionBudget();
+  const refused = await post(config, budget);
   expect(refused.status).toBe(429);
   // Only the accounts this request actually reached are cooled, and the pool -- not the combo
   // layer -- is what cooled them.
@@ -140,6 +143,11 @@ test("a spent pool account does not cool the combo target for the accounts that 
   expect(cooled.length).toBeLessThan(ids.length);
   // The last refused account must be recorded even though the request spent its retry budget.
   expect(cooled).toHaveLength(4);
+  // The reservation IS the charge, so the shared counter must equal the sends the transport
+  // actually made: four physical sends, four booked -- an unsettled booking or a double charge
+  // would each break this equality even when the account list still says four.
+  expect(sentTokens).toHaveLength(4);
+  expect(budget.used).toBe(sentTokens.length);
   expect(isComboTargetInCooldown("pooled", TARGET)).toBe(false);
 
   refuse = false;
@@ -158,6 +166,58 @@ test("a spent pool account does not cool the combo target for the accounts that 
   const servedIndex = ids.findIndex((_, index) => sentTokens[0] === `Bearer ${credential(index).access}`);
   expect(servedIndex).toBeGreaterThanOrEqual(0);
   expect(cooled).not.toContain(ids[servedIndex]!);
+}, 20_000);
+
+test("a denied hop reservation with base headroom sends nothing more but still records the refusal", async () => {
+  const ids = await seed(5);
+  const config = configFor(spent);
+  // Refuse every deferred (pre-dispatch) booking once two physical sends have left: the second
+  // hop is denied while baseSendAllowance still has room, the way a shared-total or spend-
+  // observer refusal denies it. Post-dispatch reports stay recordable (alreadySent).
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    charge: options => options?.deferDispatch === true ? sentTokens.length < 2 : true,
+    refund: () => {},
+  });
+  const response = await post(config, budget);
+  expect(response.status).toBe(429);
+  // The denied hop produced neither a physical send nor an account switch beyond the recorded
+  // refusal, and it left no unsettled reservation: the counter equals the sends on the wire.
+  expect(sentTokens).toHaveLength(2);
+  expect(budget.used).toBe(sentTokens.length);
+  const cooled = ids.filter(id => getAnthropicAccountHealthSnapshot(id) !== null);
+  expect(cooled).toHaveLength(2);
+  expect(isComboTargetInCooldown("pooled", TARGET)).toBe(false);
+}, 20_000);
+
+test("a rotation-helper throw after hop reservation releases the permit and still propagates", async () => {
+  await seed(2);
+  const config = configFor(spent);
+  // First send goes out with the real pool config; once the refusal lands, the helper's own
+  // config reads start throwing -- a stand-in for the verdict/store reads that can reject
+  // inside the rotation helper after the hop was already reserved.
+  const pool = config.anthropicAccountPool;
+  Object.defineProperty(config, "anthropicAccountPool", {
+    configurable: true,
+    get() { if (sentTokens.length > 0) throw new Error("synthetic pool-config read failure"); return pool; },
+  });
+  let hopCharges = 0;
+  let refunds = 0;
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    charge: options => { if (options?.deferDispatch === true && sentTokens.length > 0) hopCharges += 1; return true; },
+    refund: () => { refunds += 1; },
+  });
+  let thrown: unknown;
+  try { await post(config, budget); } catch (error) { thrown = error; }
+  // The helper's throw is the request's rejection itself: the policy-fallback seam converts
+  // only pacing overloads, so nothing synthesizes a 5xx here and post() must not resolve.
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toBe("synthetic pool-config read failure");
+  // The hop really was reserved before the throw, and its release refunded the charge:
+  // the counter equals the one physical send that actually left.
+  expect(sentTokens).toHaveLength(1);
+  expect(hopCharges).toBe(1);
+  expect(refunds).toBe(1);
+  expect(budget.used).toBe(sentTokens.length);
 }, 20_000);
 
 test("every pool account spent still cools the combo target", async () => {

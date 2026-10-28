@@ -1,4 +1,4 @@
-import { isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
 
 export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
 export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
@@ -23,7 +23,7 @@ export type TranslatorBufferKind =
   | "cursor_kv"
   | "request_copies";
 
-export type ExternallyCappedKind = "passthrough_serialization" | "mcp_payload";
+export type ExternallyCappedKind = "passthrough_serialization" | "mcp_payload" | "provider_image_upload";
 
 export class TranslatorBudgetExceededError extends Error {
   readonly code = "translation_buffer_limit";
@@ -413,8 +413,8 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
   if (signal?.aborted) finalize();
   else signal?.addEventListener("abort", finalize, { once: true });
   const finalizedResponse = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-  // The rebuild above drops identity markers. A refusal that must not be replayed
-  // stays non-replayable through accounting finalization.
+  // Preserve both replay suppression and refusal provenance across the rebuild
+  // so deferred logging can distinguish synthetic refusals from upstream 429s.
   if (isNonReplayableResponse(response)) markResponseNonReplayable(finalizedResponse);
-  return finalizedResponse;
+  return carryReplayRefusal(response, finalizedResponse);
 }

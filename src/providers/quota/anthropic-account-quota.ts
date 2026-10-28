@@ -4,7 +4,9 @@ import { getAccountSet } from "../../oauth/store";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../../lib/state-store-sweeper";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
 import { ACCOUNT_QUOTA_TTL_MS } from "../quota-wire";
-import { fetchAnthropicUsageQuotaForInstance } from "./vendor-probes-oauth";
+import { fetchAnthropicUsageProbeForInstance } from "./vendor-probes-oauth";
+import { thrownQuotaFailure } from "./failure-codes";
+import type { QuotaFailureCode } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor, type AnthropicQuotaRecoveryResult } from "./anthropic-cooldown-recovery";
 import {
   accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
@@ -49,7 +51,10 @@ export async function fetchAnthropicAccountQuota(
   }
   let token: string;
   try { token = await getTokenForAccountQuotaProbe(instance, accountId); }
-  catch { return unavailable(); }
+  catch {
+    // Missing, signed-out or unrefreshable credential: a reauthentication matter, never a quota fact.
+    return { ...unavailable(), quotaFailure: "account_unavailable", quotaFailureIsCurrent: ownerCurrent };
+  }
   if (!ownerCurrent()) return unavailable();
   const flightKey = recovery.anthropicCredentialQuotaFlightKey(key, accountId);
   const flightCurrent = () => ownerCurrent()
@@ -64,30 +69,38 @@ export async function fetchAnthropicAccountQuota(
   // and a thrown read (network failure) both record the unavailable row over the retained
   // in-flight observations, as the pre-instance A path did, so joined callers and later cached
   // reads agree and windows that expired during the shared probe are normalized away.
-  const publish = (result: AnthropicQuotaRecoveryResult | null): AccountQuotaCacheEntry => {
+  /** Cache the settled probe result for an account and publish its decision evidence only while the flight is still current for its credential and generation. */
+  const publish = (result: AnthropicQuotaRecoveryResult | null, failure?: QuotaFailureCode): AccountQuotaCacheEntry => {
     const previous = accountQuotaCache.get(key);
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
       ...(!result ? { unavailable: true as const } : {}), isCurrent,
+      ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
-    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); sweepExpiredOnWrite(entry.ts); }
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); result?.publishDecisionQuota(); sweepExpiredOnWrite(entry.ts); }
     return entry;
   };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
+    // The closed reason of the last usage read in this flight: an HTTP status class, an unusable
+    // body, or a thrown dispatch. Ownership and cooldown refusals never set it.
+    let failure: QuotaFailureCode | undefined;
     try {
       const result = await recovery.probeAnthropicQuotaWithRecovery(accountId, token, fresh => {
         if (!flightCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota flight changed");
         recovery.assertAnthropicQuotaSendAllowed(accountId, token);
-        return fetchAnthropicUsageQuotaForInstance(instance, token, fresh || freshDispatch);
+        return fetchAnthropicUsageProbeForInstance(instance, token, fresh || freshDispatch).then(
+          read => { failure = read.failure; return read.quota; },
+          error => { failure = thrownQuotaFailure(error); throw error; },
+        );
       }, () => ownerCurrent() && mayCommitAccountQuotaKey(key, writerGeneration));
       if (result && !result.isCurrent()) return unavailable();
       if (!result && !flightCurrent()) return unavailable();
-      return publish(result);
+      return publish(result, failure);
     } catch (error) {
       if (error instanceof AnthropicQuotaProbeOwnershipError || !flightCurrent()) return unavailable();
-      return publish(null);
+      return publish(null, failure);
     }
   })().finally(() => { if (accountQuotaInflight.get(flightKey) === probe) accountQuotaInflight.delete(flightKey); });
   accountQuotaInflight.set(flightKey, probe);

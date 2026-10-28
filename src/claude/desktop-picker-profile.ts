@@ -19,6 +19,7 @@ import {
   readDesktopLibraryText,
   resolveDesktop3pConfigLibraryPath,
   SAFE_DESKTOP_PROFILE_ID,
+  serializeDesktopLibraryJson,
   type Desktop3pConfigLibraryOptions,
   type Desktop3pMetadata,
   type Desktop3pMetadataEntry,
@@ -48,7 +49,7 @@ function metadataPath(libraryPath: string): string {
 }
 
 function metadataJson(metadata: Desktop3pMetadata): string {
-  return JSON.stringify(metadata, null, 2) + "\n";
+  return serializeDesktopLibraryJson(metadata);
 }
 
 function isValidMetadata(metadata: Desktop3pMetadata): boolean {
@@ -190,6 +191,10 @@ function applyDesktopPickerProfileLocked(options: { proxyPort: number } & Deskto
     const changed = !alreadySelected || !oldProfile.exists || oldProfile.content !== target;
     if (!changed) return { ok: true, changed: false, path: profile };
 
+    const entries = existing
+      ? metadata.entries.map(entry => entry.id === entryId ? { ...entry, name: DESKTOP_PICKER_ENTRY_NAME } : entry)
+      : [...metadata.entries, { id: entryId, name: DESKTOP_PICKER_ENTRY_NAME }];
+    const nextMetadataJson = metadataJson({ ...metadata, appliedId: entryId, entries });
     mkdirSync(join(configDir, PICKER_DIRECTORY), { recursive: true, mode: 0o700 });
     try {
       // Keep the same backup convention as the existing Desktop writer. It is removed with the
@@ -199,10 +204,7 @@ function applyDesktopPickerProfileLocked(options: { proxyPort: number } & Deskto
       if (!alreadySelected) {
         atomicWriteFile(previousStatePath, JSON.stringify({ entryId, previousAppliedId }) + "\n");
       }
-      const entries = existing
-        ? metadata.entries.map(entry => entry.id === entryId ? { ...entry, name: DESKTOP_PICKER_ENTRY_NAME } : entry)
-        : [...metadata.entries, { id: entryId, name: DESKTOP_PICKER_ENTRY_NAME }];
-      atomicWriteFile(metaPath, metadataJson({ ...metadata, appliedId: entryId, entries }));
+      atomicWriteFile(metaPath, nextMetadataJson);
     } catch {
       try {
         restoreFile(metaPath, oldMeta);
@@ -246,6 +248,8 @@ function removeDesktopPickerProfileLocked(options: DesktopPickerProfileOptions):
     try { state = readPickerState(statePath); } catch { return { ok: false, reason: "profile_state_unreadable" }; }
 
     let metadataAfterPivot = metadata;
+    let standardPath: string | undefined;
+    let pivotMetadataJson: string | undefined;
     if (selected) {
       const previous = state?.entryId === picker.id ? state.previousAppliedId : null;
       const previousExists = previous !== null && previous !== picker.id && metadata.entries.some(entry => entry.id === previous);
@@ -253,15 +257,21 @@ function removeDesktopPickerProfileLocked(options: DesktopPickerProfileOptions):
         metadataAfterPivot = { ...metadata, appliedId: previous };
       } else {
         const standardId = randomUUID();
-        atomicWriteFile(profilePath(libraryPath, standardId), "{}\n");
+        standardPath = profilePath(libraryPath, standardId);
         metadataAfterPivot = {
           ...metadata,
           appliedId: standardId,
           entries: [...metadata.entries, { id: standardId, name: "opencodex-standard" }],
         };
       }
-      atomicWriteFile(metaPath, metadataJson(metadataAfterPivot));
+      pivotMetadataJson = metadataJson(metadataAfterPivot);
     }
+
+    const entries = metadataAfterPivot.entries.filter(entry => entry.id !== picker.id);
+    const finalMetadataJson = metadataJson({ ...metadataAfterPivot, entries });
+
+    if (standardPath !== undefined) atomicWriteFile(standardPath, "{}\n");
+    if (pivotMetadataJson !== undefined) atomicWriteFile(metaPath, pivotMetadataJson);
 
     const residualPaths: string[] = [];
     for (const path of [profilePath(libraryPath, picker.id), `${profilePath(libraryPath, picker.id)}.bak`]) {
@@ -272,9 +282,8 @@ function removeDesktopPickerProfileLocked(options: DesktopPickerProfileOptions):
       return { ok: false, reason: "cleanup_incomplete", residualPaths };
     }
 
-    const entries = metadataAfterPivot.entries.filter(entry => entry.id !== picker.id);
     try {
-      atomicWriteFile(metaPath, metadataJson({ ...metadataAfterPivot, entries }));
+      atomicWriteFile(metaPath, finalMetadataJson);
       try { unlinkIfPresent(statePath); } catch { /* residual is reported below */ }
       if (existsSync(statePath)) return { ok: false, reason: "cleanup_incomplete", residualPaths: [statePath] };
     } catch {

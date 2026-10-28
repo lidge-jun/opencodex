@@ -34,6 +34,10 @@ ocx start --socks5-off
 
 Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
 
+Sur un client hub connecté, `ocx stop`, y compris via l’API, conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion ; `ocx start` les dessert de nouveau. L’arrêt explicite d’un Remote Link Child rétablit au contraire, si la restauration partagée réussit, le routage natif de Codex, le catalogue et les métadonnées de reprise sauvegardées, et supprime la configuration Grok gérée. La connexion Home enregistrée reste conservée ; `ocx disconnect` la supprime.
+
+Pour réutiliser Home depuis Codex après cette restauration, lancez `ocx start` (ou `ocx service start` si un service est installé), puis `ocx sync --restart-codex`. Le démarrage seul ne réapplique pas le routage ; sync ne recrée pas le bloc Grok. Si l’appartenance de la connexion ne peut pas être confirmée avant l’arrêt du service, l’API d’arrêt renvoie HTTP 409 avec `sharedTeardown: "refused"` et laisse le proxy et le gestionnaire de service actifs. Attendez la fin de la connexion ou déconnexion en cours, puis réessayez.
+
 ### `ocx restart`
 
 Lorsqu’un proxy est actif, demande précisément au PID et au port dont l’identité a été vérifiée de redémarrer sur place, attend la fin du drainage normal, puis vérifie qu’un autre PID d’exécution écoute sur le même port. Le routage géré et la supervision du service restent installés pendant toute l’opération. Une requête dont l’état est incertain est observée, et non rejouée comme lors d’une séquence distincte d’arrêt et de démarrage.
@@ -141,7 +145,7 @@ Vérifie l’identité du proxy actif. La sortie destinée aux utilisateurs indi
 
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
-Vérifie l’état de préparation après synchronisation au moyen du point de terminaison non authentifié `GET /readyz`. Il renvoie `200` lorsque le service est prêt, ou `503` avec `Retry-After: 1` pour les états `pending` et terminal `failed`. Son identité HTTP expurgée est `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`. `protocol` est la version courante du protocole distant du hub, `minimumClientProtocol` la plus ancienne version cliente compatible et `managementUrl` l’origine canonique de gestion visible par le navigateur. Les anciens proxys dépourvus de `/readyz` échouent de manière sûre avec l’état `unreachable` ; `/healthz` mesure la disponibilité du processus, et non son état de préparation.
+Vérifie l’état de préparation après synchronisation au moyen du point de terminaison non authentifié `GET /readyz`. Il renvoie `200` lorsque le service est prêt, ou `503` avec `Retry-After: 1` pour les états `pending` et terminal `failed`. Son identité HTTP expurgée est `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`. `protocol` est la version courante du protocole distant du hub, `minimumClientProtocol` la plus ancienne version cliente compatible et `managementUrl` l’origine canonique de gestion visible par le navigateur. Les anciens proxys dépourvus de `/readyz` échouent de manière sûre avec l’état `unreachable` ; `/healthz` mesure la disponibilité du processus, et non son état de préparation.
 
 Par défaut, la commande effectue une seule sonde. Avec `--wait`, elle interroge le service jusqu’à ce qu’il soit prêt ou jusqu’à l’expiration du délai, mais s’arrête immédiatement si elle observe l’état terminal `failed`. Le délai par défaut est de 45 secondes. `--timeout <seconds>` exige `--wait` et accepte un entier positif compris entre 1 et 300. La sortie JSON de la CLI est `{ready, status, pid, port}`, où `status` vaut `ready`, `pending`, `failed` ou `unreachable`. Les codes de sortie sont 0 si le service est prêt ; 1 s’il n’est pas prêt, reste en attente, échoue, dépasse le délai ou est inaccessible ; et 64 si les arguments sont invalides.
 
@@ -154,6 +158,8 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 ## Synchronisation du catalogue
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Enfant Remote Link :** `ocx sync` applique aussi les réglages Codex du Home et, si le runtime client a démarré avant cette application, le redémarre même sans option de redémarrage. Si le redémarrage échoue, l'ancien runtime continue de servir et la commande se termine avec un code non nul. Les champs correspondants de `ocx status --json` et `ocx link status --json` sont décrits dans [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (en anglais).
 
 Un redémarrage explicitement demandé a également lieu après une modification de `config.toml` validée et enregistrée, même si les octets du catalogue et du cache restent identiques. Une opération sans changement de configuration, un refus, une validation préalable ou une écriture annulée ne le déclenche pas. Sans option de redémarrage, sync ne redémarre jamais Codex automatiquement.
 
@@ -168,6 +174,8 @@ Si des processus Codex `app-server` de longue durée sont encore actifs, `ocx sy
 `--restart-app-server-only` rétablit le comportement étroit d’avant : `SIGTERM` uniquement aux processus app-server et code-mode-host correspondants appartenant à l’utilisateur actuel, l’application Desktop restant ouverte. Les tours actifs peuvent encore être interrompus. Combiné avec `--restart-codex` ou `--restart-desktop-app`, c’est la portée étroite qui l’emporte, car perdre des conversations en cours est irrécupérable, contrairement à un sélecteur périmé.
 
 Lorsque la commande s’exécute depuis l’application Codex, le redémarrage est confié à un assistant détaché et cette session se termine avec l’application.
+
+**Synchronisation épinglée.** `ocx sync --expect-link <linkId>` (enfant Remote Link) et `ocx sync --expect-hub-key <apiKeyId>` (client hub) ne synchronisent que si cette machine est toujours connectée à ce lien ou avec cette clé. Sinon, rien n'est modifié, les fournisseurs locaux ne sont pas synchronisés, la commande quitte avec le code 5 et la dernière ligne de stderr est `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`. Un drapeau mal formé ou répété quitte avec le code 2. Détails : [référence anglaise](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key).
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -351,7 +359,7 @@ Lorsqu'une version plus récente du paquet est connue, la zone de notification a
 
 ### `ocx gui`
 
-Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://localhost:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
+Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://127.0.0.1:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
 
 ## Mise à jour
 

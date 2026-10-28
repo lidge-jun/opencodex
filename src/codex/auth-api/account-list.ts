@@ -1,7 +1,6 @@
 import { getMainAccountExternalUsageWarning, type MainAccountExternalUsageWarning } from "../main-account-external-usage";
 import { codexCreditsDtoField, hasCodexCreditsObservation, pruneCodexCredits } from "../credits";
 import type { CodexCredits } from "../credits";
-import { getMainChatgptAccountId } from "../auth-collision";
 import { codexAccountLogLabel } from "../account-label";
 import { poolQuotaHistoryIdentity, getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
 import { getAccountQuota, isCodexQuotaExhausted, setAccountQuotaFromParsed, withoutRetiredCodexQuota } from "../quota";
@@ -29,12 +28,17 @@ import type { OAuthAccountHealth, OAuthHealthLabel } from "../../oauth/health";
 import { isSelectableCodexPoolAccount } from "../account-id";
 import type { AdmissionLease } from "../../lib/admission";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
-import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
+import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable, isNativeMainObservationUnavailable } from "./http";
 import { fetchMainAccountInfoAttempt, EMPTY_MAIN_ACCOUNT_INFO, mainResetCreditsForCurrentIdentity } from "./main-account-probe";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import type { PoolQuotaResult } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
 import { isPassiveRead } from "../../lib/passive-read";
+import { configuredAdminToken } from "../../lib/admin-secrets";
+import { nativeUserIdClaims } from "../reserve-availability";
+import { extractAccountIdClaims } from "../../oauth/chatgpt";
+import { codexUpstreamAccountKey } from "./account-identity";
+import { CODEX_MAIN_DUPLICATE_ACTION, configuredCodexMainDuplicate, getObservedMainCodexCollisionIdentity } from "../collision-identity";
 
 export function quotaForPlan<T extends Omit<StoredAccountQuota, "updatedAt"> | StoredAccountQuota | null>(
   quota: T,
@@ -109,6 +113,7 @@ export function poolAccountDto(
   paused: boolean,
   priority: number,
   maskEmails: boolean,
+  upstreamAccountKey?: string,
 ): CodexAuthAccountDto {
   const plan = codexPlanValue(account.plan);
   const quota = quotaForPlan(quotaResult.quota, plan);
@@ -133,14 +138,19 @@ export function poolAccountDto(
   // health projection. Emitting only the boolean is what left #4212's reporter guessing which
   // account took their model away and why, so name the cause they actually have to act on.
   const reauthReason: CodexAccountReauthReason | undefined = rawReauthReason ?? (health.status === "reauth_required" ? health.reason : undefined);
+  const duplicateMain = configuredCodexMainDuplicate(config, account.id);
   return {
     id: account.id,
+    slotId: account.id,
+    slotKind: "pool",
+    ...(upstreamAccountKey ? { upstreamAccountKey } : {}),
     email: projectEmail(account.email, maskEmails) ?? account.email,
     ...(account.alias !== undefined ? { alias: account.alias } : {}),
     ...(plan !== undefined ? { plan } : {}),
     logLabel: codexAccountLogLabel(account),
     isMain: false,
     paused,
+    ...(config.codexAccountPauseState?.[account.id]?.details ? { pauseDetails: config.codexAccountPauseState[account.id]!.details } : {}),
     priority,
     autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(config, account.id),
     creditsAfterLimit: codexAccountUsesCreditsAfterLimit(config, account.id),
@@ -149,7 +159,10 @@ export function poolAccountDto(
     ...codexCreditsDtoField(config, account.id, poolQuotaHistoryIdentity(account.id) ?? null),
     needsReauth: needsReauth || health.status === "reauth_required",
     ...(reauthReason !== undefined ? { reauthReason } : {}),
-    ...(isCodexAccountPlanExcluded(config, account.id) ? {
+    ...(duplicateMain ? {
+      selectionExcludedReason: "duplicate_main" as const,
+      selectionExcludedAction: CODEX_MAIN_DUPLICATE_ACTION,
+    } : isCodexAccountPlanExcluded(config, account.id) ? {
       selectionExcludedReason: "plan_excluded" as const,
       selectionExcludedPlan: codexPlanValue(config.codexAccounts?.find(row => row.id === account.id)?.plan),
     } : {}),
@@ -161,12 +174,18 @@ export function poolAccountDto(
 
 export interface CodexAuthAccountDto {
   id: string;
+  /** Registered slot identity; equal to id, including __main__ for native Codex. */
+  slotId: string;
+  slotKind: "native-main" | "pool";
+  /** Opaque local join key, present only with account and user claims. */
+  upstreamAccountKey?: string;
   alias?: string;
   email: string;
   plan?: string | null;
   logLabel?: string;
   isMain: boolean;
   paused: boolean;
+  pauseDetails?: import("../../types/account-auto-pause").AccountPauseDetails;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
   /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
@@ -182,8 +201,9 @@ export interface CodexAuthAccountDto {
    * needs the operator; `/api/oauth/accounts` already carries the same field name.
    */
   reauthReason?: CodexAccountReauthReason;
-  /** Automatic selection policy only; explicit routes retain their usual auth checks. */
-  selectionExcludedReason?: "plan_excluded";
+  /** Plan policy is automatic-only; duplicate-main exclusions also apply to explicit routes. */
+  selectionExcludedReason?: "plan_excluded" | "duplicate_main";
+  selectionExcludedAction?: string;
   selectionExcludedPlan?: string;
   hasCredential: boolean;
   health: OAuthAccountHealth;
@@ -278,6 +298,7 @@ export async function listCodexAuthAccountsSnapshot(
   pruneCodexCredits([MAIN_CODEX_ACCOUNT_ID, ...poolAccounts.map(account => account.id)]);
   // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
   const maskEmails = emailMaskingEnabled(runtimeConfig);
+  const identitySecret = configuredAdminToken();
   // A passive read (a Remote Link Child's, #6959) reports what this machine already observed: no
   // token refresh, no WHAM probe, and so none of the plan or credential writes they make.
   const passive = isPassiveRead();
@@ -285,6 +306,7 @@ export async function listCodexAuthAccountsSnapshot(
     ? { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: false, hasCredential: false,
       identityGeneration: captureMainAccountIdentityGeneration() }
     : await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false, forceRefresh, false, runtimeConfig);
+  const observedMainIdentity = getObservedMainCodexCollisionIdentity();
   const refreshedPool = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
     const cred = getCodexAccountCredential(account.id);
     let quotaResult: PoolQuotaResult;
@@ -356,6 +378,10 @@ export async function listCodexAuthAccountsSnapshot(
     const dtoAccount = generationLive && quotaResult.freshPlan
       ? { ...currentAccount, plan: quotaResult.freshPlan }
       : currentAccount;
+    const user = nativeUserIdClaims(currentCredential.accessToken);
+    const accountClaim = extractAccountIdClaims(currentCredential.accessToken);
+    const verifiedAccountId = !accountClaim.conflict && accountClaim.accountId === currentCredential.chatgptAccountId
+      ? accountClaim.accountId : undefined;
     return [poolAccountDto(
       runtimeConfig,
       dtoAccount,
@@ -364,6 +390,8 @@ export async function listCodexAuthAccountsSnapshot(
       isCodexAccountPaused(runtimeConfig, accountId),
       getCodexAccountPriority(runtimeConfig, accountId),
       maskEmails,
+      codexUpstreamAccountKey(identitySecret, verifiedAccountId,
+        user.conflict ? undefined : user.userId),
     )];
   });
   const projectSnapshot = (mainRefreshRefused = false): CodexAuthAccountsSnapshot => {
@@ -395,14 +423,21 @@ export async function listCodexAuthAccountsSnapshot(
         ? mainResult.terminalAuthFailure === true && liveQuotaRefresh?.status === "http_error"
           ? "unauthorized" : "refresh_failed"
         : mainHealth.status === "reauth_required" ? mainHealth.reason : undefined;
+    const mainIdentity = mainSnapshotLive && getObservedMainCodexCollisionIdentity() === observedMainIdentity
+      ? observedMainIdentity : undefined;
+    const mainAccountKey = codexUpstreamAccountKey(identitySecret, mainIdentity?.accountId, mainIdentity?.userId);
     const main: CodexAuthAccountDto = {
       id: MAIN_CODEX_ACCOUNT_ID,
+      slotId: MAIN_CODEX_ACCOUNT_ID,
+      slotKind: "native-main",
+      ...(mainAccountKey ? { upstreamAccountKey: mainAccountKey } : {}),
       email: projectEmail(mainInfo.email, maskEmails) ?? "Codex App login",
       plan: mainInfo.plan,
       ...(liveQuotaRefresh ? { quotaRefresh: liveQuotaRefresh } : {}),
       logLabel: "main",
       isMain: true,
       paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      ...(runtimeConfig.codexAccountPauseState?.[MAIN_CODEX_ACCOUNT_ID]?.details ? { pauseDetails: runtimeConfig.codexAccountPauseState[MAIN_CODEX_ACCOUNT_ID]!.details } : {}),
       mainAccountHardLock: { ...getMainAccountHardLockStatus(runtimeConfig),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
@@ -415,7 +450,7 @@ export async function listCodexAuthAccountsSnapshot(
       quota: mainInfo.quota
         ? quotaForPlan(mainQuotaWithCarriedResetCredits(mainInfo.quota), mainInfo.plan)
         : null,
-      ...codexCreditsDtoField(runtimeConfig, MAIN_CODEX_ACCOUNT_ID, getMainChatgptAccountId()),
+      ...codexCreditsDtoField(runtimeConfig, MAIN_CODEX_ACCOUNT_ID, getObservedMainCodexCollisionIdentity()?.accountId ?? null),
       ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
     };
     return {
@@ -434,7 +469,7 @@ export async function listCodexAuthAccountsSnapshot(
   try {
     return await withNativeMainCredentialClaim(async () => projectSnapshot(isMainAccountRefreshGrantRejected()));
   } catch (error) {
-    if (isNativeMainClaimUnavailable(error)) return projectSnapshot();
+    if (isNativeMainObservationUnavailable(error)) return projectSnapshot();
     throw error;
   } finally {
     projectionLease.release();

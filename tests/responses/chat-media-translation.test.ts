@@ -148,9 +148,18 @@ afterEach(() => {
   try { removeTreeWithRetry(home); } catch { /* Temp cleanup cannot change a passed request assertion. */ }
 });
 
-test("real HTTP translation refuses media before sending to the selected upstream", async () => {
+test("real HTTP translation carries audio and refuses media the Chat wire cannot hold", async () => {
   let sends = 0;
-  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { sends++; return new Response("Unexpected upstream request", { status: 500 }); } });
+  let received: Record<string, unknown> | undefined;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    sends++;
+    received = await request.json() as Record<string, unknown>;
+    return Response.json({
+      id: "chat_fixture", object: "chat.completion", model: "model",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+  } });
   let server: ReturnType<typeof startServer> | undefined;
   try {
     saveConfig({
@@ -158,23 +167,32 @@ test("real HTTP translation refuses media before sending to the selected upstrea
       providers: { gateway: { ...provider, baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`, allowPrivateNetwork: true } },
     } as OcxConfig);
     server = startServer(0);
+    const post = (part: unknown) => fetch(new URL("/v1/responses", server!.url), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gateway/model", stream: false, input: [{ type: "message", role: "user", content: [part] }] }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const audio = await post({ type: "input_audio", audio_url: "data:audio/wav;base64,YWJj" });
+    expect(audio.status).toBe(200);
+    expect(sends).toBe(1);
+    expect(received?.messages).toEqual([{ role: "user", content: [
+      { type: "input_audio", input_audio: { data: "YWJj", format: "wav" } },
+    ] }]);
+
     for (const part of [
-      { type: "input_audio", audio_url: "data:audio/wav;base64,YWJj" },
+      { type: "input_audio", audio_url: "data:audio/opus;base64,AAAA", format: "opus" },
       { type: "input_file", filename: "private.pdf", file_id: "file-private" },
     ]) {
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "gateway/model", stream: false, input: [{ type: "message", role: "user", content: [part] }] }),
-        signal: AbortSignal.timeout(10000),
-      });
+      const response = await post(part);
       expect(response.status).toBe(400);
       const body = await response.json() as { error: { type: string; message: string } };
       expect(body.error.type).toBe("invalid_request_error");
       expect(body.error.message).toContain("OpenCodex cannot translate");
       expect(body.error.message).not.toContain("private.pdf");
-      expect(body.error.message).not.toContain("YWJj");
+      expect(body.error.message).not.toContain("AAAA");
     }
-    expect(sends).toBe(0);
+    expect(sends).toBe(1);
   } finally {
     await server?.stop(true);
     await upstream.stop(true);

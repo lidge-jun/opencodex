@@ -476,13 +476,25 @@ export function trackStreamLifetime(
   registerTurn(ac, lease);
   const reader = body.getReader();
   let closed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  // A drain aborts the turn's controller; many callers pass a fresh one nothing else listens to,
+  // so the tracked stream itself has to stop.
+  const onAbort = () => {
+    if (closed) return;
+    // Stop the stream before the caller's onDone runs, so a throwing callback cannot leave it open.
+    reader.cancel(ac.signal.reason).catch(() => {});
+    try { streamController?.error(ac.signal.reason); } catch { /* already closed */ }
+    finish();
+  };
   const finish = () => {
     if (closed) return;
     closed = true;
+    ac.signal.removeEventListener("abort", onAbort);
     unregisterTurn(ac);
     onDone?.();
   };
-  return new ReadableStream<Uint8Array>({
+  const tracked = new ReadableStream<Uint8Array>({
+    start(controller) { streamController = controller; },
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
@@ -499,11 +511,16 @@ export function trackStreamLifetime(
       reader.cancel(reason).catch(() => {});
     },
   });
+  // After registerTurn, so the lease's own abort listener (release the turn) runs first. A
+  // controller registerTurn already aborted (a settled lease) keeps its previous behaviour.
+  ac.signal.addEventListener("abort", onAbort, { once: true });
+  return tracked;
 }
 
 export async function drainAndShutdown(
   server: ReturnType<typeof Bun.serve> | undefined,
   timeoutMs: number,
+  beforeListenerStop?: () => undefined,
 ): Promise<boolean> {
   const s = server ?? _serverRef;
   let shutdownSucceeded = true;
@@ -589,7 +606,13 @@ export async function drainAndShutdown(
     setStorageCleanupPolicyJobLiveApply(null);
   } finally {
     try {
-      await stopServerListener(s);
+      // Signal cleanup restores owned client routing while this listener still owns its port.
+      // Cleanup is synchronous only; a throw still releases listener and startup ownership.
+      try {
+        beforeListenerStop?.();
+      } finally {
+        await stopServerListener(s);
+      }
     } finally {
       await releaseServerStartupLifecycle(s);
       // shutdownDraining is a process-lifetime latch. A stopped server must

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { discoverAntigravityProject, refreshAntigravityToken } from "../../../src/oauth/google-antigravity";
 import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,13 @@ import { ANTIGRAVITY_IDE_VERSION } from "../../../src/adapters/client-fingerprin
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+const prevGoogleUa = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
+beforeEach(() => { delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT; });
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  if (prevGoogleUa === undefined) delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
+  else process.env.GOOGLE_ANTIGRAVITY_USER_AGENT = prevGoogleUa;
+});
 
 function routeFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): { calls: string[] } {
   const calls: string[] = [];
@@ -105,6 +111,27 @@ describe("antigravity project discovery", () => {
     expect(await discoverAntigravityProject("tok")).toBe("proj-T");
     expect(onboardCalls).toBe(2);
   });
+
+  test("onboardUser forwards default tier_id from loadCodeAssist allowedTiers when present", async () => {
+    let onboardTierId: string | undefined;
+    routeFetch((url, init) => {
+      if (url.includes(":loadCodeAssist")) {
+        return new Response(JSON.stringify({
+          allowedTiers: [
+            { id: "free-tier", isDefault: false },
+            { id: "standard-tier", isDefault: true },
+          ],
+        }), { status: 200 });
+      }
+      if (url.includes(":onboardUser")) {
+        onboardTierId = JSON.parse(String(init?.body)).tier_id;
+        return new Response(JSON.stringify({ done: true, response: { cloudaicompanionProject: "proj-std" } }), { status: 200 });
+      }
+      return new Response("no", { status: 404 });
+    });
+    expect(await discoverAntigravityProject("tok")).toBe("proj-std");
+    expect(onboardTierId).toBe("standard-tier");
+  });
 });
 
 describe("antigravity refresh", () => {
@@ -143,6 +170,22 @@ describe("antigravity refresh", () => {
     expect(caught).toBeDefined();
     expect(caught!.message).toContain("400");
     expect(caught!.message).not.toContain("secret-detail");
+  });
+
+  test("id_token sub populates accountId while email is normalized", async () => {
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "google-sub-12345", email: "User@Example.com" })).toString("base64url");
+    const idToken = `${header}.${payload}.sig`;
+    routeFetch((url) => {
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return Response.json({ access_token: "fresh-access", expires_in: 3600, id_token: idToken }, { status: 200 });
+      }
+      if (url.includes(":loadCodeAssist")) return Response.json({ cloudaicompanionProject: "proj-sub" });
+      return new Response("no", { status: 404 });
+    });
+    const cred = await refreshAntigravityToken("refresh-tok");
+    expect(cred.accountId).toBe("google-sub-12345");
+    expect(cred.email).toBe("user@example.com");
   });
 });
 

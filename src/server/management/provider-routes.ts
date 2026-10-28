@@ -764,7 +764,7 @@ function applyProviderPatchFields(
   if (Object.hasOwn(rawBody, "headers")) {
     const headersValue = rawBody.headers;
     if (headersValue === null || (isPlainRecord(headersValue) && Object.keys(headersValue).length === 0)) {
-      // Registry-owned static metadata (e.g. opencode-free's x-opencode-client marker)
+      // Registry-owned static metadata (e.g. meta-muse's x-api-version marker)
       // is not user-managed: restoring it keeps the upstream transport intact after a
       // clear instead of deleting the whole block.
       const entry = getProviderRegistryEntry(name);
@@ -1357,6 +1357,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (submittedModelContextTiers && liveTiers) candidate.modelContextTiers = Object.assign(Object.create(null), liveTiers, candidate.modelContextTiers ?? {});
       else if (!submittedModelContextTiers && liveTiers) candidate.modelContextTiers = { ...liveTiers };
       else if (!submittedModelContextTiers) delete candidate.modelContextTiers;
+      // Read omitted policy at publication time, after any concurrent operator edit.
+      if (!Object.hasOwn(rawProvider, "accountAutoPause")) {
+        const livePolicy = config.providers[name]?.accountAutoPause;
+        if (livePolicy === undefined) delete candidate.accountAutoPause;
+        else candidate.accountAutoPause = structuredClone(livePolicy);
+      }
       // Full forms omit the opt-in; preserve the latest value, including a concurrent clear.
       if (!Object.hasOwn(rawProvider, "inferContextWindow")) {
         const liveInference = config.providers[name]?.inferContextWindow;
@@ -1602,6 +1608,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
   }
 
+  if (url.pathname === "/api/providers/test-completion" && req.method === "POST") return (await import("./provider-completion-test")).handleProviderCompletionTestRoute(ctx);
+
   // Lightweight connectivity probe: perform the provider's live /models fetch DIRECTLY and
   // report only real upstream evidence. The catalog aggregate (fetchAllModels) deliberately
   // hides fetch failures behind stale/static fallbacks, so a catalog-presence check would
@@ -1718,7 +1726,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl,
+      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
     });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();

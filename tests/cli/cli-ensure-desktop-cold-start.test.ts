@@ -42,12 +42,12 @@ function deps(options: {
 const fresh = (): Calls => ({ launches: 0, waits: [], released: 0 });
 
 describe("ocx ensure cold start under OpenCodex Desktop (#6971)", () => {
-  test("only an unclaimed machine with no running Desktop gets a CLI proxy; unknown evidence refuses", () => {
+  test("an unclaimed machine gets a CLI proxy while unknown evidence refuses", () => {
     for (const platform of ["darwin", "linux", "win32"] as const) {
       expect(planEnsureColdStart({ ownership: "other", desktopProcess: "absent", platform })).toEqual({ kind: "spawn-cli" });
-      expect(planEnsureColdStart({ ownership: "other", desktopProcess: "running", platform })).toEqual({ kind: "wait-desktop" });
+      expect(planEnsureColdStart({ ownership: "other", desktopProcess: "running", platform })).toEqual({ kind: "spawn-cli" });
       expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "running", platform })).toEqual({ kind: "wait-desktop" });
-      expect(planEnsureColdStart({ ownership: "unknown", desktopProcess: "running", platform })).toEqual({ kind: "wait-desktop" });
+      expect(planEnsureColdStart({ ownership: "unknown", desktopProcess: "running", platform })).toEqual({ kind: "refuse", reason: "unverified" });
       for (const ownership of ["other", "desktop", "unknown"] as const) {
         expect(planEnsureColdStart({ ownership, desktopProcess: "unknown", platform })).toEqual({ kind: "refuse", reason: "unverified" });
       }
@@ -58,10 +58,78 @@ describe("ocx ensure cold start under OpenCodex Desktop (#6971)", () => {
     expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "absent", platform: "win32" })).toEqual({ kind: "refuse", reason: "desktop-unlaunchable" });
   });
 
-  test("a Desktop restart gap waits for Desktop's proxy instead of starting one", async () => {
+  test("a claimed Desktop restart gap waits for Desktop's proxy instead of starting one", async () => {
     const calls = fresh();
-    expect(await runDesktopColdStart(deps({ ownership: "other", process: "running" }, calls))).toEqual({ kind: "live", live: { port: 10100 } });
+    expect(await runDesktopColdStart(deps({ ownership: "desktop", process: "running" }, calls))).toEqual({ kind: "live", live: { port: 10100 } });
     expect(calls).toEqual({ launches: 0, waits: [DESKTOP_COLD_START_TIMEOUT_MS], released: 0 });
+  });
+
+  test("an unclaimed process named like Desktop cannot suppress the CLI cold start", async () => {
+    const calls = fresh();
+    expect(await runDesktopColdStart(deps({ ownership: "other", process: "running" }, calls))).toEqual({ kind: "cli" });
+    expect(calls).toEqual({ launches: 0, waits: [], released: 0 });
+  });
+
+  test("verified unclaimed Desktop recovery keeps its supervised replacement during the restart gap", async () => {
+    const calls = fresh();
+    const result = await runDesktopColdStart({
+      ...deps({ ownership: "other", process: "running" }, calls),
+      desktopRecovery: async () => ({ kind: "recovering" as const }),
+    });
+    expect(result).toEqual({ kind: "live", live: { port: 10100 } });
+    expect(calls).toEqual({ launches: 0, waits: [DESKTOP_COLD_START_TIMEOUT_MS], released: 0 });
+  });
+
+  test("a verified Desktop that stopped or cannot finish its recovery proof never falls back to CLI", async () => {
+    for (const kind of ["stopped", "unknown"] as const) {
+      const calls = fresh();
+      const result = await runDesktopColdStart({
+        ...deps({ ownership: "other", process: "running" }, calls),
+        desktopRecovery: async () => ({ kind }),
+      });
+      expect(result.kind).toBe("failed");
+      expect(calls).toEqual({ launches: 0, waits: [], released: 0 });
+    }
+  });
+
+  test("a structurally unsupported verdict keeps a claimed running Desktop's wait; conflicting evidence still refuses", async () => {
+    const calls = fresh();
+    const result = await runDesktopColdStart({
+      ...deps({ ownership: "desktop", process: "running", platform: "win32" }, calls),
+      desktopRecovery: async () => ({ kind: "unknown" as const, unsupported: true }),
+    });
+    expect(result).toEqual({ kind: "live", live: { port: 10100 } });
+    expect(calls).toEqual({ launches: 0, waits: [DESKTOP_COLD_START_TIMEOUT_MS], released: 0 });
+
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "running", platform, recovery: { kind: "unknown", unsupported: true } }))
+        .toEqual({ kind: "wait-desktop" });
+      expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "running", platform, recovery: { kind: "unknown" } }))
+        .toEqual({ kind: "refuse", reason: "unverified" });
+      expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "absent", platform, recovery: { kind: "unknown", unsupported: true } }))
+        .toEqual({ kind: "refuse", reason: "unverified" });
+      expect(planEnsureColdStart({ ownership: "other", desktopProcess: "running", platform, recovery: { kind: "unknown", unsupported: true } }))
+        .toEqual({ kind: "refuse", reason: "unverified" });
+      expect(planEnsureColdStart({ ownership: "unknown", desktopProcess: "running", platform, recovery: { kind: "unknown", unsupported: true } }))
+        .toEqual({ kind: "refuse", reason: "unverified" });
+      expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "running", platform, recovery: { kind: "stopped" } }))
+        .toEqual({ kind: "refuse", reason: "desktop-stopped" });
+      expect(planEnsureColdStart({ ownership: "other", desktopProcess: "absent", platform, recovery: { kind: "unknown", unsupported: true } }))
+        .toEqual({ kind: "refuse", reason: "unverified" });
+    }
+    expect(planEnsureColdStart({ ownership: "desktop", desktopProcess: "absent", platform: "win32", recovery: { kind: "none" } }))
+      .toEqual({ kind: "refuse", reason: "desktop-unlaunchable" });
+  });
+
+  test("ownership is observed after asynchronous native evidence, so a new claim still governs startup", async () => {
+    let ownership: DesktopOwnershipState = "other";
+    const calls = fresh();
+    const result = await runDesktopColdStart({
+      ...deps({ ownership, process: "absent" }, calls), ownership: () => ownership,
+      desktopRecovery: async () => { ownership = "desktop"; return { kind: "none" }; },
+    });
+    expect(result.kind).toBe("live");
+    expect(calls.launches).toBe(1);
   });
 
   test("a Desktop that never brings its proxy back fails without a CLI fallback", async () => {
@@ -169,7 +237,7 @@ describe("Desktop process detection by executable identity", () => {
   function fakeDesktopHome(options: {
     installId?: string; args?: unknown; bareArgs?: boolean; label?: string; identifier?: string;
     plist?: "present" | "absent"; executable?: "present" | "absent" | "directory"; bundleName?: string;
-    bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean;
+    bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean; runAtLoad?: unknown;
   } = {}) {
     // Keep the bundle on cwd's drive: Windows relative() returns an absolute path across drives.
     const fixtureRoot = join(process.cwd(), ".tmp");
@@ -190,7 +258,7 @@ describe("Desktop process detection by executable identity", () => {
     // A root-relative POSIX spelling also reaches this same-drive fixture on Windows.
     const absoluteProgram = process.platform === "win32" ? executable.slice(2).replaceAll("\\", "/") : executable;
     const program = options.relativeProgram ? relative(process.cwd(), executable) : absoluteProgram;
-    const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: true,
+    const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: "runAtLoad" in options ? options.runAtLoad : true,
       ProgramArguments: options.bareArgs ? [program] : (options.args ?? [program, "--autostart"]),
       ...("program" in options ? { Program: options.program } : {}) };
     if (options.plist !== "absent") writeFileSync(join(home, "Library", "LaunchAgents", "OpenCodex.plist"), JSON.stringify(registration));
@@ -221,6 +289,26 @@ describe("Desktop process detection by executable identity", () => {
       expect(launch(fixture)).toBe(true);
       expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
     } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("a false or missing RunAtLoad refuses launch without waiting or falling back to a CLI proxy", async () => {
+    for (const runAtLoad of [false, undefined]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", runAtLoad });
+      try {
+        expect(launch(fixture)).toBe(false);
+        const calls = fresh();
+        const dependencies = deps({ ownership: "desktop", process: "absent" }, calls);
+        dependencies.launchDesktop = () => launch(fixture);
+        const result = await runDesktopColdStart(dependencies);
+        let cliFallbacks = 0;
+        if (result.kind === "cli") cliFallbacks++;
+        expect(result.kind === "failed" && result.message).toContain("Open OpenCodex manually");
+        expect(calls.waits).toEqual([]);
+        expect(calls.released).toBe(1);
+        expect(cliFallbacks).toBe(0);
+        expect(fixture.seen.filter(call => call[0] === "/usr/bin/open")).toHaveLength(0);
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
   });
 
   test("a non-app directory refuses the launch without reading its Info.plist or waiting for a proxy", async () => {

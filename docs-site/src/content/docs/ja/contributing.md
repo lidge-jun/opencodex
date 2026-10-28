@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # 旧管理対象 pre-push・post-merge の削除
 bun run dev:proxy    # 開発モードのプロキシ API
 bun run dev:gui      # ダッシュボード dev サーバー(別ターミナル)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # 全テストスイート（既定）
 ```
 
@@ -122,7 +122,7 @@ Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の�
 
 ## 規約
 
-- **ES Modules のみ**(`import`/`export`)、TypeScript、`strict` モード。`bun x tsc --noEmit` をクリーンに
+- **ES Modules のみ**(`import`/`export`)、TypeScript、`strict` モード。`bun run typecheck` をクリーンに
   保ってください。
 - **ファイルあたり最大約 500 行** — 責任ごとに分割してください。単一の `index.ts` の後に小さく集中したモジュールを置いた
   `web-search/` と `vision/` サイドカーが良い例です。
@@ -175,6 +175,10 @@ versioned disposition は `passthrough`、`translated`、`degraded`、`unsupport
 `passthrough` 以外のクレームには具体的な制限を記載し、fixture に基づくクレームでは根拠となる正確な
 assertion id を指定してください。秘密情報を含まない request vector を `tests/fixtures/compatibility/` に
 追加し、production adapter に対して実行する集中テストを用意します。
+`passthrough` claim が引用できるのは、manifest test でその feature に紐付けられた selector 上の
+`equals` assertion で、期待値が同じ位置の呼び出し元の値そのものであるものだけです。これにより、削除・
+書き換え・無関係なフィールドを lossless と表示できません。custom tool とその grammar のように、片方だけ
+保たれうる側面は別々の claim にしてください。
 
 compatibility manifest は受動的なデータです。通常の router、Responses handler、server startup path から
 manifest catalog を import したり、Compatibility Lab を有効化したりしてはいけません。

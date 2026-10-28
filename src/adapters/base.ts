@@ -10,10 +10,14 @@ export interface IncomingMeta {
   headers: Headers;
   /** Canonical routed provider identity for provider-specific wire fields. */
   providerName?: string;
+  /** Trusted caller has durable structural replay ownership for earlier completed tools. */
+  completedToolBlocks?: boolean;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
   /** Lease acquired before the response is committed; the physical send transfers it to its body. */
   pacingSlot?: ProviderRequestSlot;
+  /** Internal queued rebuild already owns the outer provider fetch admission. */
+  dispatchPacingHeld?: boolean;
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**
@@ -51,6 +55,11 @@ export interface IncomingMeta {
    * channel explains why recovery stopped without inflating physical-send telemetry.
    */
   onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
+}
+
+export interface AdapterStreamContext {
+  /** Per-exchange authority: this parser feeds a bridge with signed structural output IDs. */
+  completedToolBlocks?: boolean;
 }
 
 export interface ProviderAdapter {
@@ -106,6 +115,7 @@ export interface ProviderAdapter {
     response: Response,
     budget: TranslatorBudget,
     tierMetadata?: AdapterTierMetadata,
+    streamContext?: AdapterStreamContext,
   ): AsyncGenerator<AdapterEvent>;
   parseResponse?(
     response: Response,
@@ -127,6 +137,10 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Caller tool identities replaced by hosted tools in this exact build; empty clears prior builds. */
+    hostedToolSubstitutions?: ReadonlyArray<{ name: string; namespace?: string; callType: string }>;
+    /** Exact final wire model, captured before serialization for model-scoped transport gates. */
+    outboundModelId?: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Native custom-tool wire names authorized for representation-only response repair. */
@@ -177,7 +191,7 @@ export interface AdapterFetchContext {
   kiroPreferAccountFailover?: boolean;
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
-  /** Deadline for receiving response headers on each attempt, not for consuming the response body. */
+  /** Response-header deadline per attempt; non-positive disables it. Body cancellation stays linked. */
   timeoutMs?: number;
   /** Return final non-2xx responses untouched so the caller can own the error-body read. */
   returnRawErrors?: boolean;

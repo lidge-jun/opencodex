@@ -1,7 +1,7 @@
 import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
@@ -21,7 +21,8 @@ import {
   toolBridgeInitError,
   type StreamParseState,
 } from "./protocol";
-import { resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
+import { isBatchDispatcher, resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
+import { inspectBatchDispatcher, type ReadDispatcherFn } from "./batch-dispatcher";
 
 /** Injectable spawn for tests; production uses node:child_process. */
 export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -41,6 +42,8 @@ export interface CodingAgentDeps {
   reapTimeoutMs?: number;
   /** Test seam for Windows command-shim invocation. */
   platform?: NodeJS.Platform;
+  /** Test seam for reading a Windows batch dispatcher before it is trusted with empty arguments. */
+  readDispatcher?: ReadDispatcherFn;
   /** Test seam for terminating a Windows CLI and all descendants. */
   killWindowsProcessTree?: KillWindowsProcessTreeFn;
   /** Test seam for a catalog/config write failure after private bridge-directory creation. */
@@ -121,6 +124,8 @@ export interface CodingAgentTurnInput {
   parsed: OcxParsedRequest;
   incoming: IncomingMeta;
   emit: (event: AdapterEvent) => void;
+  /** Observes accepted CLI result/stderr failures, before client-side error decoration. */
+  onCliOutputError?: (message: string) => void;
   /** Family-specific headless argument builder (tools disabled, model, reasoning, system prompt). */
   buildArgs: (profile: CodingAgentProviderProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig) => string[];
   /** Family-specific scoped env builder (credential + region switch on top of baseScopedEnv). */
@@ -299,6 +304,31 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   }
 
   const args = buildArgs(profile, parsed, provider);
+  // The family's isolation contract rides on empty-string values (`--tools ""`, and for Qoder and
+  // Claude `--setting-sources ""`). A Windows batch dispatcher that cannot deliver them would let
+  // the CLI read the next flag as the value, so refuse before spawn rather than run a turn whose
+  // isolation the host can no longer state (#7518).
+  if (platform === "win32" && isBatchDispatcher(binary) && args.includes("")) {
+    const verdict = inspectBatchDispatcher(binary, deps.readDispatcher);
+    if (!verdict.preservesEmptyArguments) {
+      const natives = profile.binaryCandidates.map(candidate => `${candidate}.exe`).join(" or ");
+      const cause = verdict.reason === "powershell_hop"
+        ? "forwards arguments through PowerShell, which drops the empty values"
+        : verdict.reason === "indirect_launch"
+          ? "hands off to another launcher that could not be checked for the empty values"
+          : "could not be read completely to confirm it keeps the empty values";
+      emit({
+        type: "error",
+        message: `${profile.label} CLI resolved to the batch dispatcher ${win32.basename(binary)}, which ${cause} this provider passes for tool and settings isolation. Put the CLI's native executable (${natives}) on PATH.`,
+        status: 500,
+        errorType: "upstream_error",
+        code: "cli_dispatcher_drops_empty_args",
+        retryable: false,
+      });
+      if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+      return;
+    }
+  }
   if (toolBridge && toolBridgeMcpConfigPath) {
     // Exact names close the wildcard domain; --strict-mcp-config (family args) keeps user
     // servers out, so this isolated server is the only capability this turn can reach.
@@ -368,10 +398,17 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   });
 
   let terminalEmitted = false;
-  const emitOnce = (event: AdapterEvent): void => {
+  const emitOnce = (event: AdapterEvent, cliOutputError?: string): void => {
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
       if (terminalEmitted) return;
       terminalEmitted = true;
+    }
+    if (event.type === "error" && cliOutputError !== undefined) {
+      try {
+        input.onCliOutputError?.(cliOutputError);
+      } catch {
+        // An observer failure must never drop the client's terminal event or turn it into a rejection.
+      }
     }
     emit(event);
   };
@@ -648,7 +685,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
-            : event);
+            : event, event.type === "error" && message.type === "result"
+              ? redactSecrets(event.message, profile.tokenEnv, apiKey) : undefined);
         }
         if (failClosed) break;
         const sawToolTurnStop = sawSelectedToolTurnStop();
@@ -762,7 +800,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       };
       emitOnce(input.classifyFailure
         ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
-        : error);
+        : error, stderr || undefined);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
         type: "error",
@@ -783,7 +821,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         errorType: "upstream_error",
         code: "protocol_error",
         retryable: false,
-      });
+      }, stderr || undefined);
     }
   }
   } finally {

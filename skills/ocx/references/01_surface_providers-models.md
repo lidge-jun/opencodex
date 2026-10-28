@@ -92,6 +92,7 @@ Drives no management route.
 | `--jsonl` | boolean | Emit one configured provider per JSON line. |
 
 - Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.
+- Each configured row carries active: false while this device is linked to a Home (a Remote Link Child or a Hub-mode client), whose providers serve instead; true when the row serves. Credential values are never printed.
 
 ### `ocx provider resets`
 
@@ -263,21 +264,25 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx provider test`
 
-Usage: `ocx provider test <name> [--json]`
+Usage: `ocx provider test <name> [--model <id> [--yes]] [--json]`
 
-Probe a provider's live model discovery connectivity.
+Probe discovery connectivity or explicitly test one model completion.
 
 State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
 | POST | `/api/providers/test` |
+| POST | `/api/providers/test-completion` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the probe result. |
+| `--model` | string | Run one bounded completion for this model instead of discovery. |
+| `--yes` | boolean | Confirm completion quota/cost; requires --model. Mandatory with --json or non-interactive input. |
+| `--json` | boolean | Emit the probe result; completion warnings go to stderr. |
 
-- May contact the upstream provider; requires operator intent to probe. Static catalogs can return applicable:false; failed connectivity exits nonzero.
+- Without --model, discovery behavior is unchanged; static catalogs can return applicable:false. Completion tests print a quota/cost warning and require a default-No terminal confirmation or --yes; cancellation exits 1 without a request.
+- Completion output includes TTFT, total latency, upstream/wire model metadata and comparison. Metadata is not proof of model identity; mismatch still exits 0. Failed tests exit 1; non-applicable results exit 0.
 
 ### `ocx provider quota`
 

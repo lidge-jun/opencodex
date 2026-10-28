@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -214,12 +215,12 @@ export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
   return true;
 }
 
-function canStartManagementOAuth(provider: string, principal: ManagementContext["principal"]): boolean {
-  return provider !== "meta-muse" || principal === "gui-session";
+function canStartManagementOAuth(provider: string, ctx: ManagementContext): boolean {
+  return provider !== "meta-muse" || hasHumanDashboardSession(ctx);
 }
 
-function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
-  if (canStartManagementOAuth(provider, principal)) return null;
+function metaMuseConsentRequired(provider: string, ctx: ManagementContext): Response | null {
+  if (canStartManagementOAuth(provider, ctx)) return null;
   return jsonResponse({
     error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
     code: "oauth_consent_required",
@@ -246,7 +247,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     // Discovery reflects this principal's admission; hiding a button is not the
     // consent boundary, which remains independently enforced on both POST routes.
-    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, principal)) });
+    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, ctx)) });
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.
@@ -273,7 +274,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // and reauth skip the import. All management login paths require the dashboard
     // principal before credential acquisition. A raw token proves administration,
     // not acknowledgement; caller-supplied headers are not consent evidence.
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
@@ -374,7 +375,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
     // several users passes the flowId it was given at /api/oauth/login.
-    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined);
+    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined,
+      { dismissSettledFailure: true });
     return jsonResponse({ ok: true, cancelled });
   }
 
@@ -389,7 +391,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string; flowId?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    const consentRequired = metaMuseConsentRequired(provider, principal);
+    const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);
@@ -510,7 +512,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
@@ -1115,6 +1117,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
+  }
+  if (url.pathname === "/api/providers/keys/pause" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
+    if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
+    const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
+    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
+      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };

@@ -43,6 +43,7 @@ import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREA
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { hasComboRoutedOriginMarker, hasOcxRoutedAuthorship } from "./ownership";
 import { NATIVE_GPT6_ASTRA_MODEL } from "./native-models";
 import { recordOwnedConfigPath } from "../../lib/config-ownership";
 
@@ -95,8 +96,18 @@ export interface CatalogModel {
    * which carries no CatalogModel, so a configured displayName can never override a native name.
    */
   displayName?: string;
+  /**
+   * Display-only Codex catalog `description` override, honored for combo rows only (#7229).
+   * Unset keeps the generated "Routed via opencodex → …" text; a set value stamps the row with
+   * the ownership marker in ./ownership so removal and template selection still recognize it.
+   */
+  description?: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   /** Exact CCA family evidence, retained through the in-memory discovery cache. */
   antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high", string>>;
   /** Suppress only catalog synthesis of a missing max rung; provider-declared max survives. */
@@ -126,6 +137,8 @@ export interface CatalogModel {
   supportsServiceTier?: boolean;
   /** Captured eligible service-tier wire explicitly maps ultrafast to ultrafast. */
   supportsUltraFastTier?: boolean;
+  /** Explicitly verified exact Flex wire and foreign caller-tier forwarding on this route. */
+  supportsFlexTier?: boolean;
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
@@ -177,15 +190,11 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   "opencode-go/mimo-v2-omni",
   "opencode-go/mimo-v2-pro",
   /*
-   * DeepSeek retired `deepseek-v4-pro` on 2026-09-14 04:00 UTC and routes its requests to
-   * V4.1-Flash (api-docs.deepseek.com/news/news260910). Deleting the registry rows removes
-   * the model on providers that publish a static roster, but every provider below discovers
-   * its models live — there, a deleted row does not remove anything, it only strips the
-   * context window, the effort ladder and the text-only hint, so the retired model would
-   * keep appearing with its capabilities broken. Excluding the slug is what actually takes
-   * it out of the routed catalog.
+   * These third-party exclusions originated in the superseded V4 Pro retirement plan.
+   * First-party service continues (api-docs.deepseek.com/updates/); these gateway routes
+   * remain excluded pending provider-specific verification. Live discovery can reintroduce
+   * a model removed from a static registry, so these exclusions act on the routed catalog.
    */
-  "deepseek/deepseek-v4-pro",
   "opencode-go/deepseek-v4-pro",
   "command-code/deepseek-deepseek-v4-pro",
   "commandcode/deepseek-deepseek-v4-pro",
@@ -297,7 +306,7 @@ export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null 
       && "base_instructions" in m
       && m.opencodex_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
       && m.owned_by !== COMBO_NAMESPACE
-      && !(typeof m.description === "string" && m.description.startsWith("Routed via opencodex → ")),
+      && !hasOcxRoutedAuthorship(m),
   ) ?? null;
 }
 
@@ -325,7 +334,7 @@ export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntr
       && "base_instructions" in m
       && m.opencodex_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
       && m.owned_by !== COMBO_NAMESPACE
-      && !(typeof m.description === "string" && m.description.startsWith("Routed via opencodex → ")),
+      && !hasOcxRoutedAuthorship(m),
   ) ?? null;
 }
 
@@ -802,6 +811,10 @@ export function normalizeRoutedCatalogEntry(
   delete entry.multi_agent_version;
   delete entry.multi_agent_reasoning_effort;
   delete entry.use_responses_lite;
+  // Codex 0.164 sends positional `configuration_update` effort items only for rows declaring this
+  // and freezes the request-level effort for the context window. A routed provider never
+  // negotiated that contract, so a row cloned from a GPT-6 template must not inherit it.
+  delete entry.supports_reasoning_effort_updates;
   delete entry.supports_websockets;
   // Routed rows cloned from native templates must not inherit OpenAI-only experimental context
   // delivery. Codex reads the flag as "this model accepts experimental context history" and drives
@@ -925,7 +938,9 @@ export function readCatalogBackup(catalogPath: string): RawCatalog | null {
 
 export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
   return (catalog?.models ?? []).some(m => typeof m.slug === "string"
-    && (m.slug.includes("/") || m.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND));
+    && (m.slug.includes("/")
+      || m.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND
+      || hasComboRoutedOriginMarker(m)));
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {

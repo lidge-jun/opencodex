@@ -18,6 +18,11 @@ closed. Explicit `xai` requires a usable stored Grok OAuth account and does not 
 requires both ChatGPT login auth and an enabled `forward` provider.
 :::
 
+On file load, a retired OpenCode Free model target in global or `claudeCode` overrides of
+`visionSidecar` or `webSearchSidecar` is removed and that sidecar is explicitly disabled, retaining
+its other settings. Select a supported target before re-enabling it. Healthy targets and the defaults
+for absent sidecar sections are unchanged.
+
 ### Additional web-search backends (explicit-only)
 
 Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
@@ -137,6 +142,19 @@ stall is not a total generation timeout. Failures before SSE starts return non-2
 failures after response headers have started are delivered as `response.failed` SSE.
 
 ## Vision sidecar
+
+Mistral's `zai-glm-5-3` is enrolled by the provider preset as text-only. With the
+vision sidecar enabled and available, OpenCodex describes attached images and
+sends their text descriptions to GLM. The Codex catalog advertises image
+attachments for this route. After an update, run `ocx sync`, then fully quit and
+relaunch the Codex desktop app or reload the VS Code window. Sync without a
+restart flag does not restart an existing Codex app-server, which can retain
+the old model list. Alternatively, use `ocx sync --restart-codex` to sync and
+restart matching Codex processes and the desktop app. Finish active work first:
+this restart ends live conversations. See the [sync and restart reference](/reference/cli/lifecycle/#ocx-sync---restart-codex---restart-app-server-only).
+After relaunch, select `mistral/zai-glm-5-3` and verify that image attachments
+are available. No model modality override is needed. Mistral documents native input in its
+[GLM 5.3 reference](https://docs.mistral.ai/models/zai-glm-5-3).
 
 Image routing is capability-aware. Before an image-bearing upstream send, opencodex resolves the selected model's effective input modalities from runtime provider evidence, explicit operator declarations, backend/registry metadata, and generated vendor metadata. A target positively known to be text-only goes through the Vision Sidecar first; the image is described **before** the main call and replaced inline with text. A target positively known to support images receives the image directly. Unknown custom models keep the existing compatibility behavior rather than being guessed text-only.
 
@@ -265,3 +283,9 @@ Claude Code OAuth fingerprint precedent, but should be soak-tested with the
 intended account and workload.
 
 See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.
+
+Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message.
+
+When a search answer ends with a Sources list, an unmatched list item stays in the answer instead of being removed as a citation. A title followed by its URL is still consumed as one citation. Non-HTTP URI-like text inside inline code, such as `mode:fast`, stays in the answer; code-formatted HTTP(S) URLs are still citations.
+
+Long search queries and answers are shortened without splitting a UTF-16 surrogate pair, so a single character such as 😀 is never cut in half by the result limits. A sequence of several characters, such as emoji joined with a zero-width joiner, can still be cut between its parts.

@@ -8,7 +8,7 @@ import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentia
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
-import { readAnthropicUsageQuota } from "../claude-cli-usage";
+import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -227,7 +227,7 @@ export async function fetchXaiQuota(provider: string, context: { accessToken: st
   }
 }
 
-const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
+const anthropicUsageInflight = new Map<string, Promise<AnthropicUsageProbe>>();
 
 /**
  * Anthropic per-credential usage.
@@ -256,6 +256,15 @@ export async function fetchAnthropicUsageQuotaForInstance(
   accessToken: string,
   requireFreshDispatch = false,
 ): Promise<ProviderQuota | null> {
+  return (await fetchAnthropicUsageProbeForInstance(instance, accessToken, requireFreshDispatch)).quota;
+}
+
+/** The same shared flight as `fetchAnthropicUsageQuotaForInstance`, keeping the closed failure reason. */
+export async function fetchAnthropicUsageProbeForInstance(
+  instance: AnthropicInstanceId,
+  accessToken: string,
+  requireFreshDispatch = false,
+): Promise<AnthropicUsageProbe> {
   // Recovery evidence must be requested after the claimed cooldown. Joining an older request
   // can return after the 429 while still describing provider state from before that refusal.
   const credentialIdentity = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken)
@@ -264,7 +273,7 @@ export async function fetchAnthropicUsageQuotaForInstance(
   const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
 
-  const probe = readAnthropicUsageQuota(accessToken).finally(() => {
+  const probe = probeAnthropicUsageQuota(accessToken).finally(() => {
     if (anthropicUsageInflight.get(key) === probe) anthropicUsageInflight.delete(key);
   });
   anthropicUsageInflight.set(key, probe);
@@ -300,7 +309,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (!initialRow || !currentRow || initialRow.loginId !== currentRow.loginId || initialRow.addedAt !== currentRow.addedAt
     || epoch !== captureProviderAccountQuotaEpoch(instance) || recovery.anthropicAccountIncarnation(probedAccountId) !== incarnation) return null;
   let quota: ProviderQuota | null;
-  let anthropicCurrent: (() => boolean) | undefined;
+  let anthropicCurrent: (() => boolean) | undefined; let anthropicPublish: (() => void) | undefined;
   try {
     const result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
       fresh => {
@@ -311,7 +320,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       () => targetCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
     if (result && !result.isCurrent()) return null;
     quota = result?.quota ?? null;
-    anthropicCurrent = result?.isCurrent;
+    anthropicCurrent = result?.isCurrent; anthropicPublish = result?.publishDecisionQuota;
   } catch (error) {
     if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
     throw error;
@@ -322,7 +331,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
     if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent });
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
   const quotaReport = report(provider, "anthropic:oauth-usage", quota);
@@ -428,7 +437,6 @@ export async function fetchCursorQuota(provider: string, accessToken: string): P
   const authHeaders = {
     Accept: "application/json",
     Authorization: `Bearer ${accessToken}`,
-    "User-Agent": "opencodex-quota",
   } as const;
 
   // Prefer dashboard period usage (Pro/Team/Ultra spend allowance in USD cents).

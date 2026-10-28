@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { accountAutoPausePolicySchema, accountPauseDetailsSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
 import { isValidProviderName } from "../provider-name";
@@ -12,6 +13,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  providerInputModalitiesConfigError,
   contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
@@ -303,10 +305,16 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  * fields pass through (preserved for runtime extensions).
  */
 export const providerConfigSchema = z.object({
+  accountAutoPause: accountAutoPausePolicySchema.optional(),
+  apiKeyPool: z.array(z.object({ id: z.string(), key: z.string(), label: z.string().optional(), addedAt: z.number().optional(), disabled: z.boolean().optional(), pauseRevision: z.string().optional(), pauseDetails: accountPauseDetailsSchema.optional() }).passthrough()).optional(),
   anthropicAccountPool: anthropicAccountPoolSchema,
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  inputModalities: z.unknown().superRefine((value, ctx) => {
+    const error = providerInputModalitiesConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["inputModalities"]),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);
     if (error) ctx.addIssue({ code: "custom", message: error });
@@ -424,6 +432,7 @@ export const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  messagePhaseInference: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
@@ -840,6 +849,21 @@ export const clientIntegrationsSchema = z.object({
   "claude-desktop": z.boolean().optional().catch(undefined),
 }).passthrough();
 
+/**
+ * Opt-in opencode-side request timeouts emitted into the generated opencode provider block.
+ * Each field is a positive millisecond count or the literal `false` (disable that wait). A
+ * malformed per-field value degrades to undefined (the field is dropped and opencode keeps its
+ * native default) rather than rejecting the whole config or emitting an opencode config that
+ * opencode would refuse to load. `.passthrough()` keeps a forward-compatible key a later version
+ * might add.
+ */
+const opencodeClientExportTimeout = z.union([z.number().positive().finite(), z.literal(false)]);
+export const opencodeClientExportSchema = z.object({
+  headerTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  chunkTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  timeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+}).passthrough();
+
 export const asideProfileSyncSchema = z.object({
   allProfiles: z.boolean().optional(),
   profiles: z.record(
@@ -1020,12 +1044,16 @@ export const codexPoolSchema = z.object({
     actions: z.object({
       pause: z.boolean(),
       notify: z.boolean(),
+      desktop: z.boolean().optional(),
     }).strict(),
     windows: z.object({
       short: z.boolean(),
       weekly: z.boolean(),
     }).strict(),
   }).strict().superRefine((policy, ctx) => {
+    if (policy.actions.desktop === true && !policy.actions.notify) {
+      ctx.addIssue({ code: "custom", path: ["actions", "desktop"], message: "desktop low-quota notification requires notify" });
+    }
     if (!policy.enabled) return;
     if (!policy.actions.pause && !policy.actions.notify) {
       ctx.addIssue({ code: "custom", path: ["actions"], message: "enabled low-quota protection needs an action" });

@@ -11,6 +11,8 @@ export const ACCOUNT_IMPORT_MAX_REQUEST_BYTES = ACCOUNT_IMPORT_MAX_BYTES + 1024;
 export const ACCOUNT_IMPORT_DEADLINE_MS = 600_000;
 export const ACCOUNT_IMPORT_MAX_RECORDS = 25;
 export const ACCOUNT_IMPORT_MAX_EMAIL_LENGTH = 254;
+/** Google Cloud project ids are 6–30 characters; anything longer cannot name a project. */
+export const ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH = 30;
 export const ACCOUNT_IMPORT_MAX_REFRESH_TOKEN_BYTES = 16 * 1024;
 
 export type AccountImportStatus = "imported" | "updated" | "failed" | "unsupported";
@@ -65,6 +67,11 @@ export function throwIfAccountImportAborted(signal?: AbortSignal): void {
 export interface CockpitAccountRecord {
   email: string;
   refreshToken: string;
+  /**
+   * Operator-supplied Cloud Code Assist project, used only when automatic discovery finds none
+   * and only after the account's own token proves it can use that project.
+   */
+  projectId?: string;
 }
 
 export type ParsedCockpitRecord =

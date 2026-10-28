@@ -203,7 +203,11 @@ describe("provider/model discovery follows existing handlers", () => {
     expect(await handleModelsRuntimeCommand("selected", ["fixture", "--set", "m", "--clear"], deps)).not.toBe(0);
     expect(await handleModelsRuntimeCommand("edit", ["id", "--context-window", "-"], deps)).not.toBe(0);
     expect(await handleProviderRuntimeCommand("test", [], deps)).not.toBe(0);
-    expect(capability("provider test").routes).toEqual([{ method: "POST", path: "/api/providers/test" }]);
+    expect(capability("provider test").routes).toEqual([
+      { method: "POST", path: "/api/providers/test" }, { method: "POST", path: "/api/providers/test-completion" },
+    ]);
+    expect(capability("provider test").usage).toBe("ocx provider test <name> [--model <id> [--yes]] [--json]");
+    expect(capability("provider test").flags.map(flag => flag.name)).toEqual(["--model", "--yes", "--json"]);
     expect(await handleProviderRuntimeCommand("edit", ["other", "--xai-chat", "on"], deps)).not.toBe(0);
     expect(calls).toEqual([]);
   });

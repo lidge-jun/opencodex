@@ -50,7 +50,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { terminalRefusalFailure } from "./terminal-refusal";
 
@@ -75,6 +75,9 @@ export function bridgeToResponsesSSE(
   heartbeatMs = 2_000,
   options?: {
     responseId?: string;
+    /** Trusted structural grouping only; never provider state or execution authority. */
+    outputItemIds?: { next(kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call"): string };
+
     stallTimeoutSec?: number;
     /**
      * The upstream is local infrastructure (loopback / private / `.local` / `.lan`); an unset
@@ -83,6 +86,8 @@ export function bridgeToResponsesSSE(
      */
     localUpstream?: boolean;
     hideThinkingSummary?: boolean;
+    /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
+    chatRawReasoningVisible?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
     /**
@@ -160,6 +165,9 @@ export function bridgeToResponsesSSE(
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope;
+  const outputItemId = (kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call", prefix: string): string =>
+    options?.outputItemIds?.next(kind) ?? `${prefix}_${uuid()}`;
+
   const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
   // Freeform/custom tools (apply_patch, code-mode exec) carry their body in `input`; the
@@ -361,10 +369,7 @@ export function bridgeToResponsesSSE(
         ? encoder.encode(': opencodex heartbeat\n\n')
         : encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
-      const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, {
-        localUpstream: options?.localUpstream,
-      });
-      const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
+      let localUpstream = options?.localUpstream;
 
       let currentMsg: {
         itemId: string;
@@ -408,7 +413,7 @@ export function bridgeToResponsesSSE(
         const encrypted = takeReasoningEnvelope(hiddenText || undefined);
         hiddenThinking = emptyChunks();
         if (!encrypted) return;
-        const itemId = `rs_${uuid()}`;
+        const itemId = outputItemId("reasoning", "rs");
         const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
         emit("response.output_item.added", { output_index: outputIndex, item });
         emit("response.output_item.done", { output_index: outputIndex, item });
@@ -437,7 +442,7 @@ export function bridgeToResponsesSSE(
         hiddenRawReasoning = emptyChunks();
         reservation?.commitRetained();
         budget?.releaseRetained(previousBytes, { kind: "reasoning" });
-        const itemId = `rs_${uuid()}`;
+        const itemId = outputItemId("reasoning", "rs");
         const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
         emit("response.output_item.added", { output_index: outputIndex, item });
         emit("response.output_item.done", { output_index: outputIndex, item });
@@ -460,7 +465,7 @@ export function bridgeToResponsesSSE(
         pendingKiroRedactedBytes = 0;
         reservation?.commitRetained();
         budget?.releaseRetained(previousBytes, { kind: "reasoning" });
-        const itemId = `rs_${uuid()}`;
+        const itemId = outputItemId("reasoning", "rs");
         const item = { type: "reasoning", id: itemId, summary: [] as never[], encrypted_content: encrypted };
         emit("response.output_item.added", { output_index: outputIndex, item });
         emit("response.output_item.done", { output_index: outputIndex, item });
@@ -488,7 +493,7 @@ export function bridgeToResponsesSSE(
       const takeWebAnnotations = (): { type: string; url: string; title?: string; start_index: number; end_index: number }[] => {
         if (pendingWebSources.length === 0) return [];
         const anns = pendingWebSources.map(s => ({
-          type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
+          type: "url_citation", url: s.url, title: s.title || s.url, start_index: 0, end_index: 0,
         }));
         const annotationBytes = bytesOf(JSON.stringify(anns));
         const reservation = budget?.reserveTransient(annotationBytes, { kind: "retained_collectors" });
@@ -770,9 +775,14 @@ export function bridgeToResponsesSSE(
         returnIterator();
       };
       let handlingTranslatorOverflow = false;
-      terminateForTranslatorOverflow = _error => {
+      terminateForTranslatorOverflow = error => {
         if (handlingTranslatorOverflow || terminated || clientCancelled || closed) return;
         handlingTranslatorOverflow = true;
+        // An adapter-raised overflow event carries the usage the turn already consumed; the
+        // provider billed it, so it must not be logged as zero.
+        const usage = (error as AdapterEvent | null | undefined)?.type === "error"
+          ? (error as Extract<AdapterEvent, { type: "error" }>).usage : undefined;
+        if (usage) options?.onUsage?.(usage);
         abortCurrentToolCallForTranslatorOverflow();
         currentWebSearch = null;
         releasePendingWebSources();
@@ -788,6 +798,7 @@ export function bridgeToResponsesSSE(
           sequence_number: seq++,
           response: {
             ...responseSnapshot("failed", finishedItems),
+            ...(usage ? { usage: responsesUsage(usage) } : {}),
             error: failure,
             last_error: failure,
           },
@@ -922,7 +933,7 @@ export function bridgeToResponsesSSE(
                 closeCurrentMessage("commentary");
               }
               if (!currentMsg) {
-                const itemId = `msg_${uuid()}`;
+                const itemId = outputItemId("message", "msg");
                 const item = {
                   type: "message", id: itemId, status: "in_progress", role: "assistant",
                   content: [] as { type: string; text: string; annotations: never[] }[],
@@ -977,7 +988,7 @@ export function bridgeToResponsesSSE(
               if (event.thinking.length > 0) rawReasoningForNextToolCall = "";
               if (currentToolCall) closeCurrentToolCall();
               if (!currentReasoning) {
-                const itemId = `rs_${uuid()}`;
+                const itemId = outputItemId("reasoning", "rs");
                 const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
                 emit("response.output_item.added", { output_index: outputIndex, item });
                 emit("response.reasoning_summary_part.added", {
@@ -1024,7 +1035,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "reasoning_raw_delta": {
-              if (options?.hideThinkingSummary || options?.hideRawReasoning) {
+              if (!(options?.chatRawReasoningVisible ?? !options?.hideThinkingSummary) || options?.hideRawReasoning) {
                 hiddenRawReasoning = appendString(
                   hiddenRawReasoning,
                   event.text,
@@ -1036,7 +1047,7 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentToolCall) closeCurrentToolCall();
               if (!currentRawReasoning) {
-                const itemId = `rs_${uuid()}`;
+                const itemId = outputItemId("reasoning", "rs");
                 const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
                 emit("response.output_item.added", { output_index: outputIndex, item });
                 currentRawReasoning = { itemId, outputIndex, text: emptyChunks() };
@@ -1096,7 +1107,7 @@ export function bridgeToResponsesSSE(
               const freeform = !toolSearch && (mapped
                 ? mapped.freeform === true
                 : (freeformToolNames?.has(realName) ?? false));
-              const itemId = `${toolSearch ? "tsc" : freeform ? "ctc" : "fc"}_${uuid()}`;
+              const itemId = toolSearch ? outputItemId("tool_search_call", "tsc") : freeform ? outputItemId("custom_tool_call", "ctc") : outputItemId("function_call", "fc");
               const item = toolSearch
                 ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
                 : freeform
@@ -1172,6 +1183,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "tool_call_end": {
+              if (event.incomplete) { failCurrentToolCall(); break; }
               // Fragments already streamed cannot be repaired. Refuse to complete a function call
               // whose assembled arguments do not parse — cancel the item and fail the turn so the
               // client never sees status:"completed" for unusable args (#765 stream remainder).
@@ -1211,7 +1223,7 @@ export function bridgeToResponsesSSE(
               flushHiddenRawReasoning();
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
-              const wsItemId = `ws_${uuid()}`;
+              const wsItemId = webSearchCellItemId(event.itemId);
               emit("response.output_item.added", {
                 output_index: outputIndex,
                 item: { type: "web_search_call", id: wsItemId, status: "in_progress" },
@@ -1224,7 +1236,7 @@ export function bridgeToResponsesSSE(
               // (defensive), synthesize the added frame first so the done has a matching item.
               if (!currentWebSearch || currentWebSearch.eventId !== event.id) {
                 if (currentWebSearch) closeCurrentWebSearch("completed", []);
-                const wsItemId2 = `ws_${uuid()}`;
+                const wsItemId2 = webSearchCellItemId(event.itemId);
                 emit("response.output_item.added", {
                   output_index: outputIndex,
                   item: { type: "web_search_call", id: wsItemId2, status: "in_progress" },
@@ -1479,6 +1491,9 @@ export function bridgeToResponsesSSE(
         gated = true;
         beat = setBeatInterval(() => {
           if (closed || gated) return;
+          if (localUpstream !== options?.localUpstream) { localUpstream = options?.localUpstream; stallTicks = 0; }
+          const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, { localUpstream });
+          const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
           if (upstreamActivity) {
             upstreamActivity = false;
             stallTicks = 0;

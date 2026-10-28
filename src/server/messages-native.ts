@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 /**
@@ -120,7 +121,9 @@ import {
   recordKeyWireAttemptUsage,
   type RequestLogContext,
 } from "./request-log";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { isLocalUpstream } from "../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";
 import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ownership";
 import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
@@ -423,7 +426,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     streamTurnRegistered = false;
     unregisterTurn(upstream);
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
+  // Set only at the final send boundary; queued refresh can replace the destination.
+  let localUpstream = false;
   // An OAuth route is served by the account the existing OAuth selection commits now, at
   // dispatch; the token lives on this lane's provider copy only, never on the shared route.
   let oauthBinding: NativeOAuthBinding | undefined;
@@ -483,6 +487,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       callerAnthropicBeta: options.callerAnthropicBeta,
       providerAccountUuid: oauthBinding?.providerAccountUuid,
       clientIdentity: options.clientIdentity,
+      sessionKey: oauthBinding?.sessionKey ?? options.sessionKey,
     });
     if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
     if (built.droppedBetas) {
@@ -545,6 +550,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     pendingDistributedFailure = undefined;
     record?.();
   };
+  /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
@@ -557,7 +563,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         request.url,
         applyUpstreamRecoveryInit({ method: "POST", headers: request.headers, body: request.body }, transportRecovery),
         upstream.signal,
-        connectMs,
+        0, // Final physical send owns the header clock after queued credential/destination refresh.
         requestedStream,
         providerFetch(activeProvider, undefined, {
           providerName: route.providerName,
@@ -616,6 +622,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             }
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+            const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, activeProvider, { config, oauth: sendingBinding?.snapshot }, headers);
             const selection = activeProvider._apiKeyAttempt;
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
@@ -636,13 +643,19 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               physicalSendsUsed++;
-              dispatched = await sendWithConnectionPolicy(
+              const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 distributedKeyPhysicalFetch(
                   anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
                   route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
+                String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
+              )) as typeof fetch;
+              localUpstream = isLocalUpstream(wire.url);
+              dispatched = await fetchWithHeaderTimeout(
                 wire.url,
-                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
-                { providerName: route.providerName, provider: activeProvider },
+                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body, ...physicalSendObserverInit(observeAutoPause, wire.url) }, transportRecovery),
+                init.signal ?? upstream.signal,
+                resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
+                requestedStream, physicalFetch,
               );
             } finally {
               try { if (physicalBudget.spendEnforced) spendReport(1); }
@@ -659,7 +672,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
@@ -672,7 +685,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               ? () => { recordDistributedResponseFailure(dispatched, config, route.providerName, req.signal); }
               : undefined;
             if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
-            return dispatched;
+            return observeAutoPause ? observeAutoPause(dispatched) : dispatched;
           },
         }),
       ),
@@ -700,9 +713,19 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     let billingRecoveryActive = false;
     const keySendAvailable = () => transientSendAvailable()
       && (!billingRecoveryActive || Math.max(physicalSendsUsed, physicalBudget.used) < physicalBudget.policy.maxTotalModelSends);
+    let autoPauseMoves = 0;
     const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
     for (let pass = 0; ; pass++) {
       const priorResponse = response;
+      for (; wasAccountAutoPaused(response) && !oauthBinding && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && keySendAvailable(); autoPauseMoves++) {
+        const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+        const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
+        if (!next) break;
+        try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        rebuildFor(next);
+        response = await send("key-401");
+      }
+
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
       while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
         const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
@@ -762,6 +785,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (response === priorResponse || isNonReplayableResponse(response) || !keySendAvailable()) break;
       // Billing class transitions share the physical-send ceiling; distributed-only
       // transitions additionally retain their original bounded pool-pass allowance.
+      if (wasAccountAutoPaused(response) && autoPauseMoves < 3) continue;
       if (distributedResponseOwnsKey && (
         (billingRecoveryActive && [401, 429].includes(response.status))
         || (activeProvider.adapter === "anthropic" && hasKeyPoolFailover(activeProvider) && [400, 402].includes(response.status))
@@ -835,6 +859,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   }
   releaseRetainedRequest();
 
+  // The last pool account refused on spent quota and rotation found no replacement: answer the
+  // usage limit with its reset (#6991), as the bridge lane does, not the upstream "try again later".
+  const poolUsageLimit = response.status === 429 && oauthBinding
+    ? anthropicRoutingFor(nativeInstance!).anthropicPoolUsageLimitAfterRefusal(Date.now(), oauthBinding.routeDecision, route.modelId)
+    : null;
+  if (poolUsageLimit) {
+    discard(response);
+    cleanupAbort();
+    logCtx.errorCode = "usage_limit_reached";
+    return retainUpstreamMessagesRequestId(localOAuthFailure(poolUsageLimit)!, response.headers);
+  }
   if (!response.ok) {
     let bodyText = "";
     try {
@@ -931,11 +966,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
 
   let read;
   try {
+    const jsonBodyReadMs = resolveJsonBodyReadTimeoutMs(config.stallTimeoutSec, { localUpstream }, config.connectTimeoutMs);
     read = await readBoundedResponseBody(response, {
       signal: upstream.signal,
       maxBytes: MAX_NATIVE_MESSAGES_JSON_BYTES,
-      totalTimeoutMs: Math.max(connectMs, 5_000),
-      inactivityTimeoutMs: Math.max(connectMs, 5_000),
+      totalTimeoutMs: localUpstream ? 0 : jsonBodyReadMs,
+      inactivityTimeoutMs: jsonBodyReadMs,
     });
   } catch (error) {
     cleanupAbort();

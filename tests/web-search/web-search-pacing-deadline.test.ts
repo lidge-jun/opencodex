@@ -4,6 +4,7 @@ import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { sleepWithAbort } from "../../src/lib/upstream-retry";
 import {
   providerRequestPacingStatus,
+  RequestPacingQueueOverloadError,
   resetProviderRequestPacingForTest,
   waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
@@ -144,6 +145,21 @@ async function waitUntilQueued(configured = provider) {
 }
 
 describe("web-search pacing and response-header deadline", () => {
+  test.each([0, -1])("disabled header budget %s survives pacing admission and retains cancellation", async connectTimeoutMs => {
+    let sends = 0;
+    const executor = fetcher(async () => { sends++; return new Response("ok"); });
+    await expectSuccess(run(executor, { connectTimeoutMs }));
+    expect(sends).toBe(1);
+    const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
+    const caller = new AbortController();
+    const pending = run(executor, { connectTimeoutMs, abortSignal: caller.signal });
+    await waitUntilQueued();
+    caller.abort(new DOMException("client left", "AbortError"));
+    expect((await settle(pending)).value.status).toBe(499);
+    expect(sends).toBe(1);
+    held.release();
+  });
+
   for (const adapterSend of [false, true]) {
     test(`${adapterSend ? "adapter fetchResponse" : "ordinary fetch"} excludes a queue wait longer than its header deadline`, async () => {
       const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
@@ -164,6 +180,14 @@ describe("web-search pacing and response-header deadline", () => {
       expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
     });
   }
+
+  test("a pacing-queue overload passes through instead of becoming 502 Provider unreachable", async () => {
+    const overload = new RequestPacingQueueOverloadError(NAME, "queue_full", 2);
+    const pending = run(fetcher(() => Promise.reject(new Error("must not send"))), {
+      adapter: { ...adapter(), fetchResponse: () => Promise.reject(overload) },
+    }).then(response => response.status, (error: unknown) => error);
+    expect((await settle(pending)).value).toBe(overload);
+  });
 
   test("client cancellation removes a queued send and leaves the next slot available", async () => {
     const held = await waitForProviderRequestSlot(NAME, provider, MODEL);

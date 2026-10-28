@@ -16,7 +16,7 @@
  */
 import type { OcxConfig } from "../../types";
 import type { RouteResult } from "../../router";
-import type { DataPlaneAdmission } from "../auth-cors";
+import type { AdmissionModelScope } from "../admission-model-scope";
 import type { AdmissionLease } from "../../lib/admission";
 import type { RequestExecutionBudget, SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
@@ -38,7 +38,7 @@ import { applyDroidReasoningDefault } from "../droid-reasoning-default";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
-import { assertRouteAllowedByScope, resolveAdmissionModelScope } from "../admission-model-scope";
+import { assertRouteAllowedByScope } from "../admission-model-scope";
 import { isNativeChatRouteEligible } from "../chat-native-eligibility";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
@@ -108,12 +108,13 @@ export function createComboProtocolLanes(input: {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
-  admission: DataPlaneAdmission | undefined;
+  /** The request's resolved model-scope snapshot; internal callers carry the caller's scope. */
+  admissionScope: AdmissionModelScope | undefined;
   droidDefaultEffort?: string;
   comboId: string;
   targets: readonly ComboTarget[];
 }): ComboProtocolLanes | undefined {
-  const { source, req, config, logCtx, admission, droidDefaultEffort, comboId, targets } = input;
+  const { source, req, config, logCtx, admissionScope, droidDefaultEffort, comboId, targets } = input;
   if (!source) return undefined;
   const envelope = source.envelope;
   const reject = resolveProtocolSettings(config).unrepresentable === "reject";
@@ -125,7 +126,7 @@ export function createComboProtocolLanes(input: {
   const settle = (target: ComboTarget, targetRoute: RouteResult): RouteResult | undefined => {
     try {
       const route: RouteResult = { ...targetRoute };
-      assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), selector(target), route);
+      assertRouteAllowedByScope(admissionScope, selector(target), route);
       const routedProvider = route.provider;
       route.staticPolicy = captureRouteStaticPolicy(
         route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, "chat",

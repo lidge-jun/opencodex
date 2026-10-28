@@ -10,10 +10,10 @@ description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
 - 主机可以使用 OpenSSH 密钥登录子机。
 - 对于由子机发起的链接，子机必须能使用 OpenSSH 密钥登录主机（不支持密码登录）。
 - 子机已安装 OpenCodex 2.66.0 或更高版本（由子机发起的链接还要求主机也满足）。
-- 两台电脑运行 macOS 或 Linux。
+- 两台计算机均可运行 macOS、Linux 或 Windows x64。Windows 需要 OpenSSH Server 和 Windows PowerShell，无需 Git Bash 或 curl。
 - 从主机添加子机的控制台需在主机上打开，或使用已配对的 Hub 会话。将当前电脑转换为子机需要操作员配对的控制台会话；无凭据签发的本地会话不能提交这项路由更改。
 
-密码 SSH 和 Windows 不在当前流程中。链接可以从任意一侧发起：按下文从主机发起，或按“将这台电脑连接为子机”一节从子机发起。
+不支持密码 SSH。可从 Home 或 Child 发起链接。Windows 通过同一固定主机密钥的 OpenSSH 连接执行 PowerShell。
 
 ## 从 `#remote` 添加子机
 
@@ -55,7 +55,7 @@ Host devbox
 
 - **Connected** 表示 SSH 隧道已就绪，子机可以使用主机链接。
 - **Reconnecting** 表示正在重试隧道。重试期间请求可能暂时返回带有 `Retry-After` 的 `503`。在从自己的仪表板连接的 Child 上，请求会先最多等待 15 秒让隧道恢复。
-- **Failed** 表示链接需要处理。请检查 SSH 身份验证、已确认的主机密钥、转发或超时原因。建立 SSH 隧道的一方会在睡眠、故障或重启后自动重试（Home 添加的 Child 由 Home 重试，从自己的仪表板连接的 Child 由 Child 重试）：超时或转发错误后大约每分钟一次，身份验证错误后每五分钟一次。主机密钥变更时不会重试。要立即重连，请在 Home 的仪表板中选择 **Retry**，或在 Home 上运行 `ocx link reconnect --link-id <id>`。这只会重启该链接的隧道，不会重启 OpenCodex。
+- **Failed** 表示链接需要处理。请检查 SSH 身份验证、已确认的主机密钥、转发或超时原因。建立 SSH 隧道的一方会在睡眠、故障或重启后自动重试（Home 添加的 Child 由 Home 重试，从自己的仪表板连接的 Child 由 Child 重试）：超时或转发错误后先在一分钟后重试，之后每次重试失败等待时间翻倍，最长五分钟一次；身份验证错误后每五分钟一次。主机密钥变更时不会重试。要立即重连，请在 Home 的仪表板中选择 **Retry**，或在 Home 上运行 `ocx link reconnect --link-id <id>`。这只会重启该链接的隧道，不会重启 OpenCodex。
 
 链接失败时不会静默切换到本地提供商。
 

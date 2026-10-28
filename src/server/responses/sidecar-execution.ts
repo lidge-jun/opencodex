@@ -34,11 +34,13 @@ import {
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
+import { sidecarContextOverflowResponse } from "./context-overflow";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
@@ -50,12 +52,13 @@ import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
-import { normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { attemptAccountChanged } from "../request-log-account-rotation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
+import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -71,6 +74,7 @@ export async function executeResponsesSidecars(
     | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
+    | "admissionScope"
   >,
   transportState: Pick<
     ResponsesTransport,
@@ -123,6 +127,7 @@ export async function executeResponsesSidecars(
     translatorBudget,
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
+    admissionScope,
   } = requestState;
   const { routedCompaction, openAiSidecar } = sidecarState;
   const { reserveCredentialHop } = sendBudgetState;
@@ -189,6 +194,7 @@ export async function executeResponsesSidecars(
       config,
       workerIdentity: `${route.modelId} (provider ${route.providerName})`,
       workerModelId: route.modelId,
+      admissionScope,
       abortSignal: options.abortSignal,
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
@@ -198,7 +204,7 @@ export async function executeResponsesSidecars(
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
-  // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
+  // Routed-compaction turns must NOT hit the image bridge: compaction disables tool execution but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
   // completion instead of the synthetic compaction item Codex expects (#424).
   //
@@ -216,6 +222,8 @@ export async function executeResponsesSidecars(
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
+  // Replayed search pairs call the synthetic web_search tool only the sidecar declares (#7269).
+  if (!wsPlan) stripReplayedSearchPairs(parsed);
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
   let sidecarOutputStarted = false;
@@ -548,8 +556,9 @@ export async function executeResponsesSidecars(
       options.codexWsRuntimeIdentity,
       { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
     );
-    const imgResponse = await runWithImageBridge({
+    const imgLoopResponse = await runWithImageBridge({
       parsed, adapter: transportState.adapter,
+      chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
@@ -580,6 +589,7 @@ export async function executeResponsesSidecars(
         return fetch.unpacedFetch ?? fetch;
       },
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -588,9 +598,7 @@ export async function executeResponsesSidecars(
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
         // runTurn branch).
-        if (!logCtx.conversationId && parsed._cursorConversationId) {
-          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-        }
+        assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
         transportState.bindKeyUsageFromBridge(usage);
       },
       on429: rotateSidecarProviderOn429,
@@ -619,15 +627,22 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
-    const imgScopeRefusal = sidecarScopeRefusal(imgResponse);
+    const imgScopeRefusal = sidecarScopeRefusal(imgLoopResponse);
     if (imgScopeRefusal) return imgScopeRefusal;
+    // A provider overflow on the first iteration answers as the main path's context failure (#7316).
+    const imgResponse = options.comboAttempt ? imgLoopResponse : sidecarContextOverflowResponse(imgLoopResponse, {
+      stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+    });
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: imgResponse.status,
         headers: imgResponse.headers,
       });
+      // The wrapper is a new object; a verified plan refusal keeps its provenance across it.
+      if (isVerifiedModelNotInPlanResponse(imgResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return imgResponse;
@@ -651,6 +666,7 @@ export async function executeResponsesSidecars(
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
       parsed, adapter: transportState.adapter,
+      chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
@@ -688,6 +704,7 @@ export async function executeResponsesSidecars(
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -732,16 +749,23 @@ export async function executeResponsesSidecars(
       ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
       : null;
     if (poolUsageLimit) void loopResponse.body?.cancel().catch(() => {});
-    const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx }) : loopResponse;
+    // A provider overflow on the first iteration answers as the main path's context failure (#7316).
+    const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx })
+      : options.comboAttempt ? loopResponse
+        : sidecarContextOverflowResponse(loopResponse, {
+          stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+        });
     // Register the sidecar stream as an active turn so drainAndShutdown waits for (or aborts)
     // in-flight web-search turns instead of skipping them during graceful shutdown.
     if (wsResponse.body) {
       const wsTurnAc = new AbortController();
       wsTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: wsResponse.status,
         headers: wsResponse.headers,
       });
+      if (isVerifiedModelNotInPlanResponse(wsResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return wsResponse;

@@ -16,6 +16,10 @@ export function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: f
       console.error("The proxy home or lifecycle ownership could not be verified. Run `ocx status`; if a service owns the proxy, use its installation's `ocx service restart`, otherwise use the owning app or supervisor. No changes were made.");
     } else if (code === "restart_package_tree_unsettled") {
       console.error(`The proxy's package files are unsettled. Wait for the install to finish, then run \`ocx restart\`. ${INCOMPLETE_INSTALL_RECOVERY}`);
+    } else if (code === "restart_supervised_service") {
+      console.error("Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.");
+    } else if (code === "restart_supervised_desktop") {
+      console.error("Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.");
     } else {
       console.error("Proxy restart request could not be confirmed; no fallback stop/start was attempted. Run `ocx status` to inspect ownership and runtime state.");
     }

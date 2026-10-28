@@ -25,6 +25,11 @@ export const UPGRADE_DEADLINE_MS = 10_000;
 // keeps exactly the previous 90 s bound; a peer that does can never trip it while alive.
 export const CODEX_WS_LIVENESS_PING_INTERVAL_MS = 15_000;
 export const CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS = 90_000;
+// The pinger keeps running after the commit: a tunnel restart or Wi-Fi rejoin can drop the path
+// without a FIN or RST, and codex-rs would wait out its 300 s idle timeout. A peer that has ponged
+// and then sends no frame and no pong for this many intervals is gone, and the stream fails so the
+// client retries. One missed pong is not a verdict.
+export const CODEX_WS_COMMITTED_SILENT_INTERVALS = 2;
 // Keep the push-based WS transport inside the same memory envelope as the
 // bounded SSE relays that consume this response. Unlike fetch response bodies,
 // a WebSocket cannot be paused when a ReadableStream applies backpressure, so
@@ -404,7 +409,7 @@ export type CodexWsFailureStage = {
   firstResponseMs: number | null;
   /** Milliseconds from send to this failure; null when the failure predates the send. */
   elapsedMs: number | null;
-  /** Liveness pings the exchange sent while waiting for the first response event. */
+  /** Liveness pings the exchange sent, before and after the first response event. */
   pings: number;
   /** Pongs the peer answered with; zero on a peer that never answers pings. */
   pongs: number;

@@ -1,6 +1,5 @@
 import { startMmxTextBridge } from "../../src/cli/minimax";
 
-let proxyRequests = 0;
 let upstreamBody = "";
 const upstream = Bun.serve({
   hostname: "127.0.0.1",
@@ -8,14 +7,6 @@ const upstream = Bun.serve({
   async fetch(request) {
     upstreamBody = await request.text();
     return Response.json({ source: "upstream" });
-  },
-});
-const attackerProxy = Bun.serve({
-  hostname: "127.0.0.1",
-  port: Number(process.env.TEST_PROXY_PORT),
-  fetch() {
-    proxyRequests += 1;
-    return Response.json({ source: "proxy" });
   },
 });
 const bridge = startMmxTextBridge({ hostname: "127.0.0.1", port: upstream.port });
@@ -31,11 +22,9 @@ try {
   console.log(JSON.stringify({
     responseStatus: response.status,
     responseText,
-    proxyRequests,
     upstreamBody,
   }));
 } finally {
   await bridge.stop();
   await upstream.stop(true);
-  await attackerProxy.stop(true);
 }

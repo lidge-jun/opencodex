@@ -24,7 +24,7 @@ both `--adapter` and `--base-url`.
 | `list` | `--json`, `--jsonl` | List configured providers and the remaining registry entries; `--jsonl` emits one configured provider object per line. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--responses-path <path>`, `--auth-mode <key\|forward\|oauth\|local>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync`, `--live` | Save locally by default; `--sync` attempts client sync in either output mode. `--live` writes through the running proxy and cannot combine with `--sync`. `--force` permits overwrite. |
 | `edit <name>` | provider field flags, `--headers <json>`, `--model-context-tier <model=default\|long_context>`, `--upstream-http-version <http1.1\|->`, `--fast <on\|off>`, `--context-window <N\|->`, `--json` | Edit validated live provider fields without replacing key pools. Repeat `--model-context-tier` for multiple Copilot models. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
-| `test <name>` | `--json` | Probe the real upstream model endpoint. |
+| `test <name>` | `--model <id>`, `--yes`, `--json` | Check discovery; with `--model`, request one confirmed completion test. |
 | `show <name>` | `--json` | Show config with API keys masked. |
 | `remove <name>` | `--json`, `--live`, `--yes` | Local removal refuses the default and last provider. Live removal requires `--yes` and uses server dependency checks, default reassignment and account/custom-model cleanup. |
 | `set-default <name>` | `--json`, `--live` | Select a local default, or update the running proxy with `--live`. |
@@ -53,6 +53,13 @@ ocx models live --provider ark --json
 `registryCount` summary from `--json`. Each object has the same fields as an item in the `configured` array.
 Use it for scripts that process one configured provider object per line.
 `--json` and `--jsonl` cannot be combined.
+
+Each configured row also has `active`. It is `false` when this device is linked to a Home
+(a Remote Link Child or a Hub-mode client): the row is local configuration that the Home's
+providers shadow, so it does not serve requests while the link is connected. It is `true` when the
+row actually serves, including when the link state cannot be read. Rows never carry credential
+values: `baseUrl` drops embedded userinfo and masks credential-shaped query values such as `key`
+or `token`, while keeping ordinary parameters such as `api-version`.
 
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
@@ -120,9 +127,36 @@ notices. Null, absent or `not-requested` refresh can exit 0 without a client syn
 Read back before recovery; do not repeat a persisted write to repair convergence.
 Errors use safe prose on stderr, including in JSON mode, rather than a JSON error envelope.
 
-`provider test` is separate: it checks upstream model discovery connectivity. A failed connection exits 1; success and a static catalog with no applicable discovery endpoint exit 0.
+`provider test <name>` without `--model` checks upstream model discovery connectivity. A failed connection exits 1; success and a static catalog with no applicable discovery endpoint exit 0.
 `applicable: false` is an expected static-catalog result, not successful inference
 or a failed connection.
+
+To send one completion request for a chosen model, use:
+
+```bash
+ocx provider test my-relay --model my-model
+ocx provider test my-relay --model my-model --yes --json
+```
+
+This test may incur provider charges. An interactive terminal asks for confirmation;
+`--yes` accepts the charge warning. Non-interactive use and `--json` require
+`--yes`. Using `--yes` without `--model` is a usage error. Declining confirmation
+sends no request and exits 1. The command uses the running proxy's management API.
+
+The completion test sends the fixed prompt `Reply exactly OK.`, requests a 32-token output cap, stops after 20 seconds or 64 KiB, and never retries or fails over.
+It supports key-auth or local OpenAI Chat and Responses providers, including
+per-model wire overrides. Disabled, OAuth, forwarded-auth and unsupported adapter
+or transport configurations return an applicability reason without sending a completion.
+TLS profiles, HTTP version pins, enabled request pacing and custom executors with
+a provider proxy override are currently unsupported.
+
+Results include time to first text delta (TTFT), total latency, the requested and
+wire model ids, sanitized upstream model metadata and a distinct match, mismatch
+or unknown comparison. Missing or conflicting metadata is unknown. The comparison
+uses the upstream id before masking, against the id actually sent after alias and
+suffix handling. Provider-reported metadata cannot verify model identity:
+`identityVerified` is always `false`. Generated text is not returned. A failed
+completion exits 1; success and a not-applicable result exit 0.
 
 ### Transport settings and request pacing
 
@@ -443,9 +477,10 @@ reset changes and expires after six hours or at the observed reset, whichever co
 
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
-While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
-If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
-schedule; a longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
+While blocked, recovery checks owned usage metadata on a capped 5/10/20/40/60-minute schedule, so a reset
+redeemed outside opencodex is noticed before the predicted reset; the first check waits five minutes, checks
+stay at least five minutes apart, and the next check is pulled in to the latest known blocking reset. A paused
+or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
@@ -639,6 +674,13 @@ changes Orca files, or changes the active pool account.
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+Stored ChatGPT pool accounts remain listable on hosts without a native Codex home, including in the
+dashboard and on account refresh. Listing does not create a Codex home or sign out the native main
+account. Disabling the Codex client integration does not disable an existing native login's quota
+observation; invalid explicit `CODEX_HOME` paths still report a configuration error. Unsafe
+`OPENCODEX_HOME` storage reports an error even when the native Codex home is missing.
+Default-home resolution also reports errors for files, dangling links, and parent directories that cannot be traversed.
+
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
@@ -655,6 +697,14 @@ returns:
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+Codex JSON rows include `slotId` (the registered `id`) and `slotKind` (`native-main` or
+`pool`). When the proxy can verify both the upstream account and user identity, it also
+includes `upstreamAccountKey` (`uai1_` followed by 64 lowercase hexadecimal characters).
+Equal keys within the `openai` provider identify slots for the same upstream user; keep
+each slot and its quota state separately. The key is local to this installation and can
+change when its administrator token rotates. If it is absent, do not infer a match from
+masked email or quota values. Raw upstream IDs, user claims and credentials are not listed.
 
 An empty provider listing names the next command in human output and JSON `notes`:
 `ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`
@@ -737,6 +787,8 @@ separately billed sends add to the request spend. Credits are never estimated fr
 With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
 confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
 that login until reset or evidence expiry; completed service clears an older verdict.
+Quota refusals include the exact `MONTHLY_REQUEST_COUNT` and `OVERAGE_REQUEST_LIMIT_EXCEEDED`
+reasons on HTTP 400 or 429. Plans allowing overage can keep serving after the monthly gauge reaches 100%.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
 Users of one organization (IAM Identity Center) profile share its profile ARN, so a Kiro CLI account is identified by that profile together with the email `kiro-cli whoami` reports for the session. Two users of the same organization therefore stay separate accounts, and signing the same user in again updates that user's account. When `kiro-cli whoami` reports no user, the profile alone identifies the account as before. If that profile already has an account with a known user, such a login only refreshes the account whose stored Kiro CLI session it continues; any other login is refused instead of replacing an account, and an Add account login switches the Kiro CLI back to its previous session. Run `kiro-cli whoami` to confirm the signed-in user, then retry. Reauthenticating an account saved before its user was known records the user that signs in, unless that user already has another account of the same profile.
@@ -795,7 +847,9 @@ Clear the manual Codex account selection without resolving an account id, so it 
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-Pause or resume one account in the Codex, Anthropic, or generic OAuth provider pool, including
+Accounts paused by the opt-in [per-provider auto-pause policy](/reference/configuration/providers/#auto-pause-permanently-refused-accounts) use the same commands. Listing shows the fixed pause reason; resume clears it.
+
+Pause or resume one account in the Codex, Anthropic, generic OAuth, or API-key provider pool, including
 `google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
 OAuth accounts must be identified by id or a unique alias. A paused OAuth account
 is excluded from request selection, 429 failover, and proactive token refresh, and cannot be

@@ -16,6 +16,7 @@ export interface PendingLinkHost {
   knownHostLine: string;
   probedAt: number;
   sshLatencyMs?: number;
+  remotePlatform?: "posix" | "windows";
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
@@ -27,6 +28,8 @@ export interface LinkRouteListener {
   status(): { state: "off" | "listening" | "failed"; port: number | null; reason: string | null };
   close(): Promise<void>;
   onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
+  /** Optional so route fakes stay small; without it every link reports an unknown peer. */
+  peerObservation?(linkId: string): import("../../link/peer-report").LinkPeerEntry;
 }
 
 export interface LinkRouteState {

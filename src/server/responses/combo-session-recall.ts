@@ -111,6 +111,31 @@ export function recallComboForLane(
 }
 
 /**
+ * The concrete target that completed the lane's last turn for `comboId`, under the same
+ * freshness and ownership rules as `recallComboForLane`. A lane answered by another combo, or
+ * whose target left the combo or was disabled, recalls nothing.
+ */
+export function recallComboTargetForLane(
+  config: OcxConfig,
+  lane: string | undefined,
+  comboId: string,
+): Pick<OcxComboTarget, "provider" | "model"> | undefined {
+  if (!lane || !comboId) return undefined;
+  const entry = recall.get(lane);
+  if (!entry || entry.comboId !== comboId) return undefined;
+  const combo = getCombo(config, entry.comboId);
+  const provider = config.providers[entry.target.provider];
+  if (Date.now() - entry.at >= RECALL_TTL_MS
+    || !Object.hasOwn(config.providers, entry.target.provider)
+    || !provider || provider.disabled === true
+    || !combo?.targets.some(target => targetKey(target) === targetKey(entry.target))) {
+    deleteEntry(lane);
+    return undefined;
+  }
+  return { provider: entry.target.provider, model: entry.target.model };
+}
+
+/**
  * Periodic expiry. Without it a lane that is never read again and never touched by a config
  * reconciliation holds its entry for the life of the process: the existing TTL is only
  * evaluated on read or on generation change.

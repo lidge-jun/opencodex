@@ -10,10 +10,10 @@ Makine bağlantısı, bir OpenCodex **Home** bilgisayarını bir **Child** bilgi
 - Home bilgisayarı, Child bilgisayarına OpenSSH anahtarıyla giriş yapabilir.
 - Child tarafından başlatılan bağlantı için Child, Home bilgisayarına OpenSSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez).
 - Child bilgisayarında OpenCodex 2.66.0 veya sonrası kuruludur (Child tarafından başlatılan bağlantıda Home üzerinde de).
-- Her iki bilgisayar da macOS veya Linux çalıştırır.
+- Bilgisayarlar macOS, Linux veya Windows x64 kullanabilir. Windows için OpenSSH Server ve Windows PowerShell gerekir; Git Bash ve curl gerekmez.
 - Home üzerinden Child ekleyen kontrol paneli Home üzerinde ya da eşleştirilmiş bir Hub oturumunda açılır. Geçerli bilgisayarı Child'a dönüştürmek için operatörün eşleştirdiği bir kontrol paneli oturumu gerekir; kimlik bilgisi olmadan oluşturulan yerel oturum bu yönlendirme değişikliğini onaylayamaz.
 
-Parolalı SSH ve Windows mevcut akışın dışındadır. Bağlantı iki taraftan da başlatılabilir: aşağıda anlatıldığı gibi Home tarafından ya da "Bu bilgisayarı Child olarak bağlama" bölümünde anlatıldığı gibi Child tarafından.
+Parolalı SSH desteklenmez. Bağlantı Home veya Child üzerinden başlatılabilir. Windows aynı doğrulanmış OpenSSH bağlantısı üzerinden PowerShell çalıştırır.
 
 ## `#remote` üzerinden Child ekleme
 
@@ -55,7 +55,7 @@ Bağlanmak bu bilgisayardaki OpenCodex'i yeniden başlatır. Zaten çalışan Co
 
 - **Connected**, SSH tünelinin hazır ve Child'ın Home bağlantısını kullanabilir olduğu anlamına gelir.
 - **Reconnecting**, tünelin yeniden denendiği anlamına gelir. Yeniden deneme sırasında istekler geçici olarak `Retry-After` ile birlikte `503` döndürebilir. Kendi panosundan bağlanan bir Child üzerinde istek önce tünelin geri gelmesi için en fazla 15 saniye bekler.
-- **Failed**, bağlantının ilgilenilmesi gerektiği anlamına gelir. SSH kimlik doğrulamasını, onaylanan ana bilgisayar anahtarını, yönlendirmeyi veya zaman aşımı nedenini kontrol edin. SSH tünelini açan taraf (eklediği Child için Home, kendi panosundan katıldığı bağlantı için Child); uyku, kesinti veya yeniden başlatmadan sonra kendiliğinden yeniden dener: zaman aşımı veya yönlendirme hatasından sonra yaklaşık dakikada bir, kimlik doğrulama hatasından sonra beş dakikada bir. Değişmiş bir ana bilgisayar anahtarı asla yeniden denenmez. Hemen yeniden denemek için Home panosunda **Retry** düğmesini seçin veya Home üzerinde `ocx link reconnect --link-id <id>` komutunu çalıştırın. Bu, OpenCodex'i yeniden başlatmadan yalnızca o bağlantının tünelini yeniden başlatır.
+- **Failed**, bağlantının ilgilenilmesi gerektiği anlamına gelir. SSH kimlik doğrulamasını, onaylanan ana bilgisayar anahtarını, yönlendirmeyi veya zaman aşımı nedenini kontrol edin. SSH tünelini açan taraf (eklediği Child için Home, kendi panosundan katıldığı bağlantı için Child); uyku, kesinti veya yeniden başlatmadan sonra kendiliğinden yeniden dener: zaman aşımı veya yönlendirme hatasından sonra bir dakika sonra, ardından her yeni başarısızlıkta bekleme ikiye katlanarak en fazla beş dakikada bir; kimlik doğrulama hatasından sonra beş dakikada bir. Değişmiş bir ana bilgisayar anahtarı asla yeniden denenmez. Hemen yeniden denemek için Home panosunda **Retry** düğmesini seçin veya Home üzerinde `ocx link reconnect --link-id <id>` komutunu çalıştırın. Bu, OpenCodex'i yeniden başlatmadan yalnızca o bağlantının tünelini yeniden başlatır.
 
 Bağlantı başarısız olduğunda sistem sessizce yerel bir sağlayıcıya geçmez.
 

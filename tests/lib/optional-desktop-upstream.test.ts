@@ -50,6 +50,20 @@ for (const kind of ["http", "https", "socks5", "socks5h"] as const) test(`verifi
   } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
 }, 15000);
 
+// The fixture proxy must hold the client's first bytes until its upstream connects; on a loaded
+// runner the ClientHello can arrive first, and a dropped one stalls the dial until its deadline.
+for (const kind of ["http", "https", "socks5"] as const) test(`${kind} fixture proxy keeps early client bytes across a slow upstream connect`, async () => {
+  const ca = createCertificateAuthority({ commonName: "egress-fixture", validityDays: 1 });
+  const leaf = issueServerLeaf(ca, "egress-fixture", ["chatgpt.com"]), proxyLeaf = issueServerLeaf(ca, "egress-fixture", ["localhost"]);
+  const origin = await listenFixture(createHttps({ cert: leaf.certPem, key: leaf.keyPem }, (_req, res) => { res.end("ok"); }));
+  const proxy = await forwardProxy(kind, origin.port, proxyLeaf, undefined, { targetConnectDelayMs: 50 });
+  let socket: Awaited<ReturnType<typeof dialDesktopUpstream>> | undefined;
+  try {
+    socket = await dialDesktopUpstream({ proxy: proxy.url, ca: ca.certPem, proxyCa: ca.certPem, target: { host: "chatgpt.com", port: 443 }, timeoutMs: 3000 });
+    expect(socket.authorized).toBe(true);
+  } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
+}, 10000);
+
 for (const kind of ["http", "https", "socks5", "http-all", "https-all"] as const) test(`desktop HTTP fetch uses the same authenticated ${kind} egress and validates upstream TLS`, async () => {
   const ca = createCertificateAuthority({ commonName: "fetch-egress-fixture", validityDays: 1 });
   const leaf = issueServerLeaf(ca, "fetch-egress-fixture", ["chatgpt.com"]), proxyLeaf = issueServerLeaf(ca, "fetch-egress-fixture", ["localhost"]);

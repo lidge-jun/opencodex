@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "id": "opengateway-key-glm53-responses-v1",
+  "manifestId": "opengateway.key.glm-5-3-flash-ultrafast.responses",
+  "cases": [
+    {
+      "id": "custom-tool-lowering",
+      "incomingHeaders": {
+        "authorization": "Bearer caller-stale-token",
+        "x-not-forwarded": "must-not-cross"
+      },
+      "request": {
+        "model": "z-ai/glm-5.3-flash-ultrafast",
+        "stream": true,
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Apply the fixture patch"
+              }
+            ]
+          },
+          {
+            "type": "custom_tool_call",
+            "call_id": "call_fixture",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** End Patch"
+          },
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_fixture",
+            "output": "Done"
+          }
+        ],
+        "tools": [
+          {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "format": {
+              "type": "grammar",
+              "syntax": "lark",
+              "definition": "start: PATCH\nPATCH: /[\\s\\S]+/"
+            }
+          }
+        ]
+      },
+      "assertions": [
+        {
+          "id": "canonical-url",
+          "operator": "equals",
+          "path": "/url",
+          "expected": "https://apis.opengateway.ai/v1/responses"
+        },
+        {
+          "id": "selected-authorization",
+          "operator": "equals",
+          "path": "/headers/authorization",
+          "expected": "Bearer fixture-runtime-token"
+        },
+        {
+          "id": "unrelated-header-removed",
+          "operator": "absent",
+          "path": "/headers/x-not-forwarded"
+        },
+        {
+          "id": "custom-tool-lowered-to-function",
+          "operator": "equals",
+          "path": "/body/tools/0",
+          "expected": {
+            "type": "function",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "string",
+                  "description": "Raw input for this client-executed custom tool."
+                }
+              },
+              "required": [
+                "input"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "id": "custom-tool-grammar-removed",
+          "operator": "absent",
+          "path": "/body/tools/0/format"
+        },
+        {
+          "id": "custom-tool-call-lowered",
+          "operator": "equals",
+          "path": "/body/input/1",
+          "expected": {
+            "type": "function_call",
+            "call_id": "call_fixture",
+            "name": "apply_patch",
+            "arguments": "{\"input\":\"*** Begin Patch\\n*** End Patch\"}"
+          }
+        },
+        {
+          "id": "custom-tool-output-lowered",
+          "operator": "equals",
+          "path": "/body/input/2",
+          "expected": {
+            "type": "function_call_output",
+            "call_id": "call_fixture",
+            "output": "Done"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,19 +1,19 @@
 # Dashboard Surfaces And Usage
 
 Dashboard page contracts, usage accounting and request metrics, and the management settings that
-back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
+back individual dashboard surfaces. An already-issued, otherwise valid remembered session can Forget after a User-Agent change; access and resumption still require the original browser binding. Serving, authentication boundaries, and `/api/*` ownership are
 in [GUI and management API](gui-and-management-api.md). Model-price editing and estimate selection follow [pricing](pricing.md).
 
 ## UX boundary
 
 The dashboard is a local control surface, not a separate service. It should reflect the same config
-and catalog invariants documented in this folder rather than inventing parallel state.
+and catalog invariants documented in this folder rather than inventing parallel state. The sign-in form offers opt-in **Remember this device** for direct HTTPS dashboards or loopback, storing an HttpOnly device cookie plus a separate proof in this site's origin-scoped localStorage; neither is the admin token or works alone, cookies span ports of one hostname so the proof binds the dashboard origin (still prefer a dedicated hostname), and storage failure reports Remember unavailable. Both mobile and sidebar **Forget this device** actions use logout to revoke the record and derived sessions immediately after successful publication and remove the proof, retaining it on failure for retry (directory-entry crash durability is best effort); remembered sessions cannot approve GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation, which require a fresh local or paired session, and session-change events update both surfaces under [GUI and management API](gui-and-management-api.md).
 
 Codex quota cards consume the display cache from `src/codex/quota.ts`. Partial refreshes remove
 omitted short tuples after their reset deadline; validated main-window absence also removes
 future-reset short tuples. Main-account hard-lock evidence and reset-notification history follow
 separate retention rules in
-[OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history).
+[OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history). See [permanent refusal auto-pause](account-auto-pause.md).
 Codex account panels expose no Spark quota toggle or setting and retain quota refresh, pause/resume, selection order, reset-credit confirmation and Advanced settings; account/provider quota DTOs suppress retired windows upstream of the generic quota renderer, under [OpenAI quota scopes](providers/openai-tiers.md#public-provider-contract).
 
 ## Dashboard surfaces
@@ -21,7 +21,7 @@ Codex account panels expose no Spark quota toggle or setting and retain quota re
 Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
 placeholder contract. Every registered locale, including Vietnamese and Brazilian Portuguese (`pt`, HTML `pt-BR`), supplies the same keys;
 locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
-maps remain total rather than silently falling back to English. The Dashboard registers Qoder for export and managed integration under the [Qoder settings ownership contract](clients/qoder.md#qoder-settings-ownership).
+maps remain total rather than silently falling back to English. The Dashboard registers Qoder for export and managed integration under the [Qoder settings ownership contract](clients/qoder.md#qoder-settings-ownership). T3 Code is registered the same way under the [T3 Code settings ownership contract](clients/t3code.md#t3-code-settings-ownership).
 
 The Models catalog names three distinct delivery states. A successful management mutation confirms
 only that the catalog is saved on the hub. `gui/src/api-targets.ts` carries the local machine's
@@ -131,7 +131,7 @@ The sidebar exposes eight rows (`gui/src/nav-groups.ts` `NAV_GROUPS`), in order:
 | Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`), plus the generic account-targeting picker opt-in on `gui/src/pages/codex-set-multiauth.tsx`. Add/delete/login completion is projected to one boolean before presentation; pending catalog work is a warning, not a failed account mutation. The main card's native-main device reauth (#3898) is owned by `gui/src/components/use-main-device-reauth.ts`: the dedicated `/api/codex-auth/main/reauth-device` namespace only — never the pool login route — with flowId-owned polling, an allowlisted verification URL, and no token fields accepted from payloads. The main-device reauth hook retains flow ownership from the Cancel click, while DELETE is unresolved and after retryable failure; polling normally continues. A concurrent GET HTTP error cannot expose a replacement login POST before DELETE settles. If a retryable DELETE failure races with a non-2xx GET while the flow is pending or committing, either response order preserves same-flow Cancel retry, restores the last server-provided device code, verification URL, and phase when needed, and keeps the existing poll cadence so a later terminal result remains observable. Outside same-flow cancellation ownership, a GET HTTP failure still stops polling without starting a second login POST. The cancellation-failure indication survives pending status updates until a trusted terminal result releases ownership. A successful DELETE with a terminal `failed` DTO releases it and uses the same closed failure-code mapping as polling; only `succeeded` notifies login completion. Unrecognized or nonterminal DTO status values remain retryable. A DELETE response with HTTP 404 and code `unknown_flow` releases the expired flow and shows the existing generic failure state so device re-login is available again; it claims neither login success nor confirmed cancellation. Confirmed cancellation also makes device re-login available. Start, polling and cancellation completions verify their controller or flow ownership after asynchronous response reads; replaced flows and unmounted hooks cannot update a newer flow or notify completion. Effect setup restores mounted state after the StrictMode development cleanup cycle. |
 | Dashboard overview | Overview, Providers, and Models tabs at the page level (`gui/src/pages/Dashboard.tsx`), the 30-day token and coverage stats in the overview head (`gui/src/pages/dashboard-overview-head.tsx`), and the effort-cap, injection, maintenance, sidecar, reasoning-retention, and memory panels below it (`gui/src/pages/dashboard-overview-panels.tsx`). The Reasoning retention controls (`gui/src/components/ReasoningRetentionPanel.tsx`) live in a collapsed Advanced settings disclosure at the end of Overview. They read and save `reasoningRetention` via GET/PUT `/api/settings` in `src/server/management/config-routes.ts`: only explicit `enabled: true` activates retention; absent, disabled, and legacy threshold-only settings remain off. The enable switch exposes numeric controls with defaults of 20% and 100000 tokens; disabling saves `enabled: false`, and null reset removes the setting and turns it off. Omission preserves it, validation precedes mutation, and save failure restores value and key presence. Copy warns that opt-in can preserve plaintext reasoning in local history/archive and that completed archives have no aggregate quota or expiry and require manual deletion. Loading disables writes, failures permit retry without losing edits, and stale responses cannot update a new API target. Its scope is the [routed v1/v2 compaction contract](transports/responses-failover.md#compaction-routing-overrides); opaque output stays unchanged. `tests/config/settings-reasoning-retention.test.ts` and `gui/tests/reasoning-retention-panel.test.tsx` cover the API and controls. Inputs expose invalid state and reference the validation alert only for the failing field. |
 
-JEV setup and its Stats tab reuse these shells; see [providers/jev-decision.md](./providers/jev-decision.md).
+JEV setup and its Stats tab reuse these shells; omitted advanced quota fields survive editor saves without new GUI controls. Content-free v1 quota tier counts/selection follow [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota); see [providers/jev-decision.md](./providers/jev-decision.md).
 
 The native-main reauth poller captures an immutable accepted flow id for queued callbacks.
 Its POST, GET and DELETE JSON reads retain API error codes, but non-2xx responses never
@@ -428,7 +428,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Remote credentials and bounded sessions
 
-Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
+Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session; for a remembered device, a successful logout additionally forgets that device record and every session derived from it.
 
 ### Model picker ordering settings
 
@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.
@@ -578,7 +578,7 @@ projection version changes and encodes older raw-selector rows from canonical JS
 still find them. CLI access-key usage is unavailable without an ISO-8601 UTC attribution timestamp,
 rather than a measured zero or never-used key.
 
-Kimi Coding K3 price rows use API-reference estimates with the default five-minute cache-write rate,
+Kimi Coding K3/K3.1 Pro (and `moonshot` `kimi-k3.1-pro*`) price rows are API-reference estimates at the 5-minute cache-write rate,
 not Code Plan billing or quota. The three Coding presets have explicit price namespaces. The
 retargeted `kimi-for-coding` alias stays unpriced until a verified K2.8 price or a user `modelCosts`
 override exists; the retired K2.7 mapping is not reused. Request, attempt and combo estimates remain

@@ -6,10 +6,12 @@ import {
   buildExecArgv,
   buildProbeArgv,
   buildTunnelArgv,
+  buildWindowsProbeArgv,
   LinkSshArgumentError,
   quoteRemote,
   REMOTE_OCX_SCRIPT,
   remoteOcxArgv,
+  WINDOWS_OS_PROBE,
 } from "../../src/link/ssh-argv";
 import {
   boundHint,
@@ -38,6 +40,7 @@ function tempPath(label: string): string {
 
 function expectCommonTrustOptions(argv: string[], strict: "yes" | "accept-new", knownHostsFile: string): void {
   expect(argv).toContain("BatchMode=yes");
+  expect(argv).toContain("HashKnownHosts=no");
   expect(argv).toContain(`StrictHostKeyChecking=${strict}`);
   expect(argv).toContain(`UserKnownHostsFile=${knownHostsFile}`);
   expect(argv).toContain("GlobalKnownHostsFile=none");
@@ -80,6 +83,17 @@ test("exec argv emits only sh bare, quotes arguments, and clears forwarding", ()
   expect(argv[argv.length - 1]).toBe(`sh 'it'"'"'s ready'`);
 });
 
+test("Windows %OS% probe is a fixed literal that trusts only an already recorded host key", () => {
+  const knownHostsFile = tempPath("windows-probe");
+  const argv = buildWindowsProbeArgv({ alias: "gamma.example.test", knownHostsFile });
+  expect(argv.slice(0, 2)).toEqual(["ssh", "-T"]);
+  expectCommonTrustOptions(argv, "yes", knownHostsFile);
+  expect(argv).toContain("ClearAllForwardings=yes");
+  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd /c echo %OS%"]);
+  expect(WINDOWS_OS_PROBE).toBe("cmd /c echo %OS%");
+  expect(() => buildWindowsProbeArgv({ alias: "-oProxyCommand=x", knownHostsFile })).toThrow(LinkSshArgumentError);
+});
+
 test("probe argv uses accept-new only with its temporary known_hosts file", () => {
   const knownHostsFile = tempPath("probe");
   writeFileSync(knownHostsFile, "", { mode: 0o600 });
@@ -89,7 +103,7 @@ test("probe argv uses accept-new only with its temporary known_hosts file", () =
   expectCommonTrustOptions(argv, "accept-new", knownHostsFile);
   expect(argv).toContain("ClearAllForwardings=yes");
   expect(argv.slice(-3, -1)).toEqual(["--", "gamma.example.test"]);
-  expect(argv[argv.length - 1]).toBe("true");
+  expect(argv[argv.length - 1]).toBe("echo ocx-link-probe");
 });
 
 test("aliases and forwarding ports are validated before building argv", () => {
