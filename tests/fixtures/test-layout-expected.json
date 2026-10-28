@@ -44,7 +44,7 @@
     "server-combo-stream-required-tool.test.ts": "server", "combo-required-tool-stream-preflight.test.ts": "routing",
     "responses-anthropic-compaction-prefix.test.ts": "responses",
     "service-proxy-env.test.ts": "service",
-    "codex-cli-update-windows-apply.test.ts": "codex-integration",
+    "codex-cli-update-windows-apply.test.ts": "codex-integration", "codex-cli-update-windows-apply-install.test.ts": "codex-integration", "codex-cli-update-windows-apply-outcomes.test.ts": "codex-integration", "codex-cli-update-windows-apply-shared.test.ts": "codex-integration",
     "codex-cli-update-windows-recovery.test.ts": "codex-integration",
     "codex-cli-update-windows-pending.test.ts": "codex-integration",
     "codex-cli-update-windows-layout.test.ts": "codex-integration",

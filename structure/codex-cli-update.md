@@ -217,11 +217,14 @@ not npm's exit code. Version uses the pinned Node with the verified JS entrypoin
 then repeats selection/content observation; it does not attest arbitrary future CMD lookup.
 Cleanup errors remain separate from the result. The existing job execution layer retries result
 persistence without repeating installation. No automatic rollback or stale-lock recovery exists.
-`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers real offline npm in private
-shared fixtures, unrelated package/shim preservation, terminal close failure, partial mutations,
-absence, selection, unknown retention, async pins and persistence retry. One JS launcher executes
-a compiled CLR x64 backing fixture that verifies Job membership and returns the version. This is
-executable-fixture evidence, not a run of the vendor Codex product.
+`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers authority and toolchain pins.
+Its siblings `tests/codex-integration/codex-cli-update-windows-apply-install.test.ts`,
+`tests/codex-integration/codex-cli-update-windows-apply-outcomes.test.ts` and
+`tests/codex-integration/codex-cli-update-windows-apply-shared.test.ts` cover real offline npm,
+partial mutations, retention, persistence retry, unrelated package/shim preservation and terminal
+close failure. `tests/helpers/codex-cli-windows-apply-fixture.ts` keeps cleanup ownership per file.
+One JS launcher executes a compiled CLR x64 backing fixture that verifies Job membership and
+returns the version. This is executable-fixture evidence, not a run of the vendor Codex product.
 
 ## Explicit POSIX apply
 
