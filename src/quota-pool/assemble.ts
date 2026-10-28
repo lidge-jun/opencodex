@@ -311,6 +311,10 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     const provider = config.providers[name]!;
     let rows: TrackedAccount[] = [];
     let tracked = false;
+    // Whether requests to this provider are served by those account rows. A per-account provider
+    // configured with an API key keeps any stored OAuth rows on display, but its quota is the
+    // key's report, as the quota dispatcher reads it.
+    let poolFromRows = true;
     if (codexPool && name === OPENAI_CODEX_PROVIDER_ID) {
       tracked = true;
       rows = codexAccounts(identity, codex, now);
@@ -320,12 +324,13 @@ async function assemble(config: OcxConfig, identity: QuotaPoolIdentity, deps: Qu
     } else if (supportsPerAccountQuota(name) || hasPassiveAccountQuota(name)) {
       tracked = true;
       rows = oauthAccounts(identity, name, now);
+      poolFromRows = provider.authMode === "oauth";
     }
     const report = reports.get(name);
     if (!tracked && !report) continue;
     // Account rows are the evidence a held report was computed from, at least as new and with
     // their own observation times; the report stands in only where there are no rows.
-    const windows = rows.length > 0
+    const windows = poolFromRows && rows.length > 0
       ? pooledWindows(rows.map(row => row.pool), now)
       : report ? providerQuotaWindows(report.quota, reportSource(report), now) : [];
     const pooled: QuotaPoolProvider["pooled"] = { windows };

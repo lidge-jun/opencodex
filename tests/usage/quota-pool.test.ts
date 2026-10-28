@@ -130,15 +130,18 @@ describe("ocx.quota-pool/1 producer", () => {
                 resetsAt: "2026-10-24T12:00:00.000Z", source: "measured", observedAt: "2026-10-21T11:59:30.000Z", exhausted: true },
             ],
           }],
-          // The only account is blocked by its 5-hour window, so every pooled window is exhausted.
+          // The only account is blocked by its 5-hour window: the pool is unavailable until it
+          // resets, while the weekly window itself still has room.
           pooled: {
             windows: [
               { id: "5h", kind: "burst_5h", label: "5-hour", usedPercent: 100, resetsAt: "2026-10-21T13:00:00.000Z",
                 source: "estimated", observedAt: "2026-10-21T11:59:30.000Z", exhausted: true },
               { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 61, resetsAt: "2026-10-24T12:00:00.000Z",
-                source: "estimated", observedAt: "2026-10-21T11:59:30.000Z", exhausted: true },
+                source: "estimated", observedAt: "2026-10-21T11:59:30.000Z", exhausted: false },
               { id: "family:opus", kind: "custom", label: "Opus", usedPercent: 100, scopeModel: "family:opus",
                 resetsAt: "2026-10-24T12:00:00.000Z", source: "estimated", observedAt: "2026-10-21T11:59:30.000Z", exhausted: true },
+              { id: "availability", kind: "custom", label: "Pool availability", resetsAt: "2026-10-21T13:00:00.000Z",
+                source: "estimated", observedAt: "2026-10-21T11:59:30.000Z", exhausted: true },
             ],
             nextResetAt: "2026-10-21T13:00:00.000Z",
           },
@@ -184,6 +187,22 @@ describe("ocx.quota-pool/1 producer", () => {
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
     expect(xai.pooled.windows.map(window => [window.id, window.usedPercent, window.source, window.observedAt]))
       .toEqual([["weekly", 42, "estimated", "2026-10-21T11:59:00.000Z"]]);
+  });
+
+  test("a per-account provider configured with an API key keeps its key's report as the pool", async () => {
+    ensureQuotaPoolIdentity();
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
+      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW - 120_000,
+      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 },
+    }] } });
+    const keyed = config();
+    keyed.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    const result = await readQuotaPool(keyed, { now: () => NOW, claudeUsageStatePath: admissionPath });
+    if (!result.ok) throw new Error(result.error);
+    const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
+    expect(xai.accounts).toHaveLength(2);
+    expect(xai.pooled.windows.map(window => [window.id, window.usedPercent, window.source, window.observedAt]))
+      .toEqual([["weekly", 3, "measured", "2026-10-21T11:58:00.000Z"]]);
   });
 
   test("accountRef is opaque, stable across restarts and distinct per provider and account", async () => {
@@ -375,7 +394,7 @@ describe("pooled windows", () => {
 
   test("paused, reauth and routing-excluded accounts neither count nor keep the pool open", () => {
     const excluded = codex("pro", weekly(5), { eligible: false });
-    expect(summary([codex("plus", weekly(100)), excluded, excluded])).toEqual([["weekly", 100, true]]);
+    expect(summary([codex("plus", weekly(100)), excluded, excluded])).toEqual([["weekly", 100, true], ["availability", undefined, true]]);
     expect(summary([excluded])).toEqual([]);
   });
 
@@ -401,12 +420,35 @@ describe("pooled windows", () => {
     expect(summary([shortOnly, codex("plus", weekly(70))])).toEqual([["5h", 30, false], ["weekly", 70, false]]);
   });
 
-  test("accounts blocked on different windows exhaust the pool even though each average has room", () => {
+  test("accounts blocked on different windows make the pool unavailable even though each average has room", () => {
     const a = codex("plus", { shortPercent: 100, shortResetAt: NOW + HOUR, ...weekly(40) });
     const b = codex("plus", { shortPercent: 20, shortResetAt: NOW + HOUR, ...weekly(100) });
-    expect(summary([a, b])).toEqual([["5h", 60, true], ["weekly", 70, true]]);
+    expect(summary([a, b])).toEqual([["5h", 60, false], ["weekly", 70, false], ["availability", undefined, true]]);
+    // The pool returns when the first account recovers: a's 5-hour reset.
+    expect(pooledWindows([a, b], NOW).at(-1)?.resetsAt).toBe("2026-10-21T13:00:00.000Z");
     // An eligible account with no evidence yet is one routing would still try.
     expect(summary([a, b, codex("plus", {})])).toEqual([["5h", 60, false], ["weekly", 70, false]]);
+  });
+
+  test("the block's timing comes from the window that proves it, not from the percentage windows", () => {
+    const blocked = codex("plus", { shortPercent: 100, shortResetAt: NOW + MINUTE, shortObservedAt: NOW - 29 * MINUTE, ...weekly(20) });
+    const pooled = pooledWindows([blocked], NOW);
+    expect(pooled.map(window => [window.id, window.exhausted, window.resetsAt, window.observedAt])).toEqual([
+      ["5h", true, "2026-10-21T12:01:00.000Z", "2026-10-21T11:31:00.000Z"],
+      ["weekly", false, "2026-10-24T12:00:00.000Z", "2026-10-21T11:59:00.000Z"],
+      ["availability", true, "2026-10-21T12:01:00.000Z", "2026-10-21T11:31:00.000Z"],
+    ]);
+  });
+
+  test("refusal evidence with no percentage still makes the pool unavailable", () => {
+    const refused: PooledAccountInput = { eligible: true, weight: 1, windows: [{
+      id: "refusal", kind: "custom", label: "Claude CLI limit", exhausted: true, resetsAt: new Date(NOW + HOUR).toISOString(),
+      source: "estimated", observedAt: new Date(NOW - MINUTE).toISOString(),
+    }] };
+    expect(pooledWindows([refused], NOW)).toEqual([{
+      id: "availability", kind: "custom", label: "Pool availability", resetsAt: "2026-10-21T13:00:00.000Z",
+      source: "estimated", observedAt: "2026-10-21T11:59:00.000Z", exhausted: true,
+    }]);
   });
 
   test("a model-scoped window exhausts only its family", () => {
@@ -420,5 +462,16 @@ describe("pooled windows", () => {
       ["family:opus", 100, "family:opus", true],
     ]);
     expect(summary([anthropic(100, 30), anthropic(50, 20)])).toEqual([["weekly", 25, false], ["family:opus", 75, false]]);
+    // One account blocked outright, the other only for Opus: Opus cannot run anywhere, other models can.
+    const outright: PooledAccountInput = { eligible: true, weight: 1, windows: providerQuotaWindows({
+      fiveHourPercent: 100, fiveHourResetAt: NOW + HOUR, updatedAt: NOW - MINUTE,
+    }, "measured", NOW) };
+    expect(pooledWindows([outright, anthropic(100, 20)], NOW).map(window => [window.id, window.scopeModel, window.exhausted, window.resetsAt]))
+      .toEqual([
+        ["5h", undefined, false, "2026-10-21T13:00:00.000Z"],
+        ["weekly", undefined, false, "2026-10-24T12:00:00.000Z"],
+        ["family:opus", "family:opus", false, "2026-10-24T12:00:00.000Z"],
+        ["availability:family:opus", "family:opus", true, "2026-10-21T13:00:00.000Z"],
+      ]);
   });
 });

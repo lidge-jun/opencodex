@@ -45,11 +45,13 @@ and unless the Codex `pooled` windows are still computed from the account rows.
 
 ## Pooled windows
 
-A provider with account rows (the Codex pool, per-account OAuth providers, Claude CLI) gets its
-`pooled` windows from those rows in `src/quota-pool/pooled.ts`, a pure function over the mapped
-account windows. The pool therefore does not depend on an active `/api/provider-quotas` read or the
-reset poller having warmed the report cache, and a held report never stands in for the rows it
-was computed from.
+A provider whose requests are served by account rows (the Codex pool, Claude CLI, and a
+per-account OAuth provider configured with `authMode: "oauth"`) gets its `pooled` windows from
+those rows in `src/quota-pool/pooled.ts`, a pure function over the mapped account windows. The
+pool therefore does not depend on an active `/api/provider-quotas` read or the reset poller having
+warmed the report cache, and a held report never stands in for the rows it was computed from. A
+per-account provider configured with an API key still lists any stored OAuth rows, but its pool is
+the key's held report, the same split the quota dispatcher makes.
 
 Per window id, over the accounts automatic routing may pick, the pooled `usedPercent` is
 Σ(weight × usedPercent) / Σ(weight). Codex weights are the plan calibration in
@@ -64,10 +66,19 @@ only (`used` and `limit` are not summed).
 
 Every pooled window is `estimated`. Its `observedAt` is the oldest contributing observation, its
 `resetsAt` the earliest contributing reset, and `windowSeconds` and `unit` appear only when every
-contributor agrees. `exhausted` is the routing verdict, separate from the average: true when every
-eligible account is known to be blocked for that window, either by the window itself or by an
-unscoped exhausted window of its own. Two accounts blocked on different windows therefore exhaust
-both pooled windows although each average has room, and an eligible account with no fresh evidence
+contributor agrees. Its `exhausted` speaks for that window alone: true when every eligible account
+has that window exhausted.
+
+Whether the pool can run at all is a separate `custom` window, present only while it cannot:
+`availability` ("Pool availability") when every eligible account holds an unscoped exhausted
+window, and `availability:<scope>` (with that `scopeModel`) when every eligible account is blocked
+for one model scope, by the scoped window or an unscoped one, and neither `availability` nor the
+scoped window itself already says so. It carries `exhausted: true` and no percentage; its
+`resetsAt` is the earliest moment some account recovers (an account recovers when the last of its
+blocking windows resets; omitted when no recovery time is known) and its `observedAt` the oldest
+blocking observation. So two accounts blocked on different windows, or a Claude CLI refusal with no
+usage reading, make the pool unavailable until the first block lifts, without stamping that timing
+on the percentage windows. An eligible account with no fresh evidence is not known to be blocked and
 keeps the pool open, because routing would still try it. GOAT's placement reads `exhausted: true`
 as 100% used. Priority tiers, pins, affinity and credits policy are not reflected in the estimate.
 
