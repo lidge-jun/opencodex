@@ -7,6 +7,7 @@ import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { assertAuxiliaryListenerPortsAvailable } from "../../src/cli/auxiliary-listener-preflight";
+import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 
 const DEADLINE = watchdogMs(20_000);
 
@@ -55,7 +56,8 @@ for (const listener of ["unauthenticatedLoopbackListener", "hub.managementIngres
         // publication (and its synchronous Windows icacls subprocesses).
         expect(existsSync(join(ocxHome, "spend-ledger-owner.sqlite"))).toBe(false);
         expect(existsSync(join(ocxHome, "admin-api-token"))).toBe(false);
-        expect(await (await fetch(`http://127.0.0.1:${publicPort}`)).text()).toBe("public canary");
+        // Probe the held listener directly; an ambient HTTP(S)_PROXY must not answer for it.
+        expect(await (await directLocalHttpFetch(`http://127.0.0.1:${publicPort}/`)).text()).toBe("public canary");
       } finally {
         clearTimeout(deadline);
         if (child.exitCode === null) { child.kill(); await child.exited; }
