@@ -47,6 +47,7 @@ import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import { hasNativeOnlyTool } from "../../claude/inbound-content-options";
+import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -181,6 +182,10 @@ export function createComboProtocolLanes(input: {
   const verdicts = new Map<string, CandidateVerdict>();
   let skipRecorded = false;
   let nativeOnlyTool: boolean | undefined;
+  // The bridge keeps only text from system messages, so an active inline tool_addition definition
+  // has no translated equivalent either; fail closed like a top-level native-only tool.
+  const declaresNativeOnlyTool = (body: Record<string, unknown>) =>
+    hasNativeOnlyTool(body) || nativeMessagesInlineToolNames(body).size > 0;
   const judge = (target: ComboTarget): CandidateVerdict => {
     const key = selector(target);
     const cached = verdicts.get(key);
@@ -211,7 +216,7 @@ export function createComboProtocolLanes(input: {
         }
       }
       // Under any policy: the source chose a native-only tool, so a translated child never runs it.
-      if (!native && inbound === "messages" && (nativeOnlyTool ??= hasNativeOnlyTool(envelope.freshBody()))) {
+      if (!native && inbound === "messages" && (nativeOnlyTool ??= declaresNativeOnlyTool(envelope.freshBody()))) {
         verdict.nativeOnly = true;
       }
     }
