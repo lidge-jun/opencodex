@@ -25,7 +25,9 @@ fi
 
 install_dir() {
   local dir="$1" attempt status remaining deadline
-  local -a retry_args=()
+  # Never empty: macOS ships bash 3.2, where expanding an empty array under `set -u` aborts
+  # with "unbound variable".
+  local -a install_cmd=("$BUN_INSTALL_BIN" install --frozen-lockfile)
   for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
     # The kill grace counts against the budget too, so the worst case stays at TOTAL_SECONDS.
     remaining=$(( TOTAL_SECONDS - SECONDS - KILL_GRACE_SECONDS ))
@@ -36,7 +38,7 @@ install_dir() {
     deadline=$(( remaining < ATTEMPT_SECONDS ? remaining : ATTEMPT_SECONDS ))
     status=0
     (cd "$dir" && timeout --signal=TERM --kill-after="${KILL_GRACE_SECONDS}s" "${deadline}s" \
-      "$BUN_INSTALL_BIN" install --frozen-lockfile "${retry_args[@]}") || status=$?
+      "${install_cmd[@]}") || status=$?
     if [[ $status -eq 0 ]]; then return 0; fi
     # 124: the deadline fired and the install exited on TERM; 137: it needed the KILL.
     if [[ $status -ne 124 && $status -ne 137 ]]; then
@@ -46,7 +48,7 @@ install_dir() {
     echo "::warning::bun install --frozen-lockfile in ${dir} exceeded ${deadline}s (attempt ${attempt}/${MAX_ATTEMPTS})."
     # A killed install may have extracted bun but not finished its trusted postinstall.
     # Plain install can then report success while leaving bin/bun.exe a placeholder.
-    retry_args=(--force)
+    install_cmd=("$BUN_INSTALL_BIN" install --frozen-lockfile --force)
   done
   echo "::error::bun install --frozen-lockfile in ${dir} exceeded its deadline ${MAX_ATTEMPTS} times."
   return 124
