@@ -34,6 +34,17 @@ for (const state of ["absent", "reused", "exited"]) test(`recovery proof polls p
   expect(result).toBe(terminal);
   expect(calls).toBe(2);
 });
+test("recovery proof retries a thrown probe before accepting a terminal guardian", async () => {
+  const terminal: WindowsRecoveryProbe = { entered: true, recovery: {
+    guardian: { state: "exited" }, job: { state: "absent", error: 2 }, record: {}, receipt: { phase: "terminal" },
+  } };
+  let calls = 0;
+  expect(await waitForWindowsRecovery(() => {
+    if (++calls === 1) throw new Error("fixture_probe_failed");
+    return terminal;
+  })).toBe(terminal);
+  expect(calls).toBe(2);
+});
 test("recovery proof times out with the observer error instead of accepting missing guardian", async () => {
   const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(90_000);
   try {
@@ -64,9 +75,13 @@ test("owner timeout stops the wrapper and drains recovery before reporting the t
 test("owner timeout keeps a failed recovery drain visible and tracked", async () => {
   const events: string[] = [], failure = new Error("fixture_probe_failed");
   const owner = { exited: new Promise<number>(() => {}), kill() { events.push("kill"); } };
-  await expect(drainWindowsRestartRecovery(owner, () => { events.push("probe"); throw failure; },
-    () => { events.push("settled"); }, 0)).rejects.toBe(failure);
-  expect(events).toEqual(["kill", "probe"]);
+  const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(89_999).mockReturnValue(90_000);
+  try {
+    await expect(drainWindowsRestartRecovery(owner, () => {
+      events.push("probe"); throw events.length === 2 ? new Error("first_probe_failed") : failure;
+    }, () => { events.push("settled"); }, 0)).rejects.toThrow("native_recovery_proof_timeout: Error: fixture_probe_failed");
+    expect(events).toEqual(["kill", "probe", "probe"]);
+  } finally { clock.mockRestore(); }
 });
 for (const kind of ["recovery", "pending", "readback"] as const) native(`Windows ${kind} publication hardens canonical paths beyond MAX_PATH`, async () => {
   const root = createCodexCliTestRoot("ocx-long-store-");

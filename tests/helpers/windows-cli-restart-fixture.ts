@@ -14,14 +14,16 @@ export const WINDOWS_RESTART_FIXTURE_MS = 300_000;
 
 export async function waitForWindowsRecovery(probe: () => WindowsRecoveryProbe) {
   const deadline = performance.now() + WINDOWS_RECOVERY_PROOF_MS;
-  let last: WindowsRecoveryProbe;
+  let last: WindowsRecoveryProbe | string;
   do {
-    last = probe();
-    if (last.entered) {
-      const guardian = "guardian" in last.recovery ? last.recovery.guardian : undefined;
-      if (guardian ? ["absent", "reused", "exited"].includes(guardian.state) : last.guardianStarted === false) return last;
-    }
-    if (performance.now() >= deadline) throw new Error("native_recovery_proof_timeout: " + JSON.stringify(last));
+    try {
+      last = probe();
+      if (last.entered) {
+        const guardian = "guardian" in last.recovery ? last.recovery.guardian : undefined;
+        if (guardian ? ["absent", "reused", "exited"].includes(guardian.state) : last.guardianStarted === false) return last;
+      }
+    } catch (error) { last = String(error); }
+    if (performance.now() >= deadline) throw new Error("native_recovery_proof_timeout: " + (typeof last === "string" ? last : JSON.stringify(last)));
     await Bun.sleep(50);
   } while (true);
 }
