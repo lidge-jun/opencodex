@@ -196,13 +196,13 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows shards more finely than Linux. Six shards grew to 13-30 minutes against
-    // the 30-minute wall; nine restores margin while keeping the bound unchanged. The
+    // Windows shards more finely than Linux. Nine reached 30 minutes in run 40756291846;
+    // refreshed weights and eleven restore margin while keeping the bound unchanged. The
     // matrix, runner shard spec, job name and aggregate leg count must move together.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
     const windowsSteps = (ci.jobs?.["platform-windows"] as {
       steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;

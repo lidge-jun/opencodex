@@ -77,7 +77,7 @@ on:
   # Nightly safety net. The Windows shards run on a pull request only when the
   # changes job judges it Windows-sensitive, so anything that slips past that
   # filter must still be caught within a day: a scheduled run requests the full
-  # lane=all matrix (nine Windows shards and the macOS control included).
+  # lane=all matrix (eleven Windows shards and the macOS control included).
   #
   # GitHub runs schedules from the DEFAULT branch, which is main, so this
   # trigger activates only once this file reaches main by promotion, and the
@@ -235,7 +235,7 @@ jobs:
       # Push, dispatch and schedule run both regardless; see the docker/keyring filters.
       docker: ${{ steps.narrow.outputs.docker }}
       keyring: ${{ steps.narrow.outputs.keyring }}
-      # Whether this pull request needs the nine Windows shards: the windows path
+      # Whether this pull request needs the Windows shards: the windows path
       # filter below OR an added src/tests line naming a Windows marker. Computed
       # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
       # treats the diff as data.
@@ -428,7 +428,7 @@ jobs:
               - 'package.json'
               - 'bun.lock'
               - '.github/workflows/ci.yml'
-            # Paths whose change selects the nine Windows suite shards on a pull
+            # Paths whose change selects the Windows suite shards on a pull
             # request. These carry the Windows service, update, shim, intercept,
             # ACL and process code, and the harness every Windows shard runs.
             # scripts/ci/windows-sensitive-diff.sh adds the content markers.
@@ -1065,7 +1065,7 @@ jobs:
   # each landed with green pull-request CI while breaking Windows, which is why
   # that dispatch is part of merging a Windows-sensitive pull request.
   platform-windows:
-    name: windows ${{ matrix.shard }}/9
+    name: windows ${{ matrix.shard }}/11
     needs: [changes, select-windows-runner]
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -1096,21 +1096,18 @@ jobs:
     # test deadline and all six shards, but left the whole batch and cleanup a
     # 30-minute bound.
     #
-    # Six shards then grew into the 30-minute ceiling too. Across seven lane=all
-    # dispatches the six shard totals were 114.3-133.2 minutes. The worst observed
-    # shard imbalance was 1.43x its dispatch's per-shard average. Eight shards leave
-    # no margin: 133.2 / 8 * 1.43 * 1.25 = 29.8 minutes after the already-observed
-    # 25% run-to-run slowdown. Nine gives 133.2 / 9 * 1.43 * 1.25 = 26.5 minutes.
-    # Keep the 30-minute bound and pay for three more concurrent runners plus their
-    # repeated checkout/install/build setup so test work, rather than the ceiling,
-    # shrinks. The per-batch timeout below is independent: it aborts a stuck Bun
-    # process but adds no delay to a healthy one, so calibrating it does not change
-    # this total-work projection.
+    # Nine shards also reached the ceiling: run 40756291846 cancelled 7/9 at batch
+    # 49/60; run 40743681086's successful shards took 22.1-29.5 minutes. Refreshing
+    # Windows weights from completed primary batches in both runs puts test work
+    # at 24.36/21.92/19.93 minutes with 9/10/11 shards. With the observed 2.4-minute
+    # maximum setup, eleven projects ~22.4 minutes; 25% test variance makes ~27.3.
+    # Pay for two extra setups (~3.3 runner-minutes at the older run's mean), keep
+    # the 30-minute job bound and all tests, and leave batch deadlines independent.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     steps:
       - name: Show selected runner
         shell: bash
@@ -1190,7 +1187,7 @@ jobs:
         # and service-manager guard before the lock boundary.
         shell: bash
         env:
-          TEST_SHARD: ${{ matrix.shard }}/9
+          TEST_SHARD: ${{ matrix.shard }}/11
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: "6"
           BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
@@ -1329,7 +1326,7 @@ jobs:
   # aggregate reported success while nothing had read the change (#5001).
   #
   # Running the gate directly here, rather than adding `structure/**` to `ci`,
-  # keeps a prose edit from starting nine Windows shards and two macOS shards for
+  # keeps a prose edit from starting the Windows shards and macOS shards for
   # a check that takes seconds. It runs whenever `structure/` changes, including
   # alongside a `src/` change where the suite covers it too; a duplicate of a
   # seconds-long check is not worth a condition that could be wrong.
@@ -1881,7 +1878,7 @@ jobs:
             if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
               dispatch=requested
             fi
-            # Only the default/all lane requests the nine Windows suite shards.
+            # Only the default/all lane requests the Windows suite shards.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
@@ -1953,10 +1950,10 @@ jobs:
           # started: five successes and one skipped leg roll up to `success`. No matrix here
           # carries a per-leg `if:`, so a leg can only be skipped when its whole job is, which
           # the expectation table above already catches. What that table cannot catch is a
-          # matrix that produced FEWER legs than the nine a dispatch is run to read, so count
-          # them by name. The nine Windows legs are the entire output of that dispatch.
+          # matrix that produced FEWER legs than the eleven a dispatch is run to read, so count
+          # them by name. The eleven Windows legs are the entire output of that dispatch.
           if [ "$windows" = requested ]; then
-            shards=9
+            shards=11
             # `filter=latest` (the default) is the latest execution of each job in the run,
             # which is what a human reading the run sees. Asking for one ATTEMPT instead would
             # fail every partial re-run: "Re-run failed jobs" puts only the repaired shard in
