@@ -46,7 +46,7 @@ for (const route of ["early", "late"] as const) {
       const live = route === "early" ? await findLiveProxy(io) : (await observeProxyLiveness(io)).live;
       expect(live).not.toBeNull();
       let written: GrokInjectResult | undefined;
-      await reconcileEnsureDesiredIntegrations(live!.port, { kind: "live", hostname: live!.hostname }, {
+      await reconcileEnsureDesiredIntegrations(live!.port, { kind: "live", ...live! }, {
         // A later config with the opposite scope must not replace the live bind, even
         // when the runtime/config candidate omitted the default hostname or left it blank.
         loadConfig: () => ({ ...config, hostname: loopback ? "0.0.0.0" : "127.0.0.1" }),
@@ -72,4 +72,43 @@ for (const route of ["early", "late"] as const) {
   });
 }
 }
+}
+
+for (const source of ["runtime", "orphan", "config"] as const) {
+  test(`late ${source} recovery writes the responding IPv4 address for an IPv6 bind candidate`, async () => {
+    const home = createTempHome("ocx-live-probe-destination-");
+    const listener = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch: () => Response.json({ service: "opencodex", pid: process.pid }) });
+    try {
+      const grokHome = home.path("grok"); mkdirSync(grokHome);
+      const config: OcxConfig = { port: listener.port!, hostname: "::1", defaultProvider: "openai", providers: {},
+        clientIntegrations: { grok: { enabled: true }, "claude-desktop": { enabled: true } },
+        claudeCode: { desktopMode: "gateway" } };
+      const io: LivenessIo = {
+        readPidFn: () => source === "runtime" ? process.pid : null,
+        readRuntimeFn: () => source === "config" ? null : { pid: process.pid, port: listener.port!, hostname: "::1" },
+        verifyPidFn: pid => pid, configFn: () => config, attempts: 1,
+        loopbackAvailabilityFn: () => "available",
+      };
+      expect(await findLiveProxy(io)).toBeNull();
+      const observed = await observeProxyLiveness(io);
+      expect(observed.kind).toBe("live");
+      const live = observed.live!;
+      expect(live).toMatchObject({ hostname: "::1", probeHostname: "127.0.0.1" });
+      await reconcileEnsureDesiredIntegrations(live.port, { kind: "live", ...live }, {
+        loadConfig: () => config,
+        syncGrokConfig: (port, current, opts) => syncGrokConfig(port, current, { ...opts, grokHome },
+          { fetchAllModels: async () => [], injectGrokConfig }),
+        stripGrokConfig: () => { throw new Error("unexpected strip"); },
+        observeClaudeDesktopMode: () => ({}),
+        removeDesktop3pStandardPivot: () => { throw new Error("unused desktop seam"); },
+        log() {}, error: message => { throw new Error(message); },
+      });
+      const written = Bun.TOML.parse(readFileSync(home.path("grok", "config.toml"), "utf8")) as {
+        model_providers: { opencodex: { base_url: string } };
+      };
+      expect(written.model_providers.opencodex.base_url).toBe(`http://127.0.0.1:${listener.port}/v1`);
+      expect((await fetch(written.model_providers.opencodex.base_url)).ok).toBe(true);
+    } finally { await listener.stop(true); home.remove(); }
+  });
 }
