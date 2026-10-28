@@ -124,7 +124,8 @@ export function tapAnthropicSseForLog(
   const named = (event: string | null, data: Rec, type: string) => data.type === type && (event === null || event === type);
   const inspectFrame = (frame: string, delivered = true) => {
     const lines = frame.split("\n");
-    const eventLine = lines.map(l => sseFieldValue(l, "event")).find((v): v is string => v !== null);
+    // SSE dispatches on the last event field of a frame.
+    const eventLine = lines.map(l => sseFieldValue(l, "event")).findLast((v): v is string => v !== null);
     const event = eventLine === undefined ? null : eventLine.trim();
     const dataLine = lines
       .map(l => sseFieldValue(l, "data"))
@@ -173,12 +174,18 @@ export function tapAnthropicSseForLog(
   // client has not seen a blank line after, so the caller restores one. tailClean: nothing but
   // comments or a ping is left undelimited, so no message event was cut off.
   const flushTail = (): { terminalInTail: boolean; tailClean: boolean } => {
-    const terminalBefore = terminalSeen;
-    const tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
+    // At EOF a held CR is a line ending, so it can complete a frame the client already has.
+    let tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
     buffer = "";
+    let sep: number;
+    while ((sep = tail.indexOf("\n\n")) !== -1) {
+      inspectFrame(tail.slice(0, sep));
+      tail = tail.slice(sep + 2);
+    }
+    const terminalBefore = terminalSeen;
     if (tail) inspectFrame(tail, false);
     return {
-      terminalInTail: terminalSeen && !terminalBefore && !tail.endsWith("\n\n"),
+      terminalInTail: terminalSeen && !terminalBefore,
       tailClean: isHarmlessSseTail(tail),
     };
   };

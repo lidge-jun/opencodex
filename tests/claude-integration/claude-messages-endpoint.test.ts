@@ -451,6 +451,7 @@ const MESSAGE_START_FRAME = 'event: message_start\ndata: {"type":"message_start"
 const UNSPACED_USAGE_FRAMES = [
   'event:message_start\ndata:{"type":"message_start","message":{"usage":{"input_tokens":11}}}\n\n',
   'event:message_delta\ndata:{"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+  'event:message_stop\ndata:{"type":"message_stop"}\n\n',
 ].join("");
 
 test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
@@ -467,8 +468,8 @@ test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
 
   // The bytes pass through untouched either way; what the strict prefix broke was the inspection.
   expect(text).toContain("message_start");
-  // "terminal" rather than "eof" is itself part of the fix: recognizing the unspaced
-  // `message_delta` is what lets the tap classify the close as a real terminal frame.
+  // A 200 terminal close depends on recognizing the unspaced frames: an unparsed
+  // `message_stop` would leave the turn looking cut short.
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
   expect(ctx.usage).toEqual(expect.objectContaining({ inputTokens: 11, outputTokens: 7 }));
 });

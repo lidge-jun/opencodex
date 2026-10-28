@@ -78,6 +78,10 @@ const CASES: Array<[string, string, boolean, "ok" | "fail"]> = [
   ["stop reason then resumed content", start + md("tool_use") + delta, false, "fail"],
   ["tolerant + stop reason then resumed content", start + md("tool_use") + delta, true, "ok"],
   ["delivered end_turn with CRLF", (partial + md("end_turn")).replace(/\n/g, "\r\n"), false, "ok"],
+  ["delivered end_turn with CR-only line endings", (partial + md("end_turn")).replace(/\n/g, "\r"), false, "ok"],
+  ["message_stop with CR-only line endings", (partial + md("end_turn") + stop).replace(/\n/g, "\r"), false, "ok"],
+  ["last event field wins: message_stop then ping", partial + 'event: message_stop\nevent: ping\ndata: {"type":"message_stop"}\n\n', false, "fail"],
+  ["last event field wins: ping then message_stop", partial + 'event: ping\nevent: message_stop\ndata: {"type":"message_stop"}\n\n', false, "ok"],
   ["empty body", "", false, "fail"],
 ];
 
@@ -159,6 +163,11 @@ describe("non-stream fold of Messages SSE", () => {
   test("data-only frames are named by their payload type", async () => {
     const dataOnly = (partial + blockStop + md("tool_use") + stop).replace(/^event: .*\n/gm, "");
     const message = await fold([dataOnly]);
+    expect(message).toMatchObject({ type: "message", stop_reason: "tool_use", content: [{ type: "text", text: "half an ans" }] });
+  });
+
+  test("a final frame delimited by CR alone still folds", async () => {
+    const message = await fold([(partial + blockStop + md("tool_use")).replace(/\n/g, "\r")]);
     expect(message).toMatchObject({ type: "message", stop_reason: "tool_use", content: [{ type: "text", text: "half an ans" }] });
   });
 });
