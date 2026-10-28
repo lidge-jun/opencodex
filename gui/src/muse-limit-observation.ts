@@ -1,6 +1,7 @@
 import type { ProviderQuotaReportView } from "./provider-workspace/report";
 
 const PROVIDER = "meta-muse";
+const OBSERVATION_SOURCE = "meta-muse:rate-limit-observation";
 const MAX_RESET_DELAY_MS = 8 * 24 * 60 * 60_000;
 
 export function formatMuseResetCountdown(resetAt: number, now = Date.now()): string {
@@ -25,6 +26,24 @@ export function museLimitReport(value: unknown, accountLabel: string, now = Date
     label: "Muse Code", source: "meta-muse:rate-limit-observation", observed: true, updatedAt: row.timestamp,
     quota: { customWindows: [{ label: "Muse Code", percent: 100, resetAt }], updatedAt: row.timestamp },
   };
+}
+
+/** Reset time of a locally observed Muse refusal; native Muse reports are never treated as observations. */
+export function museObservationResetAt(reports: Record<string, ProviderQuotaReportView>): number | undefined {
+  const report = reports[PROVIDER];
+  if (report?.source !== OBSERVATION_SOURCE) return undefined;
+  const resetAt = report.quota?.customWindows?.[0]?.resetAt;
+  return typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : undefined;
+}
+
+/** An observed refusal only describes the window it named; once that window resets it is no longer evidence. */
+export function withoutExpiredMuseObservation(
+  reports: Record<string, ProviderQuotaReportView>, now = Date.now(),
+): Record<string, ProviderQuotaReportView> {
+  const resetAt = museObservationResetAt(reports);
+  if (resetAt === undefined || resetAt > now) return reports;
+  const { [PROVIDER]: _expired, ...rest } = reports;
+  return rest;
 }
 
 /** Read local management evidence only. This must never submit or retry a model request. */

@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useDataSurface } from "../../data-surface";
-import { formatMuseResetCountdown, withMuseLimitObservation } from "../../muse-limit-observation";
+import { formatMuseResetCountdown, museObservationResetAt, withMuseLimitObservation, withoutExpiredMuseObservation } from "../../muse-limit-observation";
 import { useI18n, type Locale, type TFn } from "../../i18n/shared";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { freshQuotaReportsFromResponse, type ProviderQuotaReportView } from "../../provider-workspace/report";
@@ -369,8 +369,17 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
   );
 
   const data = resource.data;
+  // Re-render at an observed Muse reset so the exhausted row leaves without waiting for a successful poll.
+  const [clock, setClock] = useState(Date.now);
+  const observedResetAt = data ? museObservationResetAt(data.reports) : undefined;
+  useEffect(() => {
+    if (observedResetAt === undefined || clock >= observedResetAt) return;
+    const timer = window.setTimeout(() => setClock(Date.now()), Math.max(0, observedResetAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [observedResetAt, clock]);
   if (!data) return null;
-  const rows = buildQuotaSummary(data.reports, provider => formatProviderDisplayName(provider, t));
+  const reports = withoutExpiredMuseObservation(data.reports, clock);
+  const rows = buildQuotaSummary(reports, provider => formatProviderDisplayName(provider, t));
   if (rows.length === 0) return null;
   const stale = !resource.lastAttemptOk;
 
