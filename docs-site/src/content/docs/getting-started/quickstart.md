@@ -154,6 +154,12 @@ It stops before publishing a new runtime or changing those settings. Retry start
 local connectivity recovers; an installed background service retries through its service manager.
 A timeout does not permanently turn the new process into a secondary instance.
 
+`Proxy ownership is unverified; startup refused` means the local owner check was
+inconclusive. OpenCodex preserves the PID record, recovery journal and shared client
+settings. Retry after the owner responds or exits; a failed health probe alone does
+not authorize crash recovery. A dead recorded process with no listener still recovers
+automatically.
+
 IPv6 does not need to be enabled on loopback. Startup checks whether each loopback
 address can be bound locally and skips an unavailable family. Timeouts on an available
 family still stop startup until ownership can be verified.

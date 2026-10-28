@@ -438,7 +438,7 @@ describe("start probes the configured port before shadowing it (source-level)", 
   test("handleStart waits out its restart parent and refuses it on both paths after the wait", () => {
     const start = cliSource.slice(cliSource.indexOf("async function handleStart("));
     expect(start).toContain("takeRestartHandoffMarkers(process.env)");
-    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent)");
+    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true }), restartParent)");
     expect(start.match(/decision === "refuse" \|\| decision === "await-parent"/g)?.length).toBe(2);
     expect(start).toContain("livePid: fencedLive.pid, restartParentPid: restartParent.restartParentPid,");
   });
@@ -709,8 +709,10 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(honorAt).toBeLessThan(start.indexOf("findProxyOwnerBeforeJournalRecovery("));
     const owner = slice("async function findProxyOwnerBeforeJournalRecovery(", "async function handleStart(");
     expect(owner).not.toContain("reconcileJournal(");
-    expect(start.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
-    expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
+    expect(start).toContain("recover: () => recoverStartJournalAfterOwnerRecheck(owner, siblingStart)");
+    const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
+    expect(recovery.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
+    expect(recovery.indexOf("markCrossHomeSibling()")).toBeLessThan(recovery.indexOf("reconcileStartupJournal()"));
     const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
     expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
     expect(detached).toContain("delete env.OCX_SERVICE;");

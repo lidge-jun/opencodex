@@ -1,6 +1,7 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { scheduleDesktopCompatibilityStartup } from "./index/desktop-compatibility-startup";
 import { AuxiliaryListenerBindError } from "./ports";
+import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget, runAdmittedBodyWork } from "./inbound-body-admission";
 import {
   buildWarmupCompletionFrames,
@@ -327,8 +328,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
   // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
   // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
-  const configuredHost = config.hostname?.trim();
-  const bindHost = !configuredHost || /^localhost\.?$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
+  const bindHost = normalizeBindHostname(config.hostname);
 
   // Unauthenticated loopback listener (#1102). Off unless explicitly enabled.
   // A port-less enabled entry is the companion form: same port as the public listener, on

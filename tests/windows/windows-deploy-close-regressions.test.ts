@@ -100,8 +100,11 @@ describe("systemd detection tolerates a no-DBUS SSH session (F9)", () => {
 describe("server bind canonicalizes explicit localhost but preserves wildcards (F4 symmetry)", () => {
   const src = read("src/server/index.ts");
   test("literal localhost binds to 127.0.0.1; 0.0.0.0/:: exposure is untouched", () => {
-    expect(src).toContain("const configuredHost = config.hostname?.trim();");
-    expect(src).toContain('!configuredHost || /^localhost\\.?$/i.test(configuredHost) ? "127.0.0.1"');
+    // The normalization lives in src/server/bind-host.ts so liveness probes share the same spelling.
+    expect(src).toContain("const bindHost = normalizeBindHostname(config.hostname);");
+    const bindHostSrc = read("src/server/bind-host.ts");
+    expect(bindHostSrc).toContain("const configuredHost = hostname?.trim();");
+    expect(bindHostSrc).toContain('!configuredHost || /^localhost\\.?$/i.test(configuredHost) ? "127.0.0.1" : configuredHost');
     // Must not blanket-rewrite the PUBLIC bind host — that would break intentional 0.0.0.0
     // exposure, which is the regression this guards.
     //

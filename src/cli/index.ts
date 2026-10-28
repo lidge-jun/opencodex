@@ -49,7 +49,7 @@ import {
   resolveCodexHistoryJobTarget,
   runCodexHistoryJob,
 } from "../codex/history-job";
-import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling, reconcileStartupJournal } from "./cross-home-owner";
+import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
@@ -165,7 +165,7 @@ import { initializeNodeLauncherContext } from "./launcher-context";
 import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
-import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
+import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS, RESTART_REOBSERVE_RESERVE_MS } from "../lib/system-restart-contract";
@@ -371,7 +371,7 @@ async function findProxyOwnerBeforeJournalRecovery(
   const hasRuntimeOwner = readRuntimePort() !== null;
   const shouldProbe = pidSnapshot !== null || hasRuntimeOwner || options.probeConfiguredPort === true;
   // A negative answer lets the caller walk past a proxy it was supposed to find and
-  // deletes this home's stale pid record. Supervised starts defer that write to the
+  // deletes this home's stale pid record. Start and ensure defer that write to the
   // lease-held owner recheck; journal recovery follows cross-home discovery.
   // One 750ms probe is not enough evidence for that (#5004) — a transport
   // failure is indistinguishable from an empty port, and the reported Windows duplicate
@@ -439,7 +439,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   // A restart replacement waits out its draining parent instead of refusing it, and bounds its handoff log (restart-handoff.ts).
   const restartParent = { restartParentPid: takeRestartHandoffMarkers(process.env), requestedPort, ocxService: process.env.OCX_SERVICE };
-  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent);
+  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true }), restartParent);
+  if (!owner.live) siblingStart = await recoverStartStateUnderOwnershipLease({
+    supervised: supervisedServiceChild,
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+    recover: () => recoverStartJournalAfterOwnerRecheck(owner, siblingStart),
+  });
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
@@ -468,18 +475,6 @@ async function handleStart(options: { block?: boolean } = {}) {
       + `Startup continues only for an independent OPENCODEX_HOME; one state directory has one spend-ledger writer.`,
     );
   }
-  siblingStart = await recoverStartStateUnderOwnershipLease({
-    supervised: supervisedServiceChild,
-    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
-    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
-    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-    recover: async () => {
-      if (!owner.live && supervisedServiceChild) removePidIfValueIs(owner.pidSnapshot);
-      if (!owner.live && !siblingStart) siblingStart = await markCrossHomeSibling();
-      if (!siblingStart) reconcileStartupJournal();
-      return siblingStart;
-    },
-  });
 
   updateRestartChild?.check();
   const clientState = readClientConnectionState();
@@ -531,7 +526,7 @@ async function handleStart(options: { block?: boolean } = {}) {
           console.error("❌ " + leasedChildOwnership.refusal);
           throw new StartCommandExit(serviceStayOutExitCode());
         }
-        // The earlier probe owned journal cleanup. This one owns the bind decision: an
+        // Recovery rechecked liveness under its lease. This fence owns the bind decision: an
         // updater may have stopped the old runtime and acquired this lease for replacement.
         const fencedLive = await findLiveProxy(START_OWNERSHIP_LIVENESS);
         if (fencedLive) {
@@ -817,8 +812,14 @@ function detachedStartEnvironment(): NodeJS.ProcessEnv {
 }
 
 async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
-  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
-  if (!owner.live && !(await markCrossHomeSibling())) reconcileStartupJournal();
+  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: true });
+  if (!owner.live) await recoverStartStateUnderOwnershipLease({
+    supervised: false,
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => ({ kind: "proceed" }),
+    stayOut: () => { throw new Error("ordinary ensure has no service stay-out decision"); },
+    recover: () => recoverStartJournalAfterOwnerRecheck(owner),
+  });
   // A later ensure can find this home's sibling alive; the other port still owns shared clients.
   if (owner.live) await markLiveHomeSibling(owner.live);
   const config = loadConfig();
