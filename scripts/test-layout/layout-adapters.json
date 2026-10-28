@@ -1,4 +1,5 @@
 {
+  "web-search-eof.test.ts": "web-search",
   "fix-search-frame-shapes.test.ts": "web-search",
   "fix-search-orphan-source.test.ts": "web-search",
   "fix-search-unicode-clamp.test.ts": "web-search",

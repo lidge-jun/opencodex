@@ -3,6 +3,7 @@
     "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
+  "web-search-eof.test.ts": "web-search",
   "fix-search-frame-shapes.test.ts": "web-search",
   "fix-search-orphan-source.test.ts": "web-search",
   "fix-search-unicode-clamp.test.ts": "web-search",
