@@ -1,4 +1,6 @@
 // Shared client export contracts.
+import type { ExportClientId } from "../client-ids";
+export type { ExportClientId } from "../client-ids";
 import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
@@ -213,31 +215,6 @@ export interface ExportContext {
 
 /** Namespaced model selector to one of that model's declared reasoning efforts. */
 export type DroidReasoningDefaults = Record<string, string>;
-
-export type ExportClientId =
-  | "qoder"
-  | "qoder-cn"
-  | "workbuddy"
-  | "workbuddy-ai"
-  | "opencode"
-  | "pi"
-  | "omp"
-  | "hermes"
-  | "openclaw"
-  | "kimi"
-  | "gajae"
-  | "dsh"
-  | "mcode"
-  | "zcode"
-  | "prime"
-  | "aside"
-  | "raycast"
-  | "omo"
-  | "cline"
-  | "commandcode"
-  | "kilo"
-  | "droid"
-  | "gentle-shell";
 
 export interface ExportClientSpec {
   id: ExportClientId;

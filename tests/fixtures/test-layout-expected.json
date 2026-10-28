@@ -1,4 +1,6 @@
 { "service-desktop-recovery.test.ts": "service", "provider-input-modalities.test.ts": "providers", "turn-membership.test.ts": "responses", "turn-membership-ingress.test.ts": "responses", "workbuddy-quota.test.ts": "providers", "workbuddy-login.test.ts": "oauth", "workbuddy-adapter.test.ts": "adapters", "workbuddy-provider.test.ts": "providers", "link-tunnel-history.test.ts": "clients", "link-readiness.test.ts": "clients", "link-diagnostics.test.ts": "clients", "combo-description.test.ts": "routing", "combo-description-catalog.test.ts": "codex-integration", "catalog-auto-review-override.test.ts": "codex-integration", "management-auto-review-settings.test.ts": "server", "management-auto-review-auth.test.ts": "server", "prefer-model-alias-ids.test.ts": "server", "responses-mimo-envelope.test.ts": "responses", "responses-call-id-linkage.test.ts": "responses", "responses-phase-inference.test.ts": "responses",
+    "t3code-client.test.ts": "clients",
+    "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
   "fix-search-frame-shapes.test.ts": "web-search",

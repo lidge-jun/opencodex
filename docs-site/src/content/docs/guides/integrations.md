@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Qoder, Cline CLI, Kilo, Command Code, Factory Droid and T3 Code from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
@@ -31,6 +31,7 @@ file, and removes it again. Each client below has its own switch:
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
+| T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
 ## Gentle Shell
 
@@ -127,6 +128,48 @@ access and refuses an authenticated non-loopback bind. When the dedicated unauth
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
 changes refresh an already enabled Qoder integration like the other managed clients.
 Model IDs containing `,` or `]` (for example `kimi/k3[1m]`) are exported like any other model.
+
+## T3 Code
+
+[T3 Code](https://github.com/pingdotgg/t3code) drives the Codex and Claude Code CLIs already
+installed on the machine. Its Codex threads route through opencodex once the
+[Codex integration](/guides/codex-integration/) is enabled, because T3 Code lists Codex models
+through `codex app-server`, which reads `$CODEX_HOME/config.toml` like every Codex client. Routed
+models then appear under Codex with no T3 Code switch, as long as T3 Code runs Codex with the same
+Codex home opencodex manages (`CODEX_HOME`, default `~/.codex`). A T3 Code Codex instance pointed at
+another home does not see the routed catalog.
+
+The **T3 Code** switch adds the Claude side. It needs the Messages API, which every Claude turn
+uses: while Messages is off on the API page, enable and refresh are refused, and disable still
+works.
+
+```bash
+ocx export --client t3code --json
+ocx integration client enable --client t3code
+ocx integration client disable --client t3code
+```
+
+Enable writes one provider instance, `providerInstances.opencodex`, into T3 Code's server settings
+and leaves every other instance and setting alone. It is a Claude instance named **opencodex** that
+runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the non-secret
+`opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
+`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
+re-point it. Each routed model is a custom model keyed by its opencodex selector
+(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+**opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
+`ocx sync` refresh the instance.
+
+T3 Code keeps its data in `T3CODE_HOME` when set, otherwise `~/.t3`. Set the same variable on the
+opencodex process if you relocate it; a relative value is refused. On Windows, use a fully qualified
+drive path (`C:\shared\t3`) or UNC path (`\\server\share\t3`); paths without a drive, such as
+`\shared\t3` or `/shared/t3`, are refused. `~` expands against the effective user home.
+The marker is not a credential, so the integration needs loopback access and refuses an authenticated non-loopback bind unless the
+unauthenticated loopback listener is enabled.
+
+Treat the instance as opencodex's. Marking one of its variables **Sensitive** in T3 Code, adding
+a custom model to it, or toggling it off rewrites the block. The switch then shows a conflict
+instead of overwriting your edit, and **Replace** restores the generated block. To use
+different settings, add your own Claude instance in T3 Code beside it.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows

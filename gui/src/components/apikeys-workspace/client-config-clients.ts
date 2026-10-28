@@ -8,7 +8,7 @@
  * with EXPORT_CLIENT_IDS by hand; adding a client server-side renders no row
  * until this tuple changes.
  */
-export const CLIENTS = ["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"] as const;
+export const CLIENTS = ["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell", "t3code"] as const;
 export type ExportClientId = (typeof CLIENTS)[number];
 
 export const CLIENT_LABEL_KEYS = {
@@ -35,6 +35,7 @@ export const CLIENT_LABEL_KEYS = {
   cline: "api.clientConfig.clientCline",
   kilo: "api.clientConfig.clientKilo",
   droid: "api.clientConfig.clientDroid",
+  t3code: "api.clientConfig.clientT3code",
 } as const;
 
 /**
@@ -92,6 +93,9 @@ export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   commandcode: "/provider-icons/commandcode-color.svg",
   kilo: "/provider-icons/kilo.svg",
   droid: "/provider-icons/factory-droid.svg",
+  // A black plate carrying a white "T3": the plated case `omo` and `qoder` set, so it
+  // stays an image — masking would paint the plate and discard the glyph.
+  t3code: "/provider-icons/t3code.svg",
 };
 
 /**

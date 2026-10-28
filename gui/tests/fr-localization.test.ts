@@ -172,6 +172,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.tab.qoderCn",
   "integrations.tab.workbuddy",
   "integrations.tab.workbuddyAi",
+  // T3 Code is a product name, identical in every locale.
+  "integrations.tab.t3code",
+  "api.clientConfig.clientT3code",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "models.reasoningEffort.ultra",

@@ -150,8 +150,8 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO, corsHeaders } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import { ClientPathError } from "../../clients/client-path";
 import {
-  ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
   OPENCODE_PROVIDER_ID,
@@ -561,9 +561,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ClientPathError)) throw error;
       return jsonResponse({ error: error.message }, 400, req, config);
     }
-    if ((requested === "raycast" || requested === "droid" || requested === "qoder" || requested === "qoder-cn" || requested === "workbuddy" || requested === "workbuddy-ai") && shouldInjectApiAuthHeader(config)) {
+    if ((requested === "t3code" || requested === "raycast" || requested === "droid" || requested === "qoder" || requested === "qoder-cn" || requested === "workbuddy" || requested === "workbuddy-ai") && shouldInjectApiAuthHeader(config)) {
       return jsonResponse({
-        error: `${requested === "droid" ? "Factory Droid" : requested.startsWith("qoder") ? "Qoder" : requested.startsWith("workbuddy") ? "WorkBuddy" : "Raycast"} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
+        error: `${requested === "t3code" ? "T3 Code" : requested === "droid" ? "Factory Droid" : requested.startsWith("qoder") ? "Qoder" : requested.startsWith("workbuddy") ? "WorkBuddy" : "Raycast"} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
         reason: "non_loopback",
       }, 400, req, config);
     }

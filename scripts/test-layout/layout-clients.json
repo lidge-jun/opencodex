@@ -1,4 +1,5 @@
 {
+  "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
   "fix-plain-data-own-keys.test.ts": "lib",

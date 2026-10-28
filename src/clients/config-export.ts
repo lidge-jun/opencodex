@@ -88,6 +88,8 @@ export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeCon
 import { agentConfigPath, buildQoderCnClientConfig, buildQoderCnContribution, buildWorkbuddyClientConfig, buildWorkbuddyContribution, summarizeWorkbuddy, workbuddyApplyRefusal } from "./config-export/agent-clients";
 import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
 export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
+import { buildT3CodeClientConfig, summarizeT3Code, buildT3CodeContribution, t3codeApplyRefusal, t3codeConfigPath } from "./config-export/t3code";
+export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGeneratedConfig } from "./config-export/t3code";
 
 
 
@@ -1615,11 +1617,8 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     loopbackOnly: true,
   },
   /*
-   * Appended rather than filed beside the other Pi-family clients on purpose.
-   * `EXPORT_CLIENT_IDS` is `Object.keys(EXPORT_CLIENTS)`, so this object's
-   * insertion order IS the public order, and three tests assert it exactly. The
-   * existing sequence is landing order — `pi` second, `prime` eleventh — not a
-   * grouping, so appending is the edit that leaves the other thirteen alone.
+   * The shared client roster preserves public landing order, not family grouping.
+   * Keep this registry in the same order so its iteration agrees with the roster.
    */
   omo: {
     id: "omo",
@@ -1697,9 +1696,22 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     },
     loopbackOnly: true,
   },
+  t3code: {
+    id: "t3code",
+    filename: "t3code-settings.json",
+    destination: env => t3codeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Merge providerInstances.opencodex into T3 Code's settings.json; it reloads the file. Loopback needs no key.",
+    build: buildT3CodeClientConfig,
+    format: "json",
+    summarize: summarizeT3Code,
+    validateApply: t3codeApplyRefusal,
+    buildContribution: buildT3CodeContribution,
+    loopbackOnly: true,
+  },
 };
 
-export const EXPORT_CLIENT_IDS: readonly ExportClientId[] = Object.keys(EXPORT_CLIENTS) as ExportClientId[];
+export { EXPORT_CLIENT_IDS } from "./client-ids";
 
 export function isExportClientId(value: string): value is ExportClientId {
   return Object.prototype.hasOwnProperty.call(EXPORT_CLIENTS, value);

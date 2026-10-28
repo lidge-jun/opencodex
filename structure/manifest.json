@@ -932,6 +932,16 @@
       ]
     },
     {
+      "path": "clients/t3code.md",
+      "tier": 5,
+      "title": "T3 Code Client Integration",
+      "scope": "T3 Code settings.json Claude provider-instance ownership, proxy environment, custom models and loopback marker rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
       "path": "desktop-shell.md",
       "tier": 6,
       "title": "Desktop shell",
