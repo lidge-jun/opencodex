@@ -61,6 +61,7 @@ import {
   isDesktopSupervised,
 } from "../../lib/system-restart-contract";
 import { spawnReplacementStart } from "../restart-replacement";
+import { retireRestartParentOwnership } from "../restart-parent-ownership";
 
 export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
 export { waitForReplacementReady, type ReplacementReadinessIo } from "../restart-replacement";
@@ -289,6 +290,9 @@ function spawnDetachedStart(
   let env: NodeJS.ProcessEnv;
   try {
     env = replacementStartEnvironment(waitForHealthBeforeParentExit);
+    // Prepare the sibling handoff while its runtime record still exists. Only completed
+    // drain + listener stop may release parent ownership before waiting for child health.
+    if (waitForHealthBeforeParentExit) retireRestartParentOwnership(port);
   } catch (err) {
     return Promise.reject(err);
   }

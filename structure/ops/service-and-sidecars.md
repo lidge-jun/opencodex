@@ -122,7 +122,7 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 and every async ACL hardening flight and deadline-surviving `icacls.exe` runner under that home have settled. `src/config/paths.ts` owns the
 barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
 `tests/server/server-stop-config-hardening.test.ts`.
-`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands. Required-mode failures keep their sanitized ETIMEDOUT/EICACLS semantics and additionally carry a bounded `aclFailure` record — fixed step and stage enums (`deadline_before_spawn`/`spawn_failed`/`runner_rejected`/`runner_watchdog`/`child_result`), measured elapsed and requested budget, success, exit code, and an allowlisted spawn code — copied field-by-field so no path, argv, SID, or child output crosses into the thrown error; `tests/windows/windows-secret-acl-diagnostics.test.ts` covers the boundary.
+`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands. Required-mode failures keep their sanitized ETIMEDOUT/EICACLS semantics and additionally carry a bounded `aclFailure` record — fixed step and stage enums (`deadline_before_spawn`/`spawn_failed`/`runner_rejected`/`runner_watchdog`/`child_result`), measured elapsed and requested budget, success, exit code, and an allowlisted spawn code — copied field-by-field so no path, argv, SID, or child output crosses into the thrown error; `tests/windows/windows-secret-acl-diagnostics.test.ts` covers the boundary. Lifecycle acquisition opts into `verifyExistingRuntimeDirectory` before mutating its shared Windows runtime root. `src/lib/windows-owner-acl.ts` verifies a protected private DACL with the serving user's inheritable Full Control; an Administrators-owned runtime directory also qualifies when that group is enabled in the serving token, independently of its default owner. The ordinary private secret-file/pairing policy is unchanged. Verification is bound to unchanged device/inode/ctime and the original deadline, creates no hardening memo, and never falls through to the legacy name-only shortcut. Refusal retains required hardening and fail-closed errors. The root check does not certify descendants; the lifecycle database is hardened separately. Regression coverage is in `tests/windows/windows-lifecycle-root-acl.test.ts`.
 
 Removal ownership captures lexical and canonical path identities before each work item or child starts, including Windows short names and directory aliases; deadline survivors retain the same identities. A deleted temporary file is captured through its existing parent. Unreadable identity at capture stays conservatively matched until settlement. Removal compares the requested root against those retained identities, so deleting or retargeting an alias cannot release the original root early. The same Bun regression verifies aliases changed mid-flight still block removal. Matching covers captured and current alias destinations; a second retarget by a writer of the protected directory is out of scope.
 
@@ -540,32 +540,32 @@ API opt-in; dashboard, CLI, tray, join and automatic restarts keep their default
 turn may have an unknown upstream outcome and is not automatically replayed.
 `tests/server/system-restart-admission.test.ts` covers this contract and active-turn preservation.
 
-A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
-after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
-replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`
-carries `OCX_RESTART_PARENT_PID`. `handleStart` consumes the marker before its first probe and
-honors it only when it names the process's real parent. When the live owner that probe finds is
-exactly that pid, `decideStartWithLiveOwner` answers `await-parent`, and `src/cli/restart-handoff.ts`
-waits up to 30 seconds for the parent to exit or stop answering (re-probing once a second) before it
-probes again; a parent that outlives the wait is refused like any live proxy. An ordinary start
-carries no marker and probes once.
+A dashboard drain-and-restart (`src/server/management/system-restart.ts`, including a join into a Child) and the
+client runtime's standalone recycle (`src/client/runtime.ts`) use `src/server/restart-replacement.ts`. Every child
+carries `OCX_RESTART_PARENT_PID`; `handleStart` consumes it before probing and honors only its real parent PID.
+If that parent still answers, `decideStartWithLiveOwner` returns `await-parent`: `src/cli/restart-handoff.ts` waits
+up to 30 seconds, re-probing each second, then refuses a surviving owner. An ordinary start probes once without a marker.
 
-Only a handoff that waits for health (the drain completed) respawns a replacement that exits before
-it answers, at most twice, inside the one 70-second readiness budget. A spawn error is not retried.
-A parent-exit handoff (drain deadline, failed or rejected drain, listener-stop fallback) resolves as
-soon as the child spawned: the parent must exit to release what the replacement waits for, so it
-cannot watch for an early exit. The replacement's `await-parent` wait and the link-mode port reclaim
-cover the known transient causes there. Any other early exit on that path is a residual: no proxy
-serves the port until something runs `ocx start` again, and Codex keeps pointing at that port.
+After completed drain and successful listener stop, the unsupervised dashboard parent prepares its sibling handoff,
+then `src/server/restart-parent-ownership.ts` retires only its own PID/runtime records under the ownership mutation
+lease before spawning and waiting for child health. Foreign PIDs, mismatched runtime ports, malformed, linked or
+unreadable records and incomplete removal refuse the handoff. Only ENOENT proves a missing record. The lease is
+released before spawning, so child recovery and publication can acquire it. The normal fence still refuses live and
+unknown owners; no child marker bypasses it. Exact-PID exit cleanup preserves the successor's records.
+`tests/server/system-restart-ownership.test.ts` covers refusal controls and real processes, drain, alive-parent endpoint
+refusal, replacement health and parent exit; its fixture does not start providers or exercise dashboard HTTP authentication.
 
-The replacement's stdout and stderr go to `<configDir>/restart-handoff.log`: mode 0600, opened
-without following a symlink, recorded as an owned config path, and bounded at 256 KiB on both sides.
-A handoff empties the file before it opens it. The replacement keeps writing to it for its whole
-life, so the parent hands it `OCX_RESTART_HANDOFF_LOG=1` along with the file; `handleStart` consumes
-the flag and arms one unref'd 60-second timer (`armRestartHandoffLogCap`) that lstats the file and
-empties it at the cap through a fresh descriptor. A start without the flag arms nothing. The parent
-writes only timestamps, pids, ports, attempt counts, exit codes and errno labels, never an
-environment value.
+A completed-drain health wait retries a replacement that exits before answering at most twice within one 70-second
+readiness budget; spawn errors are not retried. A parent-exit handoff (drain deadline, failed or rejected drain,
+listener-stop fallback) resolves as soon as the child spawns, because the parent must exit to release what the child
+waits for. It cannot watch for early exit. The child's `await-parent` wait and link-mode port reclaim cover the known
+transient causes. Other early exits leave the port unserved until another `ocx start`, while Codex keeps pointing there.
+
+Replacement output goes to `<configDir>/restart-handoff.log`: private mode 0600, opened without following symlinks,
+recorded as an owned path and bounded at 256 KiB. Handoff empties an already-full file. `OCX_RESTART_HANDOFF_LOG=1`
+tells `handleStart` to arm `armRestartHandoffLogCap`, an unref'd 60-second timer which lstats and empties a full log
+through a fresh descriptor. An ordinary start arms no timer. Parent log lines carry only timestamps, PIDs, ports,
+attempt counts, exit codes and errno labels, never environment values.
 
 When every attempt fails while client state is `connected` (a join has committed), the parent marks
 recycling before `exit(1)`, so its exit cleanup keeps the Codex routing `connectClient` wrote

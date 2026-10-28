@@ -8,6 +8,7 @@ import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { createCodexCliWorkerLifetime, type CodexCliUpdateWorkerRunMessage } from "../../src/codex/cli-update-worker";
 import { createWorkerCommitWindow, codexCliUpdateIsCancelled } from "../../src/codex/cli-update-selection-gate";
 import { openWindowsCliApplyAuthority } from "../../src/codex/cli-update-job-store-windows";
+import { verifyActualApplyRetentionRoot } from "./windows-cli-apply-retention-root";
 import { holdWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
 import { WindowsChildNative, WIN64_CHILD_ABI } from "../../src/codex/windows-cli-child-native";
 import { startWindowsCliChildWithNative, type WindowsCliChild, type WindowsCliChildResult } from "../../src/codex/windows-cli-child";
@@ -255,10 +256,12 @@ if (!Bun.isMainThread) self.onmessage = async event => {
     if (!inspecting) { need(!busy, "BUSY_OWNER_HOLD"); if (!manual) automaticAllowed(); busy = true; acquired = true; }
     if (m?.type === "fixture-init") {
       need(!fixture && !telemetryNonce && m.executionAuthorized === true && process.platform === "win32" && process.arch === "x64"
-        && typeof m.nonce === "string" && m.nonce.length === 36 && /^[A-Z]:[\\/]ocx-actual-apply-[^\\/]+$/i.test(m.root), "EXPLICIT_FIXTURE_INIT_REQUIRED");
+        && typeof m.nonce === "string" && m.nonce.length === 36, "EXPLICIT_FIXTURE_INIT_REQUIRED");
       need(m.stopFlag instanceof SharedArrayBuffer && m.stopFlag.byteLength === 4, "PRIVATE_FAILURE_FENCE_REQUIRED");
       telemetryNonce = m.nonce; stopFlag = new Int32Array(m.stopFlag);
-      fixture = await prepareRetentionFixture(m.root);
+      const root = await verifyActualApplyRetentionRoot(m.root);
+      automaticAllowed();
+      fixture = await prepareRetentionFixture(root);
       automaticAllowed();
       const plan = await createCodexCliUpdatePlan(fixture.deps);
       automaticAllowed();

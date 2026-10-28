@@ -148,7 +148,7 @@ export function finishClosedCodexCliUpdateRecovery(token: string, configDir = ge
   renameSync(temp, marker);
   syncDirectory(dir);
 }
-/** No mutation on a read. Old ambiguous job receipts remain ambiguous after recovery. */
+/** Proven Windows pending children may publish; ambiguous job receipts stay unchanged. */
 export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()): boolean {
   // Ordinary callers can use a home alias without any updater history. Probe
   // lexically first: a dangling store link is existing, unsafe evidence too.
@@ -163,13 +163,14 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
         const record = JSON.parse(io.read(token + suffix)) as RecoveryRecord;
         if (!validRecord(record, token)) throw new Error("invalid_recovery_owner");
         return record;
-      }));
+      }, record => io.write(record.token + ".json", record.token + ".pending", JSON.stringify(record), true)), true);
     const dir = directory(canonical, false);
     return inspectRecoveryFiles(readdirSync(dir), (token, suffix) => read(dir, token, suffix));
   } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.
 }
 
-function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffix?: string) => RecoveryRecord): boolean {
+function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffix?: string) => RecoveryRecord,
+  publishChild?: (record: RecoveryRecord) => void): boolean {
     if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
     const active = new Map<string, RecoveryRecord>();
@@ -203,6 +204,17 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
       if (suffix !== ".pending" && suffix !== ".terminal.pending") return true;
       const record = readRecord(token, suffix);
       const previous = active.get(token) ?? reconciled.get(token);
+      if (process.platform === "win32" && suffix === ".pending" && record.phase === "child") {
+        const armed = active.get(token);
+        if (!publishChild || armed?.phase !== "armed" || armed.pgid !== null
+          || armed.parentPid !== record.parentPid || !armed.windows?.jobName
+          || armed.windows.creationTime !== null || armed.windows.jobName !== record.windows?.jobName
+          || record.pgid === null || record.pgid > 0xffffffff || !record.windows?.creationTime
+          || BigInt(record.windows.creationTime) > 0xffffffffffffffffn
+          || !processGone(record.parentPid) || !childGone(record, token => readRecord(token, ".proof"))) return true;
+        publishChild(record); // Existing protected flush/ACL/rename path; any failure fences.
+        reconciled.set(token, record); continue;
+      }
       // A complete cleanup write can survive a crash before rename. Recognize
       // only this owner's terminal evidence, with fresh lifetime proofs. Never
       // infer completion from an armed/potential verifier publication.
