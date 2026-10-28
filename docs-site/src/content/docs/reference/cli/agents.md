@@ -1030,6 +1030,7 @@ See [client integrations](/guides/integrations/) for managed refresh and upgrade
 | --- | --- |
 | `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|commandcode\|droid>` | Required. Selects the client config dialect. |
 | `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
+| `--model-id-mode <routed\|alias>` | Hermes and Command Code only. `routed` (default) keeps canonical `provider/id` selectors; `alias` uses a qualified `<provider alias>/<model alias>` selector only when the router proves it is the same model. Previews the retained roster; nothing is written unless `--out` is given. |
 | `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
 

@@ -272,6 +272,26 @@ describe("Hermes profile scope boundaries (#7674 audit)", () => {
     expect(readFileSync(defaultConfig(), "utf8")).toBe(DEFAULT_TEXT);
   });
 
+  test("the same profile with a different model-id mode is busy, not a joined write", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    setIntegrationMutationFlightTestHooks({ store, run: async operation => { entered(); await gate; return operation(); } });
+    try {
+      const alias = api("/api/client-integrations/hermes?profile=coder", json("PUT", { enabled: true, modelIdMode: "alias" }));
+      await started;
+      const routed = await api("/api/client-integrations/hermes?profile=coder", json("PUT", { enabled: true, modelIdMode: "routed" }));
+      expect(routed.status).toBe(409);
+      expect(await routed.json()).toMatchObject({ code: "integration_mutation_busy" });
+      release();
+      expect((await alias).status).toBe(200);
+      expect(profileStore("coder").readRecords().hermes?.modelIdMode).toBe("alias");
+    } finally {
+      release();
+    }
+  });
+
   test("a Hermes-scoped history request never reaches another client's operation", async () => {
     mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(routeEnv, home), { recursive: true });
     expect((await api("/api/client-integrations/pi", json("PUT", { enabled: true }))).status).toBe(200);

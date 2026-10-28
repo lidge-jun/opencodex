@@ -10,8 +10,9 @@
  */
 import { createClineIO } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
-import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, droidDefaultsFromOwnedRows, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import { ClientPathError, DEFAULT_MODEL_ID_MODE, EXPORT_CLIENTS, opencodeProxyBaseUrl, droidDefaultsFromOwnedRows, type ExportModel, type ManagedContribution, type ModelIdMode, type QualifiedAliasResolver } from "../clients/config-export";
 import { qoderLegacyCatalogCollision } from "../clients/config-export/qoder";
+import { qualifiedAliasResolver } from "../server/index/qualified-alias";
 import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -501,6 +502,8 @@ export interface IntegrationStateInput {
   config: OcxConfig;
   port: number;
   droidReasoningDefaults?: Record<string, string>;
+  modelIdMode?: ModelIdMode;
+  qualifiedAliasFor?: QualifiedAliasResolver;
   env?: NodeJS.ProcessEnv;
   home?: string;
   /** The whole integration state store, bound to one root. */
@@ -510,13 +513,33 @@ export interface IntegrationStateInput {
   resolvedPaths?: ResolvedIntegrationPaths;
 }
 
+const MODEL_ID_MODE_CLIENTS: ReadonlySet<IntegrationClientId> = new Set<IntegrationClientId>(["hermes", "commandcode"]);
+
+export function clientTakesModelIdMode(clientId: IntegrationClientId): boolean {
+  return MODEL_ID_MODE_CLIENTS.has(clientId);
+}
+
+export function modelIdModeFor(
+  clientId: IntegrationClientId,
+  requested: ModelIdMode | undefined,
+  record: OwnershipRecord | null,
+): ModelIdMode {
+  if (!clientTakesModelIdMode(clientId)) return DEFAULT_MODEL_ID_MODE;
+  return requested ?? record?.modelIdMode ?? DEFAULT_MODEL_ID_MODE;
+}
+
 export function exportContextOf(input: {
   models: readonly ExportModel[];
   config: OcxConfig;
   port: number;
   droidReasoningDefaults?: Record<string, string>;
+  modelIdMode?: ModelIdMode;
+  qualifiedAliasFor?: QualifiedAliasResolver;
   document?: unknown;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
+}): {
+  baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string>;
+  modelIdMode?: ModelIdMode; qualifiedAliasFor?: QualifiedAliasResolver; document?: unknown;
+} {
   return {
     /*
      * Composed through the SAME helper `ocx export` uses. Interpolating the
@@ -531,6 +554,8 @@ export function exportContextOf(input: {
     models: input.models,
     config: input.config,
     ...(input.droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: input.droidReasoningDefaults }),
+    ...(input.modelIdMode === undefined ? {} : { modelIdMode: input.modelIdMode }),
+    qualifiedAliasFor: input.qualifiedAliasFor ?? qualifiedAliasResolver(input.config),
     // Forwarded only when the caller parsed a target: a client that resolves
     // between two document roots (Command Code) needs the bytes on disk.
     ...(input.document === undefined ? {} : { document: input.document }),
@@ -546,7 +571,8 @@ export function buildIntegrationContribution(
   // The parsed target travels with the context: a client whose reader picks
   // between two document roots (Command Code) must see the bytes on disk, and
   // routing it through this one builder keeps classify, plan and write agreeing.
-  const context = exportContextOf({ ...input, document: parsed });
+  const modelIdMode = modelIdModeFor(input.clientId, input.modelIdMode, record?.configPath === effective.configPath ? record : null);
+  const context = exportContextOf({ ...input, modelIdMode, document: parsed });
   if (input.clientId === "droid" && input.droidReasoningDefaults === undefined && record?.configPath === effective.configPath) {
     const inherited = recordedDroidContributionMatches(parsed, record)
       ? droidDefaultsFromOwnedRows(context, parsed, record.fragmentPaths)

@@ -8,7 +8,7 @@ import {
 } from "./runtime-api";
 import {
   clientIntegrationPath, validateAsideProfile, integrationOption, integrationFlag,
-  integrationFingerprint, integrationDroidDefaults,
+  integrationFingerprint, integrationDroidDefaults, integrationModelIdMode,
 } from "./integration-input";
 import { decodeIntegrationPlan, FILE_INTEGRATION_CLIENTS, INTEGRATION_STATES, INTEGRATION_REFUSAL_REASONS } from "./integration-plan-dto";
 
@@ -17,7 +17,8 @@ const USAGE = `Usage:
   ocx integration client restore --op ID --preview [--client aside --profile N] [--confirm-drift] [--json]
   ocx integration client <enable|disable> --client ID [--profile N] [--overwrite-conflict] [--plan-fingerprint TOKEN] [--json]
   ocx integration client restore --op ID [--client aside --profile N] [--confirm-drift] [--plan-fingerprint TOKEN] [--json]
-  Droid apply/overwrite: [--reasoning-default MODEL=EFFORT ... | --clear-reasoning-defaults]`;
+  Droid apply/overwrite: [--reasoning-default MODEL=EFFORT ... | --clear-reasoning-defaults]
+  Hermes and Command Code enable/preview: [--model-id-mode routed|alias]`;
 
 type Intent = {
   preview: boolean; json: boolean; client?: string; profile?: string;
@@ -36,6 +37,7 @@ function parseIntent(argv: string[]): Intent {
   const previewFlag = integrationFlag(args, "--preview");
   const token = integrationFingerprint(args);
   const defaults = integrationDroidDefaults(args);
+  const modelIdMode = integrationModelIdMode(args);
   const overwrite = integrationFlag(args, "--overwrite-conflict");
   const confirmDrift = integrationFlag(args, "--confirm-drift");
   const op = integrationOption(args, "--op");
@@ -61,6 +63,10 @@ function parseIntent(argv: string[]): Intent {
   }
   if (client === "aside" && profile === undefined) throw new CliUsageError("A preview or bound operation requires one Aside --profile", USAGE);
   if (defaults !== undefined && (client !== "droid" || !["apply", "overwrite"].includes(operation))) throw new CliUsageError("Reasoning defaults apply only to Droid apply or overwrite", USAGE);
+  const modelIdModeOperation = action === "enable" || action === "preview" ? operation : undefined;
+  if (modelIdMode !== undefined && ((client !== "hermes" && client !== "commandcode") || (modelIdModeOperation !== "apply" && modelIdModeOperation !== "overwrite"))) {
+    throw new CliUsageError("--model-id-mode applies only to Hermes and Command Code apply, overwrite or enable", USAGE);
+  }
   let path: string;
   let body: Record<string, unknown>;
   if (action === "restore") {
@@ -75,6 +81,7 @@ function parseIntent(argv: string[]): Intent {
     body = { enabled: action === "enable", ...(overwrite ? { overwriteConflict: true } : {}) };
   }
   if (defaults !== undefined) body.droidReasoningDefaults = defaults;
+  if (modelIdMode !== undefined) body.modelIdMode = modelIdMode;
   if (token !== undefined) { body.operation = operation; body.planFingerprint = token; }
   return { preview, json, client, profile, operation, path, body };
 }

@@ -43,6 +43,35 @@ test.each([
   expect(JSON.stringify([out.mock.calls, err.mock.calls])).not.toContain("UNTRUSTED");
 });
 
+function clientFixture(client: string) {
+  const calls: Array<{ path: string; method?: string; body: unknown }> = [];
+  const deps: RuntimeApiDeps = {
+    findLiveProxy: async () => ({ port: 10100, hostname: "127.0.0.1", pid: 1, source: "runtime" }),
+    fetchImpl: (async (input, init) => {
+      calls.push({ path: new URL(String(input)).pathname, method: init?.method, body: JSON.parse(String(init?.body)) });
+      if (String(input).endsWith("/preview")) return Response.json({ version: 1, clientId: client, operation: "apply", state: "absent", foreignEdit: "none", changes: [], fingerprint, canApply: true, willChange: false });
+      return Response.json({ ok: true, clientId: client, state: "current", changed: true });
+    }) as typeof fetch,
+  };
+  return { calls, deps };
+}
+
+test.each([
+  ["hermes", ["--model-id-mode", "alias"], { enabled: true, modelIdMode: "alias" }],
+  ["commandcode", ["--model-id-mode=routed"], { enabled: true, modelIdMode: "routed" }],
+  ["hermes", [], { enabled: true }],
+] as const)("%s wire carries the selector form only when named (%j)", async (client, options, expected) => {
+  const f = clientFixture(client);
+  expect(await command(["enable", "--client", client, ...options, "--json"], f.deps)).toBe(0);
+  expect(f.calls).toEqual([{ path: `/api/client-integrations/${client}`, method: "PUT", body: expected }]);
+});
+
+test("preview sends the Hermes selector form for an apply preview", async () => {
+  const f = clientFixture("hermes");
+  expect(await command(["preview", "--client", "hermes", "--operation", "apply", "--model-id-mode", "alias", "--json"], f.deps)).toBe(0);
+  expect(f.calls).toEqual([{ path: "/api/client-integrations/preview", method: "POST", body: { clientId: "hermes", operation: "apply", modelIdMode: "alias" } }]);
+});
+
 test("preview sends independent expected Droid map", async () => {
   const f = fixture();
   expect(await command(["preview", "--client", "droid", "--operation", "apply", "--reasoning-default", "a/m1=high", "--json"], f.deps)).toBe(0);
@@ -58,6 +87,12 @@ const invalid = [
   ["enable", "--client", "droid", "--reasoning-default", "a/m=low", "--reasoning-default=a/m=high"],
   ["enable", "--client", "droid", "--clear-reasoning-defaults", "--reasoning-default", "a/m=low"],
   ["enable", "--client", "droid", "--clear-reasoning-defaults", "--clear-reasoning-defaults"],
+  ["enable", "--client", "droid", "--model-id-mode", "alias"],
+  ["enable", "--client", "pi", "--model-id-mode", "alias"],
+  ["enable", "--client", "hermes", "--model-id-mode", "sideways"],
+  ["enable", "--client", "hermes", "--model-id-mode"],
+  ["disable", "--client", "hermes", "--model-id-mode", "alias"],
+  ["preview", "--client", "hermes", "--operation", "disable", "--model-id-mode", "alias"],
 ];
 test.each(invalid)("invalid Droid arguments never discover or write %j", async (...args) => {
   const f = fixture(); expect(await command(args, f.deps)).toBe(2);

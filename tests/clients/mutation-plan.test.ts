@@ -231,6 +231,12 @@ describe("integration plan fingerprint", () => {
     expect(new Set(variants.map(planFingerprint)).size).toBe(variants.length);
   });
 
+  test("the selector form is a version-p3 input the token binds", () => {
+    expect(planFingerprint(BASE).startsWith("p3:")).toBe(true);
+    expect(planFingerprint({ ...BASE, modelIdMode: "alias" })).not.toBe(planFingerprint({ ...BASE, modelIdMode: "routed" }));
+    expect(planFingerprint({ ...BASE, modelIdMode: "routed" })).not.toBe(planFingerprint(BASE));
+  });
+
   test("restore binds the selected row and the bytes it would publish", () => {
     const variants: PlanFingerprintInput[] = [
       RESTORE_BASE,
@@ -330,6 +336,16 @@ describe("integration mutation plan", () => {
     expect(disabled.canApply).toBe(true);
     expect(disabled.willChange).toBe(false);
     expect(disabled.changes).toEqual([]);
+  });
+
+  test("a mode-only change is a change even when the contribution bytes are current", () => {
+    const saved: PlanInput = { ...PLAN_BASE, operation: "apply", classified: { state: "current" }, record: { ...RECORD, modelIdMode: "routed" } };
+    const changed = buildMutationPlan({ ...saved, modelIdMode: "alias" });
+    expect(changed.canApply).toBe(true);
+    expect(changed.willChange).toBe(true);
+    expect(changed.changes.some(change => change.kind === "snapshot")).toBe(true);
+    const same = buildMutationPlan({ ...saved, modelIdMode: "routed" });
+    expect(same.willChange).toBe(false);
   });
 
   test("overwrite is the operation allowed through a conflict", () => {

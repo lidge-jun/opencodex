@@ -7,8 +7,9 @@ import {
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
+import { previewRouteModel } from "../../src/router";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { listManagementModelRows, loadExportModels, toExportModel, type ManagementModelRow } from "../../src/server/management/model-rows";
+import { listManagementModelRows, loadExportModels, resetExportSnapshotForTests, toExportModel, type ManagementModelRow } from "../../src/server/management/model-rows";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
@@ -810,6 +811,126 @@ describe("Pi and Aside provider selection", () => {
     config.disabledModels = [];
     config.providers.xai!.selectedModels = [];
     expect(await ids()).toEqual(["xai/grok-4.3", "xai/grok-4.5", "xai/grok-4.6"]);
+  });
+});
+
+describe("GET /api/client-config modelIdMode (#7703)", () => {
+  const aliasedConfig = (): OcxConfig => ({
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "seek",
+    providers: {
+      seek: {
+        adapter: "openai-chat",
+        baseUrl: "https://seek.example/v1",
+        apiKey: REAL_LOOKING_KEY,
+        alias: "SEK",
+        liveModels: false,
+        models: ["glm-4.7-flash", "plain-model"],
+        modelAliases: { "glm-4.7-flash": "fast" },
+      },
+    },
+  } as OcxConfig);
+
+  const retainRoster = async (config: OcxConfig): Promise<void> => {
+    resetExportSnapshotForTests();
+    await loadExportModels(config, [
+      { id: "glm-4.7-flash", provider: "seek", namespaced: "seek/glm-4.7-flash", native: false } as never,
+      { id: "plain-model", provider: "seek", namespaced: "seek/plain-model", native: false } as never,
+    ]);
+  };
+
+  test("alias mode emits the qualified key that the router resolves back to the same model", async () => {
+    const config = aliasedConfig();
+    await retainRoster(config);
+    const response = await clientConfigApi(config, "?client=hermes&modelIdMode=alias");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope & { modelIdMode?: string };
+    expect(body.modelIdMode).toBe("alias");
+    const models = (body.config as HermesGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.models;
+    expect(Object.keys(models)).toContain("SEK/fast");
+    expect(Object.keys(models)).toContain("seek/plain-model");
+    expect(Object.keys(models)).not.toContain("seek/glm-4.7-flash");
+    expect(body.text).toContain("SEK/fast");
+    expect(body.text).not.toContain("seek/glm-4.7-flash");
+    const routed = previewRouteModel(config, "SEK/fast");
+    expect(routed).toMatchObject({ providerName: "seek", modelId: "glm-4.7-flash", routeReason: "explicit-provider-namespace" });
+  });
+
+  test("the commandcode document carries the same alias selector and echoes the mode", async () => {
+    const config = aliasedConfig();
+    await retainRoster(config);
+    const response = await clientConfigApi(config, "?client=commandcode&modelIdMode=alias");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope & { modelIdMode?: string };
+    expect(body.modelIdMode).toBe("alias");
+    expect(body.text).toContain("SEK/fast");
+    expect(body.text).not.toContain("seek/glm-4.7-flash");
+  });
+
+  test("routed mode is echoed and keeps the canonical provider/id selector", async () => {
+    const config = aliasedConfig();
+    await retainRoster(config);
+    const response = await clientConfigApi(config, "?client=hermes&modelIdMode=routed");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope & { modelIdMode?: string };
+    expect(body.modelIdMode).toBe("routed");
+    expect(body.text).toContain("seek/glm-4.7-flash");
+    expect(body.text).not.toContain("SEK/fast");
+  });
+
+  test("omitting the mode keeps the legacy document with no echo and no roster dependency", async () => {
+    const config = aliasedConfig();
+    resetExportSnapshotForTests();
+    const response = await clientConfigApi(config, "?client=hermes");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope & { modelIdMode?: string };
+    expect(body).not.toHaveProperty("modelIdMode");
+    expect(body.text).toContain("seek/glm-4.7-flash");
+  });
+
+  test("an unsupported mode value or client is a 400 and never reaches the roster", async () => {
+    const config = aliasedConfig();
+    resetExportSnapshotForTests();
+    for (const query of ["?client=hermes&modelIdMode=sideways", "?client=hermes&modelIdMode=", "?client=hermes&modelIdMode=ALIAS"]) {
+      const response = await clientConfigApi(config, query);
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain("routed");
+    }
+    for (const client of ["opencode", "pi", "droid", "raycast"]) {
+      const response = await clientConfigApi(config, `?client=${client}&modelIdMode=alias`);
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain("hermes, commandcode");
+    }
+  });
+
+  test("an explicit alias preview is passive: no discovery, no cache or config write, no gather", async () => {
+    const config = aliasedConfig();
+    resetExportSnapshotForTests();
+    const originalFetch = globalThis.fetch;
+    let networkCalls = 0;
+    let saves = 0;
+    globalThis.fetch = (async () => { networkCalls += 1; throw new Error("preview must not reach the network"); }) as typeof fetch;
+    try {
+      const url = new URL("http://127.0.0.1:10100/api/client-config?client=hermes&modelIdMode=alias");
+      const response = await handleManagementAPI(new Request(url, { headers: { Host: url.host } }), url, config, {
+        saveConfigPreservingClaudeCode: () => { saves += 1; },
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+      expect(response?.status).toBe(503);
+      expect((await response!.json() as { code: string }).code).toBe("roster_unavailable");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(networkCalls).toBe(0);
+    expect(saves).toBe(0);
+  });
+
+  test("an explicit alias export is refused with 503 when no roster is retained, instead of gathering", async () => {
+    const config = aliasedConfig();
+    resetExportSnapshotForTests();
+    const response = await clientConfigApi(config, "?client=commandcode&modelIdMode=alias");
+    expect(response.status).toBe(503);
   });
 });
 

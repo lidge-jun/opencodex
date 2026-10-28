@@ -73,6 +73,9 @@ import { buildKiloClientConfig, summarizeKilo, buildKiloContribution, kiloConfig
 export { kiloConfigPath, kiloHomeDir, kiloCandidatePath, KILO_CONFIG_CANDIDATES } from "./config-export/kilo";
 export type { KiloGeneratedConfig, KiloProviderBlock, KiloModelEntry } from "./config-export/kilo";
 import { droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution } from "./config-export/droid";
+import { DEFAULT_MODEL_ID_MODE, modelIdKeysFor } from "./config-export/model-id-mode";
+export { DEFAULT_MODEL_ID_MODE, MODEL_ID_MODES, isModelIdMode, modelIdKeyFor, modelIdKeysFor } from "./config-export/model-id-mode";
+export type { ModelIdMode, QualifiedAliasResolver } from "./config-export/model-id-mode";
 import {
   buildCommandCodeClientConfig,
   summarizeCommandCode,
@@ -1082,10 +1085,12 @@ function containsEnvInterpolation(value: string): boolean {
 
 function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
   const models: Record<string, HermesModelEntry> = {};
-  for (const model of normalizeExportModels(ctx.models)) {
+  const normalized = normalizeExportModels(ctx.models);
+  const keys = modelIdKeysFor(normalized, ctx.modelIdMode ?? DEFAULT_MODEL_ID_MODE, ctx.qualifiedAliasFor);
+  for (const model of normalized) {
     if (containsEnvInterpolation(model.namespaced)) continue;
     const declared = model.inputModalities;
-    models[model.namespaced] = declared && declared.length > 0
+    models[keys.get(model.namespaced) ?? model.namespaced] = declared && declared.length > 0
       ? { supports_vision: declared.includes("image") }
       : {};
   }

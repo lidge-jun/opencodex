@@ -26,8 +26,8 @@ import {
   type IntegrationClientId,
 } from "../../integrations/registry";
 import { detectRaycast, type RaycastInstall } from "../../integrations/raycast-detect";
-import { readIntegrationState, readOwnedDroidReasoningDefaults } from "../../integrations/state";
-import { droidReasoningModels, validateDroidReasoningDefaults } from "../../clients/config-export";
+import { clientTakesModelIdMode, readIntegrationState, readOwnedDroidReasoningDefaults } from "../../integrations/state";
+import { droidReasoningModels, isModelIdMode, validateDroidReasoningDefaults, type ModelIdMode } from "../../clients/config-export";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../integrations/store";
 import {
   applyIntegrationCoordinated,
@@ -284,6 +284,7 @@ async function buildIntegrationWriteInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelIdMode?: ModelIdMode,
 ): Promise<IntegrationWriteInput> {
   return {
     clientId,
@@ -291,6 +292,7 @@ async function buildIntegrationWriteInput(
     config: ctx.config,
     port: managementInferencePort(ctx),
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+    ...(modelIdMode === undefined ? {} : { modelIdMode }),
     store,
     io: integrationMutationTestHooks?.io,
     ...scopedPathOverrides(ctx, clientId),
@@ -310,6 +312,7 @@ async function buildIntegrationPreviewInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelIdMode?: ModelIdMode,
 ): Promise<{ input: IntegrationWriteInput; identity: string } | null> {
   const snapshot = previewExportSnapshot(ctx.config);
   // No cached roster means no honest snapshot to plan against. Gathering one here would make a
@@ -323,6 +326,7 @@ async function buildIntegrationPreviewInput(
       config: ctx.config,
       port: managementInferencePort(ctx),
       ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+      ...(modelIdMode === undefined ? {} : { modelIdMode }),
       store,
       io: integrationMutationTestHooks?.io,
       ...scopedPathOverrides(ctx, clientId),
@@ -397,6 +401,26 @@ function readDroidReasoningDefaults(
   return isStringRecord(defaults)
     ? defaults
     : invalidDroidDefaultsResponse(ctx, "droidReasoningDefaults must map model names to effort strings");
+}
+
+function invalidModelIdModeResponse(ctx: ManagementContext, message: string): Response {
+  return jsonResponse({ error: message, code: "invalid_model_id_mode" }, 400, ctx.req, ctx.config);
+}
+
+function readModelIdMode(
+  ctx: ManagementContext,
+  body: Record<string, unknown>,
+  clientId: string,
+  operation: IntegrationPlanOperation,
+): ModelIdMode | Response | undefined {
+  if (!Object.hasOwn(body, "modelIdMode")) return undefined;
+  if (!isIntegrationClientId(clientId) || !clientTakesModelIdMode(clientId)
+    || (operation !== "apply" && operation !== "overwrite")) {
+    return invalidModelIdModeResponse(ctx, "modelIdMode is allowed only for Hermes and Command Code apply or overwrite");
+  }
+  return isModelIdMode(body.modelIdMode)
+    ? body.modelIdMode
+    : invalidModelIdModeResponse(ctx, "modelIdMode must be routed or alias");
 }
 
 /**
@@ -836,9 +860,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
     const droidDefaults = readDroidReasoningDefaults(ctx, parsed, previewClient, operation);
     if (droidDefaults instanceof Response) return droidDefaults;
+    const previewModelIdMode = readModelIdMode(ctx, parsed, previewClient, operation);
+    if (previewModelIdMode instanceof Response) return previewModelIdMode;
     try {
       const captured = await buildIntegrationPreviewInput(
-        previewClient as IntegrationClientId, ctx, integrationStore(ctx), droidDefaults,
+        previewClient as IntegrationClientId, ctx, integrationStore(ctx), droidDefaults, previewModelIdMode,
       );
       if (!captured) return previewUnavailableResponse(ctx);
       if (droidDefaults !== undefined) {
@@ -1080,6 +1106,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     : "disable";
   const droidDefaults = readDroidReasoningDefaults(ctx, parsed, requestedClient, requestedOperation);
   if (droidDefaults instanceof Response) return droidDefaults;
+  const modelIdMode = readModelIdMode(ctx, parsed, requestedClient, requestedOperation);
+  if (modelIdMode instanceof Response) return modelIdMode;
   const binding = planBindingOf(parsed);
   if (binding === "half") return halfBoundResponse(ctx);
   if (binding === "unknown-operation" || (binding !== "none" && binding.operation !== requestedOperation)) {
@@ -1100,11 +1128,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
      */
     const boundToggle = binding === "none"
       ? null
-      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults);
+      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelIdMode);
     if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
     const input = boundToggle
       ? boundToggle.input
-      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults);
+      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelIdMode);
     if (droidDefaults !== undefined) {
       const invalid = validateDroidReasoningDefaults(input.models, droidDefaults);
       if (invalid) return invalidDroidDefaultsResponse(ctx, invalid);
@@ -1120,7 +1148,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     );
     const result = await runIntegrationMutationFlight(
       requestedClient,
-      scopedFlightKey(ctx, parsed.enabled ? (parsed.overwriteConflict === true ? "overwrite" : "apply") : "disable"),
+      scopedFlightKey(ctx, `${requestedOperation}:${modelIdMode ?? "saved"}`),
       input.io?.now ?? Date.now,
       () => {
         const options = {

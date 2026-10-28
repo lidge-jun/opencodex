@@ -16,7 +16,14 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
-import { ClientPathError, EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import {
+  ClientPathError,
+  DEFAULT_MODEL_ID_MODE,
+  EXPORT_CLIENTS,
+  type ExportModel,
+  type ManagedContribution,
+  type ModelIdMode,
+} from "../clients/config-export";
 import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
 import {
   ZCODE_STORE_MODEL_RULES_PATH,
@@ -38,7 +45,7 @@ import {
 } from "./registry";
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IneffectiveWrite, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
-import { buildIntegrationContribution, classifyIntegration, exportContextOf, qoderLegacyCatalogConflict, readPath, type IntegrationState, type StateReason } from "./state";
+import { buildIntegrationContribution, classifyIntegration, exportContextOf, modelIdModeFor, qoderLegacyCatalogConflict, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
 import { InvalidSelectorError, UnrepresentableSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -276,6 +283,7 @@ export interface PlanFingerprintInput {
   readonly contribution: ManagedContribution | null;
   readonly record: OwnershipRecord | null;
   readonly models: readonly ExportModel[];
+  readonly modelIdMode?: ModelIdMode;
   readonly restore?: {
     readonly opId: string;
     readonly entry: JournalEntry;
@@ -292,7 +300,7 @@ export interface PlanFingerprintInput {
   };
 }
 
-const PLAN_FINGERPRINT_VERSION = "p2";
+const PLAN_FINGERPRINT_VERSION = "p3";
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
@@ -322,6 +330,7 @@ export function planFingerprint(input: PlanFingerprintInput): string {
     input.contribution === null ? null : fingerprint(canonicalContribution(input.contribution)),
     input.record === null ? null : fingerprint(JSON.stringify(input.record)),
     fingerprint(JSON.stringify(input.models)),
+    input.modelIdMode ?? null,
     restore === undefined ? null : [
       restore.opId,
       fingerprint(JSON.stringify(restore.entry)),
@@ -334,9 +343,12 @@ export function planFingerprint(input: PlanFingerprintInput): string {
   return `${PLAN_FINGERPRINT_VERSION}:${digest(JSON.stringify(components))}`;
 }
 
+export { clientTakesModelIdMode } from "./state";
+
 /** The observation facts a plan is derived from, beside the fingerprint inputs. */
 export interface PlanInput extends PlanFingerprintInput {
   readonly classified: { readonly state: IntegrationState; readonly reason?: StateReason };
+  readonly modelIdModeDrift?: boolean;
   /**
    * The parsed target document. Whether a managed place is occupied is a fact about the file, not
    * about our record: an overwrite of a key somebody else wrote replaces a value even though no
@@ -385,8 +397,14 @@ function applyOutcome(input: PlanInput): PlanOutcome {
   if (input.classified.state === "conflict" && (input.operation !== "overwrite"
     || qoderLegacyCatalogConflict(input.parsed, input.record, input.contribution))) return deny("conflict");
   if (input.classified.state === "unsafe") return deny("unsafe");
-  if (input.classified.state === "current") return NOOP;
+  if (input.modelIdModeDrift) return deny("conflict");
+  if (input.classified.state === "current") return modelIdModeChanged(input.record, input.modelIdMode) ? CHANGE : NOOP;
   return CHANGE;
+}
+
+export function modelIdModeChanged(record: OwnershipRecord | null, modelIdMode: ModelIdMode | undefined): boolean {
+  if (!record || modelIdMode === undefined) return false;
+  return (record.modelIdMode ?? DEFAULT_MODEL_ID_MODE) !== modelIdMode;
 }
 
 /**
@@ -741,6 +759,8 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
     contribution: observed.contribution,
     record: observed.record,
     models: input.models,
+    ...(observed.modelIdMode === undefined ? {} : { modelIdMode: observed.modelIdMode }),
+    modelIdModeDrift: observed.modelIdModeDrift,
     classified: observed.classified,
     parsed: observed.parsed,
     ...(request.profileId === undefined ? {} : { profileId: request.profileId }),
@@ -852,6 +872,7 @@ export interface IntegrationWriteInput {
   port: number;
   /** Explicit Droid-only defaults; omitted means retain matching owned rows. */
   droidReasoningDefaults?: Record<string, string>;
+  modelIdMode?: ModelIdMode;
   env?: NodeJS.ProcessEnv;
   home?: string;
   store?: IntegrationStateStore;
@@ -1007,13 +1028,14 @@ export function observeIntegration(
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
+  const modelIdMode = modelIdModeFor(clientId, input.modelIdMode, record);
   if (operation !== "disable") {
     const refusal = exportSpec.validateApply?.({ ...exportContextOf(input), document: parsed });
     if (refusal) return { failed: observationFailure("unsafe", "unsafe", refusal) } as const;
   }
   let contribution: ManagedContribution;
   try {
-    contribution = buildIntegrationContribution(input, effective, parsed, record);
+    contribution = buildIntegrationContribution({ ...input, modelIdMode }, effective, parsed, record);
   } catch (error) {
     if (!(error instanceof UnrepresentableSelectorError)) throw error;
     return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
@@ -1029,6 +1051,9 @@ export function observeIntegration(
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
     format: effective.format, sourcePreservingYaml: effective.sourcePreservingYaml !== null,
   });
+  const modelIdModeDrift = operation !== "disable"
+    && modelIdModeChanged(record, modelIdMode)
+    && (before === null || fingerprint(before) !== record?.fileFingerprint);
   if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
     try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }
     catch (error) {
@@ -1038,6 +1063,7 @@ export function observeIntegration(
   }
   return {
     failed: undefined, store, io, clientId, spec, exportSpec, target: effective, configPath, detectDir,
+    modelIdMode, modelIdModeDrift,
     /*
      * One token for the plan, because the location alone is not the input: a
      * store whose schema stops being one we recognise changes the answer while

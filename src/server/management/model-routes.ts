@@ -154,22 +154,26 @@ import {
   ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
+  MODEL_ID_MODES,
   OPENCODE_PROVIDER_ID,
   buildClientConfigText,
   isExportClientId,
+  isModelIdMode,
   opencodeProxyBaseUrl,
 } from "../../clients/config-export";
 import type {
   ExportClientId,
   ExportModel,
+  ModelIdMode,
   OpencodeGeneratedConfig,
   PiGeneratedConfig,
 } from "../../clients/config-export";
+import { qualifiedAliasResolver } from "../index/qualified-alias";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { managementInferencePort, type ManagementContext } from "./context";
-import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels } from "./model-rows";
+import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot } from "./model-rows";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
@@ -191,6 +195,8 @@ function summarizeExportedModels(client: ExportClientId, document: unknown): { m
   // moment a third client existed.
   return EXPORT_CLIENTS[client].summarize(document);
 }
+
+const MODEL_ID_MODE_EXPORT_CLIENTS: ReadonlySet<ExportClientId> = new Set<ExportClientId>(["hermes", "commandcode"]);
 
 export async function handleModelRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
@@ -316,8 +322,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (collision || comboCollision || accountCollision) return jsonResponse({ error: `alias conflicts with '${collision?.[0] ?? comboCollision?.[0] ?? accountCollision}'` }, 409, req, config);
     if (alias) provider.alias = alias; else delete provider.alias;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, provider: name, alias, catalogRefresh });
+    return jsonResponse({ ok: true, provider: name, alias, ...await convergeVisibleCatalogs() });
   }
 
   const modelAliasMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-aliases$/);
@@ -345,8 +350,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (conflicts.length) return jsonResponse({ error: "model alias collision", conflicts }, 409, req, config);
     provider.modelAliases = next;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, aliases: next, catalogRefresh });
+    return jsonResponse({ ok: true, aliases: next, ...await convergeVisibleCatalogs() });
   }
 
   if (url.pathname === "/api/default-aliases" && req.method === "PUT") {
@@ -359,8 +363,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       provider.defaultAliases = raw.enabled;
     } else config.defaultModelAliases = raw.enabled;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, catalogRefresh });
+    return jsonResponse({ ok: true, ...await convergeVisibleCatalogs() });
   }
 
   if (url.pathname === "/api/catalog" && req.method === "GET") {
@@ -539,6 +542,15 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         config,
       );
     }
+    const explicitModelIdMode = url.searchParams.has("modelIdMode");
+    const modelIdModeParam = url.searchParams.get("modelIdMode");
+    if (explicitModelIdMode && !isModelIdMode(modelIdModeParam)) {
+      return jsonResponse({ error: `modelIdMode must be one of: ${MODEL_ID_MODES.join(", ")}` }, 400, req, config);
+    }
+    if (explicitModelIdMode && !MODEL_ID_MODE_EXPORT_CLIENTS.has(requested)) {
+      return jsonResponse({ error: `modelIdMode is supported only for clients: ${[...MODEL_ID_MODE_EXPORT_CLIENTS].join(", ")}` }, 400, req, config);
+    }
+    const modelIdMode: ModelIdMode | undefined = explicitModelIdMode && isModelIdMode(modelIdModeParam) ? modelIdModeParam : undefined;
     const spec = EXPORT_CLIENTS[requested];
     // Resolved before the catalog load on purpose. A refused override is a
     // property of the request, not of the catalog: validating it afterwards
@@ -569,31 +581,44 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     const baseUrl = opencodeProxyBaseUrl(managementInferencePort(ctx), config.hostname, config);
     let models: ExportModel[];
-    try {
-      // The ONE loader every export surface uses. It carries the visibility
-      // filter with it, so this route and the integration routes cannot end up
-      // telling a client about different models.
-      models = await loadExportModels(config);
-    } catch (error) {
-      // A partial or empty `models` block reads as a valid config while offering nothing,
-      // so a catalog failure is surfaced as unavailable rather than serialized. The
-      // catalog-busy error keeps its own 503 from handleManagementAPI.
-      if (error instanceof CatalogGatherBusyError) throw error;
-      return jsonResponse(
-        { error: `model catalog unavailable: ${error instanceof Error ? error.message : String(error)}` },
-        503,
-        req,
-        config,
-      );
+    if (modelIdMode !== undefined) {
+      const roster = previewExportSnapshot(config);
+      if (roster === null) {
+        return jsonResponse({
+          error: "model roster is not loaded yet; open the Models view to refresh it. Nothing was written.",
+          code: "roster_unavailable",
+        }, 503, req, config);
+      }
+      models = [...roster.models];
+    } else {
+      try {
+        // The ONE loader every export surface uses. It carries the visibility
+        // filter with it, so this route and the integration routes cannot end up
+        // telling a client about different models.
+        models = await loadExportModels(config);
+      } catch (error) {
+        // A partial or empty `models` block reads as a valid config while offering nothing,
+        // so a catalog failure is surfaced as unavailable rather than serialized. The
+        // catalog-busy error keeps its own 503 from handleManagementAPI.
+        if (error instanceof CatalogGatherBusyError) throw error;
+        return jsonResponse(
+          { error: `model catalog unavailable: ${error instanceof Error ? error.message : String(error)}` },
+          503,
+          req,
+          config,
+        );
+      }
     }
     const built = buildClientConfigText(requested, {
       baseUrl,
       models,
       config,
+      ...(modelIdMode === undefined ? {} : { modelIdMode, qualifiedAliasFor: qualifiedAliasResolver(config) }),
     });
     const document = built.document;
     return jsonResponse({
       client: spec.id,
+      ...(modelIdMode === undefined ? {} : { modelIdMode }),
       filename: spec.filename,
       destination,
       apiKeyEnv: spec.apiKeyEnv,

@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { createClineIO, ClineTransactionError } from "./cline-io";
 import { serializeClineDocument, preserveClineSelection } from "./cline-document";
 import { dirname } from "node:path";
-import type { ExportModel, ManagedContribution } from "../clients/config-export";
+import { DEFAULT_MODEL_ID_MODE, type ExportModel, type ManagedContribution, type ModelIdMode } from "../clients/config-export";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
@@ -49,7 +49,7 @@ import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { hermesRefreshRefusal } from "./hermes-refresh";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
-import { observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
+import { clientTakesModelIdMode, modelIdModeChanged, observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import {
   patchYamlFragmentSource,
@@ -264,6 +264,13 @@ function preflight(input: IntegrationWriteInput, operation: "apply" | "disable")
  */
 type ConflictPolicy = "refuse" | "overwrite";
 
+function persistedModelIdMode(pre: { clientId: IntegrationClientId; record: OwnershipRecord | null; modelIdMode?: ModelIdMode }): { modelIdMode?: ModelIdMode } {
+  if (pre.modelIdMode === undefined) return {};
+  if (!clientTakesModelIdMode(pre.clientId)) return {};
+  if (pre.modelIdMode === DEFAULT_MODEL_ID_MODE && pre.record?.modelIdMode === undefined) return {};
+  return { modelIdMode: pre.modelIdMode };
+}
+
 function applyOrRefreshIntegration(
   input: IntegrationWriteInput,
   allowAbsent: boolean,
@@ -351,6 +358,9 @@ function applyOrRefreshIntegration(
           ? `${configPath} has more than one entry matching a managed selector`
           : `${configPath} cannot be changed safely`);
   }
+  if (pre.modelIdModeDrift) {
+    return refuse(clientId, "conflict", "conflict", `${configPath} changed after opencodex wrote it`);
+  }
   /*
    * An implicit catalog sync is refresh-only. Keeping this decision inside the
    * writer's one preflight closes the read-then-apply race where a user could
@@ -366,7 +376,7 @@ function applyOrRefreshIntegration(
       message: "managed block is absent; refresh did not reconnect it",
     };
   }
-  if (classified.state === "current") {
+  if (classified.state === "current" && !modelIdModeChanged(record, pre.modelIdMode)) {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
   }
   const hermesRefusal = hermesRefreshRefusal(pre, allowAbsent);
@@ -507,6 +517,7 @@ function applyOrRefreshIntegration(
         refreshablePaths,
       } : {}),
       fragmentPaths: fragmentPathsOf(contribution), createdContainers: created,
+      ...persistedModelIdMode(pre),
       appliedAt: at, opId,
     },
     entry,
@@ -870,6 +881,9 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
   if (droidReasoningDefaults !== undefined && !droidReasoningDefaults.ok) {
     throw new UncopyableIntegrationInputError("Droid reasoning defaults could not be captured for this write");
   }
+  const modelIdMode = input.modelIdMode !== undefined && clientTakesModelIdMode(input.clientId)
+    ? input.modelIdMode
+    : undefined;
   /*
    * One resolution for both paths. Aside derives them from the account id in
    * its manifest, so two independent calls could verify one account's install
@@ -889,6 +903,7 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
   return {
     ...input, config, models: models.value,
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: droidReasoningDefaults.value }),
+    ...(modelIdMode === undefined ? {} : { modelIdMode }),
     env, home, store, io, resolvedPaths,
   };
 }

@@ -375,6 +375,91 @@ describe("ocx export argument validation (accept criterion 4)", () => {
   });
 });
 
+describe("ocx export --model-id-mode (#7703)", () => {
+  function recordingProxy(response: (path: string, query: URLSearchParams) => Response) {
+    const seen: Array<{ path: string; query: URLSearchParams }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        seen.push({ path: url.pathname, query: url.searchParams });
+        return response(url.pathname, url.searchParams);
+      },
+    });
+    servers.push(server);
+    return { baseUrl: `http://127.0.0.1:${server.port}`, seen };
+  }
+
+  test("an explicit alias mode is requested from the server route, never built locally", async () => {
+    const proxy = recordingProxy((path, query) => {
+      if (path === "/api/client-config") {
+        return Response.json({
+          client: "hermes", format: "yaml", text: "providers:\n  opencodex:\n    models: {}\n",
+          modelIdMode: query.get("modelIdMode"), config: { providers: { opencodex: { models: {} } } },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const target = join(tempDir(), "hermes-config.yaml");
+    const result = await run(["--client", "hermes", "--model-id-mode", "alias", "--out", target], { baseUrl: proxy.baseUrl });
+    expect(result.code).toBe(0);
+    expect(proxy.seen.map(call => call.path)).toEqual(["/api/client-config"]);
+    expect(proxy.seen[0]!.query.get("client")).toBe("hermes");
+    expect(proxy.seen[0]!.query.get("modelIdMode")).toBe("alias");
+    expect(readFileSync(target, "utf8")).toBe("providers:\n  opencodex:\n    models: {}\n");
+  });
+
+  test("alias for a client without a selector form is a usage error before any request", async () => {
+    const proxy = recordingProxy(() => Response.json({}));
+    const result = await run(["--client", "pi", "--model-id-mode", "alias"], { baseUrl: proxy.baseUrl });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("applies only to hermes and commandcode");
+    expect(result.stdout).toBe("");
+    expect(proxy.seen).toEqual([]);
+  });
+
+  test("a server that does not apply the requested mode fails closed and writes nothing", async () => {
+    const proxy = recordingProxy(path => path === "/api/client-config"
+      ? Response.json({ client: "commandcode", format: "json", text: "{}\n", config: {} })
+      : new Response("not found", { status: 404 }));
+    const target = join(tempDir(), "providers.json");
+    const result = await run(["--client", "commandcode", "--model-id-mode", "alias", "--out", target], { baseUrl: proxy.baseUrl });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("did not apply --model-id-mode alias");
+    expect(existsSync(target)).toBe(false);
+    expect(result.stdout).toBe("");
+  });
+
+  test("omitting the mode keeps the existing routed export path and sends no mode", async () => {
+    const proxy = recordingProxy(path => path === "/api/models"
+      ? Response.json(ROWS)
+      : new Response("not found", { status: 404 }));
+    const result = await run(["--client", "commandcode", "--json"], { baseUrl: proxy.baseUrl });
+    expect(result.code).toBe(0);
+    expect(proxy.seen.map(call => call.path)).toEqual(["/api/models"]);
+    expect(JSON.parse(result.stdout)).toBeTruthy();
+  });
+
+  test("unsupported clients and unknown values are usage errors that send no request", async () => {
+    const proxy = recordingProxy(() => Response.json({}));
+    const cases: Array<[string[], string]> = [
+      [["--client", "pi", "--model-id-mode", "alias"], "applies only to hermes and commandcode"],
+      [["--client", "hermes", "--model-id-mode", "sideways"], "must be routed or alias"],
+      [["--client", "commandcode", "--model-id-mode=ALIAS"], "must be routed or alias"],
+      [["--client", "hermes", "--model-id-mode"], "requires a value"],
+    ];
+    for (const [args, message] of cases) {
+      logs = [];
+      errors = [];
+      const result = await run(args, { baseUrl: proxy.baseUrl });
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain(message);
+      expect(result.stdout).toBe("");
+    }
+    expect(proxy.seen).toEqual([]);
+  });
+});
+
 describe("ocx export with no live proxy (accept criterion 5)", () => {
   /**
    * Run through the real dispatcher in a subprocess with an isolated OPENCODEX_HOME whose

@@ -16,6 +16,8 @@ parsing and ownership rules below.
 | Module | Responsibility |
 | --- | --- |
 | `src/clients/config-export.ts` | Pure per-client config builders and the exact managed fragments each client receives. It never writes files. |
+| `src/clients/config-export/model-id-mode.ts` | The `routed` (default) / `alias` selector form and collision-safe model key derivation for Hermes and Command Code. Pure. |
+| `src/server/index/qualified-alias.ts` | Passive alias proof for alias mode: an alias is accepted only when the router resolves it to the same provider, model and explicit-provider route. Supplied as `qualifiedAliasFor` by the export route and by `exportContextOf`. |
 | `src/clients/reasoning-controls.ts` | Ingress compatibility for effort-enum clients: `resolveThinkingEnabled(provider, modelId, options)` decodes toggle aliases into `thinkingEnabled` before strength policy runs, preserving an explicit thinking choice and canonical provider defaults/maps. `normalizeThinkingOptions` removes the alias when real effort is unsupported. |
 | `src/integrations/registry.ts` | Canonical config/detection paths, current-provider-store declarations, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
 | `src/integrations/target.ts` | Which file one operation reads, writes and records, and whether a write there reaches the client. |
@@ -84,34 +86,22 @@ It never authenticates a client or changes admission policy.
 `src/clients/config-export/agent-clients.ts` manages independent `workbuddy` and `workbuddy-ai` roots (`~/.workbuddy/models.json`, `~/.workbuddy-ai/models.json`). Both honor `WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; relative overrides refuse. Rows retain proxy IDs, a full Chat Completions URL, a loopback placeholder and declared metadata. Ownership selects each `id` in object-form `models` or legacy root arrays. Foreign settings stay untouched; `validateApply` refuses hiding `availableModels` restrictions during apply/refresh; status, disable and Undo remain available. An unrepresentable model ID also refuses apply/refresh; its empty desired contribution lets status/disable verify and remove only recorded ownership, preserving foreign-edit checks. Project overrides may shadow user settings. Shared snapshots, drift checks and owned-catalog refresh apply. No client IO runs on inference paths. Doubao Desktop and Devin have no verified arbitrary-provider configuration contract and no managed integration.
 ## Cursor installed capability reads
 
-`src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
-handle, refuses final symlinks where supported, and caps bytes read even if the file grows after
-inspection. Failure retains the static-table fallback. Parsed content is cached by path, mtime and
-size; the returned table always uses the current install version, including on a cache hit.
-`tests/providers/cursor/cursor-effort-table.test.ts` covers cache reuse, version refresh and unsafe files.
-
-`src/integrations/cursor-detect.ts` looks for `cursor*` install roots under `/opt`, `/usr/share` and
-`~/.local/share` on Linux and classifies each by `product.json` `nameLong`. When only a regular install
-is found, `src/integrations/cursor-local-installer.ts` resolves the Private Inference installer that
-Cursor's `cursor-local` update channel advertises for the host platform and architecture (only
-`x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
-with no request) (`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
-The decoded manifest is capped at 64 KiB before JSON parsing. Only a bounded
-`https://downloads.cursor.com/local-mode/` URL with a bounded version is accepted (a Linux
-`.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
-resolves to `available: false` with reason `unreachable` or `unusable-response`, and nothing is
-requested when Private Inference is already installed or no regular install exists. The module never
-downloads or launches the installer, and the lookup is never part of the polled status:
-`GET /api/native-integrations/cursor` stays local, and `resolveCursorLocalInstaller` in
-`src/server/management/cursor-integration-routes.ts` answers only
-`GET /api/native-integrations/cursor/local-installer`, which the dashboard calls from an explicit
-button and then renders the link. A failed or missing route (a hub that predates it) renders as
-the unavailable case. `tests/providers/cursor/cursor-integration-status.test.ts` pins that a
-regular-only status makes no remote request. `tests/providers/cursor/cursor-local-installer.test.ts` covers the
-manifest shapes, failures, skip conditions, the OS/architecture mapping, blank versions, the cache
-windows and request sharing. Answers are cached per update host and platform (30 minutes after a
-success, 5 after a failure) and concurrent lookups share one request, so repeated presses cost at
-most one bounded wait per failure window.
+`src/integrations/cursor-effort-table.ts` reads the installed bundle through one bounded regular-file
+handle (final symlinks refused where supported), caches parsed content by path, mtime and size, and
+always returns the current install version. Failure keeps the static-table fallback.
+`src/integrations/cursor-detect.ts` finds `cursor*` roots under `/opt`, `/usr/share` and `~/.local/share`.
+`src/integrations/cursor-local-installer.ts` resolves the Private Inference installer only when a
+regular install exists and Private Inference is absent. Hosts other than `x64`/`arm64` on Windows,
+macOS and Linux resolve to `unsupported-platform` with no request. The manifest is capped at 64 KiB, the
+URL must be a bounded `https://downloads.cursor.com/local-mode/` address (a `.AppImage.zsync` maps to its
+sibling `.AppImage`), and anything else resolves to `available: false`. The module never downloads or
+launches the installer. `GET /api/native-integrations/cursor` stays local; only
+`GET /api/native-integrations/cursor/local-installer` (`resolveCursorLocalInstaller` in
+`src/server/management/cursor-integration-routes.ts`) performs the lookup, on an explicit dashboard
+request. Answers are cached per host and platform (30 minutes on success, 5 on failure) and concurrent
+lookups share one request. Contracts: `tests/providers/cursor/cursor-effort-table.test.ts`,
+`cursor-integration-status.test.ts` (regular-only status makes no remote request) and
+`cursor-local-installer.test.ts`.
 
 ## Data Flow
 
@@ -277,14 +267,24 @@ All registered integrations consume the shared catalog, including [Anthropic see
 
 No exporter infers image support from a model name. Existing client eligibility filters and ownership/refresh rules remain unchanged; exports do not add fields to schemas without a supported mapping.
 
+## Model selector mode
+
+Only Hermes and Command Code take `modelIdMode`: `routed` (default, canonical `provider/id`) or `alias`
+(`<provider alias>/<model alias>`, used only when [`qualified-alias.ts`](#module-responsibilities) proves
+the same provider, model and explicit route; a key that collides falls back to routed, per `model-id-mode.ts`).
+The effective mode is bound into the plan fingerprint, so a confirmation for one form does not authorize the other.
+Export previews the retained roster, writes nothing unless `--out` is given, and answers 503 `roster_unavailable`
+when none is retained. Apply and enable save the mode on the ownership record; omission keeps the saved mode and
+a record without one reads as `routed`. A named Hermes profile saves its own ([hermes.md](hermes.md#selector-mode)).
+Disable takes no mode. The CLI rejects `--model-id-mode`; the management API refuses any `modelIdMode` on a disable
+body (and invalid values or other clients on apply) with 400 `invalid_model_id_mode`.
+
 ## Hermes Model Capabilities
 
-Hermes cannot infer custom-provider capabilities from its built-in registry. The OpenCodex
-provider therefore emits `models` as a mapping keyed by the canonical namespaced selector. An
-explicit catalog modality list containing `image` becomes `supports_vision: true`; an explicit,
-non-empty list without `image` becomes `false`; an absent or empty modality list keeps an empty
-model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
-because its authoritative input-modality vocabulary currently has no video value.
+Hermes cannot infer custom-provider capabilities, so `models` is keyed by the selector from
+[Model selector mode](#model-selector-mode). An explicit modality list containing `image` becomes
+`supports_vision: true`; a non-empty list without it becomes `false`; an absent or empty list keeps
+an empty object. `supports_video` is never emitted.
 
 > Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md). Profile selection and per-profile ownership: [Hermes Profiles](hermes.md).
 

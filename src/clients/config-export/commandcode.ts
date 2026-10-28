@@ -3,6 +3,7 @@ import type { ExportContext, ManagedContribution } from "./contracts";
 import { normalizeExportModels, authoritativeContextWindow, singleFragment } from "./model-metadata";
 import { OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
 import { sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { DEFAULT_MODEL_ID_MODE, modelIdKeysFor } from "./model-id-mode";
 
 export interface CommandCodeModelEntry {
   reasoningEfforts?: string[];
@@ -54,8 +55,9 @@ export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGen
   // occurrence wins per provider+id identity; distinct model ids that happen to
   // share a lossy spelling collision must both remain addressable.
   const emittedIdentitiesByCollision = new Map<string, Set<string>>();
-  for (const model of normalizeExportModels(ctx.models)) {
-    const emittedKey = model.namespaced;
+  const normalized = normalizeExportModels(ctx.models);
+  const keys = modelIdKeysFor(normalized, ctx.modelIdMode ?? DEFAULT_MODEL_ID_MODE, ctx.qualifiedAliasFor);
+  for (const model of normalized) {
     const collisionKey = canonicalSpellingOf(model.namespaced);
     const identity = `${model.provider}\u0000${model.id}`;
     const identities = emittedIdentitiesByCollision.get(collisionKey) ?? new Set<string>();
@@ -72,7 +74,7 @@ export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGen
     if (efforts && efforts.length > 0) {
       entry.reasoningEfforts = efforts;
     }
-    models[emittedKey] = entry;
+    models[keys.get(model.namespaced) ?? model.namespaced] = entry;
   }
   return {
     provider: {

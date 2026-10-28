@@ -164,6 +164,21 @@ configuration value, file location or selected member identity is returned.
 `canApply: true` with `willChange: false` means the operation succeeds and changes nothing in
 the managed client document, such as applying what is already applied.
 
+Hermes and Command Code take an optional `modelIdMode`: `routed` (the canonical `provider/id` selector,
+the default) or `alias` (the qualified `<provider alias>/<model alias>` selector). It is accepted in the
+body of `POST /api/client-integrations/preview` and `PUT /api/client-integrations/{clientId}`, and as the
+`modelIdMode` query parameter of `GET /api/client-config?client=hermes|commandcode`. Any other client, or
+any value other than `routed` or `alias`, is refused with 400 (`invalid_model_id_mode` on the integration routes;
+the config export returns a 400 error message without that code). The config export is a passive preview of the retained roster: it gathers nothing and answers 503 `roster_unavailable` when
+no roster is retained. An alias is used only when the passive router proves it resolves to the same
+provider and model; an alias that collides with another model's key falls back to the routed key.
+Previews write nothing, as described above. A confirmed apply saves the mode
+with the integration's ownership record. Omitting the field keeps the saved mode, and a record without
+one reads as `routed`. A named Hermes profile saves its own mode and changes only through an explicit Apply.
+Disable takes no mode. The CLI rejects `--model-id-mode` with a usage error. The management API refuses any
+`modelIdMode` on a disable body with 400 `invalid_model_id_mode`, whether the value is valid or not. Send no
+`modelIdMode` with a disable request.
+
 An Aside profile change still saves one thing in that case. Confirming it records the desired sync
 preference for that profile before any client document is touched, so disabling a profile whose
 managed block is already absent stores the preference and leaves the document and its history

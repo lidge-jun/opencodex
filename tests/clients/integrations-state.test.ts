@@ -9,6 +9,8 @@ import {
   canonicalContribution,
   semanticContribution,
   fingerprint,
+  readRecords,
+  readRecordsStrict,
   writeRecord,
   type OwnershipRecord,
 } from "../../src/integrations/ownership";
@@ -820,5 +822,31 @@ describe("the managed file size bound", () => {
     expect(status.state).toBe("unsafe");
     expect(status.reason).toBe("unparseable");
     expect(loadTarget(fileIO(), path)).toEqual({ ok: false, why: "read-failed" });
+  });
+
+  test("an invalid persisted modelIdMode reads as routed, while strict recovery still rejects it", () => {
+    const persisted = {
+      hermes: {
+        clientId: "hermes", configPath: join(home, "config.yaml"), opId: "op-1",
+        appliedAt: new Date(0).toISOString(), fileFingerprint: "0123456789abcdef",
+        blockFingerprint: "0123456789abcdef", fragmentPaths: [["model"]], modelIdMode: "sideways",
+      },
+    };
+    mkdirSync(stateRoot, { recursive: true });
+    writeFileSync(join(stateRoot, "records.json"), JSON.stringify(persisted));
+
+    expect(readRecords(stateRoot).hermes?.modelIdMode).toBe("routed");
+    expect(() => readRecordsStrict(stateRoot)).toThrow("integration ownership is invalid for recovery");
+  });
+
+  test("a valid persisted modelIdMode survives the non-strict read unchanged", () => {
+    const record: OwnershipRecord = {
+      clientId: "hermes", configPath: join(home, "config.yaml"), opId: "op-2",
+      appliedAt: new Date(0).toISOString(), fileFingerprint: "0123456789abcdef",
+      blockFingerprint: "0123456789abcdef", fragmentPaths: [["model"]], modelIdMode: "alias",
+    };
+    writeRecord(record, stateRoot);
+    expect(readRecords(stateRoot).hermes?.modelIdMode).toBe("alias");
+    expect(readRecordsStrict(stateRoot).hermes?.modelIdMode).toBe("alias");
   });
 });

@@ -12,7 +12,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ManagedContribution, ManagedFragment } from "../clients/config-export";
+import { DEFAULT_MODEL_ID_MODE, isModelIdMode, type ManagedContribution, type ManagedFragment, type ModelIdMode } from "../clients/config-export";
 import { atomicWriteFile, getConfigDir } from "../config";
 import type { IntegrationClientId } from "./registry";
 
@@ -87,6 +87,7 @@ export interface OwnershipRecord {
   refreshablePaths?: readonly (readonly string[])[];
   /** The exact paths we own. Removal touches these and nothing else. */
   fragmentPaths: readonly (readonly string[])[];
+  modelIdMode?: ModelIdMode;
   /**
    * Containers this apply had to CREATE, `\0`-joined.
    *
@@ -116,6 +117,7 @@ export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
     && paths(record.fragmentPaths) && (record.fragmentPaths as unknown[]).length > 0
     && ["semanticBlockFingerprint", "protectedBlockFingerprint", "semanticProtectedBlockFingerprint"]
       .every(key => record[key] === undefined || hash(record[key]))
+    && (record.modelIdMode === undefined || isModelIdMode(record.modelIdMode))
     && (record.refreshablePaths === undefined || paths(record.refreshablePaths))
     && (record.createdContainers === undefined || (Array.isArray(record.createdContainers)
       && record.createdContainers.every(path => typeof path === "string")));
@@ -161,7 +163,13 @@ export function readRecords(
   try {
     const parsed: unknown = JSON.parse(readFileSync(recordsPath(dir), "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Partial<Record<IntegrationClientId, OwnershipRecord>>;
+      const records = parsed as Partial<Record<IntegrationClientId, OwnershipRecord>>;
+      for (const record of Object.values(records)) {
+        if (record && record.modelIdMode !== undefined && !isModelIdMode(record.modelIdMode)) {
+          record.modelIdMode = DEFAULT_MODEL_ID_MODE;
+        }
+      }
+      return records;
     }
   } catch {
     // Missing or corrupt records mean "we remember nothing", which the

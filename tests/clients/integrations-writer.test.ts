@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
+import { previewIntegration } from "../../src/integrations/mutation-plan";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -1146,6 +1147,154 @@ describe("Hermes source preservation", () => {
     expect(applyIntegration(input({ clientId: "hermes" })).ok).toBe(true);
     expect(disableIntegration(input({ clientId: "hermes" })).ok).toBe(true);
     expect(readFileSync(configPath, "utf8")).toBe("");
+  });
+});
+
+describe("model selector mode (#7703)", () => {
+  const ALIAS_CONFIG: OcxConfig = {
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "seek",
+    providers: {
+      seek: {
+        adapter: "openai-chat", baseUrl: "https://seek.example/v1", alias: "SEK",
+        liveModels: false, models: ["glm-4.7-flash"], modelAliases: { "glm-4.7-flash": "fast" },
+      },
+    },
+  } as unknown as OcxConfig;
+  const ALIAS_MODELS: ExportModel[] = [
+    { namespaced: "seek/glm-4.7-flash", provider: "seek", id: "glm-4.7-flash", contextWindow: 100_000 },
+  ];
+
+  test("a fresh apply without the option writes the routed key and records no mode", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG })).ok).toBe(true);
+    const text = readFileSync(configPath, "utf8");
+    expect(text).toContain("seek/glm-4.7-flash");
+    expect(text).not.toContain("SEK/fast");
+    expect(store.readRecords().hermes?.modelIdMode).toBeUndefined();
+  });
+
+  test("alias mode writes the proven qualified key and persists the mode on the record", () => {
+    const configPath = installHermes();
+    const result = applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" }));
+    expect(result.ok).toBe(true);
+    const text = readFileSync(configPath, "utf8");
+    expect(text).toContain("SEK/fast");
+    expect(text).not.toContain("seek/glm-4.7-flash");
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+  });
+
+  test("switching to alias mode persists the requested mode", () => {
+    installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG })).ok).toBe(true);
+    expect(store.readRecords().hermes?.modelIdMode).toBeUndefined();
+    const changed = applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" }));
+    expect(changed.ok).toBe(true);
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+  });
+
+  test("an omitted mode inherits the saved alias mode on refresh and read", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" })).ok).toBe(true);
+    expect(readIntegrationState(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG })).state).toBe("current");
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG })).changed).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toContain("SEK/fast");
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+  });
+
+  test("an explicit routed apply returns the saved alias record to the routed key", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" })).ok).toBe(true);
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "routed" })).ok).toBe(true);
+    const text = readFileSync(configPath, "utf8");
+    expect(text).toContain("seek/glm-4.7-flash");
+    expect(text).not.toContain("SEK/fast");
+    expect(store.readRecords().hermes?.modelIdMode).toBe("routed");
+  });
+
+  test("a non-capable client never records a mode", () => {
+    installPi();
+    expect(applyIntegration(input({ clientId: "pi", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" })).ok).toBe(true);
+    expect(store.readRecords().pi?.modelIdMode).toBeUndefined();
+  });
+
+  test("a mode-only change over a sibling edit is refused and adopts no baseline", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG })).ok).toBe(true);
+    const recordBefore = store.readRecords().hermes;
+    const journalBefore = store.listOperations("hermes").map(row => row.opId);
+    const edited = `${readFileSync(configPath, "utf8")}# sibling edit by the user\n`;
+    writeFileSync(configPath, edited);
+
+    const plan = previewIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }), { operation: "apply" });
+    expect(plan.canApply).toBe(false);
+    expect(plan.refusalReason).toBe("conflict");
+    const result = applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }));
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
+    expect(store.readRecords().hermes).toEqual(recordBefore);
+    expect(store.readRecords().hermes?.fileFingerprint).toBe(recordBefore?.fileFingerprint);
+    expect(store.readRecords().hermes?.modelIdMode).toBeUndefined();
+    expect(store.listOperations("hermes").map(row => row.opId)).toEqual(journalBefore);
+  });
+
+  test("a mode-only overwrite over a sibling edit is refused rather than adopted as the baseline", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG })).ok).toBe(true);
+    const recordBefore = store.readRecords().hermes;
+    const journalBefore = store.listOperations("hermes").map(row => row.opId);
+    const edited = `${readFileSync(configPath, "utf8")}# sibling edit by the user\n`;
+    writeFileSync(configPath, edited);
+
+    const plan = previewIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }), { operation: "overwrite" });
+    expect(plan.canApply).toBe(false);
+    const result = overwriteIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }));
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
+    expect(store.readRecords().hermes).toEqual(recordBefore);
+    expect(store.listOperations("hermes").map(row => row.opId)).toEqual(journalBefore);
+  });
+
+  test("a mode-only change with identical bytes is reported as a change by the plan the writer then performs", () => {
+    installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG })).ok).toBe(true);
+    const plan = previewIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }), { operation: "apply" });
+    expect(plan.canApply).toBe(true);
+    expect(plan.willChange).toBe(true);
+    expect(plan.changes.some(change => change.kind === "snapshot")).toBe(true);
+    const result = applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }));
+    expect(result.ok && result.changed).toBe(true);
+  });
+
+  test("undoing a mode-only change restores the previous mode and bytes", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG })).ok).toBe(true);
+    const routedText = readFileSync(configPath, "utf8");
+    const changed = applyIntegration(input({ clientId: "hermes", models: MODELS, config: CONFIG, modelIdMode: "alias" }));
+    expect(changed.ok && changed.changed).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(routedText);
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+    const opId = changed.ok ? changed.opId! : "";
+
+    const undone = restoreIntegration({ ...input({ clientId: "hermes", models: MODELS, config: CONFIG }), opId });
+
+    expect(undone.ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(routedText);
+    expect(store.readRecords().hermes?.modelIdMode).toBeUndefined();
+    expect(readIntegrationState(input({ clientId: "hermes", models: MODELS, config: CONFIG })).state).toBe("current");
+  });
+
+  test("disable removes the managed alias keys without touching the rest of the file", () => {
+    const configPath = installHermes();
+    const original = "providers:\n  other:\n    api: http://elsewhere\n";
+    writeFileSync(configPath, original);
+    expect(applyIntegration(input({ clientId: "hermes", models: ALIAS_MODELS, config: ALIAS_CONFIG, modelIdMode: "alias" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toContain("SEK/fast");
+    expect(disableIntegration(input({ clientId: "hermes" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 });
 

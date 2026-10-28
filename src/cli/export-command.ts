@@ -34,9 +34,11 @@ import {
   EXPORT_CLIENT_IDS,
   buildClientConfigText,
   isExportClientId,
+  isModelIdMode,
   opencodeProxyBaseUrl,
   type ExportClientId,
   type ExportModel,
+  type ModelIdMode,
 } from "../clients/config-export";
 import { opencodeCatalogFromProxyRows, type OpencodeProxyModelRow } from "./opencode";
 import type { OcxConfig } from "../types";
@@ -50,11 +52,13 @@ import {
   runtimeRequest,
   takeFlag,
   takeOption,
+  takeOptionWithSyntax,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
 const USAGE = `Usage:
-  ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--json] [--out <path>] [--force]`;
+  ocx export --client <${EXPORT_CLIENT_IDS.join("|")}> [--json] [--out <path>] [--force]
+  ocx export --client <hermes|commandcode> --model-id-mode <routed|alias> [--json] [--out <path>] [--force]`;
 
 export interface ExportCommandDeps extends RuntimeApiDeps {
   /** Live config seam; tests inject a fixture instead of reading the user's config. */
@@ -139,6 +143,16 @@ function parseClient(args: string[]): ExportClientId {
   return client;
 }
 
+function parseModelIdMode(args: string[], client: ExportClientId): ModelIdMode | undefined {
+  const option = takeOptionWithSyntax(args, "--model-id-mode");
+  if (option === undefined) return undefined;
+  if (client !== "hermes" && client !== "commandcode") {
+    throw new CliUsageError(`--model-id-mode applies only to hermes and commandcode, not ${client}`, USAGE);
+  }
+  if (!isModelIdMode(option.value)) throw new CliUsageError("--model-id-mode must be routed or alias", USAGE);
+  return option.value;
+}
+
 /**
  * Write the config, refusing to replace an existing file without `--force`.
  *
@@ -167,21 +181,30 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const wantsJson = takeFlag(args, "--json");
     const force = takeFlag(args, "--force");
     const out = takeOption(args, "--out");
+    const modelIdMode = parseModelIdMode(args, client);
     rejectArgs(args, USAGE);
 
     const spec = EXPORT_CLIENTS[client];
     const root = await runtimeBaseUrl(deps);
     let built: { document: unknown; text: string };
-    if (client === "raycast" || client === "droid" || client === "qoder" || client === "qoder-cn" || client === "workbuddy" || client === "workbuddy-ai") {
+    if (modelIdMode !== undefined || client === "raycast" || client === "droid" || client === "qoder" || client === "qoder-cn" || client === "workbuddy" || client === "workbuddy-ai") {
       // The dial address alone cannot distinguish a wildcard authenticated bind
       // from loopback. Let the live server resolve its admission/listener policy;
       // saved config can differ from the process serving this request.
+      const query = modelIdMode === undefined ? "" : `&modelIdMode=${encodeURIComponent(modelIdMode)}`;
       const exported = await runtimeRequest<{
-        client: string; format: string; config: unknown; text: string;
-      }>(`/api/client-config?client=${client}`, {}, { ...deps, baseUrl: root });
+        client: string; format: string; config: unknown; text: string; modelIdMode?: unknown;
+      }>(`/api/client-config?client=${client}${query}`, {}, { ...deps, baseUrl: root });
       if (!exported || exported.client !== client || exported.format !== spec.format
         || typeof exported.text !== "string" || exported.config === undefined) {
         throw new RuntimeApiError(`Management API returned an unexpected ${client} export payload.`, 502, null);
+      }
+      if (modelIdMode !== undefined && exported.modelIdMode !== modelIdMode) {
+        throw new RuntimeApiError(
+          `Management API did not apply --model-id-mode ${modelIdMode} to ${client}; nothing was written. Update the proxy to a version that supports it.`,
+          502,
+          null,
+        );
       }
       built = { document: exported.config, text: exported.text };
     } else {

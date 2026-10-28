@@ -299,4 +299,29 @@ describe("Command Code model-key spelling", () => {
     const models = document.provider[OPENCODE_PROVIDER_ID]!.models;
     expect(Object.keys(models)).toEqual(["command-code/a-b/c", "command-code/a/b-c"]);
   });
+  test("keys by the routed selector when no mode is given, and by the proven alias in alias mode", () => {
+    const proven = { namespaced: "seek/glm-4.7-flash", provider: "seek", id: "glm-4.7-flash", contextWindow: 100 };
+    const other = { namespaced: "seek/other-x", provider: "seek", id: "other-x", contextWindow: 200 };
+    const resolveQualifiedAlias = (model: { id: string }) => model.id === "glm-4.7-flash" ? "SEK/fast" : undefined;
+    const routed = buildCommandCodeClientConfig({ ...context(), models: [proven, other] }) as CommandCodeGeneratedConfig;
+    expect(Object.keys(routed.provider[OPENCODE_PROVIDER_ID]!.models)).toEqual(["seek/glm-4.7-flash", "seek/other-x"]);
+    const alias = buildCommandCodeClientConfig({
+      ...context(), models: [proven, other], modelIdMode: "alias", qualifiedAliasFor: resolveQualifiedAlias,
+    }) as CommandCodeGeneratedConfig;
+    const models = alias.provider[OPENCODE_PROVIDER_ID]!.models;
+    expect(Object.keys(models)).toEqual(["SEK/fast", "seek/other-x"]);
+    expect(models["SEK/fast"]?.contextWindow).toBe(100);
+  });
+  test("an alias that collides with another model's routed key falls back to routed", () => {
+    const alias = buildCommandCodeClientConfig({
+      ...context(),
+      models: [
+        { namespaced: "seek/glm-4.7-flash", provider: "seek", id: "glm-4.7-flash", contextWindow: 100 },
+        { namespaced: "SEK/fast", provider: "seek", id: "unrelated", contextWindow: 300 },
+      ],
+      modelIdMode: "alias",
+      qualifiedAliasFor: model => model.id === "glm-4.7-flash" ? "SEK/fast" : undefined,
+    }) as CommandCodeGeneratedConfig;
+    expect(Object.keys(alias.provider[OPENCODE_PROVIDER_ID]!.models).sort()).toEqual(["SEK/fast", "seek/glm-4.7-flash"]);
+  });
 });

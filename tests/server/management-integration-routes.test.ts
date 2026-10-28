@@ -518,6 +518,71 @@ describe("single-flight", () => {
       for (const release of releases) release();
     }
   });
+
+  test("a different model-id mode on the same client is busy, never a joined alias success", async () => {
+    installHermes();
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const io: IntegrationIO = { ...fileIO(), now: () => 3_000_000, ...bookkeeping() };
+    setIntegrationMutationFlightTestHooks({
+      store,
+      io,
+      run: async operation => { runs += 1; await gate; return operation(); },
+    });
+
+    try {
+      const routed = putOverwrite("hermes", { enabled: true, modelIdMode: "routed" });
+      const alias = putOverwrite("hermes", { enabled: true, modelIdMode: "alias" });
+      const saved = putOverwrite("hermes", { enabled: true });
+      await settle();
+      expect(runs).toBe(1);
+
+      for (const busy of [await alias, await saved]) {
+        expect(busy.status).toBe(409);
+        expect(await busy.json()).toEqual({
+          error: "integration mutation busy",
+          code: "integration_mutation_busy",
+          clientId: "hermes",
+        });
+      }
+      expect(runs).toBe(1);
+
+      release();
+      const routedResponse = await routed;
+      expect(routedResponse.status).toBe(200);
+      expect(store.readRecords().hermes?.modelIdMode ?? "routed").toBe("routed");
+    } finally {
+      release();
+    }
+  });
+
+  test("the same model-id mode still coalesces into one alias write", async () => {
+    installHermes();
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    setIntegrationMutationFlightTestHooks({
+      store,
+      io: { ...fileIO(), now: () => 4_000_000, ...bookkeeping() },
+      run: async operation => { runs += 1; await gate; return operation(); },
+    });
+
+    try {
+      const first = putOverwrite("hermes", { enabled: true, modelIdMode: "alias" });
+      const joined = putOverwrite("hermes", { enabled: true, modelIdMode: "alias" });
+      await settle();
+      expect(runs).toBe(1);
+
+      release();
+      expect((await first).status).toBe(200);
+      expect((await joined).status).toBe(200);
+      expect(runs).toBe(1);
+      expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+    } finally {
+      release();
+    }
+  });
 });
 
 describe("cross-process integration writer lock mapping", () => {
@@ -789,6 +854,115 @@ describe("refusals", () => {
     expect(body.message).toBe(`${configPath} is not a regular file`);
     expect(existsSync(configPath)).toBe(true);
     expect(store.listOperations()).toHaveLength(0);
+  });
+});
+
+describe("model selector mode over the management API (#7703)", () => {
+  function aliasedConfig(): OcxConfig {
+    return {
+      port: 10100,
+      hostname: "127.0.0.1",
+      defaultProvider: "seek",
+      providers: {
+        seek: {
+          adapter: "openai-chat", baseUrl: "https://seek.example/v1", alias: "SEK", liveModels: false,
+          models: ["glm-4.7-flash"], modelAliases: { "glm-4.7-flash": "fast" },
+        },
+      },
+    } as unknown as OcxConfig;
+  }
+
+  beforeEach(async () => {
+    config = aliasedConfig();
+    await loadExportModels(config, [{ id: "glm-4.7-flash", provider: "seek" }]);
+  });
+
+  test("a preview with an alias mode plans without writing the file or the record", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    const before = storeContentWitness(storeRoot);
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply", modelIdMode: "alias" });
+    expect(response.status).toBe(200);
+    expect(readFileSync(path, "utf8")).toBe("");
+    expect(storeContentWitness(storeRoot)).toBe(before);
+  });
+
+  test("an alias apply persists the mode and writes the proven qualified key", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    const aliasResponse = await api("/api/client-integrations/hermes", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true, modelIdMode: "alias" }),
+    });
+    expect(aliasResponse.status).toBe(200);
+    expect(readFileSync(path, "utf8")).toContain("SEK/fast");
+    expect(readFileSync(path, "utf8")).not.toContain("seek/glm-4.7-flash");
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+  });
+
+  test("an apply that omits the option keeps the saved alias mode", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    const saved = await api("/api/client-integrations/hermes", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true, modelIdMode: "alias" }),
+    });
+    expect(saved.status).toBe(200);
+    expect((await put("hermes", true)).status).toBe(200);
+    expect(readFileSync(path, "utf8")).toContain("SEK/fast");
+    expect(store.readRecords().hermes?.modelIdMode).toBe("alias");
+  });
+
+  test("an invalid mode value is refused before anything is planned or written", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    const before = storeContentWitness(storeRoot);
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply", modelIdMode: "sideways" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_model_id_mode" });
+    expect(readFileSync(path, "utf8")).toBe("");
+    expect(storeContentWitness(storeRoot)).toBe(before);
+  });
+
+  test("the option is refused for a client that does not take a selector form", async () => {
+    installHermes();
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "omp", operation: "apply", modelIdMode: "alias" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_model_id_mode" });
+  });
+
+  test("a mode on a disable request is refused rather than silently ignored", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    expect((await api("/api/client-integrations/hermes", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true, modelIdMode: "alias" }),
+    })).status).toBe(200);
+    const before = storeContentWitness(storeRoot);
+    const fileBefore = readFileSync(path, "utf8");
+    const response = await api("/api/client-integrations/hermes", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false, modelIdMode: "routed" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_model_id_mode" });
+    expect(readFileSync(path, "utf8")).toBe(fileBefore);
+    expect(storeContentWitness(storeRoot)).toBe(before);
+  });
+
+  test("a mode on a disable preview is refused", async () => {
+    installHermes();
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "disable", modelIdMode: "alias" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_model_id_mode" });
+  });
+
+  test("a non-string mode on the mutation route is refused without writing", async () => {
+    const path = installHermes();
+    writeFileSync(path, "");
+    const before = storeContentWitness(storeRoot);
+    const response = await api("/api/client-integrations/hermes", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true, modelIdMode: 1 }),
+    });
+    expect(response.status).toBe(400);
+    expect(readFileSync(path, "utf8")).toBe("");
+    expect(storeContentWitness(storeRoot)).toBe(before);
   });
 });
 

@@ -67,5 +67,13 @@ is read and undone from that profile's page.
 `tests/clients/hermes-profile-routes.test.ts` and `tests/clients/hermes-profiles.test.ts` cover
 discovery, scoping, journal and undo isolation, plan binding, flights, ownership moves, junction swaps
 and uninstall.
+
 `tests/clients/hermes-catalog-refresh.test.ts` covers default-only updates, visible named-profile
 staleness, disabled connections, external edits during catalog loading and isolated IO failures.
+
+## Selector mode
+
+Hermes accepts the per-integration `modelIdMode` (`routed` or `alias`) on preview and apply, as
+Command Code does. Omission keeps the saved mode on the ownership record of the store being written,
+so a named profile records its own mode. A legacy record reads as `routed`. Disable takes no mode; the management API refuses one on a disable body with 400 `invalid_model_id_mode`.
+Contract: `tests/clients/integrations-writer.test.ts` (`model selector mode (#7703)`).

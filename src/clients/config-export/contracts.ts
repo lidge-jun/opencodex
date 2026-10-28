@@ -2,6 +2,7 @@
 import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
+import type { ModelIdMode, QualifiedAliasResolver } from "./model-id-mode";
 
 export const DROID_DEFAULT_EFFORT_HEADER = "x-opencodex-droid-default-effort";
 
@@ -198,6 +199,8 @@ export interface ExportContext {
    */
   config?: OcxConfig;
   droidReasoningDefaults?: DroidReasoningDefaults;
+  modelIdMode?: ModelIdMode;
+  qualifiedAliasFor?: QualifiedAliasResolver;
   /**
    * The parsed target document, when the caller has one in hand.
    *

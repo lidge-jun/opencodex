@@ -35,6 +35,13 @@ export function integrationFingerprint(args: string[]): string | undefined {
   return value;
 }
 
+export function integrationModelIdMode(args: string[]): "routed" | "alias" | undefined {
+  const value = integrationOption(args, "--model-id-mode");
+  if (value === undefined) return undefined;
+  if (value !== "routed" && value !== "alias") throw new CliUsageError("--model-id-mode must be routed or alias");
+  return value;
+}
+
 /** Entries replace the map; omission preserves it; explicit clear sends {}. */
 export function integrationDroidDefaults(args: string[]): Record<string, string> | undefined {
   const clear = integrationFlag(args, "--clear-reasoning-defaults");
