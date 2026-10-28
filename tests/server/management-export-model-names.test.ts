@@ -251,3 +251,53 @@ test.each(["hermes", "commandcode"] as const)("%s unbound apply revalidates an a
     expect(store.readRecords()[client]?.modelNames).toBe("alias");
   } finally { clearModelCache("acme"); }
 });
+
+for (const client of ["hermes", "commandcode"] as const) {
+  for (const inherited of [false, true]) {
+    for (const overwrite of [false, true]) {
+      test(`${client} post-freeze alias reassignment refuses ${overwrite ? "overwrite" : "apply"} with ${inherited ? "inherited" : "explicit"} mode`, async () => {
+        const path = install(client);
+        const provider = config.providers.acme!;
+        provider.modelAliases = { "vendor/model-x": "pick" };
+        config.fastRows = false;
+        if (inherited) {
+          const setup = await api(`/api/client-integrations/${client}`, { enabled: true, modelNames: "alias" }, "PUT");
+          expect(setup.status).toBe(200);
+          expect(store.readRecords()[client]?.modelNames).toBe("alias");
+        }
+        provider.models = ["vendor/model-x", "model-b"];
+        const before = witness();
+        setIntegrationMutationFlightTestHooks({ store, run: operation => {
+          // The coordinator captures config synchronously before its first await.
+          const pending = operation();
+          provider.modelAliases = { "model-b": "pick" };
+          return pending;
+        } });
+        const response = await api(`/api/client-integrations/${client}`, {
+          enabled: true, ...(inherited ? {} : { modelNames: "alias" }),
+          ...(overwrite ? { overwriteConflict: true } : {}),
+        }, "PUT");
+        expect(response.status).toBe(409);
+        expect((await response.json()).reason).toBe("conflict");
+        expect(witness()).toEqual(before);
+        expect(existsSync(path)).toBe(inherited);
+      });
+    }
+  }
+  test(`${client} post-freeze alias changes keep default routed apply unchanged`, async () => {
+    const path = install(client);
+    config.providers.acme!.models = ["vendor/model-x", "model-b"];
+    config.providers.acme!.modelAliases = { "vendor/model-x": "pick" };
+    config.fastRows = false;
+    setIntegrationMutationFlightTestHooks({ store, run: operation => {
+      const pending = operation();
+      config.providers.acme!.modelAliases = { "model-b": "pick" };
+      return pending;
+    } });
+    expect((await api(`/api/client-integrations/${client}`, { enabled: true }, "PUT")).status).toBe(200);
+    expect(store.readRecords()[client]?.modelNames).toBe("routed");
+    const document = parseConfig(readFileSync(path, "utf8"), client === "hermes" ? "yaml" : "json");
+    const concrete = keys(client, document).filter(key => key.startsWith("acme/") || key.startsWith("AC/"));
+    expect(concrete.sort()).toEqual(["acme/model-b", "acme/vendor-model-x"].sort());
+  });
+}

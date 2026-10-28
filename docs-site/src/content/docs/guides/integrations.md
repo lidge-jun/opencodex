@@ -565,7 +565,9 @@ fall back to the routed key. Combos retain their existing keys.
 After an alias rename or removal, run `ocx sync` or explicitly Apply the connection:
 the next successful managed refresh replaces the old key with the newly validated
 alias or routed fallback. Alias edits do not atomically update client files.
-Refresh remains idempotent and refuses foreign edits. Each named Hermes profile
+Refresh remains idempotent and refuses foreign edits. If an alias changes while
+Apply or refresh waits, the write is refused; retry against the current catalog.
+Each named Hermes profile
 stores its own mode; automatic catalog refresh covers only the default profile,
 so named profiles need explicit Apply. Other exporters retain routed names.
 

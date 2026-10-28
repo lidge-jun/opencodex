@@ -1026,7 +1026,8 @@ catalog returns unavailable; load the catalog separately and retry. Explicit
 exclusive-create/`--force` behavior. For managed writes, pass the same mode to
 both `integration client preview --operation apply|overwrite` and `enable` when
 confirming a plan. The field is unsupported on disable/restore and other clients.
-Removed/renamed aliases migrate at the next successful refresh, with foreign-edit
+An alias change during Apply or refresh can cause a conflict before any write;
+retry against the current catalog. Removed/renamed aliases migrate at the next successful refresh, with foreign-edit
 refusal. See [the integration guide](/guides/integrations/#opt-in-alias-model-names).
 
 ### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`

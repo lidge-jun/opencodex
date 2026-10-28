@@ -30,6 +30,12 @@ The common export/contribution boundary regenerates candidates against its exact
 captured configuration and current router inventory. Old candidate metadata is
 discarded first: a discovery race cannot authorize an alias that was reassigned
 before an unbound Apply freezes its input. Serializers remain pure row consumers.
+`src/integrations/model-name-guard.ts` rechecks emitted aliases against the live
+configuration after all coordinator awaits and profile guards, before maintenance
+or transaction writes. It binds inherited mode through the ordinary read-only
+observation. A changed selector refuses with conflict; serialization still uses
+the frozen input. This also covers coordinated refresh and overwrite, while
+routed-only operations and disable retain their existing behavior.
 
 ## Stored connection mode
 

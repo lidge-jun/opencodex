@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
-import { applyIntegration, refreshIntegration, restoreIntegration } from "../../src/integrations/writer";
+import { applyIntegration, refreshIntegration, refreshIntegrationCoordinated, restoreIntegration } from "../../src/integrations/writer";
 import { previewIntegration } from "../../src/integrations/mutation-plan";
 import { readIntegrationState } from "../../src/integrations/state";
 import { isOwnershipRecord } from "../../src/integrations/ownership";
@@ -155,6 +155,28 @@ describe("persisted integration model names", () => {
       expect(refreshIntegration(input)).toMatchObject({ ok: true, changed: false, state: "absent" });
       expect(readFileSync(path, "utf8")).toBe("{}\n");
       expect(store.readRecords()[clientId]).toEqual(prior);
+    });
+
+    test(`${clientId}: coordinated refresh refuses post-capture alias reassignment and retries safely`, async () => {
+      const { config, input, path, keys } = await fixture();
+      config.providers.acme!.modelAliases = { "vendor/model-x": "pick" };
+      input.models = await namingModels(config);
+      const opted = { ...input, modelNames: "alias" as const };
+      expect(applyIntegration(opted).ok).toBe(true);
+      const before = readFileSync(path, "utf8");
+      const record = store.readRecords()[clientId];
+      const operations = store.listOperations(clientId);
+      const raced = await refreshIntegrationCoordinated(input, { revalidate: async () => {
+        config.providers.acme!.modelAliases = { "model-y:free": "pick" };
+        return null;
+      } });
+      expect(raced).toMatchObject({ ok: false, reason: "conflict" });
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(store.readRecords()[clientId]).toEqual(record);
+      expect(store.listOperations(clientId)).toEqual(operations);
+      expect(await refreshIntegrationCoordinated(input)).toMatchObject({ ok: true, changed: true });
+      expect(keys()).toEqual(["AC-combo", "AC/pick", "acme/deep-nested-model-z", "acme/vendor-model-x", "beta/model-x"].sort());
+      expect(policyOf(clientId)).toBe("alias");
     });
   }
 

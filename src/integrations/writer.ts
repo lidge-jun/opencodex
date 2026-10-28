@@ -49,6 +49,7 @@ import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { hermesRefreshRefusal } from "./hermes-refresh";
 import { supportsAliasModelNames } from "../clients/config-export/model-names";
+import { staleModelNameRefusal } from "./model-name-guard";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -973,12 +974,14 @@ async function coordinatedWrite(
   input: IntegrationWriteInput,
   operation: (frozen: IntegrationWriteInput) => WriteOutcome,
   options?: CoordinatedIntegrationOptions,
+  operationKind: "apply" | "overwrite" | "disable" = "apply",
 ): Promise<WriteOutcome> {
   const prepared = tryFreezeIntegrationInput(input);
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
-  const guarded = (bound: IntegrationWriteInput) => options?.guard?.(bound) ?? operation(bound);
+  const guarded = (bound: IntegrationWriteInput) => options?.guard?.(bound)
+    ?? staleModelNameRefusal(bound, input.config, operationKind) ?? operation(bound);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
     return refused ?? guarded(frozen);
@@ -1016,14 +1019,14 @@ export function overwriteIntegrationCoordinated(
   input: IntegrationWriteInput,
   options?: CoordinatedIntegrationOptions,
 ): Promise<WriteOutcome> {
-  return coordinatedWrite(input, overwriteIntegration, options);
+  return coordinatedWrite(input, overwriteIntegration, options, "overwrite");
 }
 
 export function disableIntegrationCoordinated(
   input: IntegrationWriteInput,
   options?: CoordinatedIntegrationOptions,
 ): Promise<WriteOutcome> {
-  return coordinatedWrite(input, disableIntegration, options);
+  return coordinatedWrite(input, disableIntegration, options, "disable");
 }
 
 export async function restoreIntegrationCoordinated(
