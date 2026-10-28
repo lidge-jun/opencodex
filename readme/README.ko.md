@@ -102,9 +102,9 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 | 도구 | 연결 방법 |
 |---|---|
-| Codex | `ocx init`을 실행하고 Codex 프롬프트를 수락하세요. 로컬 리스너에서는 Codex 내장 프로바이더가 프록시를 가리킵니다. 이후 평소처럼 `codex`를 실행하세요. 이미 설정했다면 대시보드 **Connect** 페이지의 Codex 스위치로 라우팅을 켜거나 끌 수 있습니다. |
+| Codex | 대시보드 **Connect** 페이지에서 Codex 스위치를 켠 다음 평소처럼 `codex`를 실행하세요. 로컬 리스너에서는 Codex 내장 프로바이더가 프록시를 가리킵니다. 터미널에서는 대시보드에 프로바이더를 추가하기 전에 `ocx init`을 실행하고 Codex 프롬프트를 수락하세요. |
 | Claude Code | `claude` CLI가 설치된 상태에서 `ocx claude`를 실행하세요. 필요하면 프록시를 시작하고 이를 통해 Claude Code를 실행합니다. |
-| Claude Desktop | `ocx claude desktop`을 실행하세요. 기본적으로 앱 전체에 게이트웨이 프로필을 설치합니다. first-party 모드는 [Claude Code 가이드](https://opencodex.me/ko/guides/claude-code/)를 참조하세요. |
+| Claude Desktop | `ocx claude desktop`을 실행하세요. 새로 설치할 때는 앱 전체에 게이트웨이 프로필을 설정합니다. 기존 first-party 설정은 유지되며, `ocx claude desktop apply --gateway`로 명시적으로 전환할 수 있습니다. [Claude Code 가이드](https://opencodex.me/ko/guides/claude-code/)를 참조하세요. |
 | Grok Build | 로컬 리스너에서 `~/.grok`이 있으면 `ocx start`가 모델을 등록합니다. Grok Build에서 `ocx-*` 모델을 선택하세요. 원격 설정은 [Grok Build 가이드](https://opencodex.me/ko/guides/grok-build/)를 참조하세요. |
 | 관리형 통합이 있는 도구 | 대시보드의 **Connect** 페이지 또는 `ocx integration client enable --client <id>`를 사용하세요. |
 | 그 밖의 도구 | OpenAI 호환 기본 URL을 `http://localhost:10100/v1`로, 또는 Anthropic 기본 URL을 `http://localhost:10100`으로 설정하세요. |

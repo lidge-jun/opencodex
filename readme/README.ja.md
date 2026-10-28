@@ -103,9 +103,9 @@ ocx start                         # プロキシとダッシュボードが loca
 
 | ツール | 接続方法 |
 |---|---|
-| Codex | `ocx init` を実行し、Codex の確認に同意します。ローカルリスナーでは Codex の組み込みプロバイダーがプロキシを指すようになります。その後は通常どおり `codex` を実行します。設定済みの場合は、ダッシュボードの **Connect** ページにある Codex スイッチでルーティングを切り替えられます。 |
+| Codex | ダッシュボードの **Connect** ページで Codex スイッチをオンにし、通常どおり `codex` を実行します。ローカルリスナーでは Codex の組み込みプロバイダーがプロキシを指すようになります。ターミナルからは、ダッシュボードでプロバイダーを追加する前に `ocx init` を実行し、Codex の確認に同意します。 |
 | Claude Code | `claude` CLI をインストールした状態で `ocx claude` を実行します。必要に応じてプロキシを起動し、そこを経由して Claude Code を起動します。 |
-| Claude Desktop | `ocx claude desktop` を実行します。デフォルトではアプリ全体にゲートウェイプロファイルをインストールします。first-party モードは [Claude Code ガイド](https://opencodex.me/ja/guides/claude-code/)を参照してください。 |
+| Claude Desktop | `ocx claude desktop` を実行します。新規インストールではアプリ全体にゲートウェイプロファイルを設定します。既存の first-party 設定は維持され、`ocx claude desktop apply --gateway` で明示的に切り替えられます。[Claude Code ガイド](https://opencodex.me/ja/guides/claude-code/)を参照してください。 |
 | Grok Build | ローカルリスナーでは、`~/.grok` が存在すると `ocx start` がモデルを登録します。Grok Build で `ocx-*` モデルを選択します。リモート設定は [Grok Build ガイド](https://opencodex.me/ja/guides/grok-build/)を参照してください。 |
 | 管理対象の統合があるツール | ダッシュボードの **Connect** ページか `ocx integration client enable --client <id>` を使います。 |
 | その他のツール | カスタムの OpenAI 互換ベース URL に `http://localhost:10100/v1` を、または Anthropic ベース URL に `http://localhost:10100` を設定します。 |

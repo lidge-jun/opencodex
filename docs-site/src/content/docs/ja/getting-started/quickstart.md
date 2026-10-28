@@ -61,7 +61,7 @@ ocx gui       # open the dashboard on the live port
 
 ### Codex
 
-手順 1 で Codex の確認に同意した場合、Codex は透過的に opencodex と通信します。既存の設定があるためにセットアップが終了した場合は、ダッシュボードの **Connect** ページにある Codex スイッチを使います。[Codex 統合](/ja/guides/codex-integration/)では変更内容と復元方法を説明しています。
+手順 1 で Codex の確認に同意した場合、Codex は透過的に opencodex と通信します。確認を拒否した場合、または既存の設定があるためにセットアップが終了した場合は、Codex を実行する前にダッシュボードの **Connect** ページにある Codex スイッチをオンにします。[Codex 統合](/ja/guides/codex-integration/)では変更内容と復元方法を説明しています。
 
 ```bash
 codex "Refactor this function for readability"
@@ -90,7 +90,7 @@ ocx claude
 ocx claude desktop
 ```
 
-デフォルトではアプリ全体にゲートウェイプロファイルをインストールします。Desktop を claude.ai のままにして Code タブのみをルーティングする first-party モードは、[Claude Code](/ja/guides/claude-code/)の Claude Desktop モードの節を参照してください。
+新規インストールではアプリ全体にゲートウェイプロファイルを設定します。すでに first-party モードを使用している場合はそのまま維持され、`ocx claude desktop apply --gateway` を実行すると明示的に切り替えられます。Desktop を claude.ai のままにして Code タブのみをルーティングする first-party モードは、[Claude Code](/ja/guides/claude-code/)の Claude Desktop モードの節を参照してください。
 
 ### Grok Build
 

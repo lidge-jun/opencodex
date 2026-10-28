@@ -62,7 +62,7 @@ ocx gui       # 在實際監聽埠開啟儀表板
 
 ### Codex
 
-如果你在步驟 1 接受了 Codex 提示，Codex 現在會透明地透過 opencodex 通訊。如果設定因已有設定檔而結束，請使用儀表板 **Connect** 頁面的 Codex 開關；[Codex 整合](/zh-tw/guides/codex-integration/)說明修改內容與還原方式。
+如果你在步驟 1 接受了 Codex 提示，Codex 現在會透明地透過 opencodex 通訊。如果你拒絕了該提示，或設定因已有設定檔而結束，請在執行 Codex 之前開啟儀表板 **Connect** 頁面的 Codex 開關；[Codex 整合](/zh-tw/guides/codex-integration/)說明修改內容與還原方式。
 
 ```bash
 codex "Refactor this function for readability"
@@ -91,7 +91,7 @@ ocx claude
 ocx claude desktop
 ```
 
-預設會為整個應用程式安裝閘道設定檔。first-party 模式讓 Desktop 繼續使用 claude.ai，只路由其 Code 分頁；詳見 [Claude Code](/zh-tw/guides/claude-code/) 的 Claude Desktop 模式一節。
+全新安裝時會為整個應用程式設定閘道設定檔；已經使用 first-party 模式的安裝會保持原模式，可執行 `ocx claude desktop apply --gateway` 明確切換。first-party 模式讓 Desktop 繼續使用 claude.ai，只路由其 Code 分頁；詳見 [Claude Code](/zh-tw/guides/claude-code/) 的 Claude Desktop 模式一節。
 
 ### Grok Build
 

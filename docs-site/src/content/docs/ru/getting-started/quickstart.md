@@ -73,7 +73,7 @@ ocx gui       # open the dashboard on the live port
 
 ### Codex
 
-Если на шаге 1 вы приняли приглашение Codex, теперь он прозрачно взаимодействует с opencodex. Если настройка завершилась из-за существующей конфигурации, используйте переключатель Codex на странице **Connect** панели; в разделе [Интеграция Codex](/ru/guides/codex-integration/) описаны изменения и их отмена.
+Если на шаге 1 вы приняли приглашение Codex, теперь он прозрачно взаимодействует с opencodex. Если вы отклонили приглашение или настройка завершилась из-за существующей конфигурации, включите переключатель Codex на странице **Connect** панели перед запуском Codex; в разделе [Интеграция Codex](/ru/guides/codex-integration/) описаны изменения и их отмена.
 
 ```bash
 codex "Refactor this function for readability"
@@ -103,7 +103,7 @@ ocx claude
 ocx claude desktop
 ```
 
-По умолчанию команда устанавливает профиль шлюза для всего приложения. Режим first-party сохраняет подключение Desktop к claude.ai и маршрутизирует только вкладку Code; см. раздел о режимах Claude Desktop в [Claude Code](/ru/guides/claude-code/).
+При новой установке команда настраивает профиль шлюза для всего приложения. Если установка уже использует режим first-party, он сохраняется; выполните `ocx claude desktop apply --gateway`, чтобы явно переключить режим. Режим first-party сохраняет подключение Desktop к claude.ai и маршрутизирует только вкладку Code; см. раздел о режимах Claude Desktop в [Claude Code](/ru/guides/claude-code/).
 
 ### Grok Build
 

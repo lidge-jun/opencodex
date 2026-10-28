@@ -64,7 +64,7 @@ Choisissez la branche correspondant à votre outil. Vous pouvez en connecter plu
 
 ### Codex
 
-Si vous avez accepté l’invite Codex à l’étape 1, Codex communique maintenant avec opencodex de manière transparente. Si la configuration s’est arrêtée parce qu’un fichier existait déjà, utilisez le commutateur Codex de la page **Connect** ; [Intégration Codex](/fr/guides/codex-integration/) explique les modifications et leur restauration.
+Si vous avez accepté l’invite Codex à l’étape 1, Codex communique maintenant avec opencodex de manière transparente. Si vous avez refusé cette invite ou si la configuration s’est arrêtée parce qu’une configuration existait déjà, activez le commutateur Codex sur la page **Connect** du tableau de bord avant de lancer Codex ; [Intégration Codex](/fr/guides/codex-integration/) explique les modifications et leur restauration.
 
 ```bash
 codex "Refactor this function for readability"
@@ -93,7 +93,7 @@ ocx claude
 ocx claude desktop
 ```
 
-Par défaut, cette commande installe le profil de passerelle pour toute l’application. Le mode first-party conserve claude.ai pour Desktop et ne route que son onglet Code ; consultez la section sur les modes Claude Desktop dans [Claude Code](/fr/guides/claude-code/).
+Lors d’une nouvelle installation, cette commande configure le profil de passerelle pour toute l’application. Une installation utilisant déjà le mode first-party le conserve ; exécutez `ocx claude desktop apply --gateway` pour changer explicitement. Le mode first-party conserve claude.ai pour Desktop et ne route que son onglet Code ; consultez la section sur les modes Claude Desktop dans [Claude Code](/fr/guides/claude-code/).
 
 ### Grok Build
 

@@ -103,9 +103,9 @@ yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
 
 | Araç | Bağlantı yöntemi |
 |---|---|
-| Codex | `ocx init` çalıştırın ve Codex istemini kabul edin. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir; ardından `codex` komutunu her zamanki gibi çalıştırın. Zaten kuruluysa panelin **Connect** sayfasındaki Codex anahtarı yönlendirmeyi açar veya kapatır. |
+| Codex | Panelin **Connect** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
 | Claude Code | `claude` CLI kuruluysa `ocx claude` çalıştırın. Gerekirse proxy’yi başlatır ve Claude Code’u onun üzerinden açar. |
-| Claude Desktop | `ocx claude desktop` çalıştırın. Varsayılan olarak ağ geçidi profilini tüm uygulama için kurar; first-party modu için [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. |
+| Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. |
 | Grok Build | Yerel dinleyicide `~/.grok` varsa `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. |
 | Yönetilen entegrasyonu olan araçlar | Panelin **Connect** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
 | Diğer tüm araçlar | Özel OpenAI uyumlu temel URL’yi `http://localhost:10100/v1` veya Anthropic temel URL’sini `http://localhost:10100` olarak ayarlayın. |

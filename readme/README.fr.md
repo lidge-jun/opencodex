@@ -104,9 +104,9 @@ Ajoutez d’abord un fournisseur, puis connectez l’outil que vous utilisez :
 
 | Outil | Connexion |
 |---|---|
-| Codex | Exécutez `ocx init` et acceptez l’invite Codex. Sur une écoute locale, cela dirige le fournisseur intégré de Codex vers le proxy ; lancez ensuite `codex` comme d’habitude. Déjà configuré ? Le commutateur Codex de la page **Connect** du tableau de bord active ou désactive le routage. |
+| Codex | Activez le commutateur Codex sur la page **Connect** du tableau de bord, puis exécutez `codex` comme d’habitude. Sur une écoute locale, cela dirige le fournisseur intégré de Codex vers le proxy. Depuis le terminal, exécutez `ocx init` avant d’ajouter des fournisseurs dans le tableau de bord et acceptez son invite Codex. |
 | Claude Code | Avec le CLI `claude` installé, exécutez `ocx claude`. Il démarre le proxy si nécessaire et lance Claude Code à travers celui-ci. |
-| Claude Desktop | Exécutez `ocx claude desktop`. Par défaut, le profil de passerelle est installé pour toute l’application ; consultez le [guide Claude Code](https://opencodex.me/fr/guides/claude-code/) pour le mode first-party. |
+| Claude Desktop | Exécutez `ocx claude desktop`. Lors d’une nouvelle installation, cette commande configure le profil de passerelle pour toute l’application ; une configuration first-party existante est conservée et `ocx claude desktop apply --gateway` permet de changer explicitement. Consultez le [guide Claude Code](https://opencodex.me/fr/guides/claude-code/). |
 | Grok Build | Sur une écoute locale, `ocx start` enregistre les modèles si `~/.grok` existe ; choisissez un modèle `ocx-*` dans Grok Build. Configurations distantes : consultez le [guide Grok Build](https://opencodex.me/fr/guides/grok-build/). |
 | Outils avec intégration gérée | Utilisez la page **Connect** du tableau de bord ou `ocx integration client enable --client <id>`. |
 | Tout autre outil | Définissez l’URL de base compatible OpenAI `http://localhost:10100/v1` ou l’URL de base Anthropic `http://localhost:10100`. |

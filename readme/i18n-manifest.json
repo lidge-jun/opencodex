@@ -6,43 +6,43 @@
       "file": "readme/README.fr.md",
       "label": "Français",
       "docsPath": "fr",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "ko": {
       "file": "readme/README.ko.md",
       "label": "한국어",
       "docsPath": "ko",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "zh-CN": {
       "file": "readme/README.zh-CN.md",
       "label": "简体中文",
       "docsPath": "zh-cn",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "zh-TW": {
       "file": "readme/README.zh-TW.md",
       "label": "繁體中文",
       "docsPath": "zh-tw",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "ru": {
       "file": "readme/README.ru.md",
       "label": "Русский",
       "docsPath": "ru",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "ja": {
       "file": "readme/README.ja.md",
       "label": "日本語",
       "docsPath": "ja",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     },
     "tr": {
       "file": "readme/README.tr.md",
       "label": "Türkçe",
       "docsPath": "tr",
-      "sourceSha256": "95995e8351498547609319f88a284bc9e40c5b8ac37c647a8450aac9f653ad0f"
+      "sourceSha256": "57a2241111770554e6165181018008dee1f32181611e50fad245a4b7d2cb05c2"
     }
   }
 }

@@ -72,7 +72,7 @@ Kullandığınız araca ait bölümü seçin. Birden fazla araç bağlayabilirsi
 
 ### Codex
 
-1. adımda Codex istemini kabul ettiyseniz Codex artık opencodex ile şeffaf biçimde iletişim kurar. Mevcut yapılandırma nedeniyle kurulum sona erdiyse panelin **Connect** sayfasındaki Codex anahtarını kullanın; [Codex Entegrasyonu](/tr/guides/codex-integration/) değişiklikleri ve nasıl geri alınacağını açıklar.
+1. adımda Codex istemini kabul ettiyseniz Codex artık opencodex ile şeffaf biçimde iletişim kurar. İstemi reddettiyseniz veya mevcut yapılandırma nedeniyle kurulum sona erdiyse Codex’i çalıştırmadan önce panelin **Connect** sayfasındaki Codex anahtarını açın; [Codex Entegrasyonu](/tr/guides/codex-integration/) değişiklikleri ve nasıl geri alınacağını açıklar.
 
 ```bash
 codex "Okunabilirlik için bu fonksiyonu yeniden düzenle"
@@ -102,7 +102,7 @@ ocx claude
 ocx claude desktop
 ```
 
-Varsayılan olarak tüm uygulama için ağ geçidi profilini kurar. Desktop’ı claude.ai üzerinde tutup yalnızca Code sekmesini yönlendiren first-party modu, [Claude Code](/tr/guides/claude-code/) sayfasındaki Claude Desktop modları bölümünde açıklanır.
+Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar. Zaten first-party modunu kullanan bir kurulum bu modu korur; açıkça geçiş yapmak için `ocx claude desktop apply --gateway` çalıştırın. Desktop’ı claude.ai üzerinde tutup yalnızca Code sekmesini yönlendiren first-party modu, [Claude Code](/tr/guides/claude-code/) sayfasındaki Claude Desktop modları bölümünde açıklanır.
 
 ### Grok Build
 

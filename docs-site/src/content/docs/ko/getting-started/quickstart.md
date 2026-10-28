@@ -59,7 +59,7 @@ ocx gui       # open the dashboard on the live port
 
 ### Codex
 
-1단계에서 Codex 프롬프트를 수락했다면 이제 Codex가 opencodex와 투명하게 통신합니다. 기존 설정이 있어 설정이 종료됐다면 대시보드 **Connect** 페이지의 Codex 스위치를 사용하세요. [Codex 통합](/ko/guides/codex-integration/)에서 변경 내용과 복원 방법을 설명합니다.
+1단계에서 Codex 프롬프트를 수락했다면 이제 Codex가 opencodex와 투명하게 통신합니다. 프롬프트를 거절했거나 기존 설정이 있어 설정이 종료됐다면 Codex를 실행하기 전에 대시보드 **Connect** 페이지의 Codex 스위치를 켜세요. [Codex 통합](/ko/guides/codex-integration/)에서 변경 내용과 복원 방법을 설명합니다.
 
 ```bash
 codex "Refactor this function for readability"
@@ -88,7 +88,7 @@ ocx claude
 ocx claude desktop
 ```
 
-기본적으로 앱 전체에 게이트웨이 프로필을 설치합니다. Desktop은 claude.ai를 유지하고 Code 탭만 라우팅하는 first-party 모드는 [Claude Code](/ko/guides/claude-code/)의 Claude Desktop 모드 항목을 참조하세요.
+새로 설치할 때는 앱 전체에 게이트웨이 프로필을 설정합니다. 이미 first-party 모드를 사용하는 설치는 해당 모드를 유지하며, `ocx claude desktop apply --gateway`를 실행해 명시적으로 전환할 수 있습니다. Desktop은 claude.ai를 유지하고 Code 탭만 라우팅하는 first-party 모드는 [Claude Code](/ko/guides/claude-code/)의 Claude Desktop 모드 항목을 참조하세요.
 
 ### Grok Build
 
