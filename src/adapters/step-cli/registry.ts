@@ -136,8 +136,11 @@ export function ensureShutdownHook(): void {
   if (shutdownHookInstalled) return;
   shutdownHookInstalled = true;
   registerOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, () => {
-    for (const pool of pools.values()) void pool.closeAll();
-    pools.clear();
+    // This core hook is synchronous/best-effort. The explicit async clear retains failed
+    // ownership and reports its rejection; the hook must observe that same failure too.
+    void clearStepCliSessions().catch(() => {
+      console.warn("[step-cli] Process cleanup failed; conversation pools remain quarantined.");
+    });
   });
 }
 
@@ -145,9 +148,12 @@ export function ensureShutdownHook(): void {
 
 /** Drop every live session. Used by tests and available to a config reload. */
 export async function clearStepCliSessions(): Promise<void> {
-  const open = [...pools.values()];
-  pools.clear();
-  await Promise.all(open.map(pool => pool.closeAll()));
+  const closed = await Promise.allSettled([...pools].map(async ([home, pool]) => {
+    await pool.closeAll();
+    if (pools.get(home) === pool) pools.delete(home);
+  }));
+  const failure = closed.find(result => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
 }
 
 export function poolFor(

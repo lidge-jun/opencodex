@@ -1,4 +1,5 @@
 {
+  "step-cli-cleanup-ownership.test.ts": "adapters",
   "step-cli-ownership.test.ts": "adapters",
   "step-cli-process-lifecycle.test.ts": "adapters",
   "step-cli-query-race.test.ts": "adapters",

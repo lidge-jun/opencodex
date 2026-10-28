@@ -75,6 +75,8 @@ export class StepSessionPool implements StepConversationHost {
    * conversation exactly one process.
    */
   readonly #opening = new Map<string, Promise<StepCliSession>>();
+  /** Pending receipts and failed cleanup remain owned until shutdown observes them. */
+  readonly #cleanup = new Set<Promise<void>>();
   readonly #options: StepSessionPoolOptions;
   readonly #deps: StepSessionDeps;
   readonly #handlers: StepSessionHandlers;
@@ -107,10 +109,17 @@ export class StepSessionPool implements StepConversationHost {
     if (this.#closing) throw new StepSessionError("StepCode session pool is closing.");
     const existing = this.get(ref);
     if (existing) return existing;
+    if (this.#entries.has(ref.handle)) {
+      throw new StepSessionError("StepCode conversation cleanup is pending or quarantined.", "step_cli_cleanup_failed");
+    }
     const inFlight = this.#opening.get(ref.handle);
     if (inFlight) return inFlight;
     const opening = (async () => {
       const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps);
+      session.onCleanup(cleanup => {
+        this.#cleanup.add(cleanup);
+        void cleanup.then(() => { this.#cleanup.delete(cleanup); }, () => {});
+      });
       if (this.#closing) {
         await session.close();
         return session;
@@ -162,8 +171,9 @@ export class StepSessionPool implements StepConversationHost {
     this.#sweep = setInterval(() => {
       for (const entry of [...this.#entries.values()]) {
         if (entry.session.closed || entry.session.idleMs() >= this.#options.idleTimeoutMs) {
-          this.#entries.delete(entry.ref.handle);
-          void entry.session.close();
+          // The exit listener releases the handle only after cleanup succeeds. Failed receipts
+          // stay in #cleanup and the entry remains quarantined; never retry from every sweep.
+          void entry.session.close().catch(() => {});
         }
       }
       if (this.#entries.size === 0) this.#stopSweep();
@@ -187,13 +197,13 @@ export class StepSessionPool implements StepConversationHost {
     this.#stopSweep();
     const opening = [...this.#opening.values()];
     const entries = [...this.#entries.values()];
-    this.#entries.clear();
     this.#closePromise = (async () => {
       const closed = await Promise.allSettled(entries.map(entry => entry.session.close()));
       // An open owns its child until it returns. Its closing branch reaps that child before
       // resolving, so shutdown cannot finish while a late open can still publish a session.
       const opened = await Promise.allSettled(opening);
-      const failure = [...closed, ...opened].find(result => result.status === "rejected");
+      const cleanup = await Promise.allSettled([...this.#cleanup]);
+      const failure = [...closed, ...opened, ...cleanup].find(result => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
     })();
     return this.#closePromise;

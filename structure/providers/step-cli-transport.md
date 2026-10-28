@@ -33,11 +33,18 @@ detaches its owner, interrupts it and confirms its input end before registering 
 
 `session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. Late opens close
 their process before shutdown settles, and new opens and pool creation during proxy drain are
-refused. Session close is idempotent and clears held-request timers. Windows teardown uses the
+refused. The pool retains entries and tracks cleanup receipts from adapter, idle-timer and sweep
+closes until termination is confirmed; shutdown drains those receipts and propagates failures.
+Closing handles refuse replacement. Session close is idempotent and clears held-request timers.
+Termination gets at most two attempts; a second failure permanently quarantines that handle in the
+pool and preserves both errors as the cleanup failure's cause. Repeated closes return that failure
+without restarting the retry budget. Windows teardown uses the
 shared `src/adapters/coding-agent/process-tree.ts` helper (`taskkill /T /F`, bounded to five seconds)
 before releasing the wrapper; POSIX sessions use a separate process group. Cleanup verifies exit
 and reports failure if it cannot confirm termination. On Windows the OS PID check also handles
 Bun retaining null child exit fields after an external tree kill.
+Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
+quarantine. The synchronous optional shutdown hook starts the same clear and reports failure.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 
@@ -122,4 +129,6 @@ session tests drive a scripted peer, so permission hand-off, tool capture, the h
 and the single release of a tool result are all asserted without a real CLI or a real model call.
 Caller/query/catalog isolation is covered by `tests/adapters/step-cli-ownership.test.ts` and
 `tests/adapters/step-cli-query-race.test.ts`; shutdown races and a real dispatcher/descendant fixture
-are covered by `tests/adapters/step-cli-process-lifecycle.test.ts`.
+are covered by `tests/adapters/step-cli-process-lifecycle.test.ts`. Cleanup failure, bounded recovery,
+handle quarantine and already-started shutdown drains are covered by
+`tests/adapters/step-cli-cleanup-ownership.test.ts`.

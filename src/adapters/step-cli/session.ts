@@ -34,6 +34,7 @@ export type StepSpawnFn = (command: string, args: readonly string[], options: Sp
  * to call its tools, and a routed coding session would silently degrade into a chat.
  */
 const REQUIRED_CAPABILITIES = ["streaming-input", "sdk-tools"] as const;
+const CLEANUP_ATTEMPTS = 2;
 
 export interface StepSessionDeps {
   spawn?: StepSpawnFn;
@@ -143,6 +144,8 @@ export class StepCliSession {
   #child: ChildProcess | undefined;
   #closed = false;
   #closePromise: Promise<void> | undefined;
+  #cleanupComplete = false;
+  readonly #cleanupListeners = new Set<(cleanup: Promise<void>) => void>();
   #handshake: Promise<StepFrame> | undefined;
   #sessionId: string | undefined;
   #lastActivityAt: number;
@@ -152,19 +155,25 @@ export class StepCliSession {
   readonly #exitListeners = new Set<() => void>();
 
   /**
-   * Register a callback fired once when the session stops being usable.
+   * Register a callback fired once the owned process cleanup is confirmed.
    *
    * The pool needs this to drop a conversation whose process died: a restart would come back with no
    * memory of the tool results the client already delivered, and those are not recoverable from the
    * transcript this route cannot replay.
    */
   onExit(listener: () => void): () => void {
-    if (this.#closed) {
+    if (this.#cleanupComplete) {
       listener();
       return () => undefined;
     }
     this.#exitListeners.add(listener);
     return () => this.#exitListeners.delete(listener);
+  }
+
+  /** Observe cleanup even when it is initiated by an adapter or a session timer. */
+  onCleanup(listener: (cleanup: Promise<void>) => void): void {
+    if (this.#closePromise) listener(this.#closePromise);
+    else this.#cleanupListeners.add(listener);
   }
 
   #announceExit(): void {
@@ -256,19 +265,17 @@ export class StepCliSession {
     });
     child.stdout?.on("data", (chunk: Buffer) => this.#absorbStdout(chunk));
     child.on("error", error => {
-      this.#closed = true;
       // A spawn failure such as ENOENT can emit `error` without a following `close`, so the sweep has to
       // be stopped here too or it lingers on a session that no longer exists.
       this.#stopIdleSweep();
       this.#failAll(error instanceof Error ? error : new Error(String(error)));
-      this.#announceExit();
+      if (child.pid === undefined) this.#child = undefined;
+      void this.close();
     });
     child.on("close", () => {
-      const wasClosed = this.#closed;
-      this.#closed = true;
       this.#failAll(new StepSessionError("StepCode exited before the turn settled."));
       this.#stopIdleSweep();
-      if (!wasClosed) this.#announceExit();
+      void this.close();
     });
     this.#installIdleSweep();
   }
@@ -578,13 +585,43 @@ export class StepCliSession {
     this.#failAll(new StepSessionError(`StepCode session closed (${code}).`));
     for (const held of this.#held.values()) this.#clearTimer(held.timer as never);
     this.#held.clear();
-    this.#announceExit();
-    this.#closePromise = child ? this.#terminate(child) : Promise.resolve();
+    // Publish the receipt before termination can emit close or notify pool bookkeeping.
+    const receipt = Promise.withResolvers<void>();
+    this.#closePromise = receipt.promise;
+    for (const listener of this.#cleanupListeners) listener(this.#closePromise);
+    this.#cleanupListeners.clear();
+    // Timer/protocol-initiated closes have no awaiting caller. Keep the rejection in the cached
+    // receipt for close()/pool shutdown, while observing it here to avoid an unhandled rejection.
+    void this.#closePromise.catch(() => {});
+    const terminate = async (): Promise<void> => {
+      const failures: unknown[] = [];
+      if (child) {
+        for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+          try { await this.#terminate(child); break; }
+          catch (error) {
+            failures.push(error);
+            if (attempt + 1 === CLEANUP_ATTEMPTS) {
+              throw Object.assign(new StepSessionError(
+                "StepCode process cleanup failed; conversation handle is quarantined.", "step_cli_cleanup_failed",
+              ), { cause: new AggregateError(failures, "StepCode tree termination attempts failed.") });
+            }
+          }
+        }
+      }
+      this.#cleanupComplete = true;
+      this.#announceExit();
+    };
+    // Start synchronously, as before: injected timers and child event handlers can observe the
+    // first termination attempt immediately, without racing publication of the shared receipt.
+    void terminate().then(receipt.resolve, receipt.reject);
     return this.#closePromise;
   }
 
   async #terminate(child: ChildProcess): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    // A root-exit receipt cannot prove that a Windows tree kill succeeded. In particular, a
+    // failed first attempt may have killed only the root; the retry must still confirm the tree.
+    if ((child.exitCode !== null || child.signalCode !== null)
+      && !(this.#platform === "win32" && child.pid !== undefined)) return;
     let cancelWait = (): void => {};
     const exited = new Promise<void>(resolve => {
       const finish = (): void => { cancelWait(); resolve(); };
@@ -592,6 +629,7 @@ export class StepCliSession {
       cancelWait = () => child.removeListener("close", finish);
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     let failCleanup!: (error: unknown) => void;
     const cleanupFailed = new Promise<never>((_, reject) => { failCleanup = reject; });
     const gone = (): boolean => {
@@ -622,13 +660,12 @@ export class StepCliSession {
         }, this.#killGraceMs);
       }
       await Promise.race([exited, cleanupFailed, new Promise<void>((resolve, reject) => {
-        const deadline = this.#setTimer(() => {
+        deadline = this.#setTimer(() => {
           try {
             if (gone()) resolve();
             else reject(new StepSessionError("StepCode process cleanup could not be confirmed.", "step_cli_cleanup_failed"));
           } catch (error) { reject(error); }
         }, this.#killGraceMs + 2_000);
-        void exited.then(() => this.#clearTimer(deadline as never));
       })]);
       // A POSIX parent can exit on SIGTERM while a descendant ignores it. The owned group still
       // needs SIGKILL before the parent-close receipt releases cleanup.
@@ -637,6 +674,7 @@ export class StepCliSession {
       this.#child = undefined;
     } finally {
       if (timer !== undefined) this.#clearTimer(timer as never);
+      if (deadline !== undefined) this.#clearTimer(deadline as never);
       cancelWait();
     }
   }
