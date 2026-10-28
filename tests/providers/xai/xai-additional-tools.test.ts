@@ -6,6 +6,9 @@ import {
   promoteResponsesAdditionalTools,
 } from "../../../src/adapters/opencode-go-additional-tools";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
+import { CODEX_GPT5_IDENTITY_LINE, identifyRoutedModel } from "../../../src/adapters/identity";
+import { tagHistoricalInputItems } from "../../../src/responses/item-provenance";
+import { rewriteRoutedCustomToolsForUpstream } from "../../../src/responses/custom-tool-compat";
 import type { OcxProviderConfig } from "../../../src/types";
 
 const lookup = {
@@ -29,6 +32,73 @@ function build(providerConfig: OcxProviderConfig, rawBody: Record<string, unknow
 }
 
 describe("xAI Responses additional_tools promotion", () => {
+  test("custom-tool lowering carries historical and live provenance into promotion", () => {
+    const input = tagHistoricalInputItems([
+      { type: "additional_tools", tools: [{ type: "custom", name: "retired", description: "past tool" }] },
+      { type: "additional_tools", tools: [lookup] },
+    ], 1);
+    const lowered = rewriteRoutedCustomToolsForUpstream({ input }, false);
+    const promoted = promoteResponsesAdditionalTools(lowered.body) as { tools: unknown[] };
+    expect(promoted.tools).toEqual([lookup]);
+  });
+
+  test("custom-tool lowering cannot reactivate a historical wrapper", () => {
+    const { body } = build({
+      adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", supportsResponsesCustomTools: false,
+    }, { input: [
+      { type: "additional_tools", tools: [{ type: "custom", name: "retired", description: "past tool" }] },
+      { type: "additional_tools", tools: [lookup] },
+    ] }, 1);
+    expect(body.tools).toEqual([lookup]);
+    expect(body.input).toEqual([]);
+  });
+
+  test("forward cache-marker cleanup cannot promote historical declarations", () => {
+    const retired = { ...lookup, name: "retired", prompt_cache_breakpoint: true };
+    const raw = { input: [
+      { type: "additional_tools", tools: [retired] },
+      { type: "additional_tools", tools: [lookup] },
+    ] };
+    const before = structuredClone(raw);
+    const { body } = build({
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", promoteAdditionalTools: true,
+    }, raw, 1);
+    expect(body.tools).toEqual([lookup]);
+    expect(body.input).toEqual([]);
+    expect(raw).toEqual(before);
+  });
+
+  test("forward opt-in preserves live tools after removing the historical identity message", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      promoteAdditionalTools: true,
+    };
+    const live = { ...lookup, name: "live" };
+    const raw = {
+      input: [
+        { type: "message", role: "developer", content: identifyRoutedModel(CODEX_GPT5_IDENTITY_LINE, "old-model") },
+        { type: "additional_tools", tools: [live] },
+      ],
+    };
+    const before = structuredClone(raw);
+    const adapter = withTestTranslatorBudget(createProductionAdapter(provider));
+    const request = adapter.buildRequest({
+      modelId: "gpt-5", context: { messages: [] }, stream: false, options: {},
+      _rawBody: raw, _replayPrefixLen: 1,
+    }, { headers: new Headers({ authorization: "Bearer caller-fixture", "chatgpt-account-id": "caller-account" }) });
+    const body = JSON.parse(request.body);
+    expect(body.tools).toEqual([live]);
+    expect(body.input).toEqual([]);
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(new Headers(request.headers).get("authorization")).toBe("Bearer caller-fixture");
+    expect(new Headers(request.headers).get("chatgpt-account-id")).toBe("caller-account");
+    expect(raw).toEqual(before);
+    for (const item of raw.input) expect(Object.getOwnPropertySymbols(item)).toEqual([]);
+  });
+
   test("isXaiResponsesUrl matches official xAI endpoints and rejects lookalikes", () => {
     expect(isXaiResponsesUrl("https://api.x.ai/v1/responses")).toBe(true);
     expect(isXaiResponsesUrl("https://api.x.ai:443/v1/responses")).toBe(true);

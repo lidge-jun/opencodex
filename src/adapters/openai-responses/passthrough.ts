@@ -175,8 +175,22 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> | undefined;
       let convertedMuseToolNameAliases: Map<string, string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let outBody = stripPreviousResponseId(
-        parsed._rawBody,
+      let replayPrefixLen = parsed._replayPrefixLen;
+      let outBody = parsed._rawBody;
+      // Clone and tag before any input rewrite can remove, replace, or reorder replay items.
+      if (
+        typeof replayPrefixLen === "number"
+        && replayPrefixLen > 0
+        && isPlainObject(outBody)
+        && Array.isArray(outBody.input)
+      ) {
+        outBody = {
+          ...outBody,
+          input: tagHistoricalInputItems(outBody.input, replayPrefixLen),
+        };
+      }
+      outBody = stripPreviousResponseId(
+        outBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
       if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
@@ -215,18 +229,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // stores conversations for 30 days and documents previous_response_id. So it carries the
       // pairing capability instead, which reuses the orphan-call placeholder without touching
       // store or previous_response_id.
-      let replayPrefixLen = parsed._replayPrefixLen;
-      if (
-        typeof replayPrefixLen === "number"
-        && replayPrefixLen > 0
-        && isPlainObject(outBody)
-        && Array.isArray(outBody.input)
-      ) {
-        outBody = {
-          ...outBody,
-          input: tagHistoricalInputItems(outBody.input, replayPrefixLen),
-        };
-      }
       if (provider.annotateEmptyToolOutputs === true) {
         outBody = annotateEmptyResponsesToolOutputs(outBody, true);
       }
