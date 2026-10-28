@@ -111,7 +111,7 @@ Plain admission leases without controller binding do not register or unregister 
 Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
 also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` include only parsed upstream code/message,
-redacted before whitespace flattening and bounded to 200 characters; unparsed bodies stay out.
+redacted before whitespace flattening and bounded to 200 characters; native Messages source warnings use only status, and unparsed bodies stay out.
 `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.

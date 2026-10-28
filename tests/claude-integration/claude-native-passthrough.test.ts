@@ -944,7 +944,7 @@ test("a read rejection that lands before the client abort listener still finaliz
 });
 
 test("an upstream error event is the turn's terminal, logged as that failure rather than a 200", async () => {
-  const errorFrame = `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`;
+  const errorFrame = `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "fixture-private-account: private fixture prompt" } })}\n\n`;
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE + errorFrame));
@@ -958,7 +958,7 @@ test("an upstream error event is the turn's terminal, logged as that failure rat
   expect(await new Response(tapped).text()).toBe(PARTIAL_TURN_SSE + errorFrame);
   // The status every other surface maps this error to (`httpStatusFromTerminalError`).
   expect(calls).toEqual([{ status: 503, closeReason: "terminal", terminalStatus: "failed" }]);
-  expect(logCtx.upstreamError).toBe("Overloaded");
+  expect(logCtx.upstreamError).toBe("Provider stream failed (503)");
   expect(logCtx.usage?.inputTokens).toBe(12);
 });
 

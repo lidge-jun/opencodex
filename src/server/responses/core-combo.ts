@@ -1382,10 +1382,10 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
-    // A bare status made a revoked credential read as a provider outage. Log only the parsed
-    // code and message, never the raw envelope, as one redacted, bounded line.
+    // Native Messages failures can echo client content; their hop warning uses only status.
+    // Other wires retain their parsed, redacted and bounded code/message diagnostic.
     const failureReason = sanitizeLogMetadataString(
-      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
+      redactSecretString(options.protocolSource?.inbound === "messages" ? `Provider error ${response.status}` : [failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
       200,
     );
     console.warn(

@@ -109,7 +109,8 @@ export function tapAnthropicSseForLog(
       terminalSeen = true;
       if (data.type === "error" && isRec(data.error)) {
         terminalErrorStatus = httpStatusFromTerminalError(data.error) ?? 502;
-        logCtx.upstreamError = redactSecretString(typeof data.error.message === "string" ? data.error.message : "Provider stream failed").slice(0, 500);
+        // Upstream prose can echo request content or account identifiers; retain only status.
+        logCtx.upstreamError = `Provider stream failed (${terminalErrorStatus})`;
       }
     }
   };

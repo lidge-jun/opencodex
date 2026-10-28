@@ -67,7 +67,8 @@ export async function preflightNativeMessagesResponse(
     }
     if (failure && !committed) {
       logCtx.usage = anthropicUsageToOcx(usage);
-      logCtx.upstreamError = redactSecretString(typeof failure.message === "string" ? failure.message : "Provider stream failed before output");
+      const message = redactSecretString(typeof failure.message === "string" ? failure.message : "Provider stream failed before output");
+      logCtx.upstreamError = `Provider stream failed (${failureStatus})`;
       void reader.cancel("retrying native Messages pre-output refusal").catch(() => {});
       release();
       const headers = new Headers(response.headers);
@@ -75,7 +76,7 @@ export async function preflightNativeMessagesResponse(
       return { kind: "failed", response: Response.json({ error: {
         ...(typeof failure.type === "string" ? { type: failure.type } : {}),
         ...(typeof failure.code === "string" ? { code: failure.code } : {}),
-        message: logCtx.upstreamError,
+        message,
       } }, { status: failureStatus, headers }) };
     }
     let index = 0;

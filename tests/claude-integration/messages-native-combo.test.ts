@@ -206,6 +206,22 @@ describe("native Messages candidates in a combo", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
   });
+  test("pre-output refusal keeps upstream account and prompt echoes out of the final diagnostic", async () => {
+    const echo = "fixture-private-account: private fixture prompt";
+    answer = () => stream(prelude + frame("error", { error: { type: "overloaded_error", message: echo } }));
+    const warnings: unknown[][] = [];
+    const warning = spyOn(console, "warn").mockImplementation((...args) => { warnings.push(args); });
+    let result: Awaited<ReturnType<typeof send>>;
+    try { result = await send({ tools: [{ type: "bash_20250124", name: "bash" }] }); }
+    finally { warning.mockRestore(); }
+    const { response, text, rows } = result;
+    expect(response.status).toBe(529);
+    expect(text).toContain(echo);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.upstreamError).toBe("Provider stream failed (503)");
+    expect(JSON.stringify(warnings)).not.toContain(echo);
+    expect(seen).toHaveLength(1);
+  });
   for (const output of [false, true]) test(`non-streaming fold ${output ? "never replays output" : "hops before output"}`, async () => {
     answer = () => stream(prelude + (output ? textStart + textDelta : "") + refusal);
     const { text } = await send({ stream: false });
