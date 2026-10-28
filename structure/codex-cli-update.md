@@ -217,11 +217,14 @@ not npm's exit code. Version uses the pinned Node with the verified JS entrypoin
 then repeats selection/content observation; it does not attest arbitrary future CMD lookup.
 Cleanup errors remain separate from the result. The existing job execution layer retries result
 persistence without repeating installation. No automatic rollback or stale-lock recovery exists.
-`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers real offline npm in private
-shared fixtures, unrelated package/shim preservation, terminal close failure, partial mutations,
-absence, selection, unknown retention, async pins and persistence retry. One JS launcher executes
-a compiled CLR x64 backing fixture that verifies Job membership and returns the version. This is
-executable-fixture evidence, not a run of the vendor Codex product.
+`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers authority and toolchain pins.
+Its siblings `tests/codex-integration/codex-cli-update-windows-apply-install.test.ts`,
+`tests/codex-integration/codex-cli-update-windows-apply-outcomes.test.ts` and
+`tests/codex-integration/codex-cli-update-windows-apply-shared.test.ts` cover real offline npm,
+partial mutations, retention, persistence retry, unrelated package/shim preservation and terminal
+close failure. `tests/helpers/codex-cli-windows-apply-fixture.ts` keeps cleanup ownership per file.
+One JS launcher executes a compiled CLR x64 backing fixture that verifies Job membership and
+returns the version. This is executable-fixture evidence, not a run of the vendor Codex product.
 
 ## Explicit POSIX apply
 
@@ -335,7 +338,11 @@ keeps the run-once handler installed. Only successful terminal cleanup removes t
 its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
 can remain resident until separately authorized recovery. A crash still loses in-memory ownership
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
-Authority release succeeds only when lock disposal is verified and its pin set is empty.
+Authority disposal is proved only after identity/token-fenced lock removal, absent staging and
+an empty pin set. Its `resourcesReleased` evidence is separate from release's ACL diagnostic.
+Disposal follows the original held objects' deletion, even if the pathname is unreadable or replaced.
+Apply preserves that diagnostic in cleanup errors, but releases the execution token once staging,
+toolchain and authority disposal are all proved, including during terminal recovery.
 A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips
 failed closes instead of retrying or forgetting them, preserving Owner/token with `lease_release_unverified`.
 The ordinary ledger/status PinSet keeps its pre-existing best-effort disposal contract; this change
@@ -368,7 +375,9 @@ cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation remo
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
 its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
-window spans the final process scan through terminal installer evidence and readback. Windows also
+window spans the final process scan through terminal installer evidence and readback. Windows directory
+observations retain bigint device/inode identities, including the second namespace check after
+asynchronous ACL/file observations. Windows also
 renews full authority ACL/identity, inspector and full scoped preimage after acquisition, then performs
 the final process scan, synchronous held-identity/selection/cancellation checks, CAS and synchronous
 native Create/Assign/Resume with no intervening await. Windows retains the gate through native Job
@@ -414,7 +423,7 @@ proof is also required after restart: name disappearance alone cannot prove desc
 Observer failure leaves armed evidence fenced. Normal settlement also joins the observer before
 staging cleanup. Its HOME/profile/AppData, compiler temp and PowerShell analysis-cache paths all
 resolve inside that private staging root. Access/query failure, missing identity and
-armed or partial publication remain fenced. Parent admission additionally requires owner-process
+unproven armed or partial publication remain fenced. Parent admission additionally requires owner-process
 absence; same-process closed-worker recovery first seals its exact generation against another spawn.
 No recovery probe signals an installer. Terminal markers release only the proven token; alias homes
 read the same canonical store. The native-child restart regressions live in
@@ -431,13 +440,20 @@ renaming or changing the job receipt. It must pass the same private/no-follow fi
 token, carry a null child group, and match the published record's parent identity when present. Fresh
 parent absence and any published child's whole-group absence are required. Every unshadowed pending
 file must independently satisfy these checks; malformed, armed, foreign or unsafe evidence stays fenced.
+On Windows, a complete pending child may instead replace its published armed authority through the
+same protected flush, ACL verification and atomic rename path, retaining the pending file until rename.
+Both records must match token, parent
+PID and Job name; the armed PID/creation time must be null and the child identity complete. Publication
+requires parent absence, a matching terminal guardian proof, exact child lifetime absence/reuse and a
+fresh absent/zero-active Job check. Any read, validation or publication failure keeps admission fenced.
+Guardian death before terminal proof remains fenced, even when the primary and named Job are absent.
 Admission re-probes non-terminal lifetime evidence on every attempt, so later group exit is observed
 without retaining a pre-restart observer or caching a stale refusal.
 Absent recovery history admits ordinary callers, including a symlinked config home or ancestor.
 Existing evidence is read through the canonical home target with its trusted ancestry; a linked recovery
 store, unsafe target, or evidence that becomes unreadable stays fenced. Updater mutation eligibility
 retains its stricter canonical/no-alias policy. EPERM, unrelated malformed/partial records,
-and an armed record with no published child stay closed for
+and an armed record without a safely reconcilable child stay closed for
 operator inspection. PID reuse can delay recovery but cannot prove absence. The protected durable job
 ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it
 to success. Abandoned installation-prefix leases and staging after process death are not reclaimed by
@@ -452,6 +468,14 @@ documented residual it always was.
 `src/cli/codex-cli-update.ts` records confirmed CLI apply in that ledger and exposes `status <job-id>` from the same protected record, without requiring a GUI token. `src/server/management/codex-cli-update-routes.ts` exposes a proof-bound read-only plan, confirmed human dashboard session (`hasHumanDashboardSession`) plus trusted-loopback apply admission, and authenticated status. Plan and job reads use ordinary management admission. HTTP apply returns after durable admission; disconnect does not cancel the worker. Dashboard display data is never accepted back as a candidate, prefix, executable or managed-selection attestation. There is no dashboard job UI in this contract. `tests/server/persistent-dashboard-consent.test.ts` covers management admission and the apply service boundary.
 
 On Windows, `src/codex/cli-update-job-store-windows.ts` maps the same ledger contract onto NTFS handle semantics and the public admit/read/finish API in `src/codex/cli-update-job.ts` dispatches to it asynchronously. Each ancestor from the volume root is opened relative to its already-held parent — never a re-parsed path — and refused on any reparse attribute, then evaluated under the "trusted-ancestry" ACL policy (owner is the serving token or SYSTEM/Administrators/TrustedInstaller; untrusted grantees may hold read and, on admin-owned ancestors only, broad create-only rights). The config-root parent and a pre-existing config root are verified under the "write-private" policy and are never rehardened; only a directory the call itself creates is icacls-hardened and held to the strict "private" rule. File identity is the volume serial plus 128-bit file ID with single link and no pending delete, the dev:ino analog. Ledger writes go through a private hardened temp that is byte/ACL/identity-verified, renamed while its handle is held, re-read through the published name, and flushed at the directory. The admission mutex is a mkdir lock plus an owner record released only while both held pins still show this call identity and content, so a leftover lock blocks later admission exactly like POSIX. ACL snapshots are taken per phase through the shared bounded PowerShell read in `src/lib/windows-owner-acl.ts` (async variant), not per path. Pins bind each object to its verified state for the operation and the private DACL confines writers, but this is not a proof against concurrent mutation by the serving account or an elevated process, which sit inside the trust boundary as on POSIX. The backend is x64-only; cross-account (other-SID) and ARM64 behavior are unverified.
+
+Apply-authority disposal requires successful identity/token-fenced delete-on-close of both original
+lock objects, zero remaining pins and no staging. A replacement at the pathname neither proves nor
+prevents this owner's disposal; failed deletion or close retains its Worker execution token.
+Apply-authority release checks held identity before and after its ACL read. An ACL-only failure
+still attempts deletion through the original token-fenced pins and reports a failed release verdict.
+That verdict alone does not retain the Worker: proved resource disposal permits closure and a later apply.
+Identity failure preserves the lock while closing pins. Repeated release cannot affect a later owner.
 
 Each successful handle-relative `relOpen` registers its handle exactly once before returning it;
 callers use that already-owned handle without wrapping it in another `keep` registration.

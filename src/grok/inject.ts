@@ -1119,6 +1119,7 @@ export function injectGrokConfig(
   opts: {
     grokHome?: string;
     hostname?: string;
+    probeHostname?: string;
     refreshOnly?: { admit: () => boolean };
     excluded?: ReadonlySet<string>;
     /** Unfiltered known ids used only to distinguish hidden current models from retired ones. */
@@ -1215,7 +1216,7 @@ export function injectGrokConfig(
       const region = orphans.length > 0 ? findManagedRegion(content) : originalRegion;
 
       const buildCandidate = (reservedAliases: ReadonlySet<string>): string => {
-        const block = buildGrokManagedBlock(port, models, opts.hostname, reservedAliases, opts.excluded);
+        const block = buildGrokManagedBlock(port, models, opts.probeHostname ?? opts.hostname, reservedAliases, opts.excluded);
         let candidate: string;
         if (region) {
           candidate = content.slice(0, region.start) + block + content.slice(region.end);
