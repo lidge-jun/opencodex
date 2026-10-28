@@ -214,7 +214,7 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
-+  test("a predicted reset that moves earlier pulls the next hold read in, never under one base interval (#7312)", async () => {
+  test("a predicted reset that moves earlier pulls the next hold read in, never under one base interval (#7312)", async () => {
     let now = Date.now();
     const start = now;
     const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -236,7 +236,7 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
-+  test("a revised reset that expires between sweeps still releases the old reservation (#7312)", async () => {
+  test("a revised reset that expires between sweeps still releases the old reservation (#7312)", async () => {
     let now = Date.now();
     const start = now;
     const clock = spyOn(Date, "now").mockImplementation(() => now);

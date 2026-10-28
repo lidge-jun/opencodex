@@ -58,6 +58,8 @@ import {
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
+import { isLocalUpstream } from "../lib/local-upstream";
+import { resolveConnectTimeoutMs } from "../stall-timeout";
 import {
   CLAUDE_NATIVE_THINKING,
   type ClaudeThinkingProjection,
@@ -100,6 +102,7 @@ import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
   isProxyAdmissionSecret,
+  resolveContextPrincipal,
   type RequestPolicyView,
   type DataPlaneAdmission,
 } from "./auth-cors";
@@ -357,7 +360,9 @@ async function anthropicNativePassthrough(
   const result = await fetchWithHeaderDeadline(
     `${base}${pathname}${search}`,
     { method: "POST", headers, body: JSON.stringify(body) },
-    config.connectTimeoutMs ?? 200_000,
+    // Local Anthropic-compatible endpoints (a self-hosted base URL) disable the header deadline
+    // when the operator sets none, so a slow local prefill is not cut before the first header.
+    resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(base) }),
     req.signal,
   );
   if (result.kind === "timeout") {
@@ -1117,6 +1122,8 @@ async function handleClaudeMessagesWithBudget(
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    // The translated request never forwards the caller credential; resolve the principal first.
+    replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     abortSignal: req.signal,
     promptCacheKeyIsSharedCohort: cacheKeySource === "system",
@@ -1135,6 +1142,10 @@ async function handleClaudeMessagesWithBudget(
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
+    // Preserve the original catalog through late fallback; only the physical adapter projects it.
+    anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
+      && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
+      ? { tools: anthropicBody.tools, messages: anthropicBody.messages, tool_choice: anthropicBody.tool_choice } : undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,

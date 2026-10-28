@@ -11,6 +11,16 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 此推斷預設關閉，需按供應商設定 `inferContextWindow: true` 開啟。未開啟時，缺少視窗的模型使用已啟用的 Context cap，否則回退至 128k。
 
+## GPT-6.1 Terra
+
+[GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) 於 2026年10月26日發布，是 GPT-5.6 Terra 的後繼型號。`gpt-6.1-terra` 與 `gpt-5.6-terra` 並列提供，不修改預設模型或子代理清單。GitHub Copilot 使用 Responses；OpenRouter ID 為 `openai/gpt-6.1-terra`，上下文為 1,050,000，每百萬 token 輸入 $1.00、輸出 $5.00。
+
+原生 Codex：預設上下文 500,000，長上下文上限 872,000，預設 effort 為 `low`，級別為 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。原生 `ultra` 在傳輸時對應至 `max`。原生項目僅提供 Fast 高速模式。
+
+[OpenAI API](https://developers.openai.com/api/docs/models/gpt-6.1-terra)：上下文 1,050,000，最大輸出 128,000；支援文字與影像輸入、文字輸出；知識截止日期為 2026-06-01。effort 為 `none`、`low`、`medium`（預設）、`high`、`xhigh`、`max`。端點為 `v1/responses` 和 `v1/chat/completions`；工具呼叫必須使用 Responses。
+
+每百萬 token：輸入 $1.00、快取輸入 $0.05、快取寫入 $1.25（30分鐘）、輸出 $5.00。輸入超過 272,000 token 時，整個請求按輸入與快取 2×、輸出 1.5×計費，依序為 $2.00 / $0.10 / $2.50 / $7.50。Fast 模式價格為 2×。
+
 ## 首次註冊時的模型選擇
 
 新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
@@ -49,6 +59,8 @@ ocx models provider openrouter on
 | `codexFailureWindow?` | `boolean` | `true` | 60 秒滑動失敗率，與連續計數併用。至少 20 次且失敗率 ≥25% 時帳號降級，只讓新執行緒避開；比率 ≤10% 並持續 30 秒後恢復。`false` 只使用連續計數。 |
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動釘選帳號降級時，`hold` 繼續使用並記錄警告；`detour-new-threads` 只把新執行緒放到其他帳號。不會改派進行中的請求。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 選用：同一帳號與執行緒的 Codex WebSocket 跨回合重用。開啟後忙碌 socket 最多等待 750ms，模型或層級變更時最多保留 2 個 socket。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 單一傳入 JSON 請求主體解碼後大小的位元組上限。省略或設為 `0` 會保留 256 MiB 預設值；設定值限制在 1 至 512 MiB。變更後必須重新啟動。超限會回傳本機 HTTP 413，錯誤碼為 `inbound_body_too_large`。生效上限超過 256 MiB 時，也會啟用 `maxConcurrentInboundBodyBytes` 共用閘門；僅提高單次請求上限不會提高共用預算。涵蓋的路徑與詳情請見[傳入主體准入](/zh-tw/reference/inbound-body-admission/)。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | 選用的頂層共用准入預算，單位為位元組，只在生效的 `maxInboundBodyBytes` 超過 256 MiB 時啟用。省略、`0` 或無效值都會使用不變的 512 MiB 預設值。有效的正整數在使用時限制在 512 MiB 至 2 GiB（`536870912` 至 `2147483648`）範圍內。變更後必須重新啟動；同一程序內的所有監聽器共用一個預算。這是准入計量，並非預先配置的記憶體、RSS 上限或依 RAM 自動調整的容量。2 GiB 必須由操作者明確選擇。設定範例、佇列及回應生命週期的取捨，以及預設預算為何在解析前只允許一個完整 512 MiB 上傳，請見[傳入主體准入](/zh-tw/reference/inbound-body-admission/)。 |
 | `modelCacheTtlMs?` | `number` | `300000` | Per-供應商 `/models` 快取的新鮮度視窗。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端點：`"long"`；其他 Anthropic 相容端點：`"short"` | Anthropic prompt-cache 政策：停用、5 分鐘臨時或 1 小時延長。未設定時，送往 `api.anthropic.com`（API 金鑰或 OAuth 帳號池）的請求使用 1 小時 TTL，相容閘道與廠商端點維持 5 分鐘 TTL。明確設定的值一律優先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 可選的主動 OAuth refresh 與 Codex 帳號暖機政策。 |
@@ -103,7 +115,7 @@ ocx models provider openrouter on
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Per-model 標籤。空清單隱藏 effort 控制。 |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 將模型設為 `false` 以停止廣告摘要並剝離 summary-delivery 欄位。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery 列舉；重寫既有的 delivery 欄位。 |
-| `modelAdapters?` | `Record<string, string>` | 混合 wire 閘道的 Per-model `openai-chat` 或 `openai-responses` wire 覆寫。明確項目勝過 registry 預設；DeepSeek 的預設可為 `deepseek-v4-flash` 選擇原生 Responses。單一 wire 上游 pin 與規範 ChatGPT forward 拒絕覆寫。 |
+| `modelAdapters?` | `Record<string, string>` | 混合 wire 閘道的 Per-model `openai-chat` 或 `openai-responses` wire 覆寫。明確項目勝過 registry 預設；DeepSeek 的預設可為 `deepseek-v4-flash` 選擇原生 Responses。單一 wire 上游 pin 與規範 ChatGPT forward 拒絕覆寫。  GitHub Copilot 為 `gpt-6.1-sol` 與 `gpt-6.1-terra` 使用 Responses。 |
 | xAI Responses 選用（儀表板） | 開關 | 僅用於 `xai`，以原子方式設定或清除 `grok-4.5` 與 `grok-4.6` 的 `modelAdapters` 項目。若只有一個項目，會顯示混合狀態，直到下次開關寫入統一兩者。其他覆寫與層級行為不變。 Grok 4.7 在 OAuth 上透過登錄檔 wire 預設使用 Responses，也可透過明確的 `modelAdapters["grok-4.7"] = "openai-chat"` 項目切換至 Chat。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具結果送達模型前，將已存在但為空的結果替換成簡短標記，使空白結果不會被解讀為遺漏的結果。適用於空白字串及僅含文字部分的陣列；影像、檔案及加密部分絕不會被更動。DeepSeek 透過內建登錄檔預設為 `true`，其他情況則不設定。設為 `false` 可讓供應商停用此功能；後續編輯即使省略此欄位，也會保留明確設定的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；`null` 會清除覆寫並恢復使用登錄檔的預設行為。 |
 | `xaiResponsesXSearch?` | `boolean` | 預設停用。在 xAI Responses 目的地上，僅當即時 `web_search` 工具通過最終請求正規化後仍保留時，才附加由供應商託管的 `x_search` 宣告。既有宣告不會重複，呼叫端的 `tool_choice`／`allowed_tools` 選擇器絕不會擴大，且此設定與網頁搜尋輔助服務的 `search.xSearch` 選項分開。 |
@@ -119,6 +131,8 @@ ocx models provider openrouter on
 | `foldDeveloperRoleToSystem?` | `boolean` | 記錄某個 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未設定時以 `system` 傳送，`true` 時以 `system` 傳送，`false` 時以 `developer` 傳送。未設定表示尚未記錄該目的地的情況；`true` 記錄上游拒絕該角色；`false` 記錄其接受該角色。無論何者，訊息都保留在對話中的原有位置，只有角色改變。拒絕該角色的目的地會回應 `400 role 'developer' is not allowed`，該回合根本無法開始，這就是未記錄狀態預設摺疊的原因。 |
 | `parallelToolCalls?` | `boolean` | 切換平行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 僅在明確 `true` 時廣告。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 預設停用的下游 SSE 修復，用於精確佔位 id 與缺失的終端 id。Function-call id 永不被重寫。 |
+| `promptCacheKey?` | `boolean` | 為整個 `openai-chat` provider 啟用 `prompt_cache_key` 轉送。adapter 只轉送收到的 key，不自行產生，但 Claude Messages 轉換會從 `metadata.user_id`，或在沒有 metadata 時從模型/系統/工具組合衍生 key。除非 preset 宣告，否則預設關閉；Mistral 依其[提示快取契約](https://docs.mistral.ai/studio/conversations/advanced/prompt-caching)啟用，明確的 `false` 可停用。僅在上游明確支援時啟用，嚴格閘道可能以 HTTP 400 拒絕未知欄位。 |
+| `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | 僅限 API-key provider（`authMode: "key"`）。未設定時關閉，但標準端點的 OpenCode Go 與 Command Code，以及標準 Mistral 的 `openai-chat` 例外：預設 replay 6 次、間隔 10 秒、上限 60 秒。設定物件即啟用；`enabled: false` 也會停用該預設策略。串流開始前的 HTTP 429 會依 `Retry-After` 或固定間隔等待，然後在 key 容錯移轉前以同一 key 重播相同請求。涵蓋文字回合復原、Responses passthrough、圖片/影片橋接、web-search 輔助服務及終端續接；自訂 `runTurn` 不在範圍內。`attempts` 計算第一個 429 後的同 key replay 次數（總傳送次數 = `attempts` + 1），預算由整個請求共用。耗盡時僅停止同 key replay，接著依可用目的地執行一般 key 容錯移轉或最終錯誤處理；金鑰認證 passthrough 沒有容錯移轉，會原樣回傳 429。標準 Mistral Chat 的明確上游延遲超過允許等待時間時，停止同 key replay 並保留原始 `Retry-After`；pool 中另一個 key 仍可能處理請求。其他 provider 仍將等待截斷至上限。Mistral 依 credential/模型共用重試期限；`requestPacing.enabled: false` 或 `retryOn429.respectRetryAfter: false` 可停用。沒有重試時間的 429 在確認每分鐘預算不足時觸發保守的 60 秒復原等待，隨後只探測一次，成功即恢復一般流量。正常流量不預測下一次 token 成本。策略使用公告額度，排除已知耗盡的月額度，不承諾精確重設時間，也不觸發歷史壓縮。Codex 本身不重試 429。物件預設值：`enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`（單次等待上限，設定最大 600000）、`respectRetryAfter: true`。 |
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 僅限使用金鑰認證的 `openai-chat` 與 `openai-responses` 供應商。`authMode: "forward"` 的供應商（ChatGPT 帳號池）從不讀取此選項，維持預設重試次數。選擇性重試串流開始前的暫時性上游狀態（500、502、503、504、520、521、522）：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋初始 `Responses` 請求、終止防護續接、原生 `/v1/chat/completions`，以及 429／帳號復原的重新擷取。`attempts` 是單一請求允許傳送至上游的總次數，包含第一次（1..10，預設 3）；這是與連線重設復原共用的單一請求範圍預算，因此 `3` 表示最多只有三個實際請求會送達供應商。等待採固定 400 毫秒、上限 5 秒的指數退避，並遵循 `Retry-After`。此機制獨立於處理速率限制的 `retryOn429`；串流中的失敗絕不重播。 每個 Combo 目標都把預先預約的首次傳送計入該目標設定的總次數；`attempts: 1` 只傳送一次，不會退還預約來增加額度，也不會提高共用上限。傳送前的本機拒絕或取消會釋放未使用的預約。 |
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 適用於原生 `openai-responses` 供應商（包含 `authMode: "forward"`），以及收到上游回應標頭之前的通用 Responses 轉換傳送路徑。可選擇性地替換一次在呼叫端尚未觀察到任何內容時就失敗的傳送：未設定時停用；只要有此物件即啟用，除非 `enabled: false`。涵蓋兩個不確定階段——回應標頭抵達前連線中斷，以及標頭之後 SSE 內文只載有控制事件時中斷。canonical ChatGPT upstream WebSocket 在 create 訊框送出之後、任何 Responses 事件抵達之前關閉或出錯時，也以相同方式處理，其替換傳送改走 HTTP。只有自我完備的請求才會被替換：`store: false`、完整的 `input`、沒有 `previous_response_id`／`conversation`／`stream_id`，且僅使用由用戶端執行的工具。`replacements` 是單一邏輯請求在所有環節與所有組合子請求中可進行的替換傳送次數（1..2，預設 1）；它既不是各環節的重試次數，也不是傳送預算，因此替換傳送仍必須落在該環節既有的傳送額度之內。已經產生輸出或工具呼叫的請求，無論此值為何都不會被替換。若上游已經開始第一次推論，被替換的推論仍可能計費，因此此選項預設停用。 通用轉換傳送路徑的首次傳送和重建後的傳送都支援標頭之前連線重設後的替換，使用同一授權和傳送預算。配接器自行管理的傳輸，以及收到上游回應標頭之後的轉換串流故障，均不在此選項範圍內。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | 其 `tool_choice` 僅接受 `auto` 或 `none` 的模型；強制選擇被降級。 |
@@ -131,7 +145,7 @@ ocx models provider openrouter on
 | `escapeBuiltinToolNames?` | `boolean` | 為 Anthropic 相容閘道轉義內建工具名稱，並在回傳的呼叫中還原它們。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 傳輸／認證模式。預設 `ai-studio`。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | 僅限 Google。省略或設為 `compatible` 時保留相容結構描述與既有的非直接 400 修復。`reject-lossy` 會在傳送前拒絕初始損失或結果不確定的有界比較，並阻止會放寬限制的 Vertex 或 Cloud Code Assist 修復。直接 AI Studio 不會執行該修復。 |
-| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 專案 id。設定後，Vertex API 金鑰使用專案端點；未設定時，即使有 `GOOGLE_CLOUD_PROJECT` 也使用 express 模式。ADC 後備為 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`。 |
+| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 專案 id。設定後，Vertex API 金鑰使用專案端點；未設定時，即使有 `GOOGLE_CLOUD_PROJECT` 也使用 express 模式。ADC 後備為 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`。設為 `"auto"` 時，每把 Vertex API 金鑰各自解析所屬專案（解析成功的結果依金鑰快取；解析失敗的金鑰會在後續請求中再次探測），同一個金鑰池可跨多個專案；ADC 不接受 `"auto"`。 |
 | `location?` | `string` | Vertex 位置。API 金鑰的專案端點預設為 `global`，並忽略 `GOOGLE_CLOUD_LOCATION`；ADC 需要此欄位或 `GOOGLE_CLOUD_LOCATION` 後備。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 僅 Cursor：stdio 或 Streamable HTTP MCP 伺服器。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | 僅 Cursor：外部 computer-use 與 record-screen 指令。 |

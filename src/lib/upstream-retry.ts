@@ -310,7 +310,12 @@ export async function releaseResponseBodyBestEffort(
   }
   const cancel = body.cancel().catch(() => {});
   if (!signal) {
-    await Promise.race([cancel, new Promise<void>(resolve => setTimeout(resolve, timeoutMs))]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([cancel, new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs); })]);
+    } finally {
+      clearTimeout(timer);
+    }
     return;
   }
   await new Promise<void>(resolve => {
@@ -770,7 +775,10 @@ export async function fetchWithTransientRetry(
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
-    if (res.ok || !isTransientUpstreamStatus(res.status) || isNonReplayableResponse(res)) return res;
+    // An upstream that answers with the exact `x-should-retry: false` verdict has said the same
+    // thing about its own failure, so the ladder stops and hands the response back untouched.
+    if (res.ok || !isTransientUpstreamStatus(res.status) || isNonReplayableResponse(res)
+      || res.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE) return res;
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
     if (opts.abortSignal?.aborted) return res;

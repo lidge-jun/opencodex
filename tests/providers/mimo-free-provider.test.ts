@@ -1,6 +1,6 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../../src/providers/derive";
+import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds, deriveProviderPresets } from "../../src/providers/derive";
 import {
   getMimoClientId,
   resetMimoClientIdCache,
@@ -91,28 +91,32 @@ describe("mimo-free provider registry", () => {
     expect(entry?.baseUrl).toBe("https://api.xiaomimimo.com/api/free-ai/openai/chat");
     expect(entry?.authKind).toBe("key");
     expect(entry?.keyOptional).toBe(true);
-    expect(entry?.featured).toBe(true);
+    expect(entry?.featured).toBe(false);
+    expect(entry?.deprecated).toBeTruthy();
     expect(entry?.liveModels).toBe(true);
     expect(entry?.defaultModel).toBe("mimo-auto");
   });
 
-  test("providerConfigSeed preserves keyOptional and disables static live discovery", () => {
+  test("providerConfigSeed still resolves a saved provider and disables static live discovery", () => {
     const seed = providerConfigSeed(entry!);
+    expect(seed.adapter).toBe("mimo-free");
     expect(seed.keyOptional).toBe(true);
     expect(seed.liveModels).toBe(false);
   });
 
-  test("is included in the key-login map", () => {
+  test("is excluded from the key-login map", () => {
     const keyMap = deriveKeyLoginMap();
-    expect(keyMap["mimo-free"]).toBeDefined();
+    expect(keyMap["mimo-free"]).toBeUndefined();
   });
 
-  test("is in the featured provider list", () => {
-    expect(deriveFeaturedProviderIds()).toContain("mimo-free");
+  test("is excluded from the featured list and the add-provider presets", () => {
+    expect(deriveFeaturedProviderIds()).not.toContain("mimo-free");
+    expect(deriveProviderPresets().find(preset => preset.id === "mimo-free")).toBeUndefined();
   });
 
-  test("provider note mentions no key needed", () => {
-    expect(entry?.note?.toLowerCase()).toContain("no key needed");
+  test("provider note explains the deprecation and the upstream failure", () => {
+    expect(entry?.note?.toLowerCase()).toContain("deprecated");
+    expect(entry?.note?.toLowerCase()).toContain("unsupported model");
   });
 });
 
@@ -555,12 +559,8 @@ describe("mimo-free request cancellation", () => {
 });
 
 describe("mimo-free GUI preset", () => {
-  test("deriveProviderPresets exposes keyOptional for picker", () => {
-    const { deriveProviderPresets } = require("../../src/providers/derive");
+  test("deprecated provider is hidden from the picker", () => {
     const presets = deriveProviderPresets();
-    const preset = presets.find((p: { id: string }) => p.id === "mimo-free");
-    expect(preset).toBeDefined();
-    expect(preset.keyOptional).toBe(true);
-    expect(preset.note).toMatch(/no key needed/i);
+    expect(presets.find((p: { id: string }) => p.id === "mimo-free")).toBeUndefined();
   });
 });

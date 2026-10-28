@@ -89,6 +89,9 @@ function harness() {
 }
 
 function childProbe(remote: string, h: ReturnType<typeof harness>): SshRunResult | null {
+  if (remote === "echo ocx-link-probe") return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+  if (remote === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+  if (remote.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
   if (remote === remoteOcx(["config", "show", "--json"])) return { code: 0, stdout: '{"port":10100}', stderr: "" };
   if (remote === quoteRemote(REMOTE_CURL_PREFLIGHT)) return { code: 0, stdout: "", stderr: "" };
   if (remote === remoteOcx(["restart"])) { h.events.push("child-restart"); return { code: 0, stdout: "", stderr: "" }; }
@@ -150,10 +153,12 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       if (isBareOcx(argv)) return BARE_OCX;
+      if (argv.at(-1) === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+      if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
       if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
-      return argv.at(-1) === "true" ? { code: remote.probeCode, stdout: "", stderr: remote.probeStderr } : { code: 0, stdout: "", stderr: "" };
+      return argv.at(-1) === "echo ocx-link-probe" ? { code: remote.probeCode, stdout: remote.probeCode === 0 ? "ocx-link-probe\n" : "", stderr: remote.probeStderr } : { code: 0, stdout: "", stderr: "" };
     },
     spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
   };
@@ -285,9 +290,30 @@ describe("link management routes", () => {
     // `ocx link status` validates the admin-token answer key by key, so it gains neither field.
     const admin = await call("/api/link/status", "GET", undefined, h.deps, "admin-token", true, null, true, standalone);
     expect(Object.keys(await admin!.json()).sort()).toEqual(["child", "links", "listener", "role"]);
+    const compat = await call("/api/link/status?compatibility=1", "GET", undefined, h.deps, "admin-token", true, null, true, standalone);
+    expect(Object.keys(await compat!.json()).sort()).toEqual(["child", "links", "listener", "local", "role"]);
     expect(h.events).toEqual([]);
     expect(standalone.apiKeys).toEqual([]);
     expect(h.store.links).toEqual([]);
+  });
+
+  test("status with compatibility=1 maps each Home link to its observed peer verdict", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-peer-status-"));
+    const h = harness();
+    const linked: LinkStore = { version: 1, listenerPort: 18181, links: [{ id: "lnk_0123456789abcdef", alias: "child", direction: "client-initiated",
+      hostKeyFingerprint: null, tunnelPort: 2200, apiKeyId: "key-link", createdAt: "2026-10-22T00:00:00.000Z" }] };
+    const asked: string[] = [];
+    const deps = { ...h.deps, readLinkStore: () => linked, linkListener: () => ({ ...h.listener, peerObservation: (id: string) => {
+      asked.push(id);
+      return { observed: { relayAuth: "2", reported: false, version: null, features: null, observedAt: "2026-10-22T00:00:01.000Z" }, refused: null };
+    } }) } as ManagementApiDeps;
+    const response = await call("/api/link/status?compatibility=1", "GET", undefined, deps, "admin-token", true, null, true, h.config);
+    const body = await response!.json() as { role: string; links: Array<{ peer?: { compatibility: string; relayAuth: string | null } }> };
+    expect(body.role).toBe("home");
+    expect(asked).toEqual(["lnk_0123456789abcdef"]);
+    expect(body.links[0]!.peer).toMatchObject({ compatibility: "compatible", relayAuth: "2" });
+    const plain = await call("/api/link/status", "GET", undefined, deps, "admin-token", true, null, true, { ...h.config } as OcxConfig);
+    expect((await plain!.json() as { links: Array<Record<string, unknown>> }).links[0]).not.toHaveProperty("peer");
   });
 
   test("confirm-host keeps the parsed remote version to a bounded semver shape", async () => {
@@ -465,7 +491,7 @@ describe("link management routes", () => {
   test("remove preserves a record written while remote disconnect waits", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-remove-race-"));
     const h = harness();
-    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
+    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
     const other = { id: "lnk_fedcba9876543210", alias: "other", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2201, apiKeyId: "other-key", createdAt: "2026-09-25T00:00:00.000Z" };
     h.deps.writeLinkStore!({ ...h.store, links: [existing] });
     const runner: SshRunner = {
@@ -484,7 +510,7 @@ describe("link management routes", () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-force-remove-drain-"));
     const h = harness();
     const id = "lnk_0123456789abcdef";
-    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
     let exitOld!: (code: number) => void;
     const oldExit = new Promise<number>(resolve => { exitOld = resolve; });
     let killed!: () => void;
@@ -558,7 +584,7 @@ describe("link management routes", () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-remove-hold-"));
     const h = harness();
     const id = "lnk_0123456789abcdef";
-    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
+    h.deps.writeLinkStore!({ ...h.store, links: [{ id, alias: "child", direction: "hub-initiated", remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" }] });
     let release!: (value: SshRunResult) => void;
     const remote = new Promise<SshRunResult>(resolve => { release = resolve; });
     let entered!: () => void;
@@ -610,7 +636,7 @@ describe("link management routes", () => {
     h.deps.writeLinkStore!({ ...h.store, links: [{
       id: "lnk_0123456789abcdef",
       alias: "home",
-      direction: "hub-initiated",
+      direction: "hub-initiated", remotePlatform: "posix" as const,
       hostKeyFingerprint: "SHA256:abcdefghijklmnop",
       tunnelPort: 2200,
       apiKeyId: "key-1",
@@ -639,7 +665,7 @@ describe("link management routes", () => {
     h.deps.writeLinkStore!({ ...h.store, links: [{
       id: "lnk_0123456789abcdef",
       alias: "child",
-      direction: "hub-initiated",
+      direction: "hub-initiated", remotePlatform: "posix" as const,
       hostKeyFingerprint: "SHA256:abcdefghijklmnop",
       tunnelPort: 2200,
       apiKeyId: "key-1",
@@ -783,7 +809,7 @@ describe("link management routes", () => {
   test("duplicate apply is refused before issuing a key, without touching the existing link", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-duplicate-compensation-"));
     const h = harness();
-    const existing = { id: "lnk_0123456789abcdef", alias: "duplicate", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "existing-key", createdAt: "2026-09-25T00:00:00.000Z" };
+    const existing = { id: "lnk_0123456789abcdef", alias: "duplicate", direction: "hub-initiated" as const, remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "existing-key", createdAt: "2026-09-25T00:00:00.000Z" };
     h.deps.writeLinkStore!({ ...h.store, links: [existing] });
     const deps = { ...h.deps, revokeApiKey: () => false };
     const runner: SshRunner = {
@@ -793,6 +819,7 @@ describe("link management routes", () => {
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
         if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
         if (isBareOcx(argv)) return BARE_OCX;
+        const child = childProbe(argv.at(-1) ?? "", h); if (child) return child;
         if (argv.at(-1) === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
         if (argv.at(-1) === remoteOcx(["link", "port"])) return { code: 0, stdout: JSON.stringify({ port: 2200 }), stderr: "" };
         return { code: 0, stdout: "", stderr: "" };
@@ -878,7 +905,7 @@ test("remove refuses while a cross-process holder owns the config mutation lock"
     while (!existsSync(readyPath) && performance.now() < deadline) await Bun.sleep(10);
     expect(existsSync(readyPath)).toBe(true);
     const h = harness();
-    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
+    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
     h.deps.writeLinkStore!({ ...h.store, links: [existing] });
     const runner: SshRunner = {
       async run() { return { code: 0, stdout: "", stderr: "" }; },
@@ -895,3 +922,29 @@ test("remove refuses while a cross-process holder owns the config mutation lock"
     else process.env.OPENCODEX_HOME = previousHome;
   }
 });
+
+for (const remotePlatform of [undefined, "windows", "posix"] as const) {
+  test(`ordinary revoke disconnects ${remotePlatform ?? "legacy platformless"} records under the pinned key`, async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-platform-remove-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    h.deps.writeLinkStore!({ ...h.store, links: [{
+      id, alias: "fixture-child", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+      tunnelPort: 2200, apiKeyId: "fixture-key", createdAt: "2026-10-27T00:00:00.000Z",
+      ...(remotePlatform === undefined ? {} : { remotePlatform }),
+    }] });
+    const selected = remotePlatform ?? "windows";
+    const runner: SshRunner = {
+      async run(argv) {
+        expect(argv).toContain("StrictHostKeyChecking=yes");
+        if (argv.at(-1) === "cmd /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
+        expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect"], selected)));
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel() { throw new Error("ordinary remove must not spawn a tunnel"); },
+    };
+    const response = await call(`/api/link/${id}`, "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config);
+    expect(response?.status).toBe(200);
+    expect(h.store.links).toEqual([]);
+  });
+}

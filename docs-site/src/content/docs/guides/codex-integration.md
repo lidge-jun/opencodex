@@ -142,6 +142,17 @@ to restore the default upstream WebSocket selection. This setting does not chang
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
+**Reasoning usage metadata (2.90.0 and later).** For HTTP/SSE clients on the canonical
+ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
+connection-response header when the Bun runtime exposes it, including on a reused connection.
+This tells Codex that the server's reported usage already includes earlier reasoning. Metadata
+sent before the first Responses event takes precedence; later metadata remains in the stream
+but cannot change headers already committed. The relay does not invent this signal or alter
+usage numbers. A missing upstream signal and Codex's own accounting lifecycle remain separate
+issues, so this change alone does not establish that early compaction is fixed. Client-facing
+WebSocket connections have already completed their upgrade before the upstream response and
+cannot receive the signal retroactively as an upgrade header.
+
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
 classifies configuration and measures none of these: compare actual transport, pacing, network,
@@ -396,6 +407,10 @@ Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` 
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate
 copies, and never overwrites a user-owned root `openai_base_url`; if one exists, sync updates the
 catalog but reports that routing was not injected.
+
+Sync and restore also leave a root `model_context_window` in place, since OpenCodex never writes
+that key. Codex uses it instead of each model's catalog window, capped at that model's maximum
+window, so delete it yourself if you want each model to report its own window.
 :::
 
 ## Shared model catalog
@@ -411,6 +426,14 @@ $CODEX_HOME/models_cache.json
 ```
 
 On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate.
+
+Execution checks also recognize `Codex.app` and `ChatGPT.app` at any location, including relocated
+bundles, explicit `CODEX_CLI_PATH` or configured runtime commands, and symlink aliases. A recognized
+name triggers verification; it does not grant trust. Before each execution, the canonical bundle
+and exact binary must pass strict signature verification with OpenAI's Team ID and the ownership,
+permission and ancestor-directory policy. The binary must resolve inside the bundle's `Contents/`
+(including `Codex.app/Contents/Resources/codex-aarch64-apple-darwin`); unresolved bundles or binaries
+are refused. Arbitrary non-app CLIs and third-party app bundles keep their existing execution policy.
 
 On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or holds no Codex state
 (`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex also
@@ -1001,6 +1024,28 @@ has reached Codex the turn is never sent again. If every attempt is declined, Co
 the same error it would have received without the retries. Native compact requests move to
 another Pool account on a server error in the same way.
 
+### Runtime agent instances (Codex 0.164+)
+
+Codex 0.164 can sign each request with a runtime agent assertion when
+`features.runtime_agent_instances` is enabled (it is off by default). opencodex supports one of
+its two modes:
+
+- `mode = "dual_header"` keeps the normal `Authorization: Bearer` credential and adds an
+  `x-openai-agent-assertion` header. opencodex treats the request exactly as before. The assertion
+  is forwarded only when the turn goes to ChatGPT Direct with your own credential. It is removed
+  when a Pool account, a stored main credential, a routed provider, or a sidecar serves the request,
+  because it belongs to the credential Codex sent.
+- `mode = "assertion_only"` replaces the bearer with `Authorization: AgentAssertion <jwt>`.
+  opencodex refuses these requests with HTTP 400 and error code `agent_assertion_unsupported`.
+  It never substitutes a Pool or provider credential for the assertion, and it never forwards or
+  logs the assertion. Use `dual_header`, or turn the feature off, when Codex runs through opencodex.
+
+### Launch with `ocx codex`
+
+The key is supplied only when the configuration and its namespaces are protected from other principals; the current user and privileged OS authorities are trusted. Same-user processes are trusted: an actor with your write access can already read your OpenCodex key file. Same-user configuration replacement between verification and native startup is outside this threat model; the launcher does not freeze configuration at handoff.
+
+On Windows, default ProgramData creation rights withhold the key even when `ProgramData\OpenAI\Codex` is absent. The system Codex configuration folder under ProgramData must exist and be writable only by Administrators/SYSTEM, with its ancestors protected against replacement by other users. Ask an administrator to review the directory policy. opencodex never changes ACLs itself and provides no provisioning command. Alternatively, supply your own key by exporting `OPENCODEX_API_AUTH_TOKEN`; `ocx codex` leaves it untouched. See [launcher requirements and diagnostics](/reference/cli/agents/#ocx-codex-codex-args). Other refusals also produce one short specific stderr line without key values, key-file contents or key-file paths.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs
@@ -1246,6 +1291,8 @@ opencodex removes the old five-hour reading from both request admission and acco
 An allowed response with primary and secondary windows can omit the optional tertiary window.
 This recovery uses your included plan allowance and does not require enabling **Use credits**.
 Partial or invalid usage data retains the previous block until recovery is confirmed.
+
+Stored accounts with **Use credits after limit** enabled renew their credit evidence on the existing background cycle once an included usage window is exhausted and the credit observation is at least three minutes old. In **Direct** mode this also covers stored accounts explicitly bound in `codexAccountNamespaces`, such as a sub-account selector. You can keep Direct mode and separate main/sub identities; this does not enable Pool routing or refresh unbound accounts. Paused and reauthentication-required accounts are skipped. Metadata reads do not validate pending accounts or send model requests. Failed reads retain backoff and requests still need fresh spendable credits; ordinary response usage headers do not renew the credit balance timestamp.
 
 ### Cancelling main-account device reauthentication
 

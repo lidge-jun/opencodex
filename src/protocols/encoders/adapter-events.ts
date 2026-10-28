@@ -109,7 +109,13 @@ export interface ClientWireWriter {
   text(delta: string): void;
   messageDone(): void;
   reasoning(delta: string, itemId: string, channel: "summary" | "raw"): void;
-  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[] }): void;
+  /** `hidden`: the signature covers thinking text the client was not shown (the bridge's `txt`). */
+  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[]; hidden?: true }): void;
+  /**
+   * An Anthropic progress update: `text` is shown as content and is also the signed thinking
+   * block's text. Optional — a writer without it renders the update as ordinary text.
+   */
+  progressThinking?(text: string, signature: string): void;
   toolStart(call: ClientToolCall): void;
   toolArgsDelta(itemId: string, delta: string): void;
   toolArgsDone(itemId: string, args: string): void;
@@ -137,6 +143,8 @@ export interface ClientEncodeHooks {
 export interface AdapterEventEncodeOptions {
   translatorBudget: TranslatorBudget;
   hideThinkingSummary?: boolean;
+  /** Chat client delivery only, independent of upstream thinking/summary configuration. */
+  chatRawReasoningVisible?: boolean;
   /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
   hideRawReasoning?: boolean;
   toolNsMap?: ReadonlyMap<string, { namespace: string; name: string; freeform?: true }>;
@@ -173,9 +181,7 @@ export function encodeAdapterEventStream(
   const heartbeatMs = options.heartbeatMs ?? 2_000;
   const setTimer = options.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearTimer = options.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
-  const maxStallTicks = Math.ceil(
-    (resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream: options.localUpstream }) * 1000) / heartbeatMs,
-  );
+  let localUpstream = options.localUpstream;
   const textEncoder = new TextEncoder();
 
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -331,6 +337,8 @@ export function encodeAdapterEventStream(
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
   let pendingRedacted: string[] = [];
+  // The bridge's hiddenThinking: non-empty thinking text suppressed by hideThinkingSummary.
+  let hiddenThinkingSeen = false;
   let hiddenRawBytes = 0;
   let pendingKiroRedacted: string | undefined;
   let currentToolCall: OpenToolCall | null = null;
@@ -367,9 +375,11 @@ export function encodeAdapterEventStream(
   };
   // hideThinkingSummary: a signed or redacted block still round-trips as an envelope-only item.
   const flushHiddenReasoningEnvelope = () => {
+    const hidden = hiddenThinkingSeen;
+    hiddenThinkingSeen = false;
     const envelope = takeReasoningEnvelope();
     if (!envelope) return;
-    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope });
+    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope, ...(hidden ? { hidden: true as const } : {}) });
   };
   const flushHiddenRawReasoning = () => {
     if (hiddenRawBytes === 0) return;
@@ -570,6 +580,19 @@ export function encodeAdapterEventStream(
             break;
           }
           case "text_delta": {
+            if (event.anthropicThinkingSignature && writer.progressThinking) {
+              // The bridge's progress items: close everything, the carrier, then the visible copy.
+              if (currentMsg) closeCurrentMessage();
+              if (currentReasoning) closeCurrentReasoning();
+              if (currentRawReasoning) closeCurrentRawReasoning();
+              flushHiddenRawReasoning();
+              flushHiddenReasoningEnvelope();
+              if (currentToolCall) closeCurrentToolCall();
+              writer.progressThinking(event.text, event.anthropicThinkingSignature);
+              writer.text(event.text);
+              writer.messageDone();
+              break;
+            }
             if (currentReasoning) closeCurrentReasoning();
             if (currentRawReasoning) closeCurrentRawReasoning();
             flushHiddenRawReasoning();
@@ -585,6 +608,7 @@ export function encodeAdapterEventStream(
           }
           case "thinking_delta": {
             if (options.hideThinkingSummary) {
+              if (event.thinking.length > 0) hiddenThinkingSeen = true;
               flushHiddenRawReasoning();
               break;
             }
@@ -616,7 +640,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "reasoning_raw_delta": {
-            if (options.hideThinkingSummary || options.hideRawReasoning) {
+            if (!(options.chatRawReasoningVisible ?? !options.hideThinkingSummary) || options.hideRawReasoning) {
               hiddenRawBytes += Buffer.byteLength(event.text);
               break;
             }
@@ -658,6 +682,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "tool_call_end": {
+            if (event.incomplete) { failCurrentToolCall(); break; }
             // Streamed fragments cannot be repaired: unusable arguments fail the turn.
             if (currentToolCall && currentToolCall.kind === "function" && !toolCallArgumentsUsable(currentToolCall.args)) {
               failCurrentToolCall();
@@ -843,6 +868,8 @@ export function encodeAdapterEventStream(
       gated = true;
       beat = setTimer(() => {
         if (closed || gated) return;
+        if (localUpstream !== options.localUpstream) { localUpstream = options.localUpstream; stallTicks = 0; }
+        const maxStallTicks = Math.ceil((resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream }) * 1000) / heartbeatMs);
         if (upstreamActivity) {
           upstreamActivity = false;
           stallTicks = 0;

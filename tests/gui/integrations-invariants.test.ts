@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(20);
+    expect(expected).toHaveLength(24);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -110,7 +110,7 @@ describe("the client registries cannot drift apart", () => {
     // remaining per-page Record maps are enforced by the GUI typecheck
     // (Record<FileIntegrationClientId, TKey> is exhaustive).
     const routedFileClients = guiRouting.INTEGRATION_TAB_HASHES
-      .filter(hash => /^integrations\/[a-z-]+$/.test(hash))
+      .filter(hash => /^integrations\/[a-z0-9-]+$/.test(hash))
       .map(hash => hash.split("/")[1]!)
       .filter(id => (expected as string[]).includes(id))
       .sort();
@@ -252,6 +252,9 @@ describe("the journal is metadata, never a copy of the file", () => {
 describe("every client survives a full lifecycle", () => {
   /** A pre-existing user document in each client's own format. */
   const SEED: Record<IntegrationClientId, string> = {
+    "qoder-cn": '{"theme":"dark"}\n',
+    workbuddy: '{"models":[{"id":"mine","vendor":"Other"}]}\n',
+    "workbuddy-ai": '[{"id":"mine","vendor":"Other"}]\n',
     qoder: '{"providers":{"mine":{"api":"http://keep-me"}},"theme":"dark"}\n',
     cline: '{"version":1,"modes":{},"providers":{"mine":{"settings":{"provider":"mine"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}\n',
     commandcode: '{\n  "provider": {\n    "mine": { "name": "Keep Me", "api": "openai-completions", "baseURL": "http://keep-me/v1", "apiKey": "test-key", "models": {} }\n  }\n}\n',
@@ -279,10 +282,14 @@ describe("every client survives a full lifecycle", () => {
     // from the family resemblance (260912 plan unit, 001).
     omo: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     kilo: '{\n  "model": "keep-me",\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
+    // A second Codex account the user added in T3 Code sits beside ours under providerInstances.
+    t3code: '{"favorites":[],"providerInstances":{"codex_personal":{"driver":"codex","config":{"homePath":"~/.codex"}}}}\n',
   };
   /** Where the seed's user-owned entry lives when the seed is a sequence. */
   const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {
     raycast: ["providers", "[id=lmstudio]"],
+    workbuddy: ["models", "[id=mine]"],
+    "workbuddy-ai": ["[id=mine]"],
     droid: ["customModels", "[model=local]"],
   };
 

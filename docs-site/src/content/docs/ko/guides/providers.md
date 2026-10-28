@@ -55,8 +55,9 @@ shipped v1 config는 marker 2의 단일 옵션 행으로 자동 이관됩니다.
 
 [`retryOn429`](/ko/reference/configuration/)（동일 키 429 재시도）는 API 키 프로바이더
 （`authMode: "key"`）에만 적용됩니다. OAuth·forward·로컬 프리셋은 제외됩니다 — 같은 토큰을
-재전송해서는 안 되며, 로컬 런타임에는 보존할 원격 키가 없습니다. 옵트인입니다: 옵션이 없으면
-꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다.
+재전송해서는 안 되며, 로컬 런타임에는 보존할 원격 키가 없습니다. 문서화된 대상별 기본값을 제외하면 옵트인입니다. 정식 Mistral Chat은 기존 요청 단위 전송 한도 안에서 끈질긴 재시도 정책(재전송 6회, 대체 간격 10초)을 사용합니다. `enabled: false`를 포함한 명시적인 `retryOn429` 설정이 우선합니다. Mistral 프리셋은 전달받은 프롬프트 캐시 키도 기본으로 전달하며, `promptCacheKey: false`로 전달을 끌 수 있습니다. 캐시 친화성은 재사용 가능성을 높이지만 캐시 적중을 보장하거나 토큰 처리량 제한을 없애지는 않습니다.
+
+Mistral은 Studio 키와 Vibe 키 모두에 하나의 API 키 프로바이더를 사용합니다. 키 종류와 요금제 허용량은 [Mistral API 키 문서](https://docs.mistral.ai/admin/identity-access/api-keys)에 설명되어 있으며, 프록시는 키에서 구독 등급을 추론하지 않습니다. 모든 모델에서 업스트림이 명시한 `Retry-After` 기한은 같은 자격 증명과 모델의 호출 사이에서 공유됩니다. 재시도 시각이 없는 429는 유효한 분 단위 카운터가 용량 소진을 보여 주거나, 거절된 쿼리의 측정 비용이 남은 토큰을 넘지만 공시된 전체 허용량 안에 들어올 때 보수적인 60초 복구 대기를 시작할 수 있습니다. 이는 로컬 복구 정책이며 서버 재설정 시각을 정확히 예측하는 것이 아닙니다. 정상 트래픽에서는 다음 쿼리의 캐시나 비용을 예측하지 않습니다. 대기 후 복구 프로브를 한 번 보내고, 성공하면 일반 트래픽으로 돌아갑니다. 근거가 없거나, 형식이 잘못됐거나, 이용 권한이 0이거나, 월간 한도가 소진됐거나, 전체 허용량을 넘는 경우에는 재설정을 지어내거나 기록을 압축하지 않습니다. `requestPacing: { "enabled": false }` 또는 `retryOn429: { "respectRetryAfter": false }`로 공유 페이싱을 끕니다. 같은 키로 재전송할 때 Mistral의 재시도 시각이 `retryOn429.maxIntervalMs`를 넘으면 프록시는 일찍 재전송하지 않고 429와 재시도 힌트를 반환합니다. 라운드 로빈 키 선택이 켜져 있으면 대기 중인 요청은 키 쿨다운을 다시 확인하고 대체 키의 페이싱 용량을 확보하며, 출력 전의 키 거절은 요청의 기존 전송 한도 안에서 정상 키로 복구될 수 있습니다. 컨텍스트 창과 모델별 압축 설정은 서로 독립적으로 유지됩니다.
 
 ## 1. ChatGPT 로그인 (forward / 패스스루)
 
@@ -210,7 +211,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 104개 들어 있습니다. 키 방식 84개, OAuth 16개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 106개 들어 있습니다. 키 방식 85개, OAuth 17개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -265,7 +266,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | [BigModel Coding Plan — Responses (정적 모델 목록)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan(기본): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 종량제: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 또는 사용자 지정 |
+| Qwen Cloud | Token plan(기본): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 종량제: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 또는 사용자 지정 |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -285,6 +286,7 @@ Chat Completions 모델(그리고 Responses 전용이라 Responses로 보내는 
 [OpenGateway 대시보드](https://opengateway.ai/api-keys)에서 키를 발급한 뒤
 `ocx provider add opengateway`를 실행하거나 대시보드에서 **OpenGateway**를 선택하세요.
 Chat 요청은 설정한 Bearer 키를 사용하며 공개 모델 목록은 키의 유효성을 검증하지 않습니다.
+OpenGateway는 Responses에서 네이티브 커스텀 도구 호출의 재전송을 거절하므로 프리셋은 코드 모드의 `exec` 등 Codex 커스텀 도구를 전송 전에 함수 도구로 변환합니다.
 Responses 도구 결과 배열은 텍스트로 변환하고 이미지는 짝이 맞는 도구 결과 묶음 뒤의 메시지에 보존합니다. refusal이나 불투명한 내용 등 지원하지 않는 결과 part는 전송 전에 명시적인 클라이언트 입력 오류로 거절합니다.
 이미지의 `original` 상세도는 게이트웨이가 지원하는 `high`로 바꾸며 이미지 바이트는 그대로 유지합니다.
 네이티브 Responses 경로는 텍스트가 없는 완료 응답도 검사합니다. 출력 예산이 소진됐으면
@@ -300,7 +302,7 @@ Responses 도구 결과 배열은 텍스트로 변환하고 이미지는 짝이 
 
 정식 `opencode-zen` 제공자에서 API 키 인증과 공식 경로 `https://opencode.ai/zen/v1` 또는 `https://opencode.ai/inference/v1`을 사용하면 Gemini는 기본 `googleMode: ai-studio`에서 Google 네이티브 API를 자동으로 사용합니다. Zen 모델 ID는 `-tiered` 접미사가 없는 Flash ID도 그대로 유지합니다. Claude는 `googleMode`와 관계없이 Anthropic Messages를 사용합니다. 저장된 설정을 읽을 때 이 네이티브 모델의 조건에 맞는 기존 Chat/Responses 재정의와 조건에 맞는 Responses 전용 `image_generation` 호스팅 도구 선호 설정만 무시합니다. 사용자 지정 제공자, 키 인증이 아닌 경로, 그 밖의 선호 설정은 그대로 유지합니다.
 
-**`opencode-free` 지원이 제거되었습니다.** OpenCode의 업스트림 무료 등급 제한으로 모든 모델이 `403 permission_denied`를 반환하기 때문입니다([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). 기존 설정을 불러오면 해당 항목과 종속 모델 참조를 메모리에서 비활성화하고 프로세스당 한 번 경고하며 파일은 변경하지 않습니다. 기본 공급자였다면 표준 OpenAI OAuth 경로가 기본값이 됩니다. `opencode-go`, API 키를 사용하는 `opencode-zen` 또는 다른 공급자를 사용하세요. [OpenCode Zen 약관](https://opencode.ai/docs/zen/).
+**`opencode-free` 지원이 제거되었습니다.** OpenCode의 업스트림 무료 등급 제한으로 모든 모델이 `403 permission_denied`를 반환하기 때문입니다([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). 기존 설정을 불러오면 해당 항목과 종속 모델 참조를 메모리에서 비활성화하고 프로세스당 한 번 경고하며 불러올 때 파일은 변경하지 않습니다. 다음 설정 저장 시 해당 항목과 참조가 config.json에서 제거됩니다. 저장 전에 원본 파일을 같은 폴더의 `config.json.pre-opencode-free-removal.bak`에 자동 보관합니다. 해당 이름이 이미 사용 중이면 고유한 이름의 사본을 만듭니다. 바이트가 동일한 독립 사본은 소유자만 접근할 수 있음을 검증한 경우에만 재사용하고, 그렇지 않으면 그 옆에 보호된 새 사본을 만듭니다. 기존 파일은 덮어쓰지 않습니다. 첫 로드가 겹치면 동일하게 보호된 사본이 여러 개 남을 수 있습니다. 경고에 복구 사본 경로가 표시됩니다. 다운그레이드 후 복원하려면 이 사본을 config.json 위에 복사하세요. 자동 복사에 실패하면 config.json을 즉시 복사하라는 경고가 표시됩니다. 기본 공급자였다면 표준 OpenAI OAuth 경로가 기본값이 됩니다. `opencode-go`, API 키를 사용하는 `opencode-zen` 또는 다른 공급자를 사용하세요. [OpenCode Zen 약관](https://opencode.ai/docs/zen/). 수동적 읽기(passive read)에서는 메모리 내 비활성화만 적용하고 사본이나 경고를 만들지 않습니다.
 
 정상 Claude Desktop 할당과 기본값은 유지됩니다. 소스 모델 허용 목록이 비게 되는 규칙은 비활성화되며, 주입 모델이 제거되면 네이티브 하위 에이전트 동기화도 비활성화됩니다. 이후 설정을 저장하면 제거된 참조는 다시 기록되지 않고 정상적인 동시 편집은 유지됩니다.
 
@@ -469,6 +471,9 @@ Sol/Terra/Luna를 폴백 목록에 넣어 둡니다.
 | Codex 로그인(Pool 또는 Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*`와 `*-pro` | 922,000 (max input 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 네이티브 GPT-5.6 항목은 고정된 업스트림 reasoning 단계를 그대로 따릅니다. 예를 들어 Luna에는
@@ -489,7 +494,7 @@ Amazon Bedrock 네이티브 API처럼 이 구현 중 어느 것과도 맞지 않
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
 Copilot은 혼합 wire 카탈로그를 제공합니다. 모델(`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)은 에이전트
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)은 에이전트
 트래픽에 대해 `/chat/completions`를 거부하므로 opencodex는 이 모델들을 내장 기본값으로
 Responses API를 통해 라우팅하고, 다른 Copilot 모델은 모두 chat completions를 유지합니다.
 우선순위는 하드 wire 핀 → 명시적 [`modelAdapters`](/ko/reference/configuration/providers/)

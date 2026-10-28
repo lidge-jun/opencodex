@@ -1,5 +1,5 @@
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
-import { contextTierRecordConfigError, modelCapabilitiesConfigError } from "../config/provider-validation";
+import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { initialModelSelection } from "../providers/initial-model-selection";
 import { extractAccountId } from "../oauth/chatgpt";
@@ -47,11 +47,13 @@ import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compac
 import { vercelGatewayRoutingConfigError } from "../providers/vercel-gateway-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
+import { authorizationCredential } from "../lib/authorization-scheme";
 
 let _corsOrigin = "http://localhost:10100";
 // Listener identity is process-local. Never infer this trust from forwarded headers: the
 // request handler marks a Request only after resolving the actual Bun Server instance.
 const trustedHubManagementRequests = new WeakSet<Request>();
+export function isTrustedHubManagementRequest(req: Request): boolean { return trustedHubManagementRequests.has(req); }
 
 export function markTrustedHubManagementRequest(req: Request): void {
   trustedHubManagementRequests.add(req);
@@ -501,7 +503,7 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
   if (named) return named;
   if (admission?.kind !== "loopback") return undefined;
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(req.headers);
   const apiKey = req.headers.get("x-api-key")?.trim();
   for (const [token, source] of [[dedicated, "dedicated"], [bearer, "bearer"], [apiKey, "x-api-key"]] as const) {
     if (!token) continue;
@@ -510,6 +512,28 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
     if (principal) return principal;
   }
   return undefined;
+}
+
+/** Stable structural replay identity. This does not replace process-local opaque-state ownership. */
+export function resolveDurableReplayPrincipal(
+  req: Request,
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+  signingKey: Uint8Array,
+): string | undefined {
+  if (!admission || signingKey.length !== 32) return undefined;
+  // The managed client sends this dedicated local credential; a thread id, User-Agent,
+  // loopback address or upstream bearer never establishes structural replay ownership.
+  const token = req.headers.get("x-opencodex-api-key")?.trim();
+  if (!token) return undefined;
+  const resolved = resolveDataPlaneAdmissionSecret(token, config, "dedicated");
+  if (!resolved) return undefined;
+  if (admission.kind !== "loopback" && (admission.kind !== resolved.kind
+    || (admission.kind === "configured" && (resolved.kind !== "configured" || admission.keyId !== resolved.keyId)))) return undefined;
+  return createHmac("sha256", signingKey)
+    .update("opencodex.structural-replay-principal.v1\0")
+    .update(JSON.stringify([resolved.kind, resolved.kind === "configured" ? resolved.keyId : "", token]))
+    .digest("hex");
 }
 
 /** Whether `token` is a data-plane admission secret. */
@@ -600,13 +624,13 @@ export class ForwardAdmissionCredentialError extends Error {
 }
 
 export function validateForwardAdmissionCredential(headers: Headers, config: OcxConfig): void {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
 }
 
 /** Whether Authorization carries a caller-owned native Codex credential safe to forward. */
 export function hasForwardableCodexBearer(headers: Headers, config: OcxConfig): boolean {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   const accountId = headers.get("chatgpt-account-id")?.trim()
     || (bearer ? extractAccountId(undefined, bearer) : undefined);
   return !!bearer && !!accountId && !isProxyAdmissionSecret(bearer, config);
@@ -621,7 +645,7 @@ export function resolveApiAuth(req: Request, config: RequestPolicyView): DataPla
   if (!isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
   if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds });
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(req.headers);
   if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
   // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
   const apiKey = req.headers.get("x-api-key")?.trim();
@@ -653,7 +677,7 @@ export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView)
   // safe because the upstream credential is then SUBSTITUTED rather than forwarded -- see
   // materializeCodexUpstreamAuth. A bearer that is NOT our secret stays unadmitted here and
   // remains Codex Direct passthrough, so the two bearer domains still never mix.
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(req.headers);
   if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
   // `x-api-key` is deliberately NOT accepted on this transport.
   return null;
@@ -746,7 +770,7 @@ export function providerManagementConfigError(
   }
   const contextTiersError = contextTierRecordConfigError(raw.modelContextTiers);
   if (contextTiersError) return contextTiersError;
-  const capabilitiesError = modelCapabilitiesConfigError(raw.modelCapabilities);
+  const capabilitiesError = providerInputModalitiesConfigError(raw.inputModalities) ?? modelCapabilitiesConfigError(raw.modelCapabilities);
   if (capabilitiesError) return capabilitiesError;
   const pinsError = providerReasoningPinsConfigError(raw);
   if (pinsError) return pinsError;
@@ -1109,6 +1133,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelContextWindows: "editor",
   modelContextTiers: "editor",
   modelInputModalities: "editor",
+  inputModalities: "editor",
   modelCapabilities: "editor",
   modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",
@@ -1194,6 +1219,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   desktopExecutor: "redacted",
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
+  messagePhaseInference: "editor",
   tlsProfile: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 

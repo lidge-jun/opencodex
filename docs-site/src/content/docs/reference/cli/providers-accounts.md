@@ -54,6 +54,13 @@ ocx models live --provider ark --json
 Use it for scripts that process one configured provider object per line.
 `--json` and `--jsonl` cannot be combined.
 
+Each configured row also has `active`. It is `false` when this device is linked to a Home
+(a Remote Link Child or a Hub-mode client): the row is local configuration that the Home's
+providers shadow, so it does not serve requests while the link is connected. It is `true` when the
+row actually serves, including when the link state cannot be read. Rows never carry credential
+values: `baseUrl` drops embedded userinfo and masks credential-shaped query values such as `key`
+or `token`, while keeping ordinary parameters such as `api-version`.
+
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
 project selectors, tracing ids. It is **not** a place to put authentication
@@ -667,6 +674,13 @@ changes Orca files, or changes the active pool account.
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+Stored ChatGPT pool accounts remain listable on hosts without a native Codex home, including in the
+dashboard and on account refresh. Listing does not create a Codex home or sign out the native main
+account. Disabling the Codex client integration does not disable an existing native login's quota
+observation; invalid explicit `CODEX_HOME` paths still report a configuration error. Unsafe
+`OPENCODEX_HOME` storage reports an error even when the native Codex home is missing.
+Default-home resolution also reports errors for files, dangling links, and parent directories that cannot be traversed.
+
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
@@ -683,6 +697,14 @@ returns:
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+Codex JSON rows include `slotId` (the registered `id`) and `slotKind` (`native-main` or
+`pool`). When the proxy can verify both the upstream account and user identity, it also
+includes `upstreamAccountKey` (`uai1_` followed by 64 lowercase hexadecimal characters).
+Equal keys within the `openai` provider identify slots for the same upstream user; keep
+each slot and its quota state separately. The key is local to this installation and can
+change when its administrator token rotates. If it is absent, do not infer a match from
+masked email or quota values. Raw upstream IDs, user claims and credentials are not listed.
 
 An empty provider listing names the next command in human output and JSON `notes`:
 `ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`
@@ -765,6 +787,8 @@ separately billed sends add to the request spend. Credits are never estimated fr
 With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
 confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
 that login until reset or evidence expiry; completed service clears an older verdict.
+Quota refusals include the exact `MONTHLY_REQUEST_COUNT` and `OVERAGE_REQUEST_LIMIT_EXCEEDED`
+reasons on HTTP 400 or 429. Plans allowing overage can keep serving after the monthly gauge reaches 100%.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
 Users of one organization (IAM Identity Center) profile share its profile ARN, so a Kiro CLI account is identified by that profile together with the email `kiro-cli whoami` reports for the session. Two users of the same organization therefore stay separate accounts, and signing the same user in again updates that user's account. When `kiro-cli whoami` reports no user, the profile alone identifies the account as before. If that profile already has an account with a known user, such a login only refreshes the account whose stored Kiro CLI session it continues; any other login is refused instead of replacing an account, and an Add account login switches the Kiro CLI back to its previous session. Run `kiro-cli whoami` to confirm the signed-in user, then retry. Reauthenticating an account saved before its user was known records the user that signs in, unless that user already has another account of the same profile.

@@ -28,7 +28,17 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-実行中のプロキシを (PID によって) 停止し、PID ファイルを削除して、ネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
+実行中のプロキシを (PID によって) 停止し、PID ファイルを削除します。スタンドアロンの所有者ではネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
+
+接続済みの hub クライアントでは、`ocx stop`（成功した API 停止を含む）は接続が所有する Codex のルーティング、モデルカタログ、Grok 設定を保持します。`ocx start` はルーティングを再注入せず、その設定で再び処理します。Codex を自身のアカウントへ戻すには `ocx disconnect`、既にネイティブルーティングへ戻した後の再適用には `ocx sync --restart-codex` を使います。
+
+Remote Link Child を明示的に停止すると、共有設定の復元が成功した場合、ネイティブ Codex のルーティング、カタログ、バックアップ済みの再開履歴メタデータを復元し、管理対象の Grok 設定を削除します。保存済みの Home 接続は保持され、`ocx disconnect` で削除できます。Codex から Home を再び使うには、`ocx start`（サービス導入済みなら `ocx service start`）の後に `ocx sync --restart-codex` を実行してください。起動だけではルーティングは再適用されず、sync は Grok ブロックを再作成しません。
+
+サービス停止前に接続の所有権を確認できない場合、停止 API は HTTP 409 と `sharedTeardown: "refused"` を返し、プロキシとサービスマネージャーを稼働させたままにします。接続または切断の処理が完了してから再試行してください。
+
+接続済みクライアントの停止では、保護されたローカルのランタイム記録とリスナーの証明を照合します。クライアント用リスナーと通常プロキシの両方にこの確認が必要で、通常プロキシでは設定の保持機能も認証付きの読み取りで確認します。古いランタイムや確認できないランタイムは、サービスやプロセスを停止する前に拒否されます。監視元からランタイムを更新・再起動して再試行してください。
+
+既に停止済みのクライアントでは、サービス管理側が非アクティブで、既知のローカル接続先にランタイムが存在しないことを確認してから、通常の未実行結果を返します。
 
 ### `ocx restart`
 
@@ -137,7 +147,7 @@ ocx status --json
 
 認証不要の `GET /readyz` エンドポイントで同期後の準備状態を確認します。準備完了時は `200`、
 `pending` または終端状態の `failed` では `Retry-After: 1` とともに `503` を返します。HTTP の
-サニタイズ済み識別フィールドは `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}` です。`protocol` は hub の現在の remote protocol、`minimumClientProtocol` は互換性のある最小 client protocol、`managementUrl` は browser から見える canonical management origin です。`/readyz` がない
+サニタイズ済み識別フィールドは `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}` です。`protocol` は hub の現在の remote protocol、`minimumClientProtocol` は互換性のある最小 client protocol、`managementUrl` は browser から見える canonical management origin です。`/readyz` がない
 旧プロキシは `unreachable` として fail-closed し、`/healthz` は readiness ではなく別の liveness 確認です。
 デフォルトでは 1 回だけ probe します。`--wait` は準備完了または timeout まで polling しますが、
 終端 `failed` を確認すると即座に終了します。デフォルト timeout は 45 秒で、`--timeout <seconds>` には
@@ -156,6 +166,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child:** `ocx sync` は Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は、再起動フラグなしでもランタイムを再起動します。再起動に失敗した場合は以前のランタイムが動作し続け、コマンドは 0 以外で終了します。`ocx status --json` と `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
+
 再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
 
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。
@@ -167,6 +179,8 @@ ocx status --json
 `--restart-app-server-only` は以前の狭い動作を復元します。現在のユーザーが所有する一致する app-server / code-mode-host プロセスにのみ `SIGTERM` を送り、デスクトップ アプリは起動したままにします (アクティブなターンは中断される可能性があります)。`--restart-codex` または `--restart-desktop-app` と同時に指定した場合は狭い範囲が優先されます。進行中の会話を失うことは取り返しがつかず、古いピッカーはそうではないからです。
 
 コマンドを Codex アプリ内から実行すると、再起動は切り離されたヘルパーに引き渡され、このセッションはアプリとともに終了します。
+
+**接続先を固定した同期。** `ocx sync --expect-link <linkId>`（Remote Link Child）と `ocx sync --expect-hub-key <apiKeyId>`（hub クライアント）は、このマシンがまだそのリンク、またはそのキーで接続している場合にのみ同期します。そうでなければ何も変更せず、ローカルのプロバイダーも同期せず、終了コード 5 で終了し、stderr の最後の行は `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}` になります。不正な形式または重複したフラグは終了コード 2 で終了します。詳細は[英語版リファレンス](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)を参照してください。
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -301,7 +315,7 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ocx gui`
 
-`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。ハブで管理イングレスが有効な場合は `http://127.0.0.1:<管理ポート>` を開きます。
+`http://127.0.0.1:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。ハブで管理イングレスが有効な場合は `http://127.0.0.1:<管理ポート>` を開きます。
 
 ## 更新
 

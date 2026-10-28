@@ -43,6 +43,7 @@ const CLIENT_USAGE = `Usage:
   ocx integration client sync --client aside [--json]
   enable/disable/restore accept --plan-fingerprint <token>; bound Aside operations require one profile.
   Droid enable/preview accept repeatable --reasoning-default <model=effort> or --clear-reasoning-defaults.
+  Hermes/Command Code enable and apply/overwrite preview accept --model-names <alias|routed>.
   --profile selects one Aside account-backed profile; omitted Aside toggles affect all profiles.`;
 
 function parseMap(raw: string): Record<string, string> {
@@ -239,7 +240,7 @@ export async function handleClientIntegrationCommand(
     const { handleIntegrationAsideSync } = await import("./integration-aside-sync");
     return handleIntegrationAsideSync(argv.slice(1), deps);
   }
-  if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults"]
+  if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults", "--model-names"]
     .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
     const { handleIntegrationPreviewCommand } = await import("./integration-preview");
     return handleIntegrationPreviewCommand(argv, deps, expectedClientId);

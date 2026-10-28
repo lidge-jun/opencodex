@@ -183,6 +183,7 @@ describe("ocx provider", () => {
           isDefault: false,
           source: "registry",
           models: [],
+          active: true,
         },
         {
           name: "custom.models-1",
@@ -193,6 +194,7 @@ describe("ocx provider", () => {
           isDefault: true,
           source: "custom",
           models: ["plain-model", escapedModel],
+          active: true,
         },
       ]);
     } finally {
@@ -669,6 +671,17 @@ describe("ocx provider mutating --json", () => {
       expect(parsed.source).toBe("registry");
       expect(parsed.needsSync).toBe(true);
       expect(parsed.adapter).toBeDefined();
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("provider add warns when the registry entry is deprecated", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "add", "mimo-free"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('provider "mimo-free" is deprecated');
     } finally {
       removeTreeWithRetry(dir);
     }

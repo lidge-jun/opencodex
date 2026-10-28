@@ -77,6 +77,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerTools?: readonly Record<string, unknown>[];
   /**
+   * Routed Anthropic compaction summary: build tools and system exactly as the ordinary request
+   * would (prompt-cache prefix), then send tool_choice none so no client or hosted tool runs.
+   */
+  _summaryProhibitsToolCalls?: boolean;
+  /**
    * Completed server-tool exchanges from the Claude client's history, keyed by the block that
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */
@@ -148,6 +153,7 @@ export interface OcxParsedRequest {
   _kiroAuthContext?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /** Account-scoped Zed user identity paired with the long-lived access token. */
   _zedAuthContext?: { userId: string };
+  _workbuddyAuthContext?: import("../oauth/types").WorkBuddyOAuthMetadata;
   /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
   _providerContinuation?: OcxProviderContinuationState;
   /** Persisted continuation considered only after the final physical route is known. */
@@ -386,6 +392,11 @@ export interface OcxRequestOptions {
   toolChoice?: OcxToolChoice;
   parallelToolCalls?: boolean;
   reasoning?: string;
+  /**
+   * Independent reasoning toggle resolved at client-compatibility ingress. This is distinct from
+   * the strength-like `reasoning` effort: toggle-only models consume this value as `thinking.type`.
+   */
+  thinkingEnabled?: boolean;
   hideThinkingSummary?: boolean;
   /** Provider policy: suppress raw content-channel reasoning while summaries stay visible. */
   hideRawReasoning?: boolean;
@@ -468,7 +479,7 @@ export type AdapterEvent =
   | { type: "reasoning_raw_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }
   | { type: "tool_call_delta"; arguments: string }
-  | { type: "tool_call_end" }
+  | { type: "tool_call_end"; incomplete?: true }
   /** Internal boundary between a guarded first pass and its one-shot continuation. */
   | { type: "assistant_boundary" }
   // Native web-search activity surfaced by the web-search sidecar so Codex renders a "Searched the

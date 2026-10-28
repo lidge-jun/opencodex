@@ -2,12 +2,13 @@ import { describe, it, expect, afterAll, afterEach } from "bun:test";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../../src/lib/bun-runtime";
 import { findPathBun } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
+import { trustedFixtureRoot } from "../helpers/trusted-fixture-root";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -30,17 +31,11 @@ afterAll(() => {
 
 // findPathBun rejects a PATH candidate beneath any group/other-writable ancestor,
 // which includes the shared temp root on POSIX ("/tmp" is 1777). A fixture that is
-// supposed to exercise a *trusted* PATH dir therefore cannot live under tmpdir().
+// supposed to exercise a *trusted* PATH dir therefore lives under a base whose
+// ancestry the helper has checked against the same rule (#7402).
 const trustedPathRoots: string[] = [];
 function trustedPathRoot(prefix: string): string {
-  if (process.platform === "win32") {
-    const root = mkdtempSync(join(tmpdir(), prefix));
-    trustedPathRoots.push(root);
-    return root;
-  }
-  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
-  mkdirSync(base, { recursive: true, mode: 0o700 });
-  const root = mkdtempSync(join(base, prefix));
+  const root = trustedFixtureRoot(prefix);
   trustedPathRoots.push(root);
   return root;
 }
@@ -309,8 +304,12 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     ];
     for (const relative of launchers) {
       const text = readFileSync(repoPath(relative), "utf8");
-      const spawnCount = (text.match(/spawn\(process\.execPath/g) ?? []).length;
+      // The updater dispatches its restart through guardedSpawn(gate, kind, process.execPath, ...).
+      const spawnCount = (text.match(/(?:\bspawn\(|\bguardedSpawn\([^,()]+,\s*"[a-z-]+",\s*)process\.execPath/g) ?? []).length;
       const directStampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
+      const preparedStampCount = relative === "src/update/index.ts"
+        ? (text.match(/const runtimeEnv = withProcessRuntimeProvenance\(env\);/g) ?? []).length : 0;
+      if (preparedStampCount > 0) expect(text.match(/env: runtimeEnv\b/g)).toHaveLength(preparedStampCount);
       const detachedStartStampCount = relative === "src/cli/index.ts"
         ? (text.match(/env: detachedStartEnvironment\(\)/g) ?? []).length
         : 0;
@@ -318,7 +317,7 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
         expect(text).toContain("return withProcessRuntimeProvenance(env)");
       }
       expect(spawnCount).toBeGreaterThan(0);
-      expect(directStampCount + detachedStartStampCount).toBe(spawnCount);
+      expect(directStampCount + preparedStampCount + detachedStartStampCount).toBe(spawnCount);
     }
   });
 });

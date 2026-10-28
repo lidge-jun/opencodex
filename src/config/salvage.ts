@@ -32,6 +32,7 @@ const SALVAGEABLE_CONFIG_SECTIONS = ["routingProfiles", "combos"] as const;
 const SALVAGEABLE_OPTIONAL_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ["claudeCode", "desktopProfile"],
   ["claudeCode", "tierRoutes"],
+  ["claudeCode", "appendOnlyToolLoadingModels"],
 ];
 
 function isSalvageableConfigPath(section: string, id: string): boolean {

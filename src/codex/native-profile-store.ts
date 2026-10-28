@@ -353,8 +353,9 @@ export function assertNativeProfileLockPath(context: NativeProfileContext): void
 }
 
 export function resolveNativeProfileContext(options: { codexHome?: string; configDir?: string } = {}): NativeProfileContext {
-  const codexHome = canonicalExistingDirectory(options.codexHome ?? getCodexHome(), "The effective CODEX_HOME");
+  // Read-only callers may tolerate an absent native home, but never unsafe OpenCodex storage.
   const configDir = canonicalizeDirectoryPath(options.configDir ?? getConfigDir());
+  const codexHome = canonicalExistingDirectory(options.codexHome ?? getCodexHome(), "The effective CODEX_HOME");
   const homeId = nativeProfileHomeId(codexHome);
   const foldedHomeId = process.platform === "win32" ? legacyWindowsNativeProfileHomeId(codexHome) : homeId;
   const instanceId = createHash("sha256").update(DOMAIN_INSTANCE).update(configDir).digest("hex");
@@ -585,6 +586,15 @@ function isEncryptedPayload(value: unknown): value is EncryptedNativeEnvelopeV1 
     && typeof v.ciphertext === "string" && v.ciphertext.length > 0
     && typeof v.tag === "string" && v.tag.length > 0
     && typeof v.envelopeSha256 === "string" && HASH_RE.test(v.envelopeSha256);
+}
+
+export function countLocalNativeProfileSlots(raw: Record<string, unknown> | null, homeId: string): { inactive: number; active: boolean } {
+  if (raw === null) return { inactive: 0, active: false };
+  const vault = parseVaultObject(structuredClone(raw), homeId);
+  return {
+    inactive: vault.profiles.filter(profile => profile.state === "inactive").length,
+    active: vault.activeProfileId !== null,
+  };
 }
 
 function parseVaultObject(value: unknown, homeId: string): NativeMainProfileVaultV1 {

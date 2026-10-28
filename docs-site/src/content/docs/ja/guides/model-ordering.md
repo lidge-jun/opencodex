@@ -28,7 +28,7 @@ selector がない場合の priority は次のとおりです。
  --- | ---: | --- |
 | `subagentModels[i]` | `i`(`0` から `4`) | `src/codex/catalog/sync.ts` の featured rank map |
 | その他のルーティングモデル | `5` | `src/codex/catalog/sync.ts` のルーティング項目生成 |
-| デフォルトネイティブ GPT スラッグ | `9` | `src/codex/catalog/sync.ts` のネイティブ項目生成 |
+| デフォルトネイティブ GPT スラッグ | `sourcePriority` | `src/codex/catalog/sync.ts` のネイティブ項目生成 |
 | featured リストがあるとき選択されていないネイティブモデル | 最小 `featured.length + 100` | `src/codex/catalog/sync.ts` のネイティブカタログマージ |
 
 管理 API は `src/server/management/agent-settings-routes.ts` の `slice(0, 5)` で `subagentModels` を最大
@@ -69,7 +69,7 @@ Codex の priority ソートでもこの先頭順序は保存されます。
 3. カタログマージ過程で featured ブロックの下に押し下げられた選択されていないネイティブモデル
 
 `subagentModels` がない場合、ルーティングモデルは priority `5` を維持し、ネイティブ GPT 項目は通常 priority
-(opencodex が作った項目は通常 `9`)を使います。ルーティンググループ内部は引き続きプロバイダー/ID
+(sourcePriority、情報がなければ `9`)を使います。ルーティンググループ内部は引き続きプロバイダー/ID
 アルファベット順です。
 
 ## 例

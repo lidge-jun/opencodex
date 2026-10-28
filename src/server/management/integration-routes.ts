@@ -15,6 +15,8 @@ import {
   handleAsideProfileRoutes, asideJournalResponse, asideRestoreResponse,
   asideJournalDeleteResponse, type AsideProfileRouteOptions,
 } from "./aside-profile-routes";
+import { hermesProfileListResponse, hermesRequestScope, scopeHermesProfileRequest } from "./hermes-profile-routes";
+import { HermesProfileError } from "../../integrations/hermes-profiles";
 import type { IntegrationIO } from "../../integrations/config-io";
 import { createClineIO } from "../../integrations/cline-io";
 import { matchesOperationResult } from "../../integrations/journal";
@@ -26,6 +28,7 @@ import {
 import { detectRaycast, type RaycastInstall } from "../../integrations/raycast-detect";
 import { readIntegrationState, readOwnedDroidReasoningDefaults } from "../../integrations/state";
 import { droidReasoningModels, validateDroidReasoningDefaults } from "../../clients/config-export";
+import { isExportModelNames, supportsAliasModelNames, type ExportModelNames } from "../../clients/config-export/model-names";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../integrations/store";
 import {
   applyIntegrationCoordinated,
@@ -79,6 +82,8 @@ export type IntegrationStateEnvelope = {
     models: Array<{ model: string; label: string; efforts: string[] }>;
     defaults: Record<string, string>;
   };
+  /** The Hermes profile a profile-scoped read describes (#7674). */
+  hermesProfile?: string;
 } & IntegrationStateRecord;
 
 export interface IntegrationStateListEnvelope {
@@ -119,6 +124,7 @@ export interface IntegrationJournalRow {
 
 export interface IntegrationToggleBody {
   enabled: boolean;
+  modelNames?: ExportModelNames;
   /**
    * Opt in to replacing a conflicted block with the one opencodex would write.
    *
@@ -181,6 +187,37 @@ function pathOverrides(): { env?: NodeJS.ProcessEnv; home?: string } {
   };
 }
 
+/** A selected Hermes profile's environment and explicit target; nothing for any other request. */
+function scopedPathOverrides(ctx: ManagementContext, clientId: IntegrationClientId): Pick<IntegrationWriteInput, "env" | "home" | "resolvedPaths"> {
+  const scope = clientId === "hermes" ? hermesRequestScope(ctx.req) : undefined;
+  return scope?.resolvedPaths ? { ...pathOverrides(), env: scope.env, resolvedPaths: { ...scope.resolvedPaths } } : pathOverrides();
+}
+
+/** Flight keys carry the profile, so a second profile is busy instead of joining the first one's write. */
+function scopedFlightKey(ctx: ManagementContext, key: string): string {
+  const scope = hermesRequestScope(ctx.req);
+  return scope?.resolvedPaths ? `hermes-profile:${scope.profile.name}:${key}` : key;
+}
+
+/** A Hermes-scoped request may only ever see Hermes operations. */
+function outsideHermesScope(ctx: ManagementContext, clientId: IntegrationClientId): boolean {
+  return hermesRequestScope(ctx.req) !== undefined && clientId !== "hermes";
+}
+
+/** The selected profile's boundary, as a writer refusal; null when it holds or nothing is pinned. */
+function hermesBoundaryRefusal(ctx: ManagementContext): WriteRefused | null {
+  const scope = hermesRequestScope(ctx.req);
+  try {
+    scope?.assertBoundary();
+    return null;
+  } catch (error) {
+    return {
+      ok: false, reason: "unsafe", state: "unsafe", clientId: "hermes",
+      message: error instanceof Error ? error.message : "Hermes profile cannot be changed safely",
+    };
+  }
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -221,8 +258,10 @@ export function setIntegrationMutationFlightTestHooks(
  * while handing the writer a separate default store, so a test could not bind
  * the whole operation to a temp root (A-gate round 12).
  */
-function integrationStore(): IntegrationStateStore {
-  return integrationMutationTestHooks?.store ?? createIntegrationStateStore();
+function integrationStore(ctx?: ManagementContext): IntegrationStateStore {
+  // A selected Hermes profile owns its own store; every other request keeps the root.
+  return (ctx ? hermesRequestScope(ctx.req)?.store : undefined)
+    ?? integrationMutationTestHooks?.store ?? createIntegrationStateStore();
 }
 
 function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
@@ -247,6 +286,7 @@ async function buildIntegrationWriteInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): Promise<IntegrationWriteInput> {
   return {
     clientId,
@@ -254,9 +294,10 @@ async function buildIntegrationWriteInput(
     config: ctx.config,
     port: managementInferencePort(ctx),
     ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+    ...(modelNames === undefined ? {} : { modelNames }),
     store,
     io: integrationMutationTestHooks?.io,
-    ...pathOverrides(),
+    ...scopedPathOverrides(ctx, clientId),
   };
 }
 
@@ -273,6 +314,7 @@ async function buildIntegrationPreviewInput(
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): Promise<{ input: IntegrationWriteInput; identity: string } | null> {
   const snapshot = previewExportSnapshot(ctx.config);
   // No cached roster means no honest snapshot to plan against. Gathering one here would make a
@@ -286,9 +328,10 @@ async function buildIntegrationPreviewInput(
       config: ctx.config,
       port: managementInferencePort(ctx),
       ...(droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: { ...droidReasoningDefaults } }),
+      ...(modelNames === undefined ? {} : { modelNames }),
       store,
       io: integrationMutationTestHooks?.io,
-      ...pathOverrides(),
+      ...scopedPathOverrides(ctx, clientId),
     },
   };
 }
@@ -328,7 +371,7 @@ function restoreClientScopeResponse(ctx: ManagementContext, opId: string, expect
   if (expectedClientId === undefined) return null;
   if (typeof expectedClientId !== "string" || !isIntegrationClientId(expectedClientId)) return invalidClientResponse(ctx);
   try {
-    const operation = integrationStore().findOperation(opId);
+    const operation = integrationStore(ctx).findOperation(opId);
     if (!operation) return jsonResponse({ error: "integration operation not found", code: "integration_operation_not_found", opId }, 404, ctx.req, ctx.config);
     if (operation.clientId !== expectedClientId) return jsonResponse({ error: "integration operation belongs to a different client", code: "integration_client_mismatch" }, 409, ctx.req, ctx.config);
     return null;
@@ -344,6 +387,15 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 
 function invalidDroidDefaultsResponse(ctx: ManagementContext, message: string): Response {
   return jsonResponse({ error: message, code: "invalid_droid_reasoning_defaults" }, 400, ctx.req, ctx.config);
+}
+
+function readModelNames(ctx: ManagementContext, body: Record<string, unknown>, client: string, operation: string): ExportModelNames | Response | undefined {
+  if (!Object.hasOwn(body, "modelNames")) return undefined;
+  if (!isExportModelNames(body.modelNames) || !supportsAliasModelNames(client)
+    || (operation !== "apply" && operation !== "overwrite")) {
+    return jsonResponse({ error: "modelNames must be alias or routed and requires Hermes or Command Code apply or overwrite", code: "invalid_model_names" }, 400, ctx.req, ctx.config);
+  }
+  return body.modelNames;
 }
 
 function readDroidReasoningDefaults(
@@ -418,6 +470,7 @@ function stalePlanGuard(
   fingerprint: string,
   capturedIdentity: string | null,
   droidReasoningDefaults?: Record<string, string>,
+  modelNames?: ExportModelNames,
 ): {
   revalidate: NonNullable<CoordinatedIntegrationOptions["revalidate"]>;
   response: () => Response | null;
@@ -433,7 +486,7 @@ function stalePlanGuard(
        * without ever swapping the roster this mutation is about to use.
        */
       if (exportSnapshotIdentity(ctx.config) !== capturedIdentity) {
-        const refreshed = await buildIntegrationPreviewInput(clientId, ctx, store, droidReasoningDefaults);
+        const refreshed = await buildIntegrationPreviewInput(clientId, ctx, store, droidReasoningDefaults, modelNames);
         stale = refreshed === null ? "unavailable" : previewIntegration(refreshed.input, request);
         return { ok: false, reason: "conflict", state: "conflict", clientId, message: "the model roster changed while confirming" };
       }
@@ -455,6 +508,10 @@ function stalePlanGuard(
 }
 
 function internalErrorResponse(error: unknown, ctx: ManagementContext): Response {
+  // A selected Hermes profile whose boundary stopped holding is a refusal, not a server fault.
+  if (error instanceof HermesProfileError) {
+    return jsonResponse({ error: error.message, code: error.code, clientId: "hermes" }, error.status, ctx.req, ctx.config);
+  }
   return jsonResponse({
     error: error instanceof Error ? error.message : String(error),
     code: "integration_internal_error",
@@ -563,12 +620,14 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
       code: "invalid_op_id",
     }, 400, req, ctx.config);
   }
-  const aside = await asideJournalDeleteResponse(ctx, opId, asideOptions(ctx));
-  if (aside) return aside;
+  if (!hermesRequestScope(ctx.req)) {
+    const aside = await asideJournalDeleteResponse(ctx, opId, asideOptions(ctx));
+    if (aside) return aside;
+  }
   try {
-    const store = integrationStore();
+    const store = integrationStore(ctx);
     const operation = store.findOperation(opId);
-    if (!operation) {
+    if (!operation || outsideHermesScope(ctx, operation.clientId)) {
       // Already retired, or never existed. Both are 404: the tombstone hides
       // the row from findOperation, so a double-click is idempotent here
       // rather than a second deletion of something.
@@ -625,6 +684,28 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 }
 
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+  // Aside delegates before the ordinary client handler. Reject unsupported intent before that
+  // delegation can enumerate profiles, load catalogs, or write a different preference.
+  if (/^\/api\/client-integrations\/aside\/profiles(?:\/|$)/.test(ctx.url.pathname)
+    && (ctx.req.method === "PUT" || ctx.req.method === "POST")) {
+    const body = await readJsonBody({ ...ctx, req: ctx.req.clone() });
+    if (body instanceof Response) return body;
+    if (isPlainRecord(body)) {
+      const naming = readModelNames(ctx, body, "aside", "apply");
+      if (naming instanceof Response) return naming;
+    }
+  }
+  const hermesBase = { store: integrationStore(), ...pathOverrides() };
+  const hermesProfiles = await hermesProfileListResponse(ctx, hermesBase, () => loadExportModels(ctx.config),
+    (scope, models) => readIntegrationState({
+      clientId: "hermes", models, config: ctx.config,
+      port: managementInferencePort(ctx), store: scope?.store ?? hermesBase.store, ...pathOverrides(),
+      ...(scope?.resolvedPaths ? { env: scope.env, resolvedPaths: { ...scope.resolvedPaths } } : {}),
+    }));
+  if (hermesProfiles) return hermesProfiles;
+  const hermesScoped = scopeHermesProfileRequest(ctx, hermesBase);
+  if (hermesScoped instanceof Response) return hermesScoped;
+  if (hermesScoped) ctx = hermesScoped;
   const { req, url } = ctx;
   const profileOptions = asideOptions(ctx);
   const aside = await handleAsideProfileRoutes(ctx, profileOptions);
@@ -673,10 +754,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (requestedClient !== null && !isIntegrationClientId(requestedClient)) {
       return invalidClientResponse(ctx);
     }
-    const asideJournal = await asideJournalResponse(ctx, requestedClient, profileOptions);
+    const asideJournal = hermesRequestScope(req) ? null : await asideJournalResponse(ctx, requestedClient, profileOptions);
     if (asideJournal) return asideJournal;
     try {
-      const store = integrationStore();
+      const store = integrationStore(ctx);
       const storedOperations = store.listOperations(requestedClient ?? undefined);
       const newestByClient = new Map<IntegrationClientId, string>();
       for (const operation of storedOperations) {
@@ -770,6 +851,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (previewClient === "aside") {
       return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
     }
+    if (outsideHermesScope(ctx, previewClient as IntegrationClientId)) {
+      return jsonResponse({ error: "A Hermes profile plan must name the Hermes client", code: "invalid_hermes_profile" }, 400, req, ctx.config);
+    }
     const operation = parsed.operation;
     if (operation !== "apply" && operation !== "overwrite" && operation !== "disable") {
       return jsonResponse({
@@ -779,9 +863,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
     const droidDefaults = readDroidReasoningDefaults(ctx, parsed, previewClient, operation);
     if (droidDefaults instanceof Response) return droidDefaults;
+    const modelNames = readModelNames(ctx, parsed, previewClient, operation);
+    if (modelNames instanceof Response) return modelNames;
     try {
       const captured = await buildIntegrationPreviewInput(
-        previewClient as IntegrationClientId, ctx, integrationStore(), droidDefaults,
+        previewClient as IntegrationClientId, ctx, integrationStore(ctx), droidDefaults, modelNames,
       );
       if (!captured) return previewUnavailableResponse(ctx);
       if (droidDefaults !== undefined) {
@@ -798,6 +884,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
+    if (isPlainRecord(parsed)) {
+      const naming = readModelNames(ctx, parsed, "", "restore");
+      if (naming instanceof Response) return naming;
+    }
     if (!isPlainRecord(parsed) || typeof parsed.opId !== "string" || parsed.opId.trim().length === 0) {
       return jsonResponse({ error: "opId must be a non-empty string", code: "invalid_op_id" }, 400, req, ctx.config);
     }
@@ -808,14 +898,14 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     const scopeResponse = restoreClientScopeResponse(ctx, opId, parsed.expectedClientId, url.pathname === "/api/client-integrations/commandcode/restore/preview" ? "commandcode" : undefined);
     if (scopeResponse) return scopeResponse;
     try {
-      const store = integrationStore();
+      const store = integrationStore(ctx);
       const operation = store.findOperation(opId);
       /*
        * Answered as "not found" rather than by reading the row back to the caller. A preview is
        * reached before any confirmation, so it is the cheapest place to probe journal contents,
        * and it declines to be one.
        */
-      if (!operation) {
+      if (!operation || outsideHermesScope(ctx, operation.clientId)) {
         return jsonResponse({
           error: "integration operation not found",
           code: "integration_operation_not_found",
@@ -844,6 +934,10 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
     if (parsed instanceof Response) return parsed;
+    if (isPlainRecord(parsed)) {
+      const naming = readModelNames(ctx, parsed, "", "restore");
+      if (naming instanceof Response) return naming;
+    }
     if (!isPlainRecord(parsed) || typeof parsed.opId !== "string" || parsed.opId.trim().length === 0) {
       return jsonResponse({
         error: "opId must be a non-empty string",
@@ -871,7 +965,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
     // The binding travels with the request. Dropping it here routed a bound Aside restore into
     // the unbound path, which executed the mutation while its confirmation went unexamined.
-    const asideRestore = await asideRestoreResponse(ctx, {
+    // A Hermes-scoped restore never delegates: its operation lives in the selected Hermes store.
+    const asideRestore = hermesRequestScope(req) ? null : await asideRestoreResponse(ctx, {
       opId,
       confirmDrift,
       ...(parsed.operation === undefined ? {} : { operation: parsed.operation }),
@@ -880,9 +975,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (asideRestore) return asideRestore;
     let restoreClientId: IntegrationClientId | undefined;
     try {
-      const store = integrationStore();
+      const store = integrationStore(ctx);
       const operation = store.findOperation(opId);
-      if (!operation) {
+      if (!operation || outsideHermesScope(ctx, operation.clientId)) {
         return jsonResponse({
           error: "integration operation not found",
           code: "integration_operation_not_found",
@@ -921,11 +1016,12 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       };
       const result = await runIntegrationMutationFlight(
         operation.clientId,
-        `restore:${opId}:${confirmDrift}`,
+        scopedFlightKey(ctx, `restore:${opId}:${confirmDrift}`),
         writeInput.io?.now ?? Date.now,
         () => restoreIntegrationCoordinated(restoreInput, {
           lockSeams: integrationMutationTestHooks?.lockSeams,
           ...(restoreGuard ? { revalidate: restoreGuard.revalidate } : {}),
+          restoreGuard: () => hermesBoundaryRefusal(ctx),
         }),
       );
       const restoreStale = restoreGuard?.response();
@@ -967,8 +1063,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
 
   if (req.method === "GET") {
     try {
-      const input = await buildIntegrationWriteInput(requestedClient, ctx, integrationStore());
+      const input = await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx));
       const state = readIntegrationState(input);
+      const scope = hermesRequestScope(req);
       // Detection runs only for the client that needs it: `defaults` is a
       // process spawn, and no other client's read should pay for it.
       const envelope: IntegrationStateEnvelope = requestedClient === "raycast"
@@ -981,7 +1078,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
                 defaults: readOwnedDroidReasoningDefaults(input),
               },
             }
-          : state;
+          : scope ? { ...state, hermesProfile: scope.profile.name } : state;
       return jsonResponse(envelope, 200, req, ctx.config);
     } catch (error) {
       return internalErrorResponse(error, ctx);
@@ -1020,6 +1117,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     : "disable";
   const droidDefaults = readDroidReasoningDefaults(ctx, parsed, requestedClient, requestedOperation);
   if (droidDefaults instanceof Response) return droidDefaults;
+  const modelNames = readModelNames(ctx, parsed, requestedClient, requestedOperation);
+  if (modelNames instanceof Response) return modelNames;
   const binding = planBindingOf(parsed);
   if (binding === "half") return halfBoundResponse(ctx);
   if (binding === "unknown-operation" || (binding !== "none" && binding.operation !== requestedOperation)) {
@@ -1040,11 +1139,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
      */
     const boundToggle = binding === "none"
       ? null
-      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(), droidDefaults);
+      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
     if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
     const input = boundToggle
       ? boundToggle.input
-      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(), droidDefaults);
+      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
     if (droidDefaults !== undefined) {
       const invalid = validateDroidReasoningDefaults(input.models, droidDefaults);
       if (invalid) return invalidDroidDefaultsResponse(ctx, invalid);
@@ -1052,20 +1151,22 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     const guard = binding === "none" ? null : stalePlanGuard(
       requestedClient,
       ctx,
-      integrationStore(),
+      integrationStore(ctx),
       { operation: binding.operation },
       binding.fingerprint,
       boundToggle === null ? null : boundToggle.identity,
       droidDefaults,
+      modelNames,
     );
     const result = await runIntegrationMutationFlight(
       requestedClient,
-      parsed.enabled ? (parsed.overwriteConflict === true ? "overwrite" : "apply") : "disable",
+      scopedFlightKey(ctx, `${requestedOperation}:modelNames:${modelNames ?? "omitted"}`),
       input.io?.now ?? Date.now,
       () => {
         const options = {
           lockSeams: integrationMutationTestHooks?.lockSeams,
           ...(guard ? { revalidate: guard.revalidate } : {}),
+          guard: () => hermesBoundaryRefusal(ctx),
         };
         if (!parsed.enabled) return disableIntegrationCoordinated(input, options);
         return parsed.overwriteConflict === true

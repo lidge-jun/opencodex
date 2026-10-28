@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { probeSpawn, probeSpawnSync } from "./mutation-guard.mjs";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
@@ -106,11 +106,11 @@ const systemdRunHooks: SystemdRunHooks = {
   // Run a real scope with the same absolute binary as its harmless version payload.
   // Probing only the outer --version would not verify the user bus.
   probeScope: path => {
-    const probe = spawnSync(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", timeout: 5_000, env: scopeProbeEnvironment() });
+    const probe = probeSpawnSync(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", timeout: 5_000, env: scopeProbeEnvironment() });
     return !probe.error && probe.status === 0;
   },
   probeScopeAsync: path => new Promise<boolean>(resolve => {
-    const probe = spawn(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", env: scopeProbeEnvironment() });
+    const probe = probeSpawn(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", env: scopeProbeEnvironment() });
     probe.unref();
     const timer = setTimeout(() => {
       try { probe.kill("SIGKILL"); } catch { /* failed termination is not a successful probe */ }

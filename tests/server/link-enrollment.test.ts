@@ -7,7 +7,8 @@ import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
 import { SshRunnerError, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
-import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
+import { windowsScriptData } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let root: string;
@@ -28,9 +29,8 @@ const recovery = "Run ocx disconnect and ocx restart on the Child before retryin
 const result = (stdout = "", code = 0): SshRunResult => ({ code, stdout, stderr: "" });
 const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n${status}`);
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
-const ocx = (args: string[]) => quoteRemote(remoteOcxArgv(args));
 type RunOptions = Parameters<SshRunner["run"]>[1];
-type Step = "probe" | "fingerprint" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
+type Step = "probe" | "uname" | "windows" | "fingerprint" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
 interface Call { step: Step; argv: readonly string[]; options: RunOptions; }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -38,7 +38,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function harness() {
+function harness(remotePlatform: "posix" | "windows" = "posix") {
+  const remoteOcx = (args: string[]) => quoteRemote(remoteOcxArgv(args, remotePlatform));
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {}, apiKeys: [] };
   const knownHosts = join(root, "known_hosts");
   let store: LinkStore = { version: 1, listenerPort: 18181, links: [] };
@@ -79,16 +80,21 @@ function harness() {
   const runner: SshRunner = {
     async run(argv, options) {
       const command = argv.at(-1) ?? "";
+      const decoded = command.startsWith("powershell.exe ") ? Buffer.from(command.split(" ").at(-1)!, "base64").toString("utf16le") : command;
+      // Decoded with the builder's own reader, so the fixture follows the emitted format.
+      const nativeArgs = command.startsWith("powershell.exe ") ? windowsScriptData(decoded)?.args : undefined;
       const step: Step = argv[0] === "ssh-keygen" ? "fingerprint"
-        : command === "true" ? "probe"
-        : command === ocx(["--version"]) ? "version"
-        : command === ocx(["link", "port"]) ? "port"
-        : command === ocx(["config", "show", "--json"]) ? "config"
+        : command === "echo ocx-link-probe" ? "probe"
+        : command === WINDOWS_OS_PROBE ? "windows"
+        : command.includes("ocx-platform") ? "uname"
+        : command === remoteOcx(["--version"]) ? "version"
+        : command === remoteOcx(["link", "port"]) ? "port"
+        : command === remoteOcx(["config", "show", "--json"]) ? "config"
         : command.includes("ocx-curl-preflight") ? "curl"
-        : command.includes("'connect' '--link' '--key-stdin'") ? "connect"
-        : command === ocx(["restart"]) ? "restart"
-        : command.includes("'ocx-child-http' '10100' 'healthz'") ? (restarted ? "health" : "before")
-        : command.includes("'ocx-child-http' '10100' 'v1/catalog'") ? "catalog"
+        : (nativeArgs?.[0] === "connect" || command.includes("'connect' '--link' '--key-stdin'")) ? "connect"
+        : command === remoteOcx(["restart"]) ? "restart"
+        : (decoded.includes("http://127.0.0.1:10100/healthz") || command.includes("'ocx-child-http' '10100' 'healthz'")) ? (restarted ? "health" : "before")
+        : (decoded.includes("http://127.0.0.1:10100/v1/catalog") || command.includes("'ocx-child-http' '10100' 'v1/catalog'")) ? "catalog"
         : (() => { throw new Error(`Unexpected SSH command: ${command}`); })();
       const call = { step, argv, options };
       calls.push(call); events.push(step);
@@ -107,8 +113,10 @@ function harness() {
         case "probe": {
           const path = candidateFile(argv);
           writeFileSync(path, `${aliasOf(argv)} ssh-ed25519 AAAA\n`);
-          return result();
+          return result("ocx-link-probe\n");
         }
+        case "uname": return result("Linux\n");
+        case "windows": return remotePlatform === "windows" ? result("Windows_NT\r\n") : { code: 127, stdout: "", stderr: "sh: cmd: not found" };
         case "fingerprint": return result(`256 ${fingerprint} child (ED25519)`);
         case "version": return result("opencodex 2.83.0\n");
         case "port": return result('{"port":2200}');
@@ -151,7 +159,7 @@ function harness() {
     return response;
   }
   function seed(alias = "child", latency = 0) {
-    const pending = { alias, fingerprint, keyType: "ED25519", knownHostLine: `${alias} ssh-ed25519 AAAA`, probedAt: clock, sshLatencyMs: latency };
+    const pending = { alias, fingerprint, keyType: "ED25519", knownHostLine: `${alias} ssh-ed25519 AAAA`, probedAt: clock, sshLatencyMs: latency, remotePlatform };
     state.pendingHosts.set(alias, pending); return pending;
   }
   function confirmed(alias = "child", latency = 0) {
@@ -205,7 +213,7 @@ describe("Home enrollment of a standalone Child", () => {
     await catalogStarted.promise;
     try {
       expect(settled).toBe(false); expect(h.callbacks.size).toBe(1);
-      expect(h.calls.map(call => call.step)).toEqual(["probe", "fingerprint", "version", "port", "config", "curl", "before", "connect", "restart", "health", "catalog"]);
+      expect(h.calls.map(call => call.step)).toEqual(["probe", "fingerprint", "windows", "uname", "version", "port", "config", "curl", "before", "connect", "restart", "health", "catalog"]);
       expect(h.admissions).toEqual([{ phase: "enrollment", id: h.enrollmentId }, { phase: "catalog", id: h.enrollmentId }]);
     } finally { completeCatalog.resolve(http({ models: [] })); }
     const response = await applying;
@@ -289,7 +297,7 @@ describe("Home enrollment of a standalone Child", () => {
   test("measured 3400ms SSH latency allows 28600ms commands and separate restart/relay budgets", async () => {
     const h = harness();
     h.overrides.probe = call => {
-      h.advance(3400); writeFileSync(candidateFile(call.argv), "child ssh-ed25519 AAAA\n"); return result();
+      h.advance(3400); writeFileSync(candidateFile(call.argv), "child ssh-ed25519 AAAA\n"); return result("ocx-link-probe\n");
     };
     expect((await h.call("probe", { alias: "child" })).status).toBe(200);
     expect((await h.call("confirm-host", { alias: "child", fingerprint })).status).toBe(200);
@@ -355,16 +363,38 @@ describe("server-owned confirmation and authority", () => {
 
   test("failed optional version probe cannot publish a pending host", async () => {
     const h = harness(); h.overrides.version = () => result("opencodex 2.83.0\n", 125);
-    await denied(await h.call("probe", { alias: "child", includeVersion: true }), "remote_platform_unsupported", 409);
-    expect(h.state.pendingHosts.size).toBe(0); expect(existsSync(h.knownHosts)).toBe(false); noEnrollmentEffects(h);
+    await denied(await h.call("probe", { alias: "child", includeVersion: true }), "version_probe_failed");
+    expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
   });
 
-  test("Windows status 125 wins over an outdated version before committing host trust or issuing a key", async () => {
-    const h = harness(); h.seed(); writeFileSync(h.knownHosts, "existing ssh-ed25519 EXISTING\n");
-    h.overrides.version = () => result("opencodex 2.1.0\n", 125);
-    await denied(await h.call("confirm-host", { alias: "child", fingerprint }), "remote_platform_unsupported", 409);
-    expect(readFileSync(h.knownHosts, "utf8")).toBe("existing ssh-ed25519 EXISTING\n");
-    expect(h.state.confirmedHosts?.size).toBe(0); noEnrollmentEffects(h);
+  test("an unknown remote platform issues no key and creates no link", async () => {
+    const h = harness(); h.overrides.uname = () => result("?");
+    await denied(await h.call("probe", { alias: "child" }), "probe_failed");
+    expect(h.state.pendingHosts.size).toBe(0); noEnrollmentEffects(h);
+  });
+
+  test("a failed cross-shell echo refuses before platform discovery and key issuance", async () => {
+    const h = harness(); h.overrides.probe = () => result("", 255);
+    await denied(await h.call("probe", { alias: "child" }), "probe_failed");
+    expect(h.calls.map(call => call.step)).toEqual(["probe"]); noEnrollmentEffects(h);
+  });
+
+  test("Windows enrollment restarts the Child and requires a fresh authenticated Home catalog", async () => {
+    const h = harness("windows");
+    expect((await h.call("probe", { alias: "child" })).status).toBe(200);
+    expect((await h.call("confirm-host", { alias: "child", fingerprint })).status).toBe(200);
+    expect((await h.call("apply", { alias: "child", fingerprint })).status).toBe(202);
+    expect(h.store.links[0]?.remotePlatform).toBe("windows");
+    expect(h.calls.some(call => call.step === "curl")).toBe(false);
+    expect(h.admissions.map(admission => admission.phase)).toEqual(["enrollment", "catalog"]);
+    expect(h.input!.every(byte => byte === 0)).toBe(true);
+    for (const call of h.calls) expect(call.argv.join(" ")).not.toContain("fixture-child-key");
+  });
+
+  test("Windows restart failure compensates the key and exposes residual recovery", async () => {
+    const h = harness("windows"); h.confirmed(); h.overrides.restart = () => result("", 1);
+    expect(await denied(await h.call("apply", { alias: "child" }), "child_restart_failed")).toMatchObject({ residual: true, recovery });
+    cleanFailure(h, false);
   });
 
   test("fingerprint mismatch refuses both confirmation and apply without SSH", async () => {

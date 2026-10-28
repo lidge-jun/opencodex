@@ -8,7 +8,7 @@ import { bindClientListener, scheduleStandaloneRecycle, startClientRuntime } fro
 import type { MachineListenerDeps } from "../../src/client/machine-listener";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
-import { fixturePath } from "../helpers/repo-root";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { watchdogMs } from "../helpers/ci-watchdog";
 
@@ -83,6 +83,77 @@ test("link runtime refuses a busy configured port instead of selecting an epheme
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test.each(["SIGINT", "SIGTERM", "restart"])("%s shutdown persists queued diagnostics before process exit", async signal => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-client-signal-diagnostics-"));
+  const source = `
+    import { mock } from "bun:test";
+    import { readFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { getDefaultConfig, saveConfig } from ${JSON.stringify(repoPath("src/config.ts"))};
+    import { startClientRuntime } from ${JSON.stringify(repoPath("src/client/runtime.ts"))};
+    import { recordLinkDiagnostic } from ${JSON.stringify(repoPath("src/link/diagnostics.ts"))};
+    import { createLocalAttestationChallenge } from ${JSON.stringify(repoPath("src/lib/local-management-attestation.ts"))};
+    import { createSystemRestartCapability, SYSTEM_RESTART_CAPABILITY_HEADER,
+      SYSTEM_RESTART_EXPECTED_PID_HEADER, SYSTEM_RESTART_NONCE_HEADER, SYSTEM_RESTART_PATH
+    } from ${JSON.stringify(repoPath("src/lib/system-restart-contract.ts"))};
+    const record = () => {
+      recordLinkDiagnostic({ event: "relay_failure", outcome: "auth_failed" });
+      recordLinkDiagnostic({ event: "relay_retry", outcome: "deadline" });
+      recordLinkDiagnostic({ event: "relay_recovered", outcome: "recovered" });
+    };
+    if (${JSON.stringify(signal)} === "restart") {
+      const replacement = await import(${JSON.stringify(repoPath("src/server/restart-replacement.ts"))});
+      mock.module(${JSON.stringify(repoPath("src/server/restart-replacement.ts"))}, () => ({
+        ...replacement,
+        spawnReplacementStart: async () => { record(); },
+      }));
+    }
+    const config = getDefaultConfig();
+    config.port = ${freePort()};
+    config.runtimeRole = "client";
+    config.client = ${JSON.stringify(linkClientState())};
+    saveConfig(config);
+    await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
+    if (${JSON.stringify(signal)} === "restart") {
+      const { attestationSecret, port } = JSON.parse(readFileSync(join(process.env.OPENCODEX_HOME, "runtime-port.json"), "utf8"));
+      const nonce = createLocalAttestationChallenge();
+      const response = await fetch('http://127.0.0.1:' + port + SYSTEM_RESTART_PATH, {
+        method: "POST", headers: {
+          Connection: "close",
+          [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid),
+          [SYSTEM_RESTART_NONCE_HEADER]: nonce,
+          [SYSTEM_RESTART_CAPABILITY_HEADER]: createSystemRestartCapability(attestationSecret, nonce, "POST", SYSTEM_RESTART_PATH, process.pid, port),
+        },
+      });
+      await response.arrayBuffer();
+      if (response.status !== 202) throw new Error('restart refused: ' + response.status);
+    } else {
+      record();
+      process.emit(${JSON.stringify(signal)}, ${JSON.stringify(signal)});
+    }
+  `;
+  const child = Bun.spawn([process.execPath, "-e", source], {
+    cwd: root,
+    env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: join(root, "codex"),
+      OPENCODEX_HOME: join(root, "ocx"), OCX_SERVICE_MANAGED: "0" },
+    stdout: "ignore", stderr: "pipe",
+  });
+  const errors = new Response(child.stderr).text();
+  try {
+    const exit = await waitFor(() => child.exitCode, "signal shutdown");
+    expect({ exit, stderr: await errors }).toEqual({ exit: 0, stderr: "" });
+    const records = readFileSync(join(root, "ocx", "link", "diagnostics.jsonl"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line));
+    expect(records.map(({ event }) => event)).toEqual(["relay_failure", "relay_retry", "relay_recovered"]);
+    expect(existsSync(join(root, "ocx", "runtime-port.json"))).toBe(false);
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    await errors;
+    removeTreeWithRetry(root);
+  }
+}, watchdogMs(60_000));
 
 test("an ended link recycles a connected sibling after listener cleanup", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-client-sibling-recycle-"));

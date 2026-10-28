@@ -1,4 +1,8 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
+import { isRec } from "../../claude/inbound-records";
+import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
+import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
@@ -41,12 +45,14 @@ import {
 import {
   GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  antigravityModelRefusal,
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   isProactivePreferenceEnabled,
   preferredInitialAccount,
   refusalAwareInitialKiroAccount,
+  routeAntigravityModel,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
 import { admitGenericSessionAccount, bindGenericSessionAccount, genericSessionAccount, genericSessionAccountEligible, genericSessionAffinityEnabled, preferredGenericSessionAccount } from "../../oauth/generic-session-affinity";
@@ -56,7 +62,7 @@ import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
-import { resolveProviderTransport } from "../../providers/xai-transport";
+import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
 import {
@@ -71,7 +77,9 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { resolveConnectTimeoutMs } from "../../stall-timeout";
+import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
@@ -79,7 +87,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -95,6 +103,7 @@ import {
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
   recordKeyAttemptUsage,
+  rebindCacheDiagnosticBody,
 } from "../request-log";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
@@ -120,6 +129,7 @@ export async function prepareResponsesTransport(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "completedToolBlocks"
     | "inboundSelector"
     | "admissionScope"
   >,
@@ -180,9 +190,11 @@ export async function prepareResponsesTransport(
     || route.providerName === "github-copilot"
     || route.providerName === "kiro"
     || route.providerName === "google-antigravity"
+    || route.providerName === "cursor"
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "workbuddy-ai"
     || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
@@ -244,6 +256,9 @@ export async function prepareResponsesTransport(
       if (candidate.provider !== route.providerName) return null;
       if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
       if (anthropicRouteDecision && !routeCandidates(anthropicRouting!.getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(candidate.accountId)) return null;
+      // #7500: no admission, initial or a recovery/failover rebind, may land on an Antigravity
+      // account whose own roster omits the model. Callers abandon the send on null.
+      if (antigravityModelRefusal(config, route.providerName, candidate.accountId, route.modelId)) return null;
       const committed = genericAffinityMode
         ? admitGenericSessionAccount(config, route.providerName, oauthSelection, candidate, route.modelId, genericAffinityMode)
         : await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
@@ -485,6 +500,10 @@ export async function prepareResponsesTransport(
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
     }
+    if (route.providerName === "workbuddy-ai") {
+      parsed._workbuddyAuthContext = snapshot.workbuddy;
+      if (retryParsed !== parsed) retryParsed._workbuddyAuthContext = snapshot.workbuddy;
+    }
     if (route.providerName === "zed") {
       // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
       const zedContext = { userId: snapshot.providerUserId ?? "" };
@@ -552,6 +571,29 @@ export async function prepareResponsesTransport(
   const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
     if (copilotAutoAdapter) provider = { ...provider, adapter: copilotAutoAdapter };
     const resolved = resolveAdapter(provider, retention, route.providerName);
+    // Capture this physical adapter's destination. A retry/rebind gets a fresh decision, and
+    // each build projects a copy so unselected fallbacks retain the original tool catalog.
+    const discovery = options.anthropicToolLoadingSource;
+    const appendOnly = inboundWire === "anthropic" && discovery && provider.adapter === "openai-responses"
+      && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
+      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
+        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+    if (appendOnly) {
+      const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
+      resolved.buildRequest = (requestParsed, incoming) => {
+        // Gate the actual URL, including responsesPath and forward-mode construction.
+        const destination = buildResponsesTransport(provider, incoming).url;
+        if (isOpenCodeGoResponsesUrl(destination) || isXaiResponsesDestination({ baseUrl: destination })) {
+          return buildWithOriginalCatalog(requestParsed, incoming);
+        }
+        const original = requestParsed._rawBody;
+        const projected = isRec(original) ? appendLoadedToolDefinitions(original, discovery) : original;
+        if (projected === original) return buildWithOriginalCatalog(requestParsed, incoming);
+        rebindCacheDiagnosticBody(projected, logCtx.cacheDiagnosticDraft);
+        return buildWithOriginalCatalog({ ...requestParsed, _rawBody: projected }, incoming);
+      };
+    }
     if (route.provider.authMode === "forward") return resolved;
     const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
       ? oauthSelection && servingOAuthSnapshot
@@ -855,13 +897,15 @@ export async function prepareResponsesTransport(
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
-            response = ws?.provider === route.provider ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
+            const physicalFetch = ((input, physicalInit) => ws?.provider === route.provider ? execute(input, physicalInit) : sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
-              destination,
-              { ...dispatchInit, redirect: "manual",
+              input,
+              { ...physicalInit, redirect: "manual",
                 ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination)) },
               { providerName: route.providerName, provider: route.provider },
-            );
+            )) as typeof globalThis.fetch;
+            response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
+              resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } finally { releaseFamily(); }
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
@@ -899,6 +943,7 @@ export async function prepareResponsesTransport(
         bindRouteReasoningReplayScope({ parsed: requestParsed, providerName: route.providerName, provider: route.provider,
           adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
+          completedToolBlocks: requestState.completedToolBlocks,
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
           dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
@@ -978,10 +1023,16 @@ export async function prepareResponsesTransport(
           ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
+        // #7500: an Antigravity account whose own discovery omits the model is never sent to.
+        // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
+        const modelRoute = routeAntigravityModel(config, route.providerName,
+          proposedAccountId ?? oauthSelection?.accountId, route.modelId);
+        if (modelRoute.kind === "refuse") return formatErrorResponse(403, "permission_error", modelRoute.message);
+        const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
-        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
-          ? null : proposedAccountId;
+        const preferredAccountId = genericAffinityMode && routedAccountId === oauthSelection?.accountId
+          ? null : routedAccountId;
         let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -1041,6 +1092,10 @@ export async function prepareResponsesTransport(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
+        // Resolution fallbacks can still land on an omitting account; answer with the refusal
+        // here, since the commit below would only report it as a changed selection.
+        const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId);
+        if (unlisted) return formatErrorResponse(403, "permission_error", unlisted);
         const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
@@ -1104,6 +1159,7 @@ export async function prepareResponsesTransport(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
+        if (route.providerName === "workbuddy-ai") parsed._workbuddyAuthContext = resolved.workbuddy;
         if (route.providerName === "zed") {
           parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
@@ -1198,9 +1254,7 @@ export async function prepareResponsesTransport(
     codexAuthContext: admissionState.authCtx,
     forwardHeaders: requestState.selectedForwardHeaders,
   });
-  if (!logCtx.conversationId && parsed._cursorConversationId) {
-    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-  }
+  assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.

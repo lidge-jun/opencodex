@@ -260,9 +260,12 @@ function accountListsModel(providerName: string, accountId: string, model: strin
 /**
  * Model evidence only ranks accounts already eligible and below any configured cap.
  *
- * Kiro and Antigravity both gate models per account. For Antigravity (Claude 4.6 vs 5.5, Argon)
- * an account whose discovered roster lists the model wins; an account whose roster omits it is
- * skipped while any other remains; an account with no roster yet is unknown and stays usable.
+ * Kiro and Antigravity both gate models per account, but only Antigravity's roster is a gate
+ * (#7500). An account whose discovered roster lists the model wins; an account with no fresh
+ * roster is unknown and stays usable after it; an account whose fresh roster omits the model is
+ * never returned, so a field of only such accounts answers EMPTY rather than falling back to them.
+ * Callers treat empty as "no account to move to", and the transport refuses the request through
+ * {@link routeAntigravityModel}. Kiro listings remain a preference only.
  */
 export function preferKiroModelSupport(
   providerName: string, ids: string[], model?: string | null, config?: OcxConfig,
@@ -271,8 +274,7 @@ export function preferKiroModelSupport(
   if (providerName === "google-antigravity") {
     const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
     if (positive.length) return positive;
-    const notListedAgainst = ids.filter(id => accountListsModel(providerName, id, model) !== false);
-    return notListedAgainst.length ? notListedAgainst : ids;
+    return ids.filter(id => accountListsModel(providerName, id, model) !== false);
   }
   if (providerName !== "kiro") return ids;
   const cap = config?.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
@@ -280,6 +282,109 @@ export function preferKiroModelSupport(
     ? ids.filter(id => accountInFlight("kiro", id) < cap) : ids;
   const positive = withRoom.filter(id => kiroAccountSupportsModel(id, model) === true);
   return positive.length ? positive : ids;
+}
+
+/** Where an Antigravity request may be sent, judged from per-account model discovery (#7500). */
+export type AntigravityModelRoute =
+  | { readonly kind: "keep" }
+  | { readonly kind: "reroute"; readonly accountId: string }
+  | { readonly kind: "refuse"; readonly message: string };
+
+const KEEP_ANTIGRAVITY_ROUTE: AntigravityModelRoute = { kind: "keep" };
+
+/** Client-facing refusal when no usable account's discovery lists the model. Mirrored in docs-site. */
+export function antigravityModelUnlistedMessage(model: string): string {
+  return `No usable Google Antigravity account lists the model "${model}" in its model discovery. `
+    + "Choose a model your accounts list, or add an account that has access to it.";
+}
+
+/** Client-facing refusal when the chosen account omits the model but a sibling may serve it. */
+export function antigravitySelectedAccountUnlistedMessage(model: string): string {
+  return `The selected Google Antigravity account does not list the model "${model}" in its model discovery. `
+    + "Select an account that lists it, or enable oauthAccountFailover so OpenCodex can choose one.";
+}
+
+/**
+ * Fail-closed model routing for Antigravity (#7500).
+ *
+ * `plannedAccountId` is the account the request would otherwise be sent with. It is kept unless
+ * its own fresh roster omits the model: absence of a roster is unknown, never a denial, because
+ * rosters live in memory, are refreshed for usable accounts during discovery, and expire
+ * after six hours, so a restart must not take every account out of service.
+ *
+ * A planned account with a proven omission is replaced by a usable sibling (not paused, not
+ * flagged for reauth) that lists the model, then by one whose roster is unknown; siblings out
+ * of cooldown win over cooled ones within each tier. Moving a request before upstream refused it
+ * is a proactive choice, so a replacement needs {@link isProactivePreferenceEnabled}, exactly as
+ * Kiro's known-refusal exclusion does. Otherwise, or when no sibling qualifies, the request is
+ * refused locally instead of being sent to an account known not to serve the model.
+ */
+export function routeAntigravityModel(
+  config: OcxConfig,
+  providerName: string,
+  plannedAccountId: string | null | undefined,
+  model: string | null | undefined,
+  now = Date.now(),
+): AntigravityModelRoute {
+  if (providerName !== "google-antigravity" || !model || !plannedAccountId
+    || accountListsModel(providerName, plannedAccountId, model) !== false) return KEEP_ANTIGRAVITY_ROUTE;
+  const serving = (getAccountSet(providerName)?.accounts ?? [])
+    .filter(account => account.id !== plannedAccountId && account.paused !== true && account.needsReauth !== true)
+    .map(account => account.id)
+    .filter(id => accountListsModel(providerName, id, model) !== false);
+  if (serving.length === 0) return { kind: "refuse", message: antigravityModelUnlistedMessage(model) };
+  if (!isProactivePreferenceEnabled(config, providerName, now)) {
+    return { kind: "refuse", message: antigravitySelectedAccountUnlistedMessage(model) };
+  }
+  const ready = new Set(eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, model)));
+  const rank = (id: string) => (ready.has(id) ? 0 : 2) + (accountListsModel(providerName, id, model) === true ? 0 : 1);
+  const tier = Math.min(...serving.map(rank));
+  const best = rankAntigravityModelAccounts(config, serving.filter(id => rank(id) === tier), model, now)[0]!;
+  return { kind: "reroute", accountId: best };
+}
+
+/** Strategy is applied only after readiness and model-support precedence. */
+function rankAntigravityModelAccounts(config: OcxConfig, ids: string[], model: string, now: number): string[] {
+  const provider = "google-antigravity";
+  const rows = new Map((getAccountSet(provider)?.accounts ?? []).map(row => [row.id, row]));
+  const strategy = activeGenericStrategy(config, provider);
+  if (strategy === "round-robin") {
+    const best = peekRoundRobinAccount(genericPoolKey(provider), ids, genericStickyLimit(config, provider));
+    return best ? [best, ...ids.filter(id => id !== best)] : ids;
+  }
+  if (strategy === "fill-first") return stableGenericRoster(provider).filter(id => ids.includes(id));
+  if (strategy === "reset-first") return rankAccountsByResetFirst(provider, ids, model, now, rows);
+  return rankAccountsByHeadroom(provider, ids, model, rows);
+}
+
+/** Reactive model refusal never changes cooldown or account-wide authentication state. */
+export function rotateAntigravityAccountOnModelNotFound(
+  config: OcxConfig, failedAccountId: string, model: string, attempted: ReadonlySet<string>, now = Date.now(),
+): string | null {
+  const candidates = preferKiroModelSupport("google-antigravity",
+    eligibleFailoverAccounts("google-antigravity", now, classifyModelFamilyForQuota("google-antigravity", model))
+      .filter(id => id !== failedAccountId && !attempted.has(id)), model, config);
+  const positive = candidates.filter(id => accountListsModel("google-antigravity", id, model) === true);
+  return rankAntigravityModelAccounts(config, positive.length ? positive : candidates, model, now)[0] ?? null;
+}
+
+/**
+ * Client-facing refusal when failover is on and a sibling may serve the model, but the request
+ * still resolved to an omitting account (the sibling could not be resolved or admitted).
+ */
+export function antigravityReplacementUnavailableMessage(model: string): string {
+  return `The selected Google Antigravity account does not list the model "${model}" in its model discovery, `
+    + "and no account that may serve it could be used for this request. Retry the request.";
+}
+
+/** The refusal for an account that already resolved, or null when it may serve the model. */
+export function antigravityModelRefusal(
+  config: OcxConfig, providerName: string, accountId: string, model: string | null | undefined, now = Date.now(),
+): string | null {
+  const verdict = routeAntigravityModel(config, providerName, accountId, model, now);
+  if (verdict.kind === "keep") return null;
+  // A reroute verdict exists only with failover on, so advising to enable it would be wrong.
+  return verdict.kind === "refuse" ? verdict.message : antigravityReplacementUnavailableMessage(model!);
 }
 
 function kiroModelListingHasRoom(config: OcxConfig, accountId: string, model: string): boolean {
@@ -320,7 +425,11 @@ export function hasEligibleGenericOAuthFailoverTarget(
   const set = getAccountSet(providerName);
   if (!set || set.accounts.length < 2) return false;
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  return eligibleIdsIn(set, providerName, now, family).some(id => id !== failedAccountId);
+  // Same model filter rotation applies, so an Antigravity sibling whose roster omits the
+  // model is not advertised as a target rotation would then refuse to pick.
+  const siblings = eligibleIdsIn(set, providerName, now, family).filter(id => id !== failedAccountId);
+  return (providerName === "google-antigravity"
+    ? preferKiroModelSupport(providerName, siblings, requestedModelId) : siblings).length > 0;
 }
 
 /** Select a live Antigravity sibling using activation captured before the refused send. */
@@ -342,9 +451,11 @@ export function rotateAntigravityAccountOnAuthRefusal(
       cooldownSource: "auth",
       identity: sentGeneration,
     });
+    presence.delete("google-antigravity");
     sweepExpiredOnWrite(now);
   }
-  const eligible = new Set(eligibleIdsIn(set, "google-antigravity", now, family));
+  const eligible = new Set(preferKiroModelSupport("google-antigravity",
+    eligibleIdsIn(set, "google-antigravity", now, family).filter(id => id !== failedAccountId), requestedModelId));
   const order = set.accounts.map(row => row.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
@@ -673,6 +784,10 @@ export function preferredInitialAccount(
   const activeLacks = (providerName === "kiro" || providerName === "google-antigravity")
     && !!active && !!requestedModelId
     && accountListsModel(providerName, active, requestedModelId) === false;
+  if (providerName === "google-antigravity" && activeLacks) {
+    const route = routeAntigravityModel(config, providerName, active, requestedModelId, now);
+    return route.kind === "reroute" ? route.accountId : null;
+  }
   const listingSibling = activeLacks
     ? modelEligible.find(id => id !== active && (providerName === "kiro"
       ? kiroModelListingHasRoom(config, id, requestedModelId!)

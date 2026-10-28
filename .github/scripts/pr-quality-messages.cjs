@@ -30,6 +30,18 @@ const HYGIENE_BLOCK_RE = new RegExp(
   `^[ \\t]*${HYGIENE_BLOCK_START}[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*${HYGIENE_BLOCK_END}[ \\t]*$`,
   "m"
 );
+/**
+ * Whole-line delimiter matchers, the same shape HYGIENE_BLOCK_RE anchors on.
+ * A block is only read when each delimiter occurs on exactly one line: a
+ * changed filename can contain newlines, so an echoed path can add delimiter
+ * lines, and an ambiguous block must never be cut at the first one.
+ */
+const HYGIENE_BLOCK_START_LINE_RE = new RegExp(`^[ \\t]*${HYGIENE_BLOCK_START}[ \\t]*$`, "gm");
+const HYGIENE_BLOCK_END_LINE_RE = new RegExp(`^[ \\t]*${HYGIENE_BLOCK_END}[ \\t]*$`, "gm");
+
+function countDelimiterLines(text, pattern) {
+  return (text.match(pattern) ?? []).length;
+}
 
 function inlineCode(value) {
   const text = String(value);
@@ -39,6 +51,37 @@ function inlineCode(value) {
   );
   const delimiter = "`".repeat(longestBacktickRun + 1);
   return `${delimiter}${text}${delimiter}`;
+}
+
+/**
+ * Render contributor-supplied text (a changed path) on one line: control
+ * characters, including newlines, become `\uXXXX` escapes. Without this an
+ * echoed path could add whole lines, such as delimiter or record lines, to a
+ * bot comment.
+ */
+function escapeControlCharacters(value) {
+  return String(value).replace(
+    /[\u0000-\u001f\u007f\u2028\u2029]/g,
+    character => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0")
+  );
+}
+
+/** The consolidated gate comment: written by the workflow bot, marker first. */
+function isGateComment(comment) {
+  return (
+    comment?.user?.login === "github-actions[bot]" &&
+    typeof comment.body === "string" &&
+    comment.body.startsWith(GATE_MARKER)
+  );
+}
+
+/** The standalone hygiene comment posted before a gate comment exists. */
+function isStandaloneHygieneComment(comment) {
+  return (
+    comment?.user?.login === "github-actions[bot]" &&
+    typeof comment.body === "string" &&
+    comment.body.startsWith(HYGIENE_MARKER)
+  );
 }
 
 function readinessChecklistLines(readiness) {
@@ -121,9 +164,17 @@ function buildGateCommentBody(state, opts) {
  * `null` when the comment has none. The gate rebuilds its body from scratch
  * every run, so without this round-trip a hygiene update from the separate
  * hygiene workflow would be silently dropped on the next gate write.
+ * An ambiguous block (a delimiter on more than one line) reads as `null`, so
+ * the gate drops it on rebuild instead of re-wrapping a truncated section.
  */
 function extractHygieneSection(body) {
   if (typeof body !== "string") return null;
+  if (
+    countDelimiterLines(body, HYGIENE_BLOCK_START_LINE_RE) !== 1 ||
+    countDelimiterLines(body, HYGIENE_BLOCK_END_LINE_RE) !== 1
+  ) {
+    return null;
+  }
   const match = body.match(HYGIENE_BLOCK_RE);
   if (!match) return null;
   return match[1]
@@ -150,11 +201,38 @@ function withHygieneSection(body, hygieneLines) {
   ].join("\n");
 
   if (HYGIENE_BLOCK_RE.test(base)) {
-    return base.replace(HYGIENE_BLOCK_RE, block);
+    // A callback, not a replacement string: echoed paths can contain $&, $1
+    // and similar tokens that a template would expand into extra lines.
+    return base.replace(HYGIENE_BLOCK_RE, () => block);
   }
 
   // No existing block: append one at the end.
   return `${base.replace(/\s+$/, "")}\n\n## Hygiene\n\n${block}\n`;
+}
+
+/**
+ * The text the hygiene workflow last wrote for this pull request: the hygiene
+ * block of the first bot comment that starts with GATE_MARKER, or the first
+ * bot comment that starts with HYGIENE_MARKER while that gate comment has no
+ * block yet (the gate never absorbs it). A marker elsewhere in a comment does
+ * not classify it. An ambiguous gate block yields `null`; later comments are
+ * never searched for a more convenient candidate.
+ */
+function authoritativeHygieneSection(comments) {
+  const list = comments ?? [];
+  const gate = list.find(isGateComment);
+  if (gate) {
+    const section = extractHygieneSection(gate.body);
+    if (section !== null) return section;
+    if (
+      countDelimiterLines(gate.body, HYGIENE_BLOCK_START_LINE_RE) > 0 ||
+      countDelimiterLines(gate.body, HYGIENE_BLOCK_END_LINE_RE) > 0
+    ) {
+      return null;
+    }
+  }
+  const standalone = list.find(isStandaloneHygieneComment);
+  return standalone ? standalone.body : null;
 }
 
 function descriptionFailureLines(reason) {
@@ -323,10 +401,14 @@ module.exports = {
   HYGIENE_BLOCK_START,
   HYGIENE_BLOCK_END,
   inlineCode,
+  escapeControlCharacters,
+  isGateComment,
+  isStandaloneHygieneComment,
   readinessChecklistLines,
   buildGateCommentBody,
   extractHygieneSection,
   withHygieneSection,
+  authoritativeHygieneSection,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,

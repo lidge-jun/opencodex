@@ -7,11 +7,17 @@ import { reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromR
 
 type Rec = Record<string, unknown>;
 
-export function nativeChatReplayScope(headers: Headers): OcxReasoningReplayScopeRef | undefined {
+export function nativeChatReplayScope(
+  headers: Headers,
+  clientPrincipalId: string | undefined,
+): OcxReasoningReplayScopeRef | undefined {
   const clientThreadId = reasoningReplayConversationIdFromResponsesRequest({
     threadIdHeader: headers.get("thread-id"), sessionIdHeader: sessionIdHeaderFromRequest(headers),
   });
-  return clientThreadId ? { clientThreadId } : undefined;
+  return clientThreadId ? {
+    clientThreadId,
+    ...(clientPrincipalId ? { clientPrincipalId } : {}),
+  } : undefined;
 }
 
 /** Rebind before EVERY build: a key rotation must not retrieve another credential's reasoning. */
@@ -42,7 +48,8 @@ export function nativeChatReasoningCapture(
   const maxBytes = 256 * 1024;
   let bytes = 0;
   let callCount = 0;
-  let disabled = !scope?.current || !chatReasoningReplayPolicy(provider, modelId).preserve;
+  let disabled = !scope?.clientPrincipalId || !scope.current
+    || !chatReasoningReplayPolicy(provider, modelId).preserve;
   const discard = () => {
     budget.releaseRetained(bytes, accounting);
     bytes = 0;
@@ -75,8 +82,13 @@ export function nativeChatReasoningCapture(
           return previous + fragment;
         } finally { reservation.release(); }
       };
-      if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
-        const text = append(state.text, delta.reasoning_content);
+      const rText = typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0
+        ? delta.reasoning_content
+        : typeof delta.reasoning === "string" && delta.reasoning.length > 0
+          ? delta.reasoning
+          : undefined;
+      if (rText !== undefined) {
+        const text = append(state.text, rText);
         if (text === undefined) return;
         state.text = text;
       }
@@ -114,8 +126,13 @@ export function nativeChatReasoningCapture(
       for (const choice of value.choices) {
         if (!isChatRecord(choice) || !isChatRecord(choice.message)) continue;
         const message = choice.message;
-        if (typeof message.reasoning_content !== "string" || !Array.isArray(message.tool_calls)) continue;
-        remember(message.reasoning_content, message.tool_calls.filter(isChatRecord)
+        const rText = typeof message.reasoning_content === "string" && message.reasoning_content.length > 0
+          ? message.reasoning_content
+          : typeof message.reasoning === "string" && message.reasoning.length > 0
+            ? message.reasoning
+            : undefined;
+        if (rText === undefined || !Array.isArray(message.tool_calls)) continue;
+        remember(rText, message.tool_calls.filter(isChatRecord)
           .flatMap(tool => typeof tool.id === "string" ? [tool.id] : []));
       }
     },

@@ -18,6 +18,11 @@ closed. Explicit `xai` requires a usable stored Grok OAuth account and does not 
 requires both ChatGPT login auth and an enabled `forward` provider.
 :::
 
+On file load, a retired OpenCode Free model target in global or `claudeCode` overrides of
+`visionSidecar` or `webSearchSidecar` is removed and that sidecar is explicitly disabled, retaining
+its other settings. Select a supported target before re-enabling it. Healthy targets and the defaults
+for absent sidecar sections are unchanged.
+
 ### Additional web-search backends (explicit-only)
 
 Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
@@ -278,3 +283,9 @@ Claude Code OAuth fingerprint precedent, but should be soak-tested with the
 intended account and workload.
 
 See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.
+
+Search responses with malformed optional fields retain valid answer text and citations. Invalid error-message values use a generic failure message.
+
+When a search answer ends with a Sources list, an unmatched list item stays in the answer instead of being removed as a citation. A title followed by its URL is still consumed as one citation. Non-HTTP URI-like text inside inline code, such as `mode:fast`, stays in the answer; code-formatted HTTP(S) URLs are still citations.
+
+Long search queries and answers are shortened without splitting a UTF-16 surrogate pair, so a single character such as 😀 is never cut in half by the result limits. A sequence of several characters, such as emoji joined with a zero-width joiner, can still be cut between its parts.

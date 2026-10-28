@@ -13,9 +13,11 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
-management ingress is enabled — auto-starting the proxy first if needed. In
-development you can run the GUI dev server separately against a running proxy:
+This opens the running proxy's address in your browser: `http://127.0.0.1:<port>` by default,
+or `http://[::1]:<port>` for a literal IPv6 loopback bind. These literal addresses preserve the
+configured origin required for local browser pairing. With hub management ingress enabled, it opens
+`http://127.0.0.1:<management port>`. The proxy starts automatically first if needed. In development
+you can run the GUI dev server separately against a running proxy:
 
 ```bash
 ocx start
@@ -34,6 +36,14 @@ When a remote dashboard needs that credential, it presents a standard password f
 password manager can offer to save and autofill it. The dashboard itself still keeps the token only
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
+
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable.
+
+The private dashboard-sessions.json stores hashes of the cookie, proof, admin credential and browser identity, the server origin and a fixed 30-day expiry. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. Remembered sessions cannot approve consent actions: GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation. Use a fresh local or paired session for those actions. Cross-origin/relayed dashboards and remote plaintext HTTP do not support Remember. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again.
+
+Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
+
+An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
 
 ### Finding the admin token
 
@@ -114,11 +124,11 @@ is visible) and never forces an upstream refresh.
 | **Native reasoning retention** | Independently opt into reasoning ciphertext forwarding on native model or account changes. Both default off; account retention is experimental. See [the configuration scope](/reference/configuration/server/#native-reasoning-retention). |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
-| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
+| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. With restart on, Codex routing and its model catalog stay in place while the package is replaced, so a Codex app that loads them during the update still sees your routed models; the restarted proxy takes them over, and `ocx stop` restores native Codex if it never comes back. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
-| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
+| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
@@ -450,6 +460,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, generatedAt, total, logs }` where `total` is the filtered row count before pagination. |
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
 | `POST /api/stop` | Stop the proxy/service, restore native Codex, and exit. Refused with `respawnable_service` on the Windows Task Scheduler backend, with `self_unload_service` when this proxy is itself the installed launchd/systemd job, and with `service_state_unknown` when the Task Scheduler state cannot be read; nothing is changed in any of those cases. A dashboard session is also refused, with `desktop_supervised`, while the OpenCodex desktop app runs the proxy. |
+
+Stop rechecks connection ownership before restoring configuration. A new hub connection keeps its routing, catalog and Grok configuration. If ownership is still changing or cannot be confirmed, the API returns HTTP 409 with `sharedTeardown: "refused"` and keeps serving; finish the connection operation and retry. See the [Remote Link stop workflow](/guides/remote-link/).
 
 :::tip
 Adding **Ollama Cloud** or another catalog provider from the dashboard copies its text-versus-vision

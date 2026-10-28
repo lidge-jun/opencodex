@@ -19,7 +19,7 @@ import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQu
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
-import { normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE, SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE, type OcxErrorPayload } from "../../lib/errors";
 import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
@@ -406,9 +406,7 @@ export async function executeResponsesRunTurn(
         releaseProviderRequestSlot(pacingSlot);
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
-        if (!logCtx.conversationId && parsed._cursorConversationId) {
-          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-        }
+        assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
         targetQueue.close();
       }
     };
@@ -496,7 +494,8 @@ export async function executeResponsesRunTurn(
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
       const sent = transportState.sentOAuthSnapshot;
-      if (error.status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
+      const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
+      if (status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
       oauth401ReplayAttempted = true;
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-oauth-401`);
       if (!hop.allowed) return false;
@@ -842,7 +841,9 @@ export async function executeResponsesRunTurn(
           const storageRefusal = preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
+            redactSecretString(classified.error.message), {
+              code: classified.error.code, classified: true, upstreamCode: preflight.error?.code ?? null,
+            });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -900,6 +901,7 @@ export async function executeResponsesRunTurn(
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          chatRawReasoningVisible: options.chatRawReasoningVisible,
           hideRawReasoning: parsed.options.hideRawReasoning,
           declaredToolNames,
           bareCustomToolNames,
@@ -1047,7 +1049,10 @@ export async function executeResponsesRunTurn(
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
+            redactSecretString(classified.error.message), {
+              code: classified.error.code, classified: true,
+              upstreamCode: classifiedError?.code ?? (firstMeaningful?.type === "error" ? firstMeaningful.code : null) ?? null,
+            });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }
@@ -1057,6 +1062,7 @@ export async function executeResponsesRunTurn(
         translatorBudget,
         replayCacheScope: parsed._reasoningReplayScope,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        chatRawReasoningVisible: options.chatRawReasoningVisible,
         hideRawReasoning: parsed.options.hideRawReasoning,
         toolNsMap,
         declaredToolNames,

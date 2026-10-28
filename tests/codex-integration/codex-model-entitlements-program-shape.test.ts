@@ -41,6 +41,21 @@ describe("Codex roster access program metadata", () => {
     });
     expect(codexForward).toHaveProperty("available_access_programs", { cyber: ["standard"] });
   });
+  test("a routed row never inherits configuration_update support from a GPT-6 template", () => {
+    // Codex 0.164 sends positional `configuration_update` effort items only for rows declaring
+    // this flag; a routed provider must keep effort on the ordinary request parameter.
+    const template: RawEntry = { slug: "gpt-6-sol", supports_reasoning_effort_updates: true, use_responses_lite: true };
+    const routed = deriveEntry(template, "other/model", "Other provider", 5, { provider: "other", id: "model" });
+    expect(routed).not.toHaveProperty("supports_reasoning_effort_updates");
+    expect(routed).not.toHaveProperty("use_responses_lite");
+    expect(template.supports_reasoning_effort_updates).toBe(true);
+    // The native row and the exact Codex-forward alias keep the upstream contract.
+    expect(deriveEntry(template, "gpt-6-sol", "Native", 5)).toHaveProperty("supports_reasoning_effort_updates", true);
+    const codexForward = deriveEntry(template, "openai/gpt-6-sol", "Codex forward", 5, {
+      provider: "openai", id: "gpt-6-sol", codexForwardNativeCapabilityAlias: true,
+    });
+    expect(codexForward).toHaveProperty("supports_reasoning_effort_updates", true);
+  });
   test("keeps access programs from each authenticated roster separate", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential(MAIN_CODEX_ACCOUNT_ID), credential("secondary")],

@@ -20,7 +20,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 | 模式 | 介面 | 行為 |
 | --- | --- | --- |
 | **v1** | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
-| **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol 和 gpt-5.6-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
+| **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol、gpt-5.6-terra 和 gpt-6.1-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
 | **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，未明確信任的外部路由會回傳 `unreadable_encrypted_agent_task`；明確信任的直接金鑰驗證 Responses 路由可以原樣接收，而混合組合仍優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
 
 ## 運作原理
@@ -32,6 +32,42 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 - **v2 模式**：強制所有條目使用 `multi_agent_version = "v2"`，覆蓋上游固定值；但啟用 **讓 ChatGPT 保持 v1** 時例外：ChatGPT 原生條目維持 `"v1"`，路由/組合條目仍為 `"v2"`。
 
 無論是即時 `/v1/models` 目錄回應，還是磁碟目錄同步，這項覆蓋都會作為最後一步執行。因此，無論條目原本如何生成，新會話都會使用一致的模式。
+
+## `spawn_agent` 列出哪些模型
+
+Codex 在 `spawn_agent` 工具說明中最多列出五個模型，並由 Codex 自己挑選：它將選擇器中可見的目錄列依 `priority` 由小到大排序，取前五個。**Subagents** 頁面上的名冊（`subagentModels`）只能透過依名冊順序為其中的模型指定最低的 priority（沒有帳號選擇器時為 `0` 到 `4`）來影響這份清單，不會將清單限制在名冊之內。
+
+如果只設定一到四個模型，Codex 會依 priority 以接下來的列填滿其餘位置。這些列不是你選的，儀表板也不會顯示是哪些模型。實際是哪些列取決於目錄：
+
+| 目錄 | 填補其餘位置的列 |
+| --- | --- |
+| 沒有 Codex 帳號選擇器 | 其他路由的 `provider/model` 列。它們的 priority 都是 `5`，因此依 provider 名稱、再依模型 id 的字母順序排列。未設定的原生 GPT 列的 priority 不低於 `100` 加上已設定 id 的數量，因此排在後面。 |
+| 有 Codex 帳號選擇器 | 帳號限定的原生列（`<selector>/<native-model>`），緊接在已設定的列之後。未設定的路由列移到 priority `1005`，排在它們之後。 |
+
+例如，沒有帳號選擇器且名冊如下時：
+
+```json
+{ "subagentModels": ["xai/grok-4.5", "anthropic/claude-sonnet-5"] }
+```
+
+| 位置 | 模型 | Priority | 原因 |
+| ---: | --- | ---: | --- |
+| 1 | `xai/grok-4.5` | `0` | 名冊第一項 |
+| 2 | `anthropic/claude-sonnet-5` | `1` | 名冊第二項 |
+| 3 | `deepseek/deepseek-v4-flash` | `5` | 依字母順序第一個剩餘的路由列 |
+| 4 | `google/gemini-3-pro` | `5` | 下一個路由列 |
+| 5 | `moonshot/kimi-k3` | `5` | 下一個路由列 |
+| 6+ | `zai/glm-5.2`，接著是原生 GPT 列 | `5`，接著是 `102 + sourcePriority` | 不在前五之內 |
+
+名冊為空時，opencodex 不固定任何列，前五個依目錄原有的 priority 決定。
+
+被填補的位置與一般列出的模型相同，主代理可能會選用它們。這份清單也不是允許清單：主代理寫出確切名稱時，Codex 也接受前五之外的目錄模型。若要控制 Codex 列出的模型：
+
+- 設定五個模型。名冊滿了就沒有可填補的位置。
+- 對於永遠不想被提供的模型，將其停用，或不放進其 provider 的 `selectedModels`。已停用或未選取的模型會離開選擇器，不會填補位置。
+- `modelPickerOrder` 會改變 Codex 排序所用的 priority。只含路由列的清單會將列出的未設定列移到 `1000` 以上，因此未列出的路由列會先填補位置。包含裸原生 id 的清單會為整個選擇器排序（包括已設定的列）：列出的列排在前面，先於任何未列出的列佔用列出位置。參見 [Model ordering](/guides/model-ordering/)。
+
+在 v2 上，Codex 會在取前五個之前略過固定為 `"disabled"` 的列；其餘機制相同。opencodex 的 v2 指引名冊（`{{roster}}`）只列出位於前五之內的已設定名冊模型，因此填補的模型只會出現在 Codex 的工具說明中，不會出現在 opencodex 指引裡。Codex 在工作階段開始時讀取目錄，因此名冊的變更從新的工作階段開始生效。
 
 ## 委託模型與推理強度
 
@@ -185,6 +221,10 @@ curl -X PUT http://localhost:10100/api/injection-model \
 它可能是 picker 隱藏、超出五個模型的顯示上限、不在目錄中，或固定為 v1。值為 `"v2"`、`null` 或缺
 少介面值的項目合格；真正的 `"v1"` 固定值不合格。
 
+### 為什麼 `spawn_agent` 列出了我沒有設定的模型？
+
+Codex 依 priority 從目錄填入最多五個列出位置。設定的模型少於五個時，接下來的列會佔用其餘位置。參見上文「`spawn_agent` 列出哪些模型」一節。
+
 ### 模式變更會影響執行中的工作階段嗎？
 
 不會。變更模式後請開啟新的 Codex 工作階段。若長時間執行的 App host 仍顯示過時的目錄狀態，請執行
@@ -216,7 +256,7 @@ opencodex 會將磁碟上的模型目錄與目前使用者擁有的每個 Codex 
 | 模型 | 線路上的 `max` | 選擇 `ultra` 後的線路值 |
 | --- | --- | --- |
 | gpt-5.5 | xhigh | xhigh（先轉為 max，再經 `nativeEffortClamp`） |
-| gpt-5.6-sol、gpt-5.6-terra | max | max |
+| gpt-5.6-sol、gpt-5.6-terra、gpt-6.1-terra | max | max |
 | gpt-5.6-luna | max | 其精確上游階梯不提供該選項 |
 | 路由模型 | 由適配器對映或限制 | 先轉為 max，再由適配器對映或限制 |
 

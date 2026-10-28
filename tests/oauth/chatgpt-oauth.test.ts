@@ -144,10 +144,11 @@ describe("ChatGPT OAuth constants", () => {
     expect(source).not.toContain("DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD");
   });
 
-  test("uses form-urlencoded content-type (not JSON)", async () => {
+  test("uses JSON content-type for token refresh and form-urlencoded for code exchange with codex_cli_rs originator", async () => {
     const source = await Bun.file("src/oauth/chatgpt.ts").text();
     expect(source).toContain("application/x-www-form-urlencoded");
-    expect(source).not.toContain('"Content-Type": "application/json"');
+    expect(source).toContain('"application/json"');
+    expect(source).toContain('const ORIGINATOR = "codex_cli_rs"');
   });
 
   test("includes codex_cli_simplified_flow parameter", async () => {
@@ -169,8 +170,10 @@ describe("codex-account-store constants sync", () => {
     expect(source).not.toContain("DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD");
   });
 
-  test("uses form-urlencoded for refresh", async () => {
+  test("uses official JSON contract for pool and main refresh", async () => {
     const source = await Bun.file("src/codex/account-store.ts").text();
-    expect(source).toContain("application/x-www-form-urlencoded");
+    const mainSource = await Bun.file("src/codex/main-account.ts").text();
+    expect(source).toContain('"Content-Type": "application/json"');
+    expect(mainSource).toContain('"Content-Type": "application/json"');
   });
 });

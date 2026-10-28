@@ -69,7 +69,7 @@ import {
   resetCodexRoutingForManualSelection,
 } from "../../src/codex/routing";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
-import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import {
   blockNativeMainStartupForUnownedServiceHome,
   completeNativeMainRecovery,
@@ -86,17 +86,19 @@ import { recordContextSessionOwner, clearContextSessionOwnersForTests } from "..
 import { handleContextHistory } from "../../src/server/context-history";
 import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { hasForwardableCodexBearer } from "../../src/server/auth-cors";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
 
 beforeEach(() => {
-  // This suite validates refresh admission and auth-context outcomes. Real icacls
-  // processes are covered elsewhere and can retain temp-dir handles long enough
-  // to obscure those assertions under Windows isolated-test load.
+  // This suite validates refresh admission and auth-context outcomes; real icacls is
+  // covered by tests/windows. Both runners are stubbed: the native-main claim lock is
+  // hardened through the ASYNC runner, and with only the sync one stubbed, real icacls
+  // still rewrote that lock's DACL under the home this teardown removes (#7515).
   setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
   testDir = mkdtempSync(join(tmpdir(), "ocx-auth-ctx-"));
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
@@ -113,21 +115,28 @@ beforeEach(() => {
   clearAccountNeedsReauth("pool-b");
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetContextRelayActivationForTests();
-  setIcaclsRunnerForTests(null);
-  removeTreeWithRetry(testDir);
-  clearThreadAccountMap();
-  clearCodexUpstreamHealth();
-  clearAccountQuota();
-  setMainAccountPlan(null);
-  __resetGuardianState();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = previousCodexHome;
+  // Settle producers, config flights and ACL work, and refuse a home whose native-main
+  // owner is still open, before removal; the stubs stay installed until removal ends.
+  await drainAndRemoveFixtureRoots({
+    roots: [{ path: testDir }],
+    restoreEnvironment: () => {
+      setIcaclsRunnerForTests(null);
+      setAsyncIcaclsRunnerForTests(null);
+      clearThreadAccountMap();
+      clearCodexUpstreamHealth();
+      clearAccountQuota();
+      setMainAccountPlan(null);
+      __resetGuardianState();
+      clearAccountNeedsReauth("pool-a");
+      clearAccountNeedsReauth("pool-b");
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    },
+  });
 });
 
 function config(): OcxConfig {

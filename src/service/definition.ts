@@ -7,7 +7,8 @@
  * route back through them (see `installedServiceListenPort` in `health.ts`, which
  * intentionally stays behind because it asks every backend).
  */
-import { loadConfig } from "../config";
+import { getConfigDir, loadConfig } from "../config";
+import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
 
@@ -87,19 +88,30 @@ export function parseBakedListenPort(read: () => string): number | null {
  * own `applyProxyEnv` already treats both cases as equivalent. Only the canonical
  * upper-case name is baked, so a definition never carries two spellings of one setting.
  */
-export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: string; value: string }[] {
+export function resolvedProxyEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  ownClaudeInterceptProxy?: string | null,
+): { name: string; value: string }[] {
+  const token = ownClaudeInterceptProxy === undefined ? readClaudeInterceptProxyToken(getConfigDir()) : null;
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
-    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && !OWN_CLAUDE_INTERCEPT_PROXY.test(v));
+    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && (
+      ownClaudeInterceptProxy === undefined ? !isOwnedClaudeInterceptProxy(v, token) : v !== ownClaudeInterceptProxy
+    ));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
 }
 
 /**
- * The URL Claude first-party writes into `~/.claude/settings.json` (`claudeInterceptProxyUrl`),
- * which every process Claude Code starts inherits. Baked into the service, it would send the
- * proxy's own outbound traffic back through its intercept listener. Only the token-bearing form
- * is matched: a plain `http://127.0.0.1:<port>` is a user's local proxy client and is kept.
+ * Match this installation's credential and exact URL components without creating a token.
+ * An inherited URL can still use an old bound port after the persisted config changes.
+ * Shape alone cannot establish ownership: a user proxy may also use an `opencodex` username.
  */
-const OWN_CLAUDE_INTERCEPT_PROXY = /^http:\/\/opencodex:[^@/]+@127\.0\.0\.1:\d{1,5}\/?$/i;
+function isOwnedClaudeInterceptProxy(value: string, token: string | null): boolean {
+  if (!token) return false;
+  const prefix = `http://opencodex:${encodeURIComponent(token)}@127.0.0.1:`;
+  if (!value.startsWith(prefix)) return false;
+  const port = value.slice(prefix.length).replace(/\/$/, "");
+  return /^\d{1,5}$/.test(port) && Number(port) > 0 && Number(port) <= 65535;
+}

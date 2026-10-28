@@ -13,7 +13,7 @@ the protocol boundary it actually exposes:
 ## MiniMax Code
 
 In the OpenCodex Models page, both MiniMax Coding Plan regions advertise image input for
-`MiniMax-M3` and `MiniMax-M3.1-Flash-Preview`. A Combo's **Image / multimodal** switch is
+`MiniMax-M3` and `MiniMax-M3.1-Flash`. A Combo's **Image / multimodal** switch is
 available only when every selected model supports image input. The switch controls image
 attachments; it does not enable video uploads.
 

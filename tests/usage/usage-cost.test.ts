@@ -459,6 +459,20 @@ describe("resolveMatchedPrice", () => {
         expect(price?.sourceRef).toContain("default 5-minute cache-write");
         expect(price?.sourceRef).toContain("not Code Plan billing/quota");
       }
+      // K3.1 Pro: official table 2026-10-24, flat 1M pricing, default 5-minute cache write.
+      for (const [model, cost4] of [
+        ["k3.1-pro", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 }],
+        ["k3.1-pro-highspeed", { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 }],
+      ] as const) {
+        const price = resolveMatchedPrice(provider, model, undefined, []);
+        expect(price).toMatchObject({ cost4, source: "expected", status: "verified-derived", verifiedAt: "2026-10-24" });
+        expect(price?.sourceRef).toContain("not Code Plan billing/quota");
+        // inputTokens is the raw prompt, cached parts included: 1M uncached + 1M read + 1M written.
+        const usage = { inputTokens: 3_000_000, outputTokens: 1_000_000, cacheReadInputTokens: 1_000_000, cacheCreationInputTokens: 1_000_000 };
+        const estimate = estimateRequestCost({ provider, model, usageStatus: "reported" as const, usage }, undefined, []);
+        expect(estimate?.contextTier).toBeUndefined();
+        expect(estimate?.cost.total).toBeCloseTo(cost4.input + cost4.output + cost4.cacheRead + cost4.cacheWrite, 9);
+      }
       const usage = { inputTokens: 100, outputTokens: 10 };
       const input = { provider, model: "kimi-for-coding", usageStatus: "reported" as const, usage };
       expect(resolveMatchedPrice(provider, input.model, undefined, [])).toBeNull();
@@ -477,15 +491,25 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
+  test("Moonshot platform API prices K3.1 Pro under its kimi- ids only", () => {
+    expect(resolveMatchedPrice("moonshot", "kimi-k3.1-pro", undefined, [])?.cost4).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 });
+    expect(resolveMatchedPrice("moonshot", "kimi-k3.1-pro-highspeed", undefined, [])?.cost4).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 });
+    // The coding endpoint's bare ids are not platform API ids.
+    expect(findExpectedPriceOverlay("moonshot", "k3.1-pro")).toBeUndefined();
+    // kimi-k2.5 left the official table (discontinued 2026-08-31): its row keeps the dated snapshot.
+    expect(findExpectedPriceOverlay("moonshot", "kimi-k2.5")).toMatchObject({ verifiedAt: "2026-07-20" });
+    expect(findExpectedPriceOverlay("moonshot", "kimi-k2.5")?.source).toContain("discontinued 2026-08-31");
+  });
+
   test("16. shipped overlay membership: unique keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, GPT-6.1 Sol, OpenCode Go and compatibility prices", () => {
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     expect(keys.size).toBe(EXPECTED_PRICE_OVERLAYS.length);
     for (const expected of [
-      "openai-apikey/gpt-6.1-sol",
-      "openai/gpt-6.1-sol",
-      "devin/gpt-6-1-sol",
-      "devin-cli/gpt-6-1-sol",
+      "openai-apikey/gpt-6.1-sol", "openai-apikey/gpt-6.1-terra",
+      "openai/gpt-6.1-sol", "openai/gpt-6.1-terra",
+      "devin/gpt-6-1-sol", "devin/gpt-6-1-terra",
+      "devin-cli/gpt-6-1-sol", "devin-cli/gpt-6-1-terra",
       "anthropic/claude-fable-5-1",
       "anthropic-apikey/claude-fable-5-1",
       "cursor/claude-fable-5-1",
@@ -557,11 +581,15 @@ describe("resolveMatchedPrice", () => {
       "kimi/k3",
       "kimi/k3[1m]",
       "kimi/k3-256k",
+      "kimi/k3.1-pro",
+      "kimi/k3.1-pro-highspeed",
       "kimi/kimi-k2.7-code",
       "kimi/kimi-k2.7-code-highspeed",
       "kimi/kimi-k2.6",
       "kimi/kimi-k2.5",
       "moonshot/kimi-k3",
+      "moonshot/kimi-k3.1-pro",
+      "moonshot/kimi-k3.1-pro-highspeed",
       "moonshot/kimi-k2.7-code",
       "moonshot/kimi-k2.7-code-highspeed",
       "moonshot/kimi-k2.6",
@@ -569,6 +597,8 @@ describe("resolveMatchedPrice", () => {
       "kimi-code/k3",
       "kimi-code/k3[1m]",
       "kimi-code/k3-256k",
+      "kimi-code/k3.1-pro",
+      "kimi-code/k3.1-pro-highspeed",
       "kimi-code/kimi-k2.7-code",
       "kimi-code/kimi-k2.7-code-highspeed",
       "kimi-code/kimi-k2.6",
@@ -576,6 +606,8 @@ describe("resolveMatchedPrice", () => {
       "kimi-responses/k3",
       "kimi-responses/k3[1m]",
       "kimi-responses/k3-256k",
+      "kimi-responses/k3.1-pro",
+      "kimi-responses/k3.1-pro-highspeed",
       "alibaba-token-plan/qwen3.8-max",
       "alibaba-token-plan-intl/qwen3.8-max",
       // OpenCode Go — served ids with no jawcode bundle row; each reuses the
@@ -1048,7 +1080,7 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
-    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(9);
+    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(10); // incl. gpt-6.1-terra (gpt61-terra-pricing.test.ts)
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["gpt-daybreak-blue-latest"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["daybreak-blue-latest"]).toBe(2);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
@@ -64,7 +65,7 @@ describe("no secret reaches a client config", () => {
     // credential wiring is deliberately deferred from those initial generated
     // integrations -- omo and Gentle Shell reuse Pi's builder, which emits no headers at all.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["qoder", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid", "gentle-shell"]);
+    expect(loopbackOnly).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "droid", "gentle-shell", "t3code"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -85,7 +86,7 @@ describe("no secret reaches a client config", () => {
 
   test("even a non-loopback bind never serializes the key", () => {
     for (const id of EXPORT_CLIENT_IDS) {
-      if (id === "qoder") {
+      if (id === "t3code" || id === "qoder" || id === "qoder-cn" || id === "workbuddy" || id === "workbuddy-ai") {
         expect(() => buildClientConfigText(id, ctx(REMOTE))).toThrow("loopback");
         continue;
       }
@@ -137,6 +138,10 @@ describe("hermes", () => {
 });
 
 describe("openclaw", () => {
+  const home = join(tmpdir(), "ocx-openclaw-fixture");
+  const custom = join(home, "custom.json");
+  const state = join(home, "state");
+  const relocatedHome = join(home, "relocated");
   test("declares image input only from catalog capabilities", () => {
     const doc = buildClientConfig("openclaw", ctx()) as OpenclawGeneratedConfig;
     const models = doc.models.providers[OPENCODE_PROVIDER_ID]!.models;
@@ -179,26 +184,26 @@ describe("openclaw", () => {
      * `~/.openclaw/openclaw.json` while the running gateway read a different
      * file — and snapshot the wrong one for rollback.
      */
-    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: "/tmp/oc/custom.json" }, "/home/u"))
-      .toBe("/tmp/oc/custom.json");
+    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: custom }, home))
+      .toBe(custom);
     // It outranks the state dir, not merely the home default.
     expect(openclawConfigPath(
-      { OPENCLAW_CONFIG_PATH: "/tmp/oc/custom.json", OPENCLAW_STATE_DIR: "/tmp/state" },
-      "/home/u",
-    )).toBe("/tmp/oc/custom.json");
+      { OPENCLAW_CONFIG_PATH: custom, OPENCLAW_STATE_DIR: state },
+      home,
+    )).toBe(custom);
   });
 
   test("OPENCLAW_STATE_DIR relocates both the config file and detection", () => {
-    expect(openclawConfigPath({ OPENCLAW_STATE_DIR: "/tmp/state" }, "/home/u"))
-      .toBe(join("/tmp/state", "openclaw.json"));
+    expect(openclawConfigPath({ OPENCLAW_STATE_DIR: state }, home))
+      .toBe(join(state, "openclaw.json"));
     // Detection has to follow, or a relocated install reads as not installed
     // while the gateway runs perfectly well.
-    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: "/tmp/state" }, "/home/u")).toBe("/tmp/state");
+    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: state }, home)).toBe(state);
   });
 
   test("with no override the documented default still holds", () => {
-    expect(openclawConfigPath({}, "/home/u")).toBe(join("/home/u", ".openclaw", "openclaw.json"));
-    expect(openclawHomeDir({}, "/home/u")).toBe(join("/home/u", ".openclaw"));
+    expect(openclawConfigPath({}, home)).toBe(join(home, ".openclaw", "openclaw.json"));
+    expect(openclawHomeDir({}, home)).toBe(join(home, ".openclaw"));
   });
 
   test("OPENCLAW_PROFILE selects .openclaw-<profile>, and default stays unnamed", () => {
@@ -207,24 +212,24 @@ describe("openclaw", () => {
      * state directory their gateway does not read — and read as not installed
      * besides, because detection looked at the same wrong place.
      */
-    expect(openclawHomeDir({ OPENCLAW_PROFILE: "work" }, "/home/u")).toBe(join("/home/u", ".openclaw-work"));
-    expect(openclawConfigPath({ OPENCLAW_PROFILE: "work" }, "/home/u"))
-      .toBe(join("/home/u", ".openclaw-work", "openclaw.json"));
+    expect(openclawHomeDir({ OPENCLAW_PROFILE: "work" }, home)).toBe(join(home, ".openclaw-work"));
+    expect(openclawConfigPath({ OPENCLAW_PROFILE: "work" }, home))
+      .toBe(join(home, ".openclaw-work", "openclaw.json"));
     // `default` is the unnamed profile, not a directory suffix.
-    expect(openclawHomeDir({ OPENCLAW_PROFILE: "default" }, "/home/u")).toBe(join("/home/u", ".openclaw"));
+    expect(openclawHomeDir({ OPENCLAW_PROFILE: "default" }, home)).toBe(join(home, ".openclaw"));
   });
 
   test("OPENCLAW_HOME outranks the OS home for everything derived from it", () => {
-    expect(openclawHomeDir({ OPENCLAW_HOME: "/srv/claw" }, "/home/u")).toBe(join("/srv/claw", ".openclaw"));
-    expect(openclawHomeDir({ OPENCLAW_HOME: "/srv/claw", OPENCLAW_PROFILE: "work" }, "/home/u"))
-      .toBe(join("/srv/claw", ".openclaw-work"));
-    expect(openclawConfigPath({ OPENCLAW_HOME: "/srv/claw" }, "/home/u"))
-      .toBe(join("/srv/claw", ".openclaw", "openclaw.json"));
+    expect(openclawHomeDir({ OPENCLAW_HOME: relocatedHome }, home)).toBe(join(relocatedHome, ".openclaw"));
+    expect(openclawHomeDir({ OPENCLAW_HOME: relocatedHome, OPENCLAW_PROFILE: "work" }, home))
+      .toBe(join(relocatedHome, ".openclaw-work"));
+    expect(openclawConfigPath({ OPENCLAW_HOME: relocatedHome }, home))
+      .toBe(join(relocatedHome, ".openclaw", "openclaw.json"));
   });
 
   test("an explicit state dir outranks a profile", () => {
-    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: "/tmp/state", OPENCLAW_PROFILE: "work" }, "/home/u"))
-      .toBe("/tmp/state");
+    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: state, OPENCLAW_PROFILE: "work" }, home))
+      .toBe(state);
   });
 
   test("a relative selector is refused, not silently anchored to our cwd", () => {
@@ -238,26 +243,26 @@ describe("openclaw", () => {
      * We cannot know the gateway's cwd, so the honest answer is to refuse at
      * the boundary rather than pick a directory and hope.
      */
-    expect(() => openclawConfigPath({ OPENCLAW_CONFIG_PATH: "custom.json" }, "/home/u"))
+    expect(() => openclawConfigPath({ OPENCLAW_CONFIG_PATH: "custom.json" }, home))
       .toThrow(/OPENCLAW_CONFIG_PATH must be an absolute path/);
-    expect(() => openclawHomeDir({ OPENCLAW_STATE_DIR: "state" }, "/home/u"))
+    expect(() => openclawHomeDir({ OPENCLAW_STATE_DIR: "state" }, home))
       .toThrow(/OPENCLAW_STATE_DIR must be an absolute path/);
-    expect(() => openclawHomeDir({ OPENCLAW_HOME: "srv/claw" }, "/home/u"))
+    expect(() => openclawHomeDir({ OPENCLAW_HOME: "srv/claw" }, home))
       .toThrow(/OPENCLAW_HOME must be an absolute path/);
   });
 
   test("~ is stable, because it anchors to the home rather than the cwd", () => {
-    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: "~/claw.json" }, "/home/u"))
-      .toBe(join("/home/u", "claw.json"));
+    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: "~/claw.json" }, home))
+      .toBe(join(home, "claw.json"));
     // …and OPENCLAW_HOME moves what `~` means, as it does for OpenClaw itself.
-    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: "~/claw.json", OPENCLAW_HOME: "/srv/claw" }, "/home/u"))
-      .toBe(join("/srv/claw", "claw.json"));
-    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: "~/state" }, "/home/u")).toBe(join("/home/u", "state"));
+    expect(openclawConfigPath({ OPENCLAW_CONFIG_PATH: "~/claw.json", OPENCLAW_HOME: relocatedHome }, home))
+      .toBe(join(relocatedHome, "claw.json"));
+    expect(openclawHomeDir({ OPENCLAW_STATE_DIR: "~/state" }, home)).toBe(join(home, "state"));
   });
 
   test("the default profile comparison is case-insensitive, as OpenClaw's is", () => {
     for (const spelling of ["default", "DEFAULT", "Default"]) {
-      expect(openclawHomeDir({ OPENCLAW_PROFILE: spelling }, "/home/u")).toBe(join("/home/u", ".openclaw"));
+      expect(openclawHomeDir({ OPENCLAW_PROFILE: spelling }, home)).toBe(join(home, ".openclaw"));
     }
   });
 });

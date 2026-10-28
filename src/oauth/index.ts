@@ -50,6 +50,8 @@ import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
+import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
+import { WORKBUDDY_CONFIG_URL, workBuddyHeaders } from "../providers/workbuddy";
 import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
@@ -98,6 +100,7 @@ import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
+  workbuddy?: import("./types").WorkBuddyOAuthMetadata;
   provider: string;
   accountId: string;
   generation: string;
@@ -246,6 +249,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "workbuddy-ai": {
+    login: loginWorkBuddy, refresh: refreshWorkBuddyToken,
+    providerConfig: oauthConfig("workbuddy-ai"), defaultModel: oauthDefaultModel("workbuddy-ai"),
+    defaultRefreshPolicy: "lazy-only",
+  },
   "dsh-account": {
     ...DSH_ACCOUNT_AUTH,
     providerConfig: oauthConfig("dsh-account"),
@@ -561,6 +569,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(oauthProvider === "workbuddy-ai" && cred.workbuddy ? { workbuddy: { ...cred.workbuddy } } : {}),
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
@@ -717,10 +726,12 @@ export async function getValidAccessTokenSnapshot(
 
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set([
+  "workbuddy-ai",
   "xai",
   "github-copilot",
   "kiro",
   "google-antigravity",
+  "cursor",
   "orcarouter-oauth",
   "devin",
   "dsh-account",
@@ -1177,6 +1188,7 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
  * `/models` + Bearer with a `{ data: [{ id, owned_by? }] }` response.
  */
 export interface ModelsRequestObservedAuth {
+  readonly workbuddy?: import("./types").WorkBuddyOAuthMetadata;
   readonly oauthApiBaseUrl?: string;
 }
 
@@ -1186,6 +1198,10 @@ export function buildModelsRequest(
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
 ): { method?: "POST"; url: string; headers: Record<string, string> } {
+  if (providerName === "workbuddy-ai" || prov.adapter === "workbuddy-ai") {
+    const allowed = mayResolveModelsOAuth(providerName, prov);
+    return { url: WORKBUDDY_CONFIG_URL, headers: workBuddyHeaders(allowed && observedAuth?.workbuddy ? apiKey : undefined, observedAuth?.workbuddy) };
+  }
   const authorizedTarget = captureModelsOAuthTarget(providerName, prov);
   if (prov.authMode === "oauth" && !mayResolveModelsOAuth(providerName, prov)) apiKey = undefined;
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
@@ -1672,7 +1688,7 @@ export async function runLogin(
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
           : existing.email && cred.email
-            ? existing.email.toLowerCase() === cred.email.toLowerCase()
+            ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;
       if (!identityMatches) {
         throw new OAuthReauthIdentityMismatchError();

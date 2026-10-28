@@ -38,8 +38,8 @@ Recent npm versions may block bun's postinstall script (`npm warn
 install-scripts ... blocked because they are not covered by allowScripts`),
 which leaves the bundled Bun runtime unprepared. After trying permitted bundled-runtime
 recovery, the launcher can use an executable Bun from an absolute PATH directory if its
-stable version has the pinned major and a minor at least the pinned minor. With the current
-1.4.2 dependency, that means 1.4.0 or newer within major 1. Bounded version-policy and identity
+stable version has the pinned major and a version at least the pinned version. With the current
+1.4.4 dependency, that means 1.4.4 or newer within major 1. Bounded version-policy and identity
 checks require `bun --version` to match `bun -e`'s `Bun.version`. On POSIX, the launcher checks
 the whole candidate path, including ancestor directories and components reached through
 symlinks. Each traversed directory and symlink, and the resolved executable, must be owned by

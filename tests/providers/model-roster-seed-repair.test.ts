@@ -1,12 +1,67 @@
 import { describe, expect, test } from "bun:test";
 import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
+import { routedMaxOutputTokens } from "../../src/codex/catalog/model-hints";
 import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import { projectStaleModelRosters, STALE_MODEL_ROSTERS } from "../../src/providers/stale-model-roster-migration";
-import { MINIMAX_MODELS, MINIMAX_MODELS_BEFORE_M31 } from "../../src/providers/registry/model-seeds";
+import {
+  ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  META_MODEL_API_MODELS,
+  META_MUSE_CONTEXT_WINDOW,
+  META_MUSE_MODELS,
+  META_MUSE_WONDER_MODEL,
+  MINIMAX_MODELS,
+  MINIMAX_MODELS_BEFORE_M31,
+} from "../../src/providers/registry/model-seeds";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
-const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+const PREVIEW = "MiniMax-M3.1-Flash";
+
+describe("DeepSeek Pro saved roster refresh", () => {
+  const before = ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"];
+  const configFor = (models = before, baseUrl = "https://api.deepseek.com") => ({ providers: { deepseek: {
+    adapter: "openai-chat", baseUrl, models: [...models], liveModels: false,
+    defaultModel: "deepseek-flash", modelContextWindows: { "deepseek-flash": 1_048_576 },
+  } } } as unknown as OcxConfig);
+
+  test.each(["https://api.deepseek.com", "https://api.deepseek.com/v1", "https://api.deepseek.com/v1/"])("startup restores the native seed without live discovery at %s", (baseUrl) => {
+    const first = projectStartupConfigRepairs(configFor(before, baseUrl));
+    const row = first.config.providers!.deepseek!;
+    expect(first.changed).toBe(true);
+    expect(row.models).toContain("deepseek-v4-pro");
+    expect(row.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
+    expect(row.liveModels).toBe(false);
+    expect(row.baseUrl).toBe(baseUrl);
+    expect(row.defaultModel).toBe("deepseek-flash");
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    enrichProviderFromRegistry("deepseek", row);
+    expect(row.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
+    expect(row.modelSupportsReasoningSummaries?.["deepseek-v4-pro"]).toBe(true);
+  });
+
+  test("preserves operator lists, custom destinations and adapters", () => {
+    for (const models of [[], before.slice(1), [...before].reverse(), [...before, "custom-model"]]) {
+      const config = configFor(models);
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config.providers!.deepseek!.models).toEqual(models);
+    }
+    expect(projectStaleModelRosters(configFor(before, "https://example.com")).changed).toBe(false);
+    const config = configFor();
+    config.providers!.deepseek!.adapter = "anthropic";
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+  });
+
+  test.each(["deepseek-v4-pro", "DeepSeek-V4-Pro"])("preserves explicit Pro context under %s and absent metadata containers", (key) => {
+    const config = configFor();
+    config.providers!.deepseek!.modelContextWindows![key] = 123;
+    const windows = { ...config.providers!.deepseek!.modelContextWindows };
+    expect(projectStaleModelRosters(config).config.providers!.deepseek!.modelContextWindows).toEqual(windows);
+    const absent = configFor();
+    delete absent.providers!.deepseek!.modelContextWindows;
+    expect(projectStaleModelRosters(absent).config.providers!.deepseek!.modelContextWindows).toBeUndefined();
+  });
+});
 
 function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxConfig {
   return {
@@ -17,6 +72,94 @@ function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxCo
 }
 
 describe("stale model roster migration", () => {
+  describe.each(["minimax", "minimax-cn"])("MiniMax destination guard: %s", (provider) => {
+    const savedRow = (baseUrl: string | undefined, models = MINIMAX_MODELS_BEFORE_M31) => ({
+      baseUrl, models: [...models], defaultModel: "MiniMax-M3", liveModels: false,
+      modelContextWindows: { "MiniMax-M3": 123 },
+      modelMaxOutputTokens: { "MiniMax-M3": 456 },
+      modelDefaultReasoningEfforts: { "MiniMax-M3": "low" },
+    });
+
+    test.each([
+      "https://gateway.example/v1",
+      "https://api.minimax.io.gateway.example/v1",
+      "https://api.minimaxi.com.gateway.example/v1",
+      "https://api.minimax.cn.gateway.example/v1",
+      "https://api.minimax.io/other/v1",
+      "https://api.minimaxi.com/other/v1",
+      "https://api.minimax.cn/other/v1",
+      "http://api.minimax.io/v1",
+      "http://api.minimaxi.com/v1",
+      "http://api.minimax.cn/v1",
+      "https://api.minimax.io/anthropic",
+      "https://api.minimaxi.com/anthropic",
+      "https://api.minimax.cn/anthropic",
+    ])("keeps the entire old seed row at %s", (baseUrl) => {
+      const config = minimaxConfig(provider, savedRow(baseUrl));
+      const original = structuredClone(config.providers![provider]!);
+      const result = projectStaleModelRosters(config);
+      expect(result.config.providers![provider]).toEqual(original);
+      expect(result.changed).toBe(false);
+      expect(result.warnings).toEqual([]);
+    });
+
+    test("does not fill a current Custom roster's partial output map", () => {
+      const config = minimaxConfig(provider, savedRow("https://gateway.example/v1", MINIMAX_MODELS));
+      const original = structuredClone(config.providers![provider]!);
+      const result = projectStaleModelRosters(config);
+      expect(result.config.providers![provider]).toEqual(original);
+      expect(result.changed).toBe(false);
+      expect(result.warnings).toEqual([]);
+    });
+
+    test.each([
+      ...["https://api.minimax.io/v1", "https://api.minimaxi.com/v1", "https://api.minimax.cn/v1"]
+        .flatMap(url => [url, `${url}/`, `${url}/chat/completions`, `${url}/chat/completions/`]),
+      undefined, "",
+    ])("refreshes the official or default destination %s", (baseUrl) => {
+      const config = minimaxConfig(provider, savedRow(baseUrl));
+      if (baseUrl === undefined) delete config.providers![provider]!.baseUrl;
+      const result = projectStaleModelRosters(config);
+      const row = result.config.providers![provider]!;
+      expect(result.changed).toBe(true);
+      expect(row.models).toEqual(MINIMAX_MODELS);
+      expect(row.baseUrl).toBe(baseUrl);
+      expect(row.modelContextWindows).toEqual({ "MiniMax-M3": 123, [PREVIEW]: 1_000_000 });
+      expect(row.modelMaxOutputTokens).toEqual({ "MiniMax-M3": 456, [PREVIEW]: 524_288 });
+      expect(row.modelDefaultReasoningEfforts).toEqual({ "MiniMax-M3": "low", [PREVIEW]: "max" });
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+    });
+  });
+
+  test("adds Muse Wonder to an untouched saved Meta Model API seed", () => {
+    const config = { providers: { "meta-model": {
+      adapter: "openai-responses",
+      models: [...META_MUSE_MODELS],
+      modelContextWindows: { "muse-spark-1.3": META_MUSE_CONTEXT_WINDOW },
+    } } } as unknown as OcxConfig;
+
+    const projection = projectStartupConfigRepairs(config);
+    const row = projection.config.providers!["meta-model"]!;
+    expect(projection.changed).toBe(true);
+    expect(row.models).toEqual(META_MODEL_API_MODELS);
+    expect(row.modelContextWindows).toEqual({
+      "muse-spark-1.3": META_MUSE_CONTEXT_WINDOW,
+      [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW,
+    });
+    expect(projection.warnings.join(" ")).toContain(`added ${META_MUSE_WONDER_MODEL}`);
+    expect(projectStartupConfigRepairs(structuredClone(projection.config)).changed).toBe(false);
+  });
+
+  test("preserves a hand-edited Meta Model API roster", () => {
+    const models = [...META_MUSE_MODELS, "custom-model"];
+    const config = { providers: { "meta-model": {
+      adapter: "openai-responses", models: [...models],
+    } } } as unknown as OcxConfig;
+
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+    expect(config.providers!["meta-model"]!.models).toEqual(models);
+  });
+
   test("adds the preview to an untouched saved MiniMax seed on both presets", () => {
     // A config saved since 2026-07-10 carries exactly this eight-id copy, and enrichment
     // never rewrites a present list. MiniMax's /v1/models omits the preview, so without
@@ -56,6 +199,42 @@ describe("stale model roster migration", () => {
     expect(projection.config.providers!.minimax!.modelDefaultReasoningEfforts).toEqual({ [PREVIEW]: "low" });
   });
 
+  test("fills the Flash output limit into an existing partial output map", () => {
+    // Custom catalog rows read the saved map directly; without this the added id would
+    // publish with no output ceiling (CodeRabbit on #7739).
+    const projection = projectStaleModelRosters(minimaxConfig("minimax", {
+      models: [...MINIMAX_MODELS_BEFORE_M31],
+      modelMaxOutputTokens: { "MiniMax-M3": 128_000 },
+    }));
+    expect(projection.config.providers!.minimax!.modelMaxOutputTokens).toEqual({
+      "MiniMax-M3": 128_000, [PREVIEW]: 524_288,
+    });
+  });
+
+  test("renames a saved MiniMax-M3.1-Flash-Preview selection to the GA id on both presets", () => {
+    const RETIRED = "MiniMax-M3.1-Flash-Preview";
+    for (const [provider, baseUrl] of [["minimax", "https://api.minimax.io/v1"], ["minimax-cn", "https://api.minimaxi.com/v1"]] as const) {
+      const config = minimaxConfig(provider, {
+        baseUrl,
+        authMode: "key",
+        defaultModel: RETIRED,
+        models: MINIMAX_MODELS.map(id => (id === PREVIEW ? RETIRED : id)),
+        modelContextWindows: { [RETIRED]: 1_000_000, "MiniMax-M3": 1_000_000 },
+        modelDefaultReasoningEfforts: { [RETIRED]: "high" },
+      });
+      const projection = projectStartupConfigRepairs(config);
+      const row = projection.config.providers![provider]!;
+      expect(projection.changed).toBe(true);
+      expect(JSON.stringify(projection.config)).not.toContain(RETIRED);
+      expect(row.models).toEqual(MINIMAX_MODELS);
+      expect(row.defaultModel).toBe(PREVIEW);
+      expect(row.modelContextWindows).toEqual({ [PREVIEW]: 1_000_000, "MiniMax-M3": 1_000_000 });
+      // The user's saved effort survives the rename rather than being reset to the seed.
+      expect(row.modelDefaultReasoningEfforts).toEqual({ [PREVIEW]: "high" });
+      expect(projectStartupConfigRepairs(structuredClone(projection.config)).changed).toBe(false);
+    }
+  });
+
   test("leaves a hand-edited roster alone", () => {
     const trimmed = MINIMAX_MODELS_BEFORE_M31.filter(id => id !== "MiniMax-M2");
     const reordered = [...MINIMAX_MODELS_BEFORE_M31].reverse();
@@ -86,7 +265,7 @@ describe("stale model roster migration", () => {
     for (const entry of STALE_MODEL_ROSTERS) {
       const registry = PROVIDER_REGISTRY.find(row => row.id === entry.provider);
       expect(registry?.models).toEqual([...entry.to]);
-      expect(entry.to.length).toBeGreaterThan(entry.from.length);
+      expect(entry.to.some(id => !entry.from.includes(id))).toBe(true);
     }
   });
 });
@@ -102,6 +281,217 @@ describe("MiniMax preview catalog retention", () => {
       const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({ name, provider, models: live, configured });
       expect(models.map(model => model.id)).toContain(PREVIEW);
       expect(droppedConfiguredIds).toEqual([]);
+    }
+  });
+});
+
+describe.each([
+  // Beijing is pinned to its registry host by the router, so any saved URL is refreshed.
+  { provider: "alibaba-token-plan", baseUrl: "https://example.com/v1", before: [
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+] },
+  { provider: "alibaba-token-plan-intl", baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", before: [
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v3.2",
+  "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+  "glm-5.2", "glm-5.3", "glm-5.1", "glm-5",
+  "MiniMax-M2.5",
+] },
+])("Token Plan saved roster refresh: $provider", ({ provider, baseUrl, before }) => {
+  const entry = STALE_MODEL_ROSTERS.find(row => row.provider === provider)!;
+  const makeConfig = (models: string[]) => ({ providers: { [entry.provider]: {
+    adapter: "openai-chat", baseUrl, models,
+    defaultModel: "qwen3.8-max", liveModels: false,
+    modelContextWindows: { "deepseek-v4.1-flash-1017": 123 },
+    modelDefaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "low" },
+  } } } as unknown as OcxConfig);
+  test("refreshes only the exact previous seed through startup and is idempotent", () => {
+    const config = makeConfig([...before]);
+    const first = projectStartupConfigRepairs(config);
+    expect(first.changed).toBe(true);
+    const row = first.config.providers![entry.provider]!;
+    expect(row.models).toEqual([...entry.to]);
+    expect(row.models).toContain("deepseek-v4.1-flash-1017");
+    expect(row.modelContextWindows!["deepseek-v4.1-flash-1017"]).toBe(123);
+    expect(row.modelDefaultReasoningEfforts!["deepseek-v4.1-flash-1017"]).toBe("low");
+    expect(row.defaultModel).toBe("qwen3.8-max");
+    expect(row.liveModels).toBe(false);
+    expect(row.baseUrl).toBe(baseUrl);
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+  });
+  test("preserves trimmed, extended, reordered, duplicated and empty operator lists", () => {
+    for (const models of [before.slice(1), [...before, "custom-model"], [...before].reverse(), [...before, before[0]!], []]) {
+      const config = makeConfig(models);
+      const original = structuredClone(config);
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config).toEqual(original);
+    }
+  });
+  test("fills existing metadata containers but never creates absent containers", () => {
+    const config = makeConfig([...before]);
+    const row = config.providers![entry.provider]!;
+    row.modelContextWindows = {};
+    row.modelDefaultReasoningEfforts = {};
+    expect(projectStaleModelRosters(config).changed).toBe(true);
+    expect(row.modelContextWindows["deepseek-v4.1-flash-1017"]).toBe(1_000_000);
+    expect(row.modelDefaultReasoningEfforts["deepseek-v4.1-flash-1017"]).toBe("high");
+    const absent = makeConfig([...before]);
+    delete absent.providers![entry.provider]!.modelContextWindows;
+    delete absent.providers![entry.provider]!.modelDefaultReasoningEfforts;
+    projectStaleModelRosters(absent);
+    expect(absent.providers![entry.provider]!.modelContextWindows).toBeUndefined();
+    expect(absent.providers![entry.provider]!.modelDefaultReasoningEfforts).toBeUndefined();
+  });
+  test("backfills the added id's output limit into a partial saved map", () => {
+    // Custom catalog rows hand the saved provider straight to routedMaxOutputTokens, so a
+    // partial map without the added id published it with no limit when discovery had none.
+    const config = makeConfig([...before]);
+    const row = config.providers![entry.provider]!;
+    row.modelMaxOutputTokens = { "qwen3.8-max": 4_096 };
+    expect(projectStaleModelRosters(config).changed).toBe(true);
+    const added = entry.to.filter(id => !before.includes(id));
+    expect(row.modelMaxOutputTokens).toEqual({
+      "qwen3.8-max": 4_096, ...Object.fromEntries(added.map(id => [id, ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS[id]])),
+    });
+    expect(routedMaxOutputTokens("custom-token-plan", row, { id: "deepseek-v4.1-flash-1017" } as never)).toBe(393_216);
+    const kept = makeConfig([...before]);
+    kept.providers![entry.provider]!.modelMaxOutputTokens = { "deepseek-v4.1-flash-1017": 8_192 };
+    projectStaleModelRosters(kept);
+    expect(kept.providers![entry.provider]!.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(8_192);
+    const absent = makeConfig([...before]);
+    projectStaleModelRosters(absent);
+    expect(absent.providers![entry.provider]!.modelMaxOutputTokens).toBeUndefined();
+  });
+  test("backfills output limits on a row an earlier refresh already moved to the current roster", () => {
+    const config = makeConfig([...entry.to]);
+    const row = config.providers![entry.provider]!;
+    row.modelContextWindows = {};
+    row.modelMaxOutputTokens = { "qwen3.8-max": 4_096 };
+    const first = projectStartupConfigRepairs(config);
+    expect(first.changed).toBe(true);
+    const saved = first.config.providers![entry.provider]!;
+    expect(saved.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(393_216);
+    expect(saved.modelMaxOutputTokens!["qwen3.8-max"]).toBe(4_096);
+    expect(saved.modelContextWindows).toEqual({});
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    const kept = makeConfig([...entry.to]);
+    kept.providers![entry.provider]!.modelMaxOutputTokens = { "deepseek-v4.1-flash-1017": 8_192 };
+    projectStaleModelRosters(kept);
+    expect(kept.providers![entry.provider]!.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(8_192);
+    const absent = makeConfig([...entry.to]);
+    const original = structuredClone(absent);
+    expect(projectStaleModelRosters(absent).changed).toBe(false);
+    expect(absent).toEqual(original);
+  });
+  test("preserves a custom adapter", () => {
+    const config = makeConfig([...before]);
+    config.providers![entry.provider]!.adapter = "anthropic";
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+    expect(config.providers![entry.provider]!.models).toEqual(before);
+  });
+});
+
+describe("International roster refresh follows the saved destination", () => {
+  const entry = STALE_MODEL_ROSTERS.find(row => row.provider === "alibaba-token-plan-intl")!;
+  const row = (baseUrl: string | undefined, selectedModels?: string[]) => ({ providers: { [entry.provider]: {
+    adapter: "openai-chat", ...(baseUrl === undefined ? {} : { baseUrl }), models: [...entry.from],
+    ...(selectedModels ? { selectedModels } : {}),
+  } } } as unknown as OcxConfig);
+
+  test("leaves pay-as-you-go and Custom destinations, and their allowlists, untouched", () => {
+    for (const baseUrl of ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "https://gateway.example.test/v1"]) {
+      const config = row(baseUrl, ["deepseek-v3.2", "deepseek-v4-flash"]);
+      const original = structuredClone(config);
+      expect(projectStartupConfigRepairs(config).changed).toBe(false);
+      expect(config).toEqual(original);
+    }
+  });
+
+  test("refreshes the Token Plan host in any spelling and a row using the registry default", () => {
+    for (const baseUrl of [undefined, "HTTPS://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/"]) {
+      const config = row(baseUrl);
+      expect(projectStaleModelRosters(config).changed).toBe(true);
+      expect(config.providers![entry.provider]!.models).toEqual([...entry.to]);
+      expect(config.providers![entry.provider]!.baseUrl).toBe(baseUrl);
+    }
+  });
+});
+describe("Meta Model API roster refresh follows the saved destination", () => {
+  const entry = STALE_MODEL_ROSTERS.find(row => row.provider === "meta-model")!;
+  const row = (baseUrl: string | undefined) => ({ providers: { [entry.provider]: {
+    adapter: "openai-responses", ...(baseUrl === undefined ? {} : { baseUrl }), models: [...entry.from],
+    modelContextWindows: { "muse-spark-1.3": 262_144 },
+    modelMaxOutputTokens: { "muse-spark-1.3": 8_192 },
+  } } } as unknown as OcxConfig);
+
+  test("leaves a Custom destination's roster and saved metadata untouched", () => {
+    // A preserved custom provider can still carry the two Spark ids; the refresh must not
+    // add Wonder to a gateway that is not api.meta.ai.
+    const config = row("https://gateway.example.test/v1");
+    const original = structuredClone(config);
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+    expect(config).toEqual(original);
+  });
+
+  test("refreshes the Model API host in any spelling and a row using the registry default", () => {
+    for (const baseUrl of [undefined, "HTTPS://api.meta.ai/v1/"]) {
+      const config = row(baseUrl);
+      expect(projectStaleModelRosters(config).changed).toBe(true);
+      const saved = config.providers![entry.provider]!;
+      expect(saved.models).toEqual([...entry.to]);
+      expect(saved.baseUrl).toBe(baseUrl);
+      expect(saved.modelContextWindows).toEqual({
+        "muse-spark-1.3": 262_144, [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW,
+      });
+      expect(saved.modelMaxOutputTokens).toEqual({ "muse-spark-1.3": 8_192 });
+    }
+  });
+});
+
+describe("Moonshot K3.1 Pro saved roster refresh", () => {
+  // The roster every install saved between the Kimi K3 seed (260717) and #7653. Frozen here on
+  // purpose: a later K2 retirement must not silently change what this refresh matches.
+  const before = ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+  const added = ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"];
+  const moonshotConfig = (baseUrl: string | undefined, models: string[]) => ({ providers: { moonshot: {
+    adapter: "openai-chat", ...(baseUrl === undefined ? {} : { baseUrl }), models,
+    defaultModel: "kimi-k2.7-code",
+    modelContextWindows: { "kimi-k3": 1_048_576 },
+    modelDefaultReasoningEfforts: {},
+  } } } as unknown as OcxConfig);
+
+  test("refreshes an untouched seed on the International, China, and default destinations", () => {
+    // platform.kimi.ai and platform.kimi.com (China) both list kimi-k3.1-pro and -highspeed.
+    for (const baseUrl of [undefined, "https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1/"]) {
+      const first = projectStartupConfigRepairs(moonshotConfig(baseUrl, [...before]));
+      expect(first.changed).toBe(true);
+      const row = first.config.providers!.moonshot!;
+      expect(row.models).toEqual(PROVIDER_REGISTRY.find(entry => entry.id === "moonshot")!.models);
+      expect(row.models).toEqual(expect.arrayContaining(added));
+      expect(row.defaultModel).toBe("kimi-k2.7-code");
+      expect(row.baseUrl).toBe(baseUrl);
+      for (const id of added) {
+        expect(row.modelContextWindows![id]).toBe(1_048_576);
+        expect(row.modelDefaultReasoningEfforts![id]).toBe("max");
+      }
+      expect(row.modelContextWindows!["kimi-k3"]).toBe(1_048_576);
+      expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    }
+  });
+
+  test("leaves Custom destinations and hand-edited lists untouched", () => {
+    const cases: Array<[string | undefined, string[]]> = [
+      ["https://gateway.example.test/v1", [...before]],
+      ["https://api.moonshot.ai/v1", before.slice(1)],
+      ["https://api.moonshot.ai/v1", [...before, "kimi-custom"]],
+      ["https://api.moonshot.ai/v1", [...before].reverse()],
+    ];
+    for (const [baseUrl, models] of cases) {
+      const config = moonshotConfig(baseUrl, models);
+      const original = structuredClone(config);
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config).toEqual(original);
     }
   });
 });

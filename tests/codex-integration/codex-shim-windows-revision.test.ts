@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { autoRestoreCodexShim, installCodexShim } from "../../src/codex/shim";
+import { autoRestoreCodexShim, installCodexShim, uninstallCodexShim } from "../../src/codex/shim";
+import { createWorkerCommitWindow, createCodexCliUpdateFence, codexCliUpdateSelectionGate } from "../../src/codex/cli-update-selection-gate";
 import { stableShimPathProbe } from "../../src/codex/shim-fingerprint";
 import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
 import { buildWindowsCodexShim, buildWindowsPowerShellCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
@@ -17,6 +18,21 @@ import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixtu
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 isolateCodexShimEnvironment();
+
+test("all Windows public shim writers refuse a held Worker commit gate before preflight", () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  const window = createWorkerCommitWindow({ gate: codexCliUpdateSelectionGate(), fence: createCodexCliUpdateFence() });
+  let enabledReads = 0;
+  try {
+    expect(window.tryEnter()).toBe(true);
+    expect(installCodexShim()).toMatchObject({ installed: false, refused: true, message: "codex_cli_selection_busy" });
+    expect(autoRestoreCodexShim({ enabled: () => { enabledReads++; return true; } }))
+      .toMatchObject({ status: "deferred", message: "codex_cli_selection_busy" });
+    expect(uninstallCodexShim()).toEqual({ removed: false, message: "codex_cli_selection_busy" });
+    expect(enabledReads).toBe(0);
+  } finally { window.exit(); Object.defineProperty(process, "platform", original); }
+});
 
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const previousHome = process.env.OPENCODEX_HOME;

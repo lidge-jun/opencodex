@@ -265,13 +265,13 @@ export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
   // codex-rs appends one agent_message (any of the four codex-rs message types) at the
   // current input tail. Historical
   // agent messages may be adjacent in full-history bodies; they must not poison the
-  // later task. compaction_trigger/additional_tools are trailing metadata rather than
-  // a newer user turn.
+  // later task. compaction_trigger/additional_tools/configuration_update are trailing
+  // metadata rather than a newer user turn; Codex may record an effort update after the task.
   let index = input.length - 1;
   while (index >= 0) {
     const item = input[index];
     const type = item && typeof item === "object" ? (item as { type?: unknown }).type : undefined;
-    if (type !== "compaction_trigger" && type !== "additional_tools") break;
+    if (type !== "compaction_trigger" && type !== "additional_tools" && type !== "configuration_update") break;
     index -= 1;
   }
   const item = input[index];

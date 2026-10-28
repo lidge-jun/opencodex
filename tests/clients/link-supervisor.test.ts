@@ -302,7 +302,7 @@ test("auth failures retry every five minutes, a changed host key never does, and
   await Promise.resolve();
   await Promise.resolve();
   const failed = supervisor.status()[0]!.state;
-  expect(failed).toEqual({ kind: "failed", since: 0, reason: "hostkey" });
+  expect(failed).toEqual({ kind: "failed", since: 0, reason: "hostkey", retries: 1 });
   for (let second = 0; second < 2 * 60 * 60; second += 10) {
     current += 10_000;
     timers[0]!();
@@ -312,7 +312,7 @@ test("auth failures retry every five minutes, a changed host key never does, and
   await supervisor.stop();
 });
 
-test("the Home's -R supervisor retries a failed forward once a minute and promotes a retry that stays up", async () => {
+test("the Home's -R supervisor retries a failed forward with a doubling delay and promotes a retry that stays up", async () => {
   const fake = fakeRunner();
   const timers: Array<() => void> = [];
   let current = 0;
@@ -335,7 +335,9 @@ test("the Home's -R supervisor retries a failed forward once a minute and promot
   fake.children[0]!.resolve(255);
   await Promise.resolve();
   await Promise.resolve();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 65_000, inFlight: false });
+  expect(supervisor.status()[0]!.state).toEqual({
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 65_000, inFlight: false, detail: "remote_forward_conflict",
+  });
   current = 64_999;
   timers[0]!();
   expect(fake.children).toHaveLength(1);
@@ -347,17 +349,22 @@ test("the Home's -R supervisor retries a failed forward once a minute and promot
   fake.children[1]!.resolve(255);
   await Promise.resolve();
   await Promise.resolve();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false });
-  current = 125_000;
+  expect(supervisor.status()[0]!.state).toEqual({
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
+  });
+  current = 184_999;
+  timers[0]!();
+  expect(fake.children).toHaveLength(2);
+  current = 185_000;
   timers[0]!();
   expect(fake.children).toHaveLength(3);
   // A retry in flight is not killed for reading failed, and staying up past the retry grace proves it.
-  current = 139_999;
+  current = 199_999;
   timers[0]!();
   expect(supervisor.status()[0]!.state).toMatchObject({ kind: "failed", inFlight: true });
-  current = 140_000;
+  current = 200_000;
   timers[0]!();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 140_000 });
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 200_000 });
   expect(supervisor.status()[0]!.pid).toBe(fake.children[2]!.child.pid);
   await supervisor.stop();
 });
@@ -706,7 +713,9 @@ test("a reload neither skips the reconnect backoff nor a failed link's retry del
   fake.children[1]!.resolve(255);
   await Promise.resolve();
   await Promise.resolve();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 6_000, reason: "forward", retryAt: 66_000, inFlight: false });
+  expect(supervisor.status()[0]!.state).toEqual({
+    kind: "failed", since: 6_000, reason: "forward", retryAt: 66_000, inFlight: false, detail: "remote_forward_conflict",
+  });
   await supervisor.reload();
   expect(fake.children).toHaveLength(2);
   await supervisor.stop();
@@ -743,9 +752,13 @@ test("the Home's -R supervisor keeps the retry cadence when ssh cannot be starte
   spawnError = new Error("spawn ssh ENOENT");
   current = 65_000;
   timers[0]!();
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 125_000, inFlight: false });
+  // A retry that cannot even start counts as a failed retry, so the delay doubles, and it keeps
+  // the peer's last answer because it learned nothing new about the link.
+  expect(supervisor.status()[0]!.state).toEqual({
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
+  });
   spawnError = null;
-  current = 125_000;
+  current = 185_000;
   timers[0]!();
   expect(fake.children).toHaveLength(2);
   await supervisor.stop();

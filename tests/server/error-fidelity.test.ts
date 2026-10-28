@@ -47,6 +47,14 @@ describe("error fidelity", () => {
       type: "insufficient_quota",
       code: "insufficient_quota",
     });
+    expect(classifyError(400, "upstream_error", "Your weekly usage quota has been exhausted")).toMatchObject({
+      type: "insufficient_quota",
+      code: "insufficient_quota",
+    });
+    expect(classifyError(400, "invalid_request_error", "Invalid configuration: weekly usage quota must be greater than zero")).toMatchObject({
+      type: "invalid_request_error",
+      code: "invalid_request_error",
+    });
     expect(classifyError(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin")).toMatchObject({
       type: "invalid_request_error",
       code: "origin_rejected",

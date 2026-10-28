@@ -1,8 +1,10 @@
 import type { Server } from "bun";
 import {
-  LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION,
-  LINK_RELAY_SESSION_HEADER, linkRelayProof, linkRelayProofMatches,
+  LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
+  LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
+  linkRelayProof, linkRelayProofMatches,
 } from "../../link/relay-auth";
+import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
 
 interface Session {
   peer: string;
@@ -18,6 +20,10 @@ export interface LinkRelaySessionOptions {
   fingerprints: (keyId: string, linkId: string) => readonly string[];
   /** Tests can use a bounded shorter reservation; production uses five seconds. */
   reservationMs?: number;
+  /** Where a verified challenge records the Child's report, and a known link's version mismatch. */
+  peers?: LinkPeerObservations;
+  /** The current tunnel connection of a Home-initiated link, announced with each proof. */
+  connectionGeneration?: (linkId: string) => string | undefined;
 }
 
 /** One book per bound listener. A pending proof reserves the bind before the data request arrives. */
@@ -64,21 +70,35 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (closing || req.method !== "GET" || sessions.size >= 256 || req.headers.has("upgrade")
           || req.headers.has("authorization") || req.headers.has("x-opencodex-api-key")) return refuse();
         const q = url.searchParams;
-        if (q.get("version") !== LINK_RELAY_AUTH_VERSION || [...q.keys()].length !== 5
-          || ["version", "key", "link", "nonce", "proof"].some(name => q.getAll(name).length !== 1)) return refuse();
+        if ([...q.keys()].length !== 5 || ["version", "key", "link", "nonce", "proof"].some(name => q.getAll(name).length !== 1)) return refuse();
         const keyId = q.get("key")!, linkId = q.get("link")!, nonce = q.get("nonce")!;
+        if (q.get("version") !== LINK_RELAY_AUTH_VERSION) {
+          // Unverifiable, but only for a link and key this Home issued: status names the mismatch.
+          const version = q.get("version")!;
+          if (/^[1-9]\d{0,3}$/.test(version) && options.fingerprints(keyId, linkId).length > 0) options.peers?.refuse(linkId, version);
+          return refuse();
+        }
         const peer = peerOf(req, server as Server<unknown>);
         if (!peer || sessions.has(nonce)) return refuse();
         const fingerprint = options.fingerprints(keyId, linkId).find(candidate =>
           linkRelayProofMatches(q.get("proof"), linkRelayProof(candidate, "caller", keyId, linkId, nonce)));
         if (!fingerprint) return refuse();
+        options.peers?.observe(linkId, LINK_RELAY_AUTH_VERSION, parseLinkPeerReport(req.headers));
+        let generation: string | undefined;
+        try { generation = options.connectionGeneration?.(linkId); } catch { generation = undefined; }
+        const connectionProof = generation === undefined ? null : linkConnectionProof(fingerprint, keyId, linkId, nonce, generation);
+        const answer = () => new Response(null, { status: 204, headers: {
+          "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
+          "cache-control": "no-store",
+          ...(connectionProof ? { [LINK_RELAY_CONNECTION_HEADER]: generation!, [LINK_RELAY_CONNECTION_PROOF_HEADER]: connectionProof } : {}),
+        } });
+        // A readiness probe closes after this answer and sends no data request, so it reserves
+        // nothing: no session to consume, no capacity and no drain lease held until expiry.
+        if (req.headers.get(LINK_RELAY_PROBE_HEADER) === "1") return answer();
         const release = acquire();
         const timer = setTimeout(() => { consume(nonce)?.release(); }, reservationMs);
         sessions.set(nonce, { peer, keyId, linkId, fingerprint, release, timer, expiresAt: Date.now() + reservationMs });
-        return new Response(null, { status: 204, headers: {
-          "x-opencodex-link-proof": linkRelayProof(fingerprint, "listener", keyId, linkId, nonce)!,
-          "cache-control": "no-store",
-        } });
+        return answer();
       }
       const nonce = req.headers.get(LINK_RELAY_SESSION_HEADER);
       let release: () => void;

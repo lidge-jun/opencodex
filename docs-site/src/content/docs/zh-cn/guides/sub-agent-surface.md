@@ -33,6 +33,42 @@ opencodex 会把这一点作为最后一步同时应用到实时的 `/v1/models`
 
 对于 v2 roster，资格有三种状态：标记为 `"v2"` 的条目、显式设为 `null` 的条目，或者没有 `multi_agent_version` 字段的条目。真正的 `"v1"` 固定值会被排除，因为它说明该模型属于另一种协作界面。
 
+## `spawn_agent` 列出哪些模型
+
+Codex 在 `spawn_agent` 工具描述中最多列出五个模型，并由 Codex 自己挑选：它把选择器中可见的目录行按 `priority` 升序排序，取前五个。**Subagents** 页面上的 roster（`subagentModels`）只能通过按 roster 顺序为其中的模型分配最低的 priority（没有账号选择器时为 `0` 到 `4`）来影响这份列表，不会把列表限制在 roster 之内。
+
+如果只设置一到四个模型，Codex 会按 priority 用接下来的行填满剩余位置。这些行不是你选的，仪表板也不会显示是哪些模型。具体是哪些行取决于目录：
+
+| 目录 | 填补剩余位置的行 |
+| --- | --- |
+| 没有 Codex 账号选择器 | 其他路由的 `provider/model` 行。它们的 priority 都是 `5`，因此按 provider 名称、再按模型 id 的字母顺序排列。未设置的原生 GPT 行的 priority 不低于 `100` 加上已设置 id 的数量，因此排在后面。 |
+| 有 Codex 账号选择器 | 账号限定的原生行（`<selector>/<native-model>`），紧跟在已设置的行之后。未设置的路由行移到 priority `1005`，排在它们之后。 |
+
+例如，没有账号选择器且 roster 如下时：
+
+```json
+{ "subagentModels": ["xai/grok-4.5", "anthropic/claude-sonnet-5"] }
+```
+
+| 位置 | 模型 | Priority | 原因 |
+| ---: | --- | ---: | --- |
+| 1 | `xai/grok-4.5` | `0` | roster 第一项 |
+| 2 | `anthropic/claude-sonnet-5` | `1` | roster 第二项 |
+| 3 | `deepseek/deepseek-v4-flash` | `5` | 按字母顺序第一个剩余的路由行 |
+| 4 | `google/gemini-3-pro` | `5` | 下一个路由行 |
+| 5 | `moonshot/kimi-k3` | `5` | 下一个路由行 |
+| 6+ | `zai/glm-5.2`，然后是原生 GPT 行 | `5`，然后是 `102 + sourcePriority` | 不在前五之内 |
+
+roster 为空时，opencodex 不固定任何行，前五个按目录原有的 priority 决定。
+
+被填补的位置和普通列出的模型一样，主代理可能会选用它们。这份列表也不是允许列表：主代理写出确切名称时，Codex 也接受前五之外的目录模型。要控制 Codex 列出的模型：
+
+- 设置五个模型。roster 满了就没有可填补的位置。
+- 对于永远不想被提供的模型，将其禁用，或不放进其 provider 的 `selectedModels`。被禁用或未选中的模型会离开选择器，不会填补位置。
+- `modelPickerOrder` 会改变 Codex 排序所用的 priority。只含路由行的列表会把列出的未设置行移到 `1000` 及以上，因此未列出的路由行会先填补位置。包含裸原生 id 的列表会对整个选择器排序（包括已设置的行）：列出的行排在前面，先于任何未列出的行占据列出位置。参见 [Model ordering](/guides/model-ordering/)。
+
+在 v2 上，Codex 会在取前五个之前跳过固定为 `"disabled"` 的行；其余机制相同。opencodex 的 v2 指引 roster（`{{roster}}`）只列出位于前五之内的已配置 roster 模型，因此填补的模型只出现在 Codex 的工具描述中，不会出现在 opencodex 指引里。Codex 在会话开始时读取目录，因此 roster 的更改从新会话开始生效。
+
 ## 委派模型与推理强度
 
 Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
@@ -160,6 +196,10 @@ curl -X PUT http://localhost:10100/api/injection-model \
 ### 为什么配置的模型没有出现在 v2 roster 中？
 
 它可能在 picker 中被隐藏、超出了五个模型的显示上限、从目录中缺失，或者被固定到 v1。`"v2"`、`null` 或缺失的界面值都可以；真正的 `"v1"` 固定值不可以。
+
+### 为什么 `spawn_agent` 列出了我没有设置的模型？
+
+Codex 按 priority 从目录中填充最多五个列出位置。设置的模型少于五个时，接下来的行会占据剩余位置。参见上文“`spawn_agent` 列出哪些模型”一节。
 
 ### 模式更改会影响正在运行的会话吗？
 

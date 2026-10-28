@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
 import {
   handoffLogPath,
   resolveHelperCommand,
@@ -9,7 +10,12 @@ import {
   startDesktopRestartHandoff,
   type HandoffIo,
 } from "../../src/codex/desktop-app/handoff";
-import { acquireDesktopRestartLock } from "../../src/codex/desktop-app/lock";
+import { acquireDesktopRestartLock, releaseDesktopRestartLock } from "../../src/codex/desktop-app/lock";
+import {
+  codexCliUpdateSelectionGate,
+  beginCodexCliSelectionParentWrite,
+  createWorkerCommitWindow, createCodexCliUpdateFence,
+} from "../../src/codex/cli-update-selection-gate";
 
 /**
  * The handoff exists because the self-ancestry refusal fires in the NORMAL case on a
@@ -91,6 +97,104 @@ describe("starting a handoff", () => {
     const planArg = spawned.args?.[3];
     expect(planArg).toBeDefined();
     expect(existsSync(planArg as string)).toBe(false);
+  });
+
+  test("worker commit gate refuses self-ancestry handoff before restart lock acquisition", () => {
+    const dir = home();
+    const lockPath = join(dir, "lock");
+    const spawned: { command?: string; args?: string[] } = {};
+    const handoffIo = startIo(dir, spawned, 9001);
+    const calls = { handoff: 0, helper: 0, quit: 0, force: 0, relaunch: 0, exec: 0 };
+    let lockPathReads = 0;
+    const lock = {
+      ...handoffIo.lock!,
+      get lockPath() { lockPathReads++; return lockPath; },
+    };
+    handoffIo.lock = lock;
+    const spawnHelper = handoffIo.spawnHelper!;
+    handoffIo.spawnHelper = (command, args) => {
+      calls.helper++;
+      return spawnHelper(command, args);
+    };
+    const io: DesktopAppRestartIo = {
+      platform: "win32",
+      lock,
+      allowHandoff: true,
+      ancestryPids: () => [4242, 1000],
+      execFile: () => { calls.exec++; throw new Error("unexpected fixture exec"); },
+      isAlive: () => false,
+      sleep: () => {},
+      now: () => 1_000,
+      adapter: {
+        discover: () => ({ id: "fixture", root: dir, relaunch: "fixture" }),
+        listProcesses: () => [{
+          pid: 1000, parentPid: 1, createdAt: "fixture-start",
+          executable: join(dir, "fixture-shell"),
+        }],
+        isShell: () => true,
+        ancestryPids: () => [4242, 1000],
+        captureRelaunchContext: () => ({}),
+        requestQuit: () => { calls.quit++; },
+        forceStop: () => { calls.force++; },
+        relaunch: () => { calls.relaunch++; },
+      },
+      startHandoff: () => {
+        calls.handoff++;
+        const result = startDesktopRestartHandoff(handoffIo);
+        return result.kind === "started"
+          ? { helperPid: result.helperPid, logPath: result.logPath }
+          : null;
+      },
+    };
+    const window = createWorkerCommitWindow({
+      gate: codexCliUpdateSelectionGate(),
+      fence: createCodexCliUpdateFence(),
+    });
+    let held = false;
+    try {
+      expect(existsSync(lockPath)).toBe(false);
+      held = window.tryEnter();
+      expect(held).toBe(true);
+      // Calls the production restart ladder, not a wrapper that pre-checks the gate.
+      expect(restartCodexDesktopApp(io)).toEqual({
+        attempted: false, stopped: [], surviving: [], relaunch: "skipped",
+        reason: "selection_mutation_busy",
+      });
+      expect(calls).toEqual({ handoff: 0, helper: 0, quit: 0, force: 0, relaunch: 0, exec: 0 });
+      // Final absence alone would miss create-then-unlink. The existing lock
+      // implementation reads io.lock.lockPath before any acquisition side effect.
+      expect(lockPathReads).toBe(0);
+      expect(existsSync(lockPath)).toBe(false);
+      expect(spawned.command).toBeUndefined();
+
+      window.exit();
+      held = false;
+      expect(restartCodexDesktopApp(io)).toEqual({
+        attempted: false, stopped: [], surviving: [], relaunch: "skipped",
+        reason: "handoff_started",
+        handoff: { helperPid: 9001, logPath: handoffLogPath({ homeDir: dir }) },
+      });
+      expect(calls).toEqual({ handoff: 1, helper: 1, quit: 0, force: 0, relaunch: 0, exec: 0 });
+      expect(lockPathReads).toBeGreaterThan(0);
+      expect(spawned.command).toBe("/usr/local/bin/ocx");
+      expect(spawned.args?.slice(0, 3)).toEqual(["internal", "desktop-restart-handoff", "--plan"]);
+      expect(JSON.parse(readFileSync(lockPath, "utf8")).ownerPid).toBe(9001);
+      // Handoff deliberately keeps the filesystem lock, but must release the
+      // process-wide selection gate in the restart function's finally.
+      const parent = beginCodexCliSelectionParentWrite();
+      try { expect(parent.entered).toBe(true); }
+      finally { if (parent.entered) parent.exit(); }
+    } finally {
+      if (held) window.exit();
+      // These are synthetic fixture owners; no helper process was created.
+      releaseDesktopRestartLock({ lockPath, pid: 9001 });
+      releaseDesktopRestartLock({ lockPath, pid: 4242 });
+      const planPath = spawned.args?.[3];
+      if (planPath && existsSync(planPath)) unlinkSync(planPath);
+      const logPath = handoffLogPath({ homeDir: dir });
+      if (existsSync(logPath)) unlinkSync(logPath);
+      rmdirSync(dir);
+    }
   });
 });
 

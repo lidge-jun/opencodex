@@ -1,5 +1,8 @@
 import { readRuntimePort } from "../config/process-state";
 import { proxyIdentityAt } from "../server/proxy-liveness";
+import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, updateServiceHomeRefusal, type UpdateServiceHomeInspector } from "./service-home-authority";
+import type { UpdateMutationAuthorizer } from "./mutation-guard.mjs";
+import { guardedRun, UpdateMutationRefusedError } from "./mutation-guard.mjs";
 import {
   freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
   supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning,
@@ -12,11 +15,12 @@ import {
  * detached `ocx start`, and counts it only when the serving proxy is that job. It lives beside the
  * worker because `src/update/job.ts` sits at the repository's size cap.
  */
-export type ManagerRestartOutcome = "supervised" | "failed" | "unsettled";
+export type ManagerRestartOutcome = "supervised" | "failed" | "unsettled" | "refused";
 
 export interface ManagerRestartDeps {
+  serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   hasManager?: () => boolean;
-  restartJob?: () => { ok: true } | { ok: false; reason: string; unsettled?: true };
+  restartJob?: () => { ok: true } | { ok: false; reason: string; unsettled?: true; refused?: true };
   managerPid?: () => number | null;
   parentPid?: (pid: number) => number | null;
   readRecord?: () => { pid: number; port: number; hostname?: string } | null;
@@ -27,7 +31,7 @@ export interface ManagerRestartDeps {
 }
 
 export type ManagerRestartFn = (
-  target: { port: number; hostname: string; release?: () => void },
+  target: { port: number; hostname: string; release?: () => void; authorizeMutation?: UpdateMutationAuthorizer },
   log: (line: string) => void,
 ) => Promise<ManagerRestartOutcome>;
 
@@ -37,12 +41,20 @@ export type ManagerRestartFn = (
  * worker reaches this point without a release when it skipped the service repair.
  */
 export async function restartServiceManagerAfterUpdate(
-  target: { port: number; hostname: string; release?: () => void },
+  target: { port: number; hostname: string; release?: () => void; authorizeMutation?: UpdateMutationAuthorizer },
   log: (line: string) => void,
   deps: ManagerRestartDeps = {},
 ): Promise<ManagerRestartOutcome> {
   if (!(deps.hasManager ?? hasRestartableServiceManager)()) return "failed";
   target.release?.();
+  const standalone = target.authorizeMutation ? undefined : createUpdateServiceHomePolicy(deps.serviceHomeAuthorityFn ?? inspectUpdateServiceHome, log);
+  if (standalone && standalone.initial.kind !== "same") {
+    const refusal = updateServiceHomeRefusal(standalone.initial);
+    if (refusal) { log(refusal); return "refused"; }
+    return "failed";
+  }
+  const authorizeMutation = target.authorizeMutation ?? standalone!.authorizeMutation;
+  if (!authorizeMutation("runtime")) return "refused";
   log("Asking the service manager to restart the background service...");
   const readRecord = deps.readRecord ?? (() => readRuntimePort());
   const probe = deps.probeServing ?? (async (port: number, hostname: string, pid: number, deadlineAt: number) => (
@@ -51,7 +63,11 @@ export async function restartServiceManagerAfterUpdate(
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleepMs ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const staleRecordPid = readRecord()?.pid ?? null;
-  const restarted = (deps.restartJob ?? restartServiceManagerJob)();
+  if (!authorizeMutation("service")) return authorizeMutation("runtime") ? "failed" : "refused";
+  let restarted: ReturnType<NonNullable<ManagerRestartDeps["restartJob"]>>;
+  try { restarted = deps.restartJob ? guardedRun(authorizeMutation, "service", deps.restartJob, []) : restartServiceManagerJob({}, authorizeMutation); }
+  catch (error) { if (error instanceof UpdateMutationRefusedError) return "refused"; throw error; }
+  if (!restarted.ok && restarted.refused) return "refused";
   const unsettled = !restarted.ok && restarted.unsettled === true;
   let verdict: ReturnType<typeof supervisionVerdict>;
   if (!restarted.ok && !unsettled) {
@@ -73,7 +89,8 @@ export async function restartServiceManagerAfterUpdate(
     });
   }
   if (verdict.kind === "supervised") {
-    log(`Proxy is healthy on port ${target.port} under the service manager (pid ${verdict.managerPid}).`);
+    if (!authorizeMutation("publish")) return "refused";
+    guardedRun(authorizeMutation, "publish", log, [`Proxy is healthy on port ${target.port} under the service manager (pid ${verdict.managerPid}).`]);
     return "supervised";
   }
   if (unsettled) return "unsettled";

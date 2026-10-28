@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { listCodexDesktopShellPids, restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import {
+  codexCliUpdateSelectionGate,
+  beginCodexCliSelectionParentWrite,
+  createWorkerCommitWindow, createCodexCliUpdateFence,
+} from "../../src/codex/cli-update-selection-gate";
 import { classifyDesktopPicker, readCodexCatalogBinding, readCodexDesktopPickerState } from "../../src/codex/desktop-app/picker-freshness";
 import type { DesktopAppAdapter, DesktopProcess } from "../../src/codex/desktop-app/types";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
@@ -561,14 +566,21 @@ describe("desktop picker freshness inputs (#4761)", () => {
     expect(listCodexDesktopShellPids({ adapter: fixtureAdapter(listed, false), execFile: exec })).toBeNull();
   });
 
-  test("classifies a picker as current only when every shell started strictly after the catalog", () => {
-    expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("current");
+  test("does not mistake a newer shell for proof that it loaded the current binding", () => {
+    // The shell may have loaded catalog A before an earlier sync rebound config.toml to
+    // the already-existing catalog B. B's older mtime cannot distinguish that case.
+    expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, 1_000], 1_000)).toBe("stale");
     expect(classifyDesktopPicker([500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([500, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, 500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([1_000, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, null], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([], 1_000)).toBe("not_running");
     expect(classifyDesktopPicker([], null)).toBe("not_running");
     expect(classifyDesktopPicker(null, 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, null], 1_000)).toBe("unknown");
+    expect(classifyDesktopPicker([null, 2_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000], null)).toBe("unknown");
   });
 
@@ -580,7 +592,7 @@ describe("desktop picker freshness inputs (#4761)", () => {
       catalogMtimeMs: path => { expect(path).toBe("/codex/opencodex-catalog.json"); return catalogMtimeMs; },
     });
     const bound = "/codex/opencodex-catalog.json";
-    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("current");
+    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("unknown");
     expect(read(bound, 9_000, new Map([[10, 5_000]]))).toBe("stale");
     expect(read(bound, 1_000, new Map([[10, null]]))).toBe("unknown");
     expect(read(bound, null, new Map([[10, 5_000]]))).toBe("unknown");
@@ -614,6 +626,82 @@ describe("desktop picker freshness inputs (#4761)", () => {
     } finally {
       if (previous === undefined) delete process.env.OCX_TEST_HOME_GUARD;
       else process.env.OCX_TEST_HOME_GUARD = previous;
+    }
+  });
+});
+
+describe("the cli-update selection gate covers the whole restart ladder", () => {
+  test("CLI commit window refuses the real desktop restart caller before quit, then releases it", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({
+      discovery: DISCOVERY,
+      processes: "1000 900 2026-08-22T10:00:00.000Z",
+      calls,
+    });
+    const window = createWorkerCommitWindow({
+      gate: codexCliUpdateSelectionGate(),
+      fence: createCodexCliUpdateFence(),
+    });
+    let held = false;
+    try {
+      held = window.tryEnter();
+      expect(held).toBe(true);
+      const denied = withTrustedExes(() => restartCodexDesktopApp(io));
+      expect(denied).toEqual({
+        attempted: false, stopped: [], surviving: [], relaunch: "skipped",
+        reason: "selection_mutation_busy",
+      });
+      expect(existsSync(io.lock!.lockPath!)).toBe(false);
+      expect(calls.some(call => call.file === TASKKILL ||
+        /CloseMainWindow|Start-Process|OpenCodexPackageActivation/.test(call.args.join(" ")))).toBe(false);
+
+      window.exit();
+      held = false;
+      calls.length = 0;
+      // Same caller/lock path, plus explicit absence checks: same-PID reentry alone
+      // would NOT prove lock release.
+      const allowed = withTrustedExes(() => restartCodexDesktopApp(io));
+      expect(allowed).toEqual({
+        attempted: true, stopped: [1000], surviving: [], relaunch: "started",
+      });
+      expect(calls.filter(call => call.args.join(" ").includes("CloseMainWindow"))).toHaveLength(1);
+      expect(calls.some(call => call.args.join(" ").includes("Start-Process"))).toBe(true);
+      expect(calls.some(call => call.file === TASKKILL)).toBe(false);
+
+      expect(existsSync(io.lock!.lockPath!)).toBe(false);
+      const parent = beginCodexCliSelectionParentWrite();
+      try { expect(parent.entered).toBe(true); }
+      finally { if (parent.entered) parent.exit(); }
+    } finally {
+      if (held) window.exit();
+      removeTreeWithRetry(dirname(io.lock!.lockPath!));
+    }
+  });
+
+  test("a lock-acquisition throw still releases the process-wide selection gate", () => {
+    // Regression for the gate-then-lock ordering: the lock's own mkdir/write
+    // can throw, and before the fix that throw sat outside the try/finally and
+    // left the shared gate held for the rest of the process. A lock path whose
+    // parent is a regular file makes that acquisition throw deterministically.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-restart-gate-"));
+    try {
+      const blocker = join(dir, "not-a-directory");
+      writeFileSync(blocker, "fixture");
+      const calls: Call[] = [];
+      const io = scriptedIo({
+        discovery: DISCOVERY,
+        processes: "1000 900 2026-08-22T10:00:00.000Z",
+        calls,
+      });
+      io.lock = { lockPath: join(blocker, "lock") };
+      expect(() => withTrustedExes(() => restartCodexDesktopApp(io))).toThrow();
+      // No discovery/quit/relaunch ran, and the gate is free again.
+      expect(calls).toHaveLength(0);
+      const parent = beginCodexCliSelectionParentWrite();
+      try { expect(parent.entered).toBe(true); }
+      finally { if (parent.entered) parent.exit(); }
+    } finally {
+      removeTreeWithRetry(dir);
     }
   });
 });

@@ -333,6 +333,18 @@ describe("Cockpit account-import atomic identity upsert", () => {
     expect(JSON.parse(readFileSync(join(testHome, "auth.json"), "utf8"))[ACCOUNT_IMPORT_PROVIDER].accounts).toHaveLength(1);
   });
 
+  test("a stored email with surrounding whitespace still matches the same identity", async () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-account-import-store-"));
+    process.env.OPENCODEX_HOME = testHome;
+    expect(await upsertCredentialByIdentity(ACCOUNT_IMPORT_PROVIDER, {
+      access: "access-one", refresh: "refresh-one", expires: 1, email: " USER@example.com ", projectId: "project-one",
+    })).toBe("inserted");
+    expect(await upsertCredentialByIdentity(ACCOUNT_IMPORT_PROVIDER, {
+      access: "access-two", refresh: "refresh-two", expires: 2, email: "user@example.com", projectId: "project-two",
+    })).toBe("updated");
+    expect(getAccountSet(ACCOUNT_IMPORT_PROVIDER)?.accounts).toHaveLength(1);
+  });
+
   test("clears a terminal reauth flag when the same identity is re-imported", async () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-account-import-store-"));
     process.env.OPENCODEX_HOME = testHome;

@@ -42,10 +42,11 @@ import type { RequestLogContext } from "../request-log";
 import { markLocalRequestLogRefusal } from "../request-log";
 import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
-import { forceRefreshMainAccountToken } from "../../codex/main-account";
+import { forceRefreshMainAccountToken, mainAccountTokenQuotaWriter } from "../../codex/main-account";
 import { rebindPoolCreditPolicy } from "../../codex/pool-credit-policy";
 import { safeCallerSessionId } from "../caller-session-identity";
 import { copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
+import { AgentAssertionUnsupportedError, agentAssertionUnsupportedResponse, authorizationCredential, carryAgentAssertionForCallerBearer, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 
 /** Normalize caller aliases only on native egress; preserve ingress and fallback identity. */
 export function withClaudeNativeSession(headers: Headers, provider: OcxProviderConfig, sessionId?: string): Headers {
@@ -205,6 +206,9 @@ export async function resolveResponsesCodexAuth(
   retainAccountForUploadedFiles = false,
 ): Promise<ResponsesAuthResolution> {
   let authCtx: CodexAuthContext | undefined;
+  // Ingress already refuses assertion_only; a later internal hop must not reach a pool or
+  // routed credential with it either, because that would be a silent credential swap.
+  if (hasAgentAssertionAuthorization(req.headers)) return { ok: false, response: agentAssertionUnsupportedResponse() };
   try {
     let authInputHeaders = codexRouteCredentialDomainHeaders(
       req,
@@ -332,7 +336,7 @@ export async function resolveResponsesCodexAuth(
     } else {
       // Even adapters that ignore caller auth must not retain a proxy secret for
       // a later internal hop or a future transport change.
-      const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+      const bearer = authorizationCredential(headers);
       if (bearer && isProxyAdmissionSecret(bearer, config)) {
         headers.delete("authorization");
         headers.delete("chatgpt-account-id");
@@ -342,6 +346,11 @@ export async function resolveResponsesCodexAuth(
     // must also retain the permitted client fingerprint for its routed summarizer send.
     if (options.compactionRecoveryKind === "compaction-v1") {
       copyResponsesClientMetadata(headers, authInputHeaders, route.provider);
+    }
+    // dual_header: the assertion is first-party only and travels only beside the caller's own
+    // unchanged Bearer, compared with the ORIGINAL request (injected credentials do not count).
+    if (isCanonicalOpenAiForwardProvider(route.provider) && authCtx?.kind === "main" && !substituteMainCredential) {
+      carryAgentAssertionForCallerBearer(headers, req.headers);
     }
     return {
       ok: true,
@@ -364,6 +373,7 @@ export async function resolveResponsesCodexAuth(
     if (err instanceof ForwardAdmissionCredentialError) {
       return { ok: false, response: formatErrorResponse(401, "authentication_error", err.message) };
     }
+    if (err instanceof AgentAssertionUnsupportedError) return { ok: false, response: agentAssertionUnsupportedResponse() };
     const response = mapCodexAuthContextErrorToResponse(err, {
       accountSelector: route.codexAccountNamespace,
       now: Date.now(),
@@ -568,6 +578,7 @@ export async function refreshNativeMainForwardAuth(args: {
       ...authCtx,
       accessToken: refreshed.accessToken,
       chatgptAccountId: refreshed.chatgptAccountId,
+      mainQuotaWriter: mainAccountTokenQuotaWriter(refreshed) ?? authCtx.mainQuotaWriter,
     };
     const provider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(route.provider),

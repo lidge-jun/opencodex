@@ -44,7 +44,7 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-실행 중인 프록시를 PID 기준으로 중지하고, PID 파일을 삭제한 뒤 기본 Codex를 복원합니다. 관리형
+실행 중인 프록시를 PID 기준으로 중지하고 PID 파일을 삭제합니다. 독립 실행 소유자라면 기본 Codex를 복원합니다. 관리형
 백그라운드 서비스가 설치되어 있으면 `ocx stop`이 먼저 그 서비스를 중지하므로 프록시가 다시
 올라올 수 없습니다. 웹 대시보드의 **Stop** 버튼도 같은 동작(`POST /api/stop`)을 하지만, Windows 작업 스케줄러는 예외입니다. 작업이 끝나도 래퍼가 프록시를 다시 띄울 수 있어서, 대시보드는 `respawnable_service`로 거절하고 아무것도 바꾸지 않은 채 `ocx stop` 실행을 안내합니다.
 
@@ -53,6 +53,16 @@ ocx start --socks5-off
 검사를 거친 부모 CLI가 복원을 맡습니다. 이미 종료가 확인된 프로세스를 강제 종료하는 경로로는
 넘어가지 않습니다. 영수증에 근거한 지연 복원도 최종 복원과 영수증 정리를 부모가 담당하며,
 부모의 공유 설정 복원이 실패하면 종료 실패로 남기고 미완료 영수증을 보존합니다.
+
+연결된 hub 클라이언트에서는 성공한 API 종료를 포함해 `ocx stop`이 연결 소유의 Codex 라우팅, 모델 카탈로그와 Grok 설정을 보존합니다. `ocx start`는 라우팅을 다시 주입하지 않고 보존한 설정으로 서비스를 재개합니다. Codex를 자체 계정으로 돌리려면 `ocx disconnect`를, 이미 기본 라우팅으로 복원했다면 다시 연결하려고 `ocx sync --restart-codex`를 실행하세요.
+
+Remote Link Child를 명시적으로 중지하면 공유 설정 복원에 성공한 경우 기본 Codex 라우팅, 카탈로그와 백업된 재개 이력 메타데이터를 복원하고 관리형 Grok 설정을 제거합니다. 저장된 Home 연결은 유지하며 `ocx disconnect`로 제거할 수 있습니다. Codex에서 Home을 다시 쓰려면 `ocx start`(서비스가 설치되어 있으면 `ocx service start`) 후 `ocx sync --restart-codex`를 실행하세요. 시작만으로 라우팅을 다시 적용하지 않으며, sync는 Grok 블록을 다시 만들지 않습니다.
+
+서비스 중지 전에 연결 소유권을 확인할 수 없으면 종료 API는 HTTP 409와 `sharedTeardown: "refused"`를 반환하고 프록시와 서비스 관리자를 실행 상태로 둡니다. 진행 중인 연결 또는 연결 해제가 끝난 뒤 다시 시도하세요.
+
+연결된 클라이언트를 중지할 때는 보호된 로컬 런타임 기록과 리스너의 신원 증명을 대조합니다. 클라이언트 리스너와 일반 프록시 모두 이 검증이 필요하며, 일반 프록시는 인증된 조회로 설정 보존 기능도 확인합니다. 오래되었거나 검증할 수 없는 런타임은 서비스나 프로세스를 중지하기 전에 거절합니다. 런타임을 관리하는 앱이나 서비스에서 업데이트·재시작한 뒤 다시 시도하세요.
+
+이미 중지된 클라이언트는 서비스 관리자가 비활성이고 알려진 로컬 주소에 런타임이 없음을 확인한 뒤 정상적인 미실행 결과를 반환합니다.
 
 ### `ocx restart`
 
@@ -209,7 +219,7 @@ ocx status --json
 
 인증이 필요 없는 `GET /readyz` 엔드포인트로 동기화 후 준비 상태를 확인합니다. 준비되면 `200`,
 `pending` 또는 종단 상태인 `failed`이면 `Retry-After: 1`과 함께 `503`을 반환합니다. HTTP의 정제된
-식별 필드는 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`입니다. `protocol`은 허브의 현재 원격 프로토콜, `minimumClientProtocol`은 호환되는 최소 클라이언트 프로토콜, `managementUrl`은 브라우저에서 보이는 표준 관리 origin입니다. `/readyz`가 없는 이전 프록시는
+식별 필드는 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`입니다. `protocol`은 허브의 현재 원격 프로토콜, `minimumClientProtocol`은 호환되는 최소 클라이언트 프로토콜, `managementUrl`은 브라우저에서 보이는 표준 관리 origin입니다. `/readyz`가 없는 이전 프록시는
 `unreachable`로 fail-closed하며, `/healthz`는 준비 상태가 아닌 별도의 liveness 확인입니다. 기본값은 한 번의
 probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `failed`를 확인하면 즉시 종료합니다.
 기본 timeout은 45초이며, `--timeout <seconds>`는 `--wait`와 함께 써야 하고 양의 정수인 1~300초 범위를 받습니다. CLI JSON은
@@ -238,6 +248,8 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child:** `ocx sync`는 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 런타임을 재시작합니다. 재시작이 실패하면 이전 런타임이 계속 서비스하고 명령은 0이 아닌 코드로 끝납니다. `ocx status --json`과 `ocx link status --json`의 관련 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요.
+
 재시작 플래그를 명시하면 카탈로그와 캐시 바이트가 같아도 `config.toml` 변경이 성공적으로 커밋된 뒤 재시작합니다. 설정만 다루는 작업이 변경 없음, 거부, 사전 검증 또는 롤백으로 끝나면 재시작하지 않습니다. 재시작 플래그가 없으면 sync는 Codex를 자동으로 재시작하지 않습니다.
 
 설정된 모든 공급자에서 라이브 모델 목록을 가져와 병합된 카탈로그를 Codex에 다시 주입합니다.
@@ -261,6 +273,8 @@ app-server / code-mode-host 프로세스에만 `SIGTERM`을 보내고 데스크�
 
 명령을 Codex 앱 안에서 실행하면 재시작은 분리된 helper에 넘기고, 이 세션은 앱과 함께
 종료됩니다.
+
+**대상을 고정한 동기화.** `ocx sync --expect-link <linkId>`(Remote Link Child)와 `ocx sync --expect-hub-key <apiKeyId>`(hub 클라이언트)는 이 머신이 여전히 그 링크나 그 키로 연결되어 있을 때만 동기화합니다. 그렇지 않으면 아무것도 바꾸지 않고 로컬 공급자도 동기화하지 않으며, 종료 코드 5로 끝나고 stderr 마지막 줄에 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`를 출력합니다. 형식이 잘못되었거나 반복된 플래그는 종료 코드 2로 끝납니다. 자세한 내용은 [영어 레퍼런스](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)를 참고하세요.
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -433,7 +447,7 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 ### `ocx gui`
 
 프록시가 실행 중이 아니면 자동으로 시작하면서 [웹 대시보드](/guides/web-dashboard/)를
-`http://localhost:<port>`에서 엽니다. 허브에서 관리 리스너를 켜 두면 `http://127.0.0.1:<관리 포트>`에서 엽니다.
+`http://127.0.0.1:<port>`에서 엽니다. 허브에서 관리 리스너를 켜 두면 `http://127.0.0.1:<관리 포트>`에서 엽니다.
 
 ## 업데이트
 

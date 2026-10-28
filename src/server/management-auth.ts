@@ -72,7 +72,9 @@ import {
   type GuiSessionRequestContext,
 } from "./gui-session";
 import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth";
+import { forgetGuiDevice, rememberGuiDevice, rememberedGuiSessionIsCurrent, resumeGuiDevice } from "./persistent-gui-session";
 import { hasLocalAccountSwitchCapability } from "./local-account-switch-auth";
+import { authorizationCredential } from "../lib/authorization-scheme";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -259,7 +261,7 @@ export function issueGuiSession(
   context?: GuiSessionRequestContext,
 ): GuiSessionBootstrap | null {
   if (!state.available) return null;
-  return issueGuiSessionFromState(req, config, state, context);
+  return resumeGuiDevice(req, config, state, context?.now) ?? issueGuiSessionFromState(req, config, state, context);
 }
 
 /** Returns the recorded issuance for the session that authorized this request. */
@@ -274,6 +276,8 @@ export function managementSessionIssuance(
 }
 
 export interface ManagementSessionControl {
+  rememberDevice?(req: Request, config: OcxConfig): ReturnType<typeof rememberGuiDevice>;
+  forgetDevice?(req: Request, config: OcxConfig): string | null;
   revokeCurrent(req: Request): boolean;
   /** Revalidate a long-lived request against current authority, without cached admission or renewal. */
   isCurrent(req: Request, config: OcxConfig): boolean;
@@ -290,7 +294,7 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
     const credential = requestManagementCredential(req);
     if (!credential || equalSecret(credential, adminToken)) return null;
     const session = state.sessions.get(credential);
-    if (!session) return null;
+    if (!session || !rememberedGuiSessionIsCurrent(req, config, state, session)) return null;
     // Reuse the full origin/expiry/CSRF predicate against the current record, but
     // isolate its sliding-expiry mutation: authority checks are not browser activity.
     return authorizeGuiSessionRequest(req, config, {
@@ -299,6 +303,8 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
     }).ok ? session : null;
   }
   return {
+    rememberDevice(req, config) { return state.available ? rememberGuiDevice(req, config, state) : null; },
+    forgetDevice(req, config) { return state.available ? forgetGuiDevice(req, config, state) : null; },
     isCurrent(req: Request, config: OcxConfig): boolean {
       if (!state.available) return false;
       const credential = requestManagementCredential(req);
@@ -545,7 +551,7 @@ function hasGuiPairCapability(
 
 function requestManagementCredential(req: Request): string | null {
   return req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
+    || authorizationCredential(req.headers)
     || null;
 }
 
@@ -581,7 +587,10 @@ function resolveManagementAdmission(
     else if (actual && isOpencodeCatalogRequest(req) && equalSecret(actual, opencodeCatalogToken(state.token))) {
       principal = "opencode-catalog-token";
     }
-    else if (config && authorizeGuiSessionRequest(req, config, state).ok) principal = "gui-session";
+    else if (config) {
+      const admission = authorizeGuiSessionRequest(req, config, state);
+      if (admission.ok && rememberedGuiSessionIsCurrent(req, config, state, admission.session, "logout")) principal = "gui-session";
+    }
   }
   if (principal) admittedManagementRequests.set(req, principal);
   return principal;

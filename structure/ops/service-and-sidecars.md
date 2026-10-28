@@ -24,6 +24,8 @@ Only proven absence enters registration. A query failure refuses the bare comman
 guidance, because treating `unknown` as absent can rerun elevated `schtasks /create` against an
 existing task. Explicit `ocx service install` remains the operator-owned registration request.
 
+`src/lib/windows-elevation.ts` formats scheduler exec failures without echoing child stderr; generic failures retain the numeric exit status. Delete, run and end access denials name the exact command to run from an elevated terminal. `src/service/windows-scheduler.ts` also classifies an owned-task delete exiting 1 as denied when a fresh probe proves the task survived; absent, unreadable and failed probes do not establish that classification. `src/service/windows-ops.ts` retains service assets until deletion is proven complete. `tests/windows/windows-scheduler-errors.test.ts` exercises these paths with injected runners.
+
 `src/config/serving-runtimes.ts` records successfully serving installs and lets only a
 non-sibling managed-service start defer to a verified strictly newer recorded command. The
 census gate recognizes launchd, systemd, and current or repaired WinSW definitions through
@@ -58,7 +60,7 @@ without running handlers is not covered by this forwarding mechanism.
 systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
 mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
 refused. Descriptor stats bracket the read; a final pathname stat must agree. Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
-refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
+refuse. Homes compare canonical path plus exact bigint `dev:ino` (`fileId`); rounded doubles merge NTFS ids above 2^53. Aliases stay equivalent. Lock, PID and runtime records are excluded.
 
 `src/cli/update-restart.ts` requires known versions and a detached POSIX target with PID-1
 parent, no ownership claim and no client/sibling role. An installed record without a claim
@@ -120,7 +122,7 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 and every async ACL hardening flight and deadline-surviving `icacls.exe` runner under that home have settled. `src/config/paths.ts` owns the
 barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
 `tests/server/server-stop-config-hardening.test.ts`.
-`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands.
+`src/lib/windows-secret-acl.ts` retains removal ownership for an entire async harden, including principal lookup, successive ACL commands, retries and diagnostics, as well as tracking runners that outlive their deadlines. The exact-path timeout indicator keeps its existing meaning for atomic-file fallback. The Bun regression in `tests/windows/windows-secret-acl-removal-flight.test.ts` holds a normal command and verifies that removal remains blocked between successive commands. Required-mode failures keep their sanitized ETIMEDOUT/EICACLS semantics and additionally carry a bounded `aclFailure` record — fixed step and stage enums (`deadline_before_spawn`/`spawn_failed`/`runner_rejected`/`runner_watchdog`/`child_result`), measured elapsed and requested budget, success, exit code, and an allowlisted spawn code — copied field-by-field so no path, argv, SID, or child output crosses into the thrown error; `tests/windows/windows-secret-acl-diagnostics.test.ts` covers the boundary.
 
 Removal ownership captures lexical and canonical path identities before each work item or child starts, including Windows short names and directory aliases; deadline survivors retain the same identities. A deleted temporary file is captured through its existing parent. Unreadable identity at capture stays conservatively matched until settlement. Removal compares the requested root against those retained identities, so deleting or retargeting an alias cannot release the original root early. The same Bun regression verifies aliases changed mid-flight still block removal. Matching covers captured and current alias destinations; a second retarget by a writer of the protected directory is out of scope.
 
@@ -235,7 +237,7 @@ deliberate stop. Existing launchd jobs retain
 their old keepalive definition until `ocx service repair` rewrites and reloads the changed plist.
 New WinSW XML stamps `OCX_SERVICE_MANAGED=1`; parent command-line inference applies only to
 legacy registrations whose XML lacks that marker. Bare `OCX_SERVICE=1`
-is never the marker because `ocx claude` and `ocx opencode` companions carry it too; a
+is never the marker because `ocx claude`, `ocx codex`, and `ocx opencode` companions carry it too; Codex's client-token loading separately requires a managed loopback destination. A
 marker-less Windows registration is still recognised by the parent's command line naming
 this install's wrapper script, launcher or WinSW host as a complete token in any position,
 and an unreadable parent command line is no evidence and proceeds. POSIX keeps the
@@ -381,7 +383,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -423,20 +425,18 @@ Live supervision is re-read separately from durable ownership before stop, packa
 service restoration and direct recovery. Each service command, Node/Bun update run and dashboard
 restart decision shares one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
 `desktop` or `unknown` with `desktopSeen: true` blocks; only a later `none` clears it.
-Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains.
-`src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
+Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains; `src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
 when blocked. A restoration refusal after a completed package swap does not undo that update.
 Service install, repair, start and restart refuse before mutation, including Windows XML staging,
-when live Desktop supervision is verified. Windows probes use bounded process snapshots; `ocx stop` shows the Desktop notice. Limits are listed
-in [desktop supervision](../desktop-shell.md#runtime-ownership-from-the-apps-side).
+when live Desktop supervision is verified; `ocx stop` shows the Desktop notice. Windows probe acquisition and residual limits: [desktop supervision](desktop-supervision.md#runtime-ownership-from-the-apps-side).
 The lease is released before any service-manager-mediated start (`service repair` in recovery
 or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
 through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
 is made again after the release, and the lease is re-acquired before each fallback's ownership
 re-read so a claim landing in the unleased window is vetoed rather than killed unleased.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful manual-runtime update still prints the existing
-restart hint.
-
+Direct recovery retains the lease until readiness or its bounded deadline. If acquisition fails, Node and Bun return false before owner inspection or spawn and print static manual repair/start guidance without the error's details.
+`src/update/index.ts` rechecks service-home authority in the mutation caller after its final ownership or recovery-plan await, before proxy stop and each service repair. Service mutations also require `homePolicy.serviceAllowed`; a previously installed registration disappearing before full stop refuses, while recovery uses guarded direct start. No await separates these final checks from the control command. The dashboard worker in `src/update/job.ts` also checks service permission before stopping wrappers after its service import. Package replacement retains its separate stable-unknown package-only policy.
+The normal successful manual-runtime update still prints the existing restart hint. All three update lanes use the shared latched mutation gate described in [Update Supervised Recovery](update-supervised-recovery.md#service-home-authority), including fresh checks between blocking control calls and before terminal success.
 Every updater lane makes the same exception where the service manager starts the proxy outside
 the updater's process tree, so that proxy has to take the lease itself; held through the
 repair's health wait, the lease kept it from starting, and recovery fell through to a second,
@@ -452,7 +452,7 @@ service repair` and re-acquires it at the direct-start fallthrough, waiting long
 outlast one service-wrapper respawn, then re-runs the durable-owner and live-supervision veto under it before
 mutating the port, because a claim could have landed during the now-unleased refresh window. A
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
-the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.
+the refresh before it produced no serving proxy; an ownership veto ends as succeeded only after a fresh service-home check. CLI refresh and final fallback vetoes give home refusal precedence too.
 
 On Windows, `src/update/npm-invocation.mjs` reads copied shell-location keys case-insensitively,
 with exact-key precedence, no ambiguous alias selection, and the same absolute-path checks.
@@ -465,12 +465,12 @@ home aliases without trusting a redirected persist subtree. Unreadable paths fai
 Other Scoop apps, version-directory entries (`NO_JUNCTION`), custom home-root Scoop installs,
 arbitrary descendants and cwd inside the resolved Node installation are not admitted.
 
-The npm transaction creates each staging directory exclusively and may clean that fresh path
-while the creating process still owns it. On POSIX it also creates the stage's `lib` directory,
-because npm's strict script policy plans the global tree before it creates the prefix layout
-(#5760). A later update only reports staging leftovers. It does not recursively delete them
-from a marker: the marker is not an authorization secret, and a neighbouring writer could
-replace a previously checked pathname with a link before traversal.
+The Windows npm staging runner (`src/update/npm-install.mjs`) keeps a 180-second install budget and a separate 10-second join budget. Before cleanup or verification, it requires proof that the full installer tree exited, including when npm returns status zero.
+After that barrier and stage verification, the transaction's synchronous replacement callback rechecks home authority, owner, supervision and dead liveness before the live swap. A denied callback returns `authorize`, removes only the owned exited stage and leaves the old package usable; failure guidance classifies this as an untouched install. The same callback runs after synchronous npm staging. Pinned restart preparation separately checks current service permission inside its wrapper callback after the fresh home gate, so confirmed absence grants foreground cleanup without a global service stop.
+On Windows, `src/update/npm-install-job.ps1` creates the root atomically inside a private kill-on-close Job Object using `STARTUPINFOEX` and `PROC_THREAD_ATTRIBUTE_JOB_LIST`. It stays suspended until local exit-proof handling is armed. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` admits only stdin and npm's stderr, excluding the Job and supervisor result pipe; attribute lists and value buffers are freed. Windows 10+ Job List support is required: attribute setup or extended creation failure returns `EINSTALLJOIN` with a clear prerequisite and native error, without starting an unsupervised installer or retrying a legacy creation path. Timeout terminates the job, checks zero active members and waits for the root handle. The updater and recovery stay outside this job; a watchdog bounds supervisor startup/protocol failure.
+Missing exit proof retains the complete stage and marker. npm output drains before a successful join returns; failed supervision stops forwarding it. Windows timeout diagnostics retain `ETIMEDOUT` and the budget; stage failures retain owner-aware recovery through the untouched launcher. POSIX keeps the legacy synchronous install and status-only transaction; complete-tree timeout cleanup remains open there because process groups do not contain detached descendants.
+The npm transaction creates each staging directory exclusively and may clean that fresh path while the creating process still owns it. On POSIX it also creates the stage's `lib` directory, because npm's strict script policy plans the global tree before creating the prefix layout (#5760).
+A later update only reports staging leftovers. It does not recursively delete them from a marker: the marker is not an authorization secret, and a neighbouring writer could replace a previously checked pathname with a link before traversal.
 
 Before any tray or proxy stop, `src/update/npm-cache-preflight.mjs` checks npm's cache on every
 platform (#6288). The cache root, or the nearest existing folder npm would create it under, must
@@ -516,6 +516,8 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+Ordinary signal shutdown passes the CLI's idempotent exit cleanup to `drainAndShutdown` in `src/server/lifecycle.ts`: its drain-finally block calls the synchronous-only `() => undefined` hook before listener stop. Promise-returning hooks are outside this contract; there is no asynchronous cleanup wait. Listener stop and startup-lifecycle release still run if cleanup throws. Restart callers omit that hook and retain their existing routing-preservation decisions; receipt-backed stop deferral remains owned by the stopping client. After verifying a matching receipt, `performStopTeardown` records a dedicated process-lifetime exit deferral; exit cleanup consults it before restoring native Codex/Grok, including when the API's own drain ends in `process.exit`. A query flag or connected-client capability does not set it. API and signal restoration repeat the [connection ownership guard at each write](../runtime.md#remote-hub-hardening-ownership); an unproven API boundary returns 409 before scheduling shutdown, and signal cleanup reports failure while preserving shared configuration. `tests/fixtures/api-stop-exit-runner.ts`, exercised by `tests/service/stop-deferred-teardown.test.ts`, runs the actual API handler, listener drain and process-exit cleanup in one child. `tests/service/shutdown-drain.test.ts` covers the hook with a real loopback listener and the CLI signal handler.
+
 During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and `src/service/linux-linger.ts` observes boot lingering without changing it; enabled, disabled and unknown states receive distinct install advice. Desktop startup distinguishes enabled next-login registration from current loaded state, preserving identity/disabled/supervisor checks. `src/cli/hub-disable.ts` changes persisted hub settings only, prints Desktop/service/manual restart guidance and reminds the operator to review external publishing to old ports.
 an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
@@ -528,10 +530,8 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
-`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
-restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
-input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
-acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
 caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
 a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
 still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup
@@ -574,7 +574,7 @@ waits for its replacement to answer, exits 1 when it never did, and falls back t
 when the listener recorded none. A supervised process (`OCX_SERVICE=1`) never spawns and exits 1
 for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
 `tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
-`tests/clients/client-runtime.test.ts`.
+`tests/clients/client-runtime.test.ts`. The client runtime's bound restart (OCX-6) keeps serving when its replacement fails, so it alone passes `notReady: "terminate"`: an unready replacement is stopped and `not_ready` returns only after its exit is observed (`tests/server/restart-replacement-not-ready.test.ts`; contract in [Remote Link](../remote-link.md)).
 
 A process the desktop app spawned spawns no replacement at all. The app sets
 `OCX_DESKTOP_SUPERVISED=1` on its sidecar; `handleStart` consumes it with the other start markers and
@@ -595,6 +595,6 @@ src/update/async-check.ts uses the existing owner-bound registry target with a b
 
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
 
-Desktop startup diagnostics use `src/service/desktop-startup.ts` to read the ownership record, the login registration (macOS: launchd; Linux: the `~/.config/autostart/OpenCodex.desktop` entry that auto-launch writes, credited only when `XDG_CONFIG_HOME` is unset or `~/.config`; it must launch an unquoted absolute `opencodex-desktop` with exactly `--autostart`, without conditional keys, and not be hidden or disabled) and exact parent/child executable paths (Linux: `/proc/<pid>/exe` and the parent pid from `/proc/<pid>/stat`) without mutating them. A durable desktop claim survives a failed identity or supervision check; its protection requires fresh matching identity, enabled login registration, and live supervision. Only ownership `none` enters the unowned branch: verified supervision adds `supervisor: { supervisorPid, runtimePid, app }` with `owned: false`, and protection requires that same app's verified login registration and a fresh, running, viable diagnostic. Unknown ownership and CLI-owned claims receive no supervision credit. The independent process evidence requires two matching snapshots and correlation of the target, PID-file and runtime-port PIDs, as described in [desktop supervision](../desktop-shell.md#runtime-ownership-from-the-apps-side); it never becomes ownership. An unloaded macOS job receives credit only from two matching plist/target/enabled snapshots; a boolean plist Disabled default combines with explicit launchctl overrides, and malformed or changing evidence refuses credit. On macOS, ownership and PID are re-read before crediting an owned result; on Linux, the complete owned evidence chain is read twice and both reads must agree. The startup-health subprocess uses `selfLaunchArgv` to support both source and compiled entrypoints.
+Desktop startup diagnostics use `src/service/desktop-startup.ts` to read the ownership record, the login registration (macOS: launchd; Linux: the `~/.config/autostart/OpenCodex.desktop` entry that auto-launch writes, credited only when `XDG_CONFIG_HOME` is unset or `~/.config`; it must launch an unquoted absolute `opencodex-desktop` with exactly `--autostart`, without conditional keys, and not be hidden or disabled) and exact parent/child executable paths (Linux: `/proc/<pid>/exe` and the parent pid from `/proc/<pid>/stat`) without mutating them. A durable desktop claim survives a failed identity or supervision check; its protection requires fresh matching identity, enabled login registration, and live supervision. Only ownership `none` enters the unowned branch: verified supervision adds `supervisor: { supervisorPid, runtimePid, app }` with `owned: false`, and protection requires that same app's verified login registration and a fresh, running, viable diagnostic. Unknown ownership and CLI-owned claims receive no supervision credit. The independent process evidence requires two matching snapshots and correlation of the target, PID-file and runtime-port PIDs, as described in [desktop supervision](desktop-supervision.md#runtime-ownership-from-the-apps-side); it never becomes ownership. An unloaded macOS job receives credit only from two matching plist/target/enabled snapshots; a boolean plist Disabled default combines with explicit launchctl overrides, and malformed or changing evidence refuses credit. On macOS, ownership and PID are re-read before crediting an owned result; on Linux, the complete owned evidence chain is read twice and both reads must agree. The startup-health subprocess uses `selfLaunchArgv` to support both source and compiled entrypoints.
 
 On Linux, a dashboard update worker started from the systemd user service is launched through an executable regular file at a trusted absolute path — `/usr/bin/systemd-run`, `/bin/systemd-run`, `/usr/local/bin/systemd-run` (local installs), or `/run/current-system/sw/bin/systemd-run` (the NixOS layout) — with `--user --scope --quiet --collect` (`src/update/worker-launch.ts`), so it leaves the service cgroup before the updater stops `opencodex-proxy.service`; the default `KillMode=control-group` otherwise kills it with the proxy (#5750). The inherited `PATH` is never searched, and each candidate's resolved target — plus every ancestor directory able to substitute it — must be root-owned and not group/world-writable: a trusted-path symlink into a user-replaceable directory is skipped, as is a group-writable `/usr/local/bin`, rather than exec'd under the service account. Candidates are tried in order and a path whose no-op scope probe fails falls through to the next trusted path; the probe applies only when `INVOCATION_ID` is set, and every other case keeps the plain detached spawn. The management route resolves the launcher with `resolveSystemdRunAsync` before spawning, so first-request probing overlaps other work instead of blocking the event loop for up to twenty seconds. `--scope` moves `systemd-run` itself into the scope and then execs the worker, so the recorded PID is the worker's (`tests/update/update-worker-launch.test.ts`).

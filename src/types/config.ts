@@ -2,7 +2,9 @@ import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import type { OcxFallbackConfig } from "./fallback";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
+export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -54,6 +56,14 @@ export interface OcxClaudeCodeConfig {
    * Default: false; only literal true enables it. Native passthrough is unchanged.
    */
   stabilizePromptCache?: boolean;
+  /**
+   * Opt-in resolved provider/model routes verified to accept Responses additional_tools.
+   * A single trailing '*' matches a provider-qualified prefix (for example 'gateway/gpt-*').
+   * Replays successful client ToolSearch discoveries in place without growing the initial
+   * catalog. Requires metadata.user_id. Absent/empty is off; native passthrough is unchanged.
+   * Applies only after routing settles on a direct openai-responses route; combos and policies are skipped.
+   */
+  appendOnlyToolLoadingModels?: string[];
   /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
   compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
@@ -147,15 +157,15 @@ export interface OcxClaudeCodeConfig {
    * that back on: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy
    * forwards tool_reference blocks."
    *
-   * Default OFF, because opencodex only forwards them on the NATIVE ANTHROPIC
-   * PASSTHROUGH route, where the body reaches Anthropic untouched. On a translated
-   * route the deferral shape is not representable: compatibility.ts marks
-   * tool_search/tool_reference/deferred_tools unsupported, and toolsToResponses
-   * drops the tool_search server tool while ignoring defer_loading — deferred tools
-   * still carry input_schema on the wire, so the routed provider receives every
-   * schema anyway while Claude Code stops accounting for them and therefore stops
-   * compacting. Under `claudeCode.compatibility: "enforce"` the same request is
-   * rejected with 400 instead.
+   * Default OFF. Native Anthropic passthrough retains server-side search; the
+   * ordinary translated route drops the typed search tool and sends function schemas
+   * eagerly. appendOnlyToolLoadingModels is a separate opt-in for verified final
+   * Responses destinations and an eager client-executed ToolSearch function: it
+   * projects currently declared deferred definitions at successful discovery results.
+   * This launcher switch alone enables neither that projection nor server-side search.
+   * Compatibility-enforcement admission remains unchanged and can reject unsupported
+   * tool_search/tool_reference/deferred_tools requests; no native-search parity or
+   * cache-hit guarantee is implied.
    *
    * `true` injects "true"; a string is passed through verbatim so Claude Code's own
    * vocabulary (`auto`, `auto:N`, `force`) stays reachable. `false` and absent
@@ -234,9 +244,9 @@ export interface OcxClaudeCodeConfig {
   /** Optional roster-style model forced on subagents at the next routed Claude Code launch. */
   subagentModelForce?: string;
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
+  webSearchSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
+  visionSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /**
@@ -382,6 +392,28 @@ export interface OcxClientIntegrationsConfig {
   grok?: boolean;
   /** Durable desired state for Claude Desktop. MISSING MEANS ON. */
   "claude-desktop"?: boolean;
+}
+
+/**
+ * Opt-in opencode-side request timeouts written into the generated opencode provider block
+ * (both the V1 `options` and V2 `settings` connection objects). Each maps to the matching
+ * opencode `settings` field and accepts a number of milliseconds or `false` to disable that wait.
+ *
+ * Omitted by default: opencode keeps its native header and chunk waits for every upstream reached
+ * through the proxy (current V2 defaults the header wait to 5 minutes and the longer chunk wait to
+ * 15 minutes; this repo pins no opencode release). The knob exists because the generated
+ * `opencodex` provider multiplexes all upstreams under one block and opencode's timeouts are
+ * provider-wide, so a user fronting a slow local model (whose prompt prefill behind a non-streaming
+ * turn can exceed the header wait before the proxy emits a byte) can raise or disable the wait
+ * without touching the safety net for anyone else only by setting it here.
+ */
+export interface OcxOpencodeClientExportConfig {
+  /** opencode `settings.headerTimeout`: client wait for the proxy's first response header (ms), or false to disable. */
+  headerTimeoutMs?: number | false;
+  /** opencode `settings.chunkTimeout`: wait between streamed response chunks (ms), or false to disable. */
+  chunkTimeoutMs?: number | false;
+  /** opencode `settings.timeout`: whole-request bound (ms), or false. opencode applies no default. */
+  timeoutMs?: number | false;
 }
 
 export interface OcxConfigRebaseProvenance {
@@ -665,6 +697,13 @@ export interface OcxConfig {
    * one key at a time rather than widening a shared union.
    */
   clientIntegrations?: OcxClientIntegrationsConfig;
+  /**
+   * Opt-in opencode-side request timeouts emitted into the generated opencode provider block.
+   * Omitted by default (opencode keeps its native header/chunk waits). Set `headerTimeoutMs` to
+   * extend or disable the header wait that otherwise cuts a slow local model's prompt prefill.
+   * See {@link OcxOpencodeClientExportConfig}.
+   */
+  opencodeClientExport?: OcxOpencodeClientExportConfig;
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;
@@ -1024,7 +1063,14 @@ export interface OcxConfig {
    * response.incomplete. Default 300. Min 1.
    */
   stallTimeoutSec?: number;
-  /** Connect timeout (ms) for upstream fetch — covers DNS, TCP, TLS, and response header. Default 200000. */
+  /**
+   * Connect timeout (ms) for upstream fetch — the deadline from dispatch until the upstream
+   * returns its first response header (covers DNS, TCP, TLS, and the header wait; NOT the body
+   * stream that follows, which is governed by stallTimeoutSec). Set 0 (or any non-positive value)
+   * to disable it entirely. When unset, a public upstream defaults to 200000, while a local
+   * upstream (loopback / private / `.local` / `.lan`) disables it — a local model's prompt prefill
+   * can hold the connection silent for minutes on a large prompt before the first header arrives.
+   */
   connectTimeoutMs?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
@@ -1324,6 +1370,13 @@ export interface OcxConfig {
    */
   maxInboundBodyBytes?: number;
   /**
+   * Aggregate admission budget, in bytes, for concurrent raised-limit inbound HTTP bodies.
+   * Omitted or 0 = the built-in 512 MiB budget. `resolveConcurrentInboundBodyLimitBytes()`
+   * clamps to [512 MiB, 2 GiB]; there is no disabled or unbounded mode. Changes take effect
+   * on proxy restart. This accounts for admitted bodies, not total process memory.
+   */
+  maxConcurrentInboundBodyBytes?: number;
+  /**
    * Opt-in Anthropic OAuth PROACTIVE routing (#294). Default OFF.
    * Sticky session affinity; new sessions may pick lowest known 5h usage.
    * Experimental — see docs and GUI warning before enabling.
@@ -1363,6 +1416,11 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /**
+   * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
+   * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
+   */
+  fallback?: OcxFallbackConfig;
 }
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
@@ -1430,6 +1488,12 @@ export interface OcxComboConfig {
   cooldownMs?: number;
   /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
   waitForCooldownMs?: number;
+  /** Opt-in retry pass when all otherwise eligible targets are cooling. Disabled by default. */
+  cooldownReprobe?: {
+    enabled: boolean;
+    /** Minimum interval between recovery passes, in milliseconds. Default 300000; range 1000..86400000. */
+    intervalMs?: number;
+  };
   /**
    * `before-last-resort` defers targets marked `lastResort` while a normal
    * target is merely cooling and that cooldown can be waited out inside
@@ -1491,6 +1555,12 @@ export interface OcxComboConfig {
   decisionQuotaSignals?: boolean | null;
   /** Partial 0..100 tier overrides; defaults limited 70/nearlyExhausted 90. null clears. */
   decisionQuotaTiers?: import("../combos/jev-quota-config").JevQuotaTiers | null;
+  /**
+   * `strategy: "jev"` only, default off: keep an explicit client session on the target JEV chose
+   * for it while the session stays active, so the provider prompt cache stays warm (#7525).
+   * `ttlMs` is the idle window after the last successful turn (60000..86400000). null clears.
+   */
+  sessionPin?: import("../combos/jev-session-pin-config").JevSessionPinConfig | null;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

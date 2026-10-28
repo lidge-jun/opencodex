@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { antigravityUserAgent } from "../../src/adapters/client-fingerprint";
+import { antigravityCliUserAgent, antigravityUserAgent } from "../../src/adapters/client-fingerprint";
 import { probeAntigravityUsageQuota, setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
@@ -35,7 +35,7 @@ function transport(responses: Array<Response | Error>) {
   return calls;
 }
 
-function expectedCall(url: string, userAgent = antigravityUserAgent()) {
+function expectedCall(url: string, userAgent = url === summaryUrl ? antigravityCliUserAgent() : antigravityUserAgent()) {
   return { url, userAgent, authorization: "Bearer test-access", body: JSON.stringify({ project: "test-project" }) };
 }
 
@@ -57,10 +57,36 @@ describe("Antigravity quota summary 403 compatibility retry (#5940)", () => {
     });
   }
 
-  test("successful IDE summary needs no retry", async () => {
+  test("successful CLI summary needs no retry", async () => {
     const calls = transport([Response.json(summary)]);
     expect((await probeAntigravityUsageQuota("test-access", "test-project")).kind).toBe("available");
     expect(calls).toEqual([expectedCall(summaryUrl)]);
+  });
+
+  test("summary is requested with the CLI fingerprint so the Argon group is reported", async () => {
+    // Live CCA shape: the Argon group is present only for the CLI client family.
+    const liveSummary = { groups: [
+      { displayName: "Gemini Models", buckets: [
+        { bucketId: "gemini-weekly", window: "weekly", resetTime: "2026-11-03T05:10:46Z", remainingFraction: 1 },
+        { bucketId: "gemini-5h", window: "5h", resetTime: "2026-10-27T10:10:46Z", remainingFraction: 1 },
+      ] },
+      { displayName: "Claude and GPT models", buckets: [
+        { bucketId: "3p-weekly", window: "weekly", resetTime: "2026-11-03T05:10:46Z", remainingFraction: 1 },
+        { bucketId: "3p-5h", window: "5h", resetTime: "2026-10-27T10:10:46Z", remainingFraction: 1 },
+      ] },
+      { displayName: "Gemini 4 Argon", buckets: [
+        { bucketId: "gemini-argon-wtu-weekly", displayName: "Gemini 4 Argon Weekly Limit", window: "weekly", resetTime: "2026-11-01T11:46:46Z", remainingFraction: 0.75 },
+      ] },
+    ] };
+    const calls = transport([Response.json(liveSummary)]);
+    const result = await probeAntigravityUsageQuota("test-access", "test-project");
+    expect(calls[0]?.userAgent).toStartWith("antigravity/cli/");
+    expect(result).toMatchObject({ kind: "available", source: "google-antigravity:retrieveUserQuotaSummary" });
+    if (result.kind !== "available") {
+      throw new Error("expected available quota");
+    }
+    expect(result.quota.customWindows?.map(window => window.label)).toEqual(["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)", "Argon (Weekly)"]);
+    expect(result.quota.customWindows?.at(-1)).toMatchObject({ label: "Argon (Weekly)", modelId: "gemini-4-argon", percent: 25 });
   });
 
   test("401 is not retried", async () => {
@@ -82,6 +108,14 @@ describe("Antigravity quota summary 403 compatibility retry (#5940)", () => {
       const calls = transport([new Response(null, { status: 403 }), failure, Response.json(models)]);
       expect(await probeAntigravityUsageQuota("test-access", "test-project")).toMatchObject({ kind: "available", source: "google-antigravity:fetchAvailableModels", quota: { customWindows: [{ label: "Gem", percent: 25 }, { label: "gemini", modelId: "gemini", percent: 25 }] } });
       expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(summaryUrl, "antigravity/1.0"), expectedCall(modelsUrl)]);
+    });
+  }
+
+  for (const [status, failure] of [[302, "redirect_blocked"], [401, "access_denied"], [403, "access_denied"], [429, "rate_limited"], [503, "upstream_error"]] as const) {
+    test(`models fallback status ${status} maps to ${failure}`, async () => {
+      const calls = transport([new Response(null, { status: 500 }), new Response(null, { status, headers: { location: "https://redirect.example/" } })]);
+      expect(await probeAntigravityUsageQuota("test-access", "test-project")).toMatchObject({ kind: "unavailable", failure });
+      expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(modelsUrl)]);
     });
   }
 });

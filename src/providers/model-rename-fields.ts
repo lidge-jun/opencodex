@@ -67,6 +67,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelContextWindows: "record",
   modelContextTiers: "record",
   modelInputModalities: "record",
+  inputModalities: "none",
   modelCapabilities: "record",
   modelMaxInputTokens: "record",
   modelAutoCompactTokenLimits: "record",
@@ -153,6 +154,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   desktopExecutor: "none",
   unsafeAllowNativeLocalExec: "none",
   nativeLocalExec: "none",
+  messagePhaseInference: "none",
   tlsProfile: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 

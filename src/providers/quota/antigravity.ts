@@ -1,13 +1,18 @@
-import { antigravityUserAgent } from "../../adapters/client-fingerprint";
+import { antigravityCliUserAgent, antigravityUserAgent } from "../../adapters/client-fingerprint";
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
 import { getValidAccessToken } from "../../oauth";
-import { getAccountCredential, getCredential } from "../../oauth/store";
+import { getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
-import { report, type ProviderQuotaReport } from "./report-cache";
+import { antigravityEvidence, report, type ProviderQuotaReport } from "./report-cache";
+import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
+import { antigravityDecisionWindows } from "../quota-decision-publication";
+import { antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
+import type { OcxProviderConfig } from "../../types";
 import { quotaCredentialIdentity } from "./account-cache";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
+import { httpQuotaFailure } from "./failure-codes";
 
 export function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
   return credential ? quotaCredentialIdentity("google-antigravity", accountId, credential, {
@@ -45,11 +50,6 @@ function quotaInfoEntries(modelInfo: Record<string, unknown>): Record<string, un
   return entries;
 }
 
-/**
- * Gemini 4 Argon has its own quota pool. Its names also contain "gemini", so every family
- * decision below checks Argon first; otherwise Argon readings fill or replace the Gem family.
- */
-const ARGON_TOKEN = /(?:^|[^a-z0-9])argon(?:[^a-z0-9]|$)/i;
 const GEMINI_TOKEN = /(?:^|[^a-z0-9])gemini(?:[^a-z0-9]|$)/i;
 const CLAUDE_FAMILY_TOKEN = /(?:^|[^a-z0-9])(?:claude|3p|gpt|opus|sonnet)(?:[^a-z0-9]|$)/i;
 /** Canonical model of the Argon summary pool; tagging keeps the window out of routing. */
@@ -60,7 +60,7 @@ type AntigravitySummaryFamily = "argon" | "gem" | "cla";
 /** A bucket's own id and name decide its family when they name one; the group decides otherwise. */
 function antigravitySummaryBucketFamily(bucket: Record<string, unknown>): AntigravitySummaryFamily | undefined {
   const identity = `${typeof bucket.bucketId === "string" ? bucket.bucketId : ""} ${typeof bucket.displayName === "string" ? bucket.displayName : ""}`;
-  if (ARGON_TOKEN.test(identity)) return "argon";
+  if (isAntigravityArgonIdentity(identity)) return "argon";
   if (GEMINI_TOKEN.test(identity)) return "gem";
   if (CLAUDE_FAMILY_TOKEN.test(identity)) return "cla";
   return undefined;
@@ -69,7 +69,7 @@ function antigravitySummaryBucketFamily(bucket: Record<string, unknown>): Antigr
 function classifyAntigravityFamily(modelId: string, modelInfo: Record<string, unknown>, quotaInfo: Record<string, unknown>): "Gem" | "Cla" | null {
   const displayName = typeof modelInfo.displayName === "string" ? modelInfo.displayName : "";
   // Argon models keep their exact model rows but never seed the shared Gem family bar.
-  if (ARGON_TOKEN.test(`${modelId} ${displayName}`)) return null;
+  if (isAntigravityArgonIdentity(`${modelId} ${displayName}`)) return null;
   const tier = typeof quotaInfo.tier === "string" ? quotaInfo.tier : "";
   const haystack = `${modelId} ${displayName} ${tier}`.toLowerCase();
   if (haystack.includes("gemini")) return "Gem";
@@ -154,7 +154,7 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
     const groupDisplayName = typeof group.displayName === "string" ? group.displayName : "";
     const groupName = `${groupDisplayName} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
     // A description that merely mentions Argon must not move a whole Gemini group.
-    const groupFamily: AntigravitySummaryFamily | undefined = ARGON_TOKEN.test(groupDisplayName) ? "argon"
+    const groupFamily: AntigravitySummaryFamily | undefined = isAntigravityArgonIdentity(groupDisplayName) ? "argon"
       : groupName.includes("gemini") ? "gem"
         : groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt") ? "cla"
           : undefined;
@@ -275,13 +275,6 @@ function quotaTransportFailure(error: unknown): QuotaFailureCode {
   return "transport_error";
 }
 
-function quotaHttpFailure(status: number): QuotaFailureCode {
-  if (status >= 300 && status < 400) return "redirect_blocked";
-  if (status === 401 || status === 403) return "access_denied";
-  if (status === 429) return "rate_limited";
-  return "upstream_error";
-}
-
 function unavailableAntigravityQuota(failure: QuotaFailureCode): AntigravityQuotaProbeResult {
   return { kind: "unavailable", failure, legacy: { kind: "null" } };
 }
@@ -310,7 +303,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   // An optional caller signal (account import) cancels every request of this probe, including the
   // 403 retry and the models fallback, alongside the per-request deadline.
   const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const fetchQuota = (url: string, userAgent = antigravityUserAgent()) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+  const fetchQuota = (url: string, userAgent: string) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
       Accept: "application/json", "Content-Type": "application/json",
       "User-Agent": userAgent, Authorization: `Bearer ${accessToken}`,
@@ -319,7 +312,9 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   }, antigravityOutboundDependencies);
   let summaryFailure: QuotaFailureCode | undefined;
   try {
-    let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL);
+    // The summary includes the Gemini 4 Argon group only for the CLI client family; under the
+    // IDE UA the same account reports just the Gemini and Claude groups, so Argon usage is lost.
+    let response = await fetchQuota(ANTIGRAVITY_QUOTA_SUMMARY_URL, antigravityCliUserAgent());
     if (response.status === 403) {
       // Some valid accounts reject the IDE fingerprint only for quota accounting.
       try { await response.body?.cancel(); } catch { /* Best-effort release before retry. */ }
@@ -337,12 +332,12 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   }
   if (signal?.aborted) return unavailableAntigravityQuota(summaryFailure ?? "transport_error");
   try {
-    const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
+    const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL, antigravityUserAgent());
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) {
       return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "redirect_blocked"));
     }
     if (!response.ok) {
-      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, quotaHttpFailure(response.status)));
+      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, httpQuotaFailure(response.status)));
     }
     const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
     if (!customWindows.length) {
@@ -366,13 +361,25 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
   return null;
 }
 
-export async function fetchAntigravityQuota(provider: string): Promise<ProviderQuotaReport | null> {
-  const credential = getCredential("google-antigravity");
+/** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
+export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  const credential = getCredential(provider);
   if (!credential?.projectId) return null;
   let accessToken: string;
-  try { accessToken = await getValidAccessToken("google-antigravity"); } catch { return null; }
+  try { accessToken = await getValidAccessToken(provider); } catch { return null; }
+  const set = decisionQuotaSinkActive() ? getAccountSet(provider) : undefined;
+  const account = set?.accounts.find(row => row.id === set.activeAccountId);
+  const probed = account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
+  const receipt = probed ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
   const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
-  if (result.kind === "available") return report(provider, result.source, result.quota);
+  if (result.kind === "available") {
+    const value = report(provider, result.source, result.quota);
+    // Only the summary endpoint reports real family buckets. The models fallback labels one model's
+    // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
+    const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];
+    if (value && receipt) antigravityEvidence.set(value, { receipt, windows: Object.freeze(windows.map(row => Object.freeze(row))) });
+    return value;
+  }
   if (result.legacy.kind === "throw") throw result.legacy.error;
   return null;
 }

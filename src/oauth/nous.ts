@@ -35,10 +35,11 @@
  */
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { getAuthStorePath } from "./store";
 import { atomicWriteFile, hardenConfigDir, hardenExistingSecret } from "../config";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBytes } from "../lib/bounded-body";
 
 export const NOUS_PORTAL_BASE_URL = "https://portal.nousresearch.com";
@@ -220,6 +221,8 @@ function readRefreshIntent(refreshToken: string): RefreshIntent | undefined {
 }
 
 function writeRefreshIntent(refreshToken: string, status: RefreshIntentStatus): void {
+  // Before the mkdir/chmod below, which would otherwise touch the real home first.
+  assertNotRealHomeUnderTest(dirname(getAuthStorePath()));
   const dir = refreshIntentDir();
   // Hardened, owner-only directory + atomic (temp+rename) write. Throws on
   // failure so the caller can fail closed instead of refreshing blind.

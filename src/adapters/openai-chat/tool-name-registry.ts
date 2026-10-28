@@ -63,6 +63,7 @@ export function openAIChatToolNameIdentities(parsed: OcxParsedRequest): ToolIden
  */
 export function createOpenAIChatToolNameRegistry(
   tools: readonly ToolIdentity[] | undefined,
+  strictNames = false,
 ): OpenAIChatToolNameRegistry {
   const identities = new Map<string, ToolIdentity>();
   for (const tool of tools ?? []) identities.set(identityKey(tool), tool);
@@ -85,6 +86,7 @@ export function createOpenAIChatToolNameRegistry(
   for (const [key, tool] of sortedIdentities) {
     const wireName = namespacedToolName(tool.namespace, tool.name);
     const candidate = (tool.namespace !== undefined && wireName.length > MAX_CHAT_TOOL_NAME_LENGTH)
+      || (strictNames && !/^[A-Za-z0-9_-]+$/.test(wireName))
       || RESERVED_ALIAS_PATTERN.test(wireName)
       || wireOwners.get(wireName) === null
       ? boundedAlias(tool, wireName)
@@ -157,7 +159,7 @@ export function withOpenAIChatToolNames<T>(
   let registry = createOpenAIChatToolNameRegistry(undefined);
   return build({
     messages(parsed, baseUrl, messages): unknown {
-      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed));
+      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed), baseUrl === "https://www.workbuddy.ai/v2");
       return frameAgentRouterMessages(baseUrl, aliasOpenAIChatMessageToolNames(messages, registry));
     },
     registry: () => registry,

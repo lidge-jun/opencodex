@@ -21,12 +21,19 @@ canonical registry transport, with `TYPESAFE_API_KEY` and the standard provider-
 either credential through the JEV client; a retargeted `jev` row is ignored, never a custom
 destination. Automated coverage mocks TypeSafe; live-key behavior is an operator smoke boundary. A Combo's `decisionProvider` selects the service: omitted or `"jev"` (stored as omission) is that
 canonical path with `jev-latest`; any other id must be an enabled `jev-decision` row with a full
-full HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` URL and a `defaultModel`/`models[0]`, sending only its own `apiKey` (a TypeSafe
-env reference or foreign keychain entry makes it unusable). The row's `authMode` attaches no other credential: only its own `apiKey` is sent, as a Bearer header. URLs with userinfo, query strings, or fragments (including an empty `?`, `#`, or `@`) are refused before a send; an HTTPS path is sent exactly as configured, while a `/systemone` path keeps its trailing-slash normalization. Shared validation rejects public HTTP hosts; the local-literal check is tested against the transport allowlist. `allowLocalCleartextPost` in
+HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` URL and a `defaultModel`/`models[0]`, sending only its own `apiKey` (a TypeSafe
+env reference or foreign keychain entry makes it unusable). The row's `authMode` attaches no other credential: only its own `apiKey` is sent, as a Bearer header. URLs with userinfo, query strings, or fragments (including an empty `?`, `#`, or `@`) are refused before a send; an HTTPS path is sent exactly as configured, while a `/systemone` path keeps its trailing-slash normalization.
+Destinations targeting Vercel AI Gateway (`ai-gateway.vercel.sh`) normalize automatically to `/decisions`
+via `jevDecisionEndpointUrl` in `src/combos/jev-decision-contract.ts` and `systemOneEndpoint` in
+`src/server/management/decision-discovery.ts` (stripping trailing `/systemone` or slashes).
+Shared validation rejects public HTTP hosts; the local-literal check is tested against the transport allowlist. `allowLocalCleartextPost` in
 `src/lib/provider-outbound.ts` admits `http:` only with the row's explicit `allowPrivateNetwork`, a
 `localhost`/loopback/RFC 1918/ULA host whose answers stay in that set, and no proxy. Options go out as
-strings (Ollama requires them); under 2 or over 26 fail open locally (`no_choices`/`invalid`), unusable
-rows reuse `missing_key`, and `decisionTimeoutMs` (1000..120000) replaces the 4 s default.
+strings (Ollama requires them); under 2 fail open locally (`no_choices`). For option ceilings, Ollama
+System One endpoints allow 2..26 options (`SELF_HOSTED_MIN_OPTIONS = 2`, `SELF_HOSTED_MAX_OPTIONS = 26`),
+while Vercel Decisions endpoints admit 2..255 options (`DECISIONS_MIN_OPTIONS = 2`, `DECISIONS_MAX_OPTIONS = 255`).
+Option counts exceeding the endpoint's maximum fail open locally (`invalid`), unusable rows reuse `missing_key`,
+and `decisionTimeoutMs` (1000..120000) replaces the 4 s default.
 
 Decision backends. `src/combos/jev-dispatch.ts` derives the backend from the Combo and never stores
 it: `decisionModel` set means `model`, a `decisionProvider` other than `jev` means `systemone`, and
@@ -50,8 +57,10 @@ PATCH cannot turn a referenced row into one). `src/server/management/decision-ro
 body's `decisionProvider` / `decisionModel` select the method, none means TypeSafe; `comboId` only
 scopes the recursion rules, and a disabled, model-less or non-System-One row is refused by name), and
 `GET /api/combos/decision-discovery`, read-only System One and catalog hints built by
-`src/server/management/decision-discovery.ts`. Persisted decisions carry an optional `backend`, and
-the usage aggregate reports per-backend counts and latency with older rows as `unknown`.
+`src/server/management/decision-discovery.ts` (identifying candidate models including Apple Silicon `"laya"` models).
+Persisted decisions carry an optional `backend`, and the usage aggregate reports per-backend counts and latency with older rows as `unknown`.
+The bounded decision response selects SSE through the [internal media-type contract](../transports/inventory.md#internal-response-media-types), so valid header casing and parameters preserve the chosen route.
+`tests/server/server-jev-model-decision-e2e.test.ts` also verifies that other media types whose names or parameters contain the SSE token stay on the JSON path.
 
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
@@ -59,28 +68,49 @@ the JEV credential are excluded. All three text samples omit recognized Codex pr
 and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
 Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
 reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
-It owns the joint target/effort choice map and strict answer
-validation, including the complete probability distribution. The service exchange owns the canonical
-`jev-latest` destination, the self-hosted URL (shared `jevDecisionEndpointUrl`: an HTTPS path as
-configured, `/systemone` trailing slashes normalized), credentials, 64 KiB serialized request and response caps, default
-four-second deadline, no-redirect policy, and caller-cancellation ownership. It rejects an already
-aborted caller by reason identity before endpoint, credential or preparation work. It checks again
-after endpoint resolution and preparation (including failures), POST, redirect inspection, HTTP
-error-body cleanup and response reads, and when parsing returns or throws; caller cancellation takes
-precedence over the local outcome at those checkpoints. HTTP error-body cancellation is best effort
-and never awaited. The separate decision deadline remains a `timeout` gate. Its
-request builder receives only `model` and `descriptiveCriteria` after authorization/credential
-resolution; its answer parser runs inside the cancellation boundary. Without caller cancellation,
-question-specific local refusals and invalid answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this
-seam independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the
-unchanged route bytes authoritative. Missing credentials or safe state, transport failures, and
-invalid answers fail open to the first eligible target; no response can escape the configured choice
-map.
-The direct TypeSafe and System One decision destinations are checked against the parent API key's
-resolved provider/model scope before reading decision credentials or extracting state. A denied
-optional decision uses the existing fail-open inference target without sending a decision request;
-management probes and unrestricted admissions retain their existing behavior.
-Telemetry never retains extracted state or credentials.
+When routing to a Decisions endpoint (`isDecisionsEndpoint`), `formatDecisionsInput` projects this state into
+a formatted plain-text `input` string: `Task:` with user task text, `Signals:` (`has_image`, `tool_history`
+when present), `Recent Assistant:` prior assistant text, and `Recent Tool Call:` / `Tool Output:` from step
+history. Route choices are sent in `questions` as `{ value, description }` entries, joining target criterion
+descriptions with operator `modelProfile` notes when configured.
+
+Answer selection and probability validation (`parseJevDecision` in `src/combos/jev.ts`):
+The parser accepts answers as an object (`payload.answers.route`) or an array (`payload.answers`),
+selecting the unique route answer (`name === "route"`) while ignoring unrelated choices and throwing on
+duplicate route answers. Selected route values read from `choice` or `value`. The probability
+distribution accepts an object mapping option keys to numbers or an array of `{ choice | value, probability }`
+entries. Array distributions strictly refuse duplicate choice keys (`invalid JEV route probabilities`).
+Parsing validates that: (1) distribution keys match expected candidate choices exactly, (2) probabilities are
+finite numbers between 0 and 1, (3) total probability sums to 1.00 ± 0.02, and (4) the selected option holds
+the maximum probability (within 1e-6). Missing route answers, unknown choices, malformed distributions, duplicate
+route answers or array keys, or inconsistent totals throw and fail open to the first eligible target.
+
+The service exchange owns the canonical `jev-latest` destination, the self-hosted URL (shared
+`jevDecisionEndpointUrl`: an HTTPS path as configured with Vercel `/decisions` rewrite, `/systemone` trailing slashes normalized),
+credentials, 64 KiB serialized request and response caps, default four-second deadline, no-redirect policy,
+and caller-cancellation ownership. It rejects an already aborted caller by reason identity before endpoint,
+credential or preparation work. It checks again after endpoint resolution and preparation (including failures),
+POST, redirect inspection, HTTP error-body cleanup and response reads, and when parsing returns or throws;
+caller cancellation takes precedence over the local outcome at those checkpoints. HTTP error-body cancellation
+is best effort and never awaited. The separate decision deadline remains a `timeout` gate. Its request builder
+receives `model`, `descriptiveCriteria`, and optional canonical gateway `url` after authorization/credential resolution; its answer parser
+runs inside the cancellation boundary. Without caller cancellation, question-specific local refusals and
+invalid answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this seam
+independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the unchanged route bytes authoritative.
+Missing credentials or safe state, transport failures, and invalid answers fail open to the first eligible
+target; no response can escape the configured choice map.
+The direct TypeSafe and System One decision destinations are checked against the parent API key's resolved
+provider/model scope before reading decision credentials or extracting state. A denied optional decision uses
+the existing fail-open inference target without sending a decision request; management probes and unrestricted
+admissions retain their existing behavior. Telemetry never retains extracted state or credentials.
+
+Primary endpoint/model-contract evidence and verification:
+Verification date: 2026-10-25. The [official Vercel OpenAI-compatible Decisions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-decisions)
+(checked 2026-10-25) specifies the `/v1/decisions` contract, string input, named array questions/answers, and the value/probability schema.
+The upstream API supports a choice range of 1..255; OpenCodex enforces a 2-choice minimum as local routing policy since routing requires
+at least two distinct targets. Continuous CI verification exercises hermetic local fixtures in `tests/routing/jev-decision.test.ts` and
+`tests/routing/jev-service-exchange.test.ts` (covering `/decisions` endpoint rewriting, context projection, 2..255 option bounds,
+array/object answers, and duplicate-probability refusal) without live vendor network calls.
 
 ## Loaded advisory quota
 
@@ -127,6 +157,19 @@ native-main writer objects bind the observed bearer generation. Display-only and
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.
 
+`src/providers/quota-decision-antigravity.ts` owns Antigravity's separate loaded OAuth evidence.
+`src/providers/quota/antigravity.ts` captures an opaque receipt from the actual authenticated probe;
+display reports cannot mint one. Loaded auth-store notifications prove a sole active, usable account
+and retire receipts on credential/project, login, selection or roster transitions. Root, config
+generation and explicit invalidation also fence outstanding probes. The pure policy in
+`src/providers/antigravity-quota-identity.ts` requires the canonical `google-antigravity` OAuth store
+key, the Google cloud-code-assist mode and the canonical destination. Inference resolves its token from
+`store[route.providerName]` through the OAuth definition registered under that name, so the quota probe
+reads the same key and a renamed row neither probes nor borrows the canonical account; it reads unknown.
+Only Gem/Cla five-hour and weekly buckets contribute. A same-owner display-only refresh may retain
+previous family observations with their original clocks; without a matching observation it stays unknown.
+Per-model rows, Argon and last-good display data never create or restamp family evidence.
+
 `src/combos/jev-quota.ts` uses the worst valid relevant 5h/weekly/monthly/requested-family
 window per account, then the best usable pool tier in stable order. Observations older than
 30 minutes, future/invalid clocks or percentages and expired resets are ignored. Unknown ties
@@ -142,6 +185,9 @@ An Anthropic reset grant that drops one account's cached quota row also drops th
 `src/combos/jev-quota-route.ts` enriches only opted-in candidates. Authorization precedes
 service evidence reads. TypeSafe criteria carry scalar quota fields, System One/model descriptions
 carry advisory clauses, and all retain target/effort ordering and parser/deadline/abort contracts.
+Quota family lookup uses the native provider/model identity already resolved for the candidate;
+configured choice keys and effort allowlists remain unchanged. Native `gemini-*` and `claude-*`
+prefixes select Gem and Cla respectively; conflicting words elsewhere and unclassified ids do not.
 If additions exceed 64 KiB, serialization retries without quota before ordinary size refusal.
 `src/combos/jev-model-request.ts` owns the exact detached Responses JSON envelope, including escaping. The model backend uses it for quota sizing; the invoker adds its existing reasoning effort and checks that same serialized budget before admission/dispatch, selecting the supplied quota-free prompt only on overflow. This never retries a sent request or malformed output.
 Off payload bytes remain unchanged. Outbound quota omits ids/fingerprints; the optional v1
@@ -163,6 +209,14 @@ applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 
 `src/server/responses/core-combo.ts` computes current eligibility and asks JEV once for the initial pick.
+Candidate enumeration carries the initial pick's request-scoped cooldown reservation and cannot
+reserve another pass. After the decision returns, reserved requests recheck current eligibility and
+cooldown revisions before dispatch. A stale choice fails open to the first remaining eligible target
+and its supported effort, recording that actual fallback. No remaining choice returns unavailable
+without sending; the completed decision keeps its reported usage and zero model attempts. A previously
+applicable choice is marked invalid; existing failure gates remain. The selected pick retains the reservation through ordinary failover and
+conditional success settlement under the [Combo cooldown contract](../runtime.md#scoped-provider-quota-for-combo-selection).
+`tests/server/server-combo-cooldown-fallback.test.ts` covers an all-cooled JEV choice, its fallback and concurrent reservation invalidation.
 The validated effort shapes the first Responses child or the separate opt-in native Chat body in
 `src/server/responses/core-combo-native.ts`; both remove caller `service_tier` and conflicting effort controls.
 Explicit null strips effort using a non-force path, even when the Combo has a forced default; the ordinary
@@ -179,6 +233,35 @@ Direct models and every other Combo strategy bypass this path. The shared Combo 
 checkboxes and `Create JEV Auto` template. Inside that editor, a JEV Combo's `Decision method`
 section (`gui/src/components/combo-workspace-jev-decision.tsx`) chooses TypeSafe, a System One row,
 or an opencodex model route, with the timeout and a Test probe; there is no separate decisions page.
+
+## Session pin
+
+`sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
+owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
+The shared JEV Decision method editor exposes a pin checkbox and an exact millisecond idle window.
+GUI drafts preserve omission from older responses; enable saves `{ ttlMs }`, disable saves `null`,
+and invalid or blank enabled windows block saving. Failed saves retain the draft for retry.
+Fresh Combo rows supersede the optimistic saved baseline, including same-ID pin changes.
+Validation, sparse storage, omitted-field preservation on JEV saves and removal on a strategy switch follow
+the quota fields above. Absent, `src/server/responses/core-combo.ts` asks JEV on every request exactly as before.
+`src/server/responses/jev-session-pin.ts` keys a process-local pin by the admitted caller (context principal,
+key id, or `loopback`), the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
+without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
+(`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
+(tool-loop continuations included) renews its idle window. Reuse runs after current eligibility: the pinned
+key must be among this request's JEV choices with its effort still offered, and opted-in quota evidence must
+not read `nearly_exhausted`; otherwise the pin is released and JEV decides. Any recorded target failure in the
+request forgets the pin, cancellation does not, and a config generation change invalidates both stored pins and
+in-flight writers. A reused turn sends no decision request and persists `pinned: true` with `pinReason: "session"`;
+a decision that replaced a released pin persists the reason. `src/usage/jev-stats.ts` counts pinned turns as
+`pinnedRequests`, never as decisions, gates or backend latency; request success, model fallback and physical
+attempts count every JEV-routed request, pinned or decided. The CLI projection reads an absent `pinnedRequests` as 0.
+Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
+committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
+per-session failure fence, so a request already in flight on that session cannot write the pin back.
+The store holds at most 512 pins with least-recently-written eviction. Coverage:
+`tests/routing/jev-session-pin.test.ts`, `tests/server/server-jev-session-pin.test.ts` and
+`tests/cli/cli-combo-session-pin.test.ts`.
 
 JEV setup stays inside those existing shells. A configured `jev-decision` provider Overview exposes
 **Create JEV Auto**, which navigates to the registered `models/combos/jev-auto` action hash.

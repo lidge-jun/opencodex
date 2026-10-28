@@ -12,6 +12,7 @@ import { transientSendCapFor } from "./request-send-budget";
 import { isNonReplayableResponse, isSameTargetRetryHold } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -20,7 +21,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { linkAbortSignal } from "./core-lifetime";
 import type { AdapterRequest } from "../../adapters/base";
 import type { AdapterEvent } from "../../types";
-import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, formatUpstreamFailureResponse } from "../../bridge";
 import { trackStreamLifetime } from "../lifecycle";
 import {
   recordAdapterReasoning,
@@ -116,6 +117,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 
@@ -127,7 +129,7 @@ export async function prepareAdapterExchange(
     PreparedResponsesRequest,
     | "parsed"
     | "toolBridgeMaps"
-    | "translatorBudget"
+    | "translatorBudget" | "completedToolBlocks"
     | "selectedForwardHeaders"
     | "route"
     | "inboundWire"
@@ -257,19 +259,16 @@ export async function prepareAdapterExchange(
         ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
     }
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
-  // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
-  // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
-  const stallTimeoutMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec) && config.stallTimeoutSec > 0
-    ? Math.floor(config.stallTimeoutSec * 1000)
-    : 300_000;
   // Where this exchange dials. Local upstreams (loopback / private / `.local` / `.lan`) are
   // operator-trusted and often CPU-bound, so an unset stall budget resolves to disabled for them.
-  // Key/OAuth rotation re-resolves credentials, never the origin, so the routed baseUrl is stable.
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
+  // Header arrival and body silence are separate clocks (structure/transports/timeouts.md).
+  const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
+  const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) }) : 0;
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
+  const antigravityDenial = createAntigravityModelDenialRecovery();
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
@@ -336,8 +335,8 @@ export async function prepareAdapterExchange(
   }
   try {
     initialRequest = await transportState.activeAdapter.buildRequest(parsed, {
-      headers: requestState.selectedForwardHeaders,
-            providerName: route.providerName,
+      headers: requestState.selectedForwardHeaders, completedToolBlocks: requestState.completedToolBlocks,
+      providerName: route.providerName,
       translatorBudget,
       abortSignal: upstream.signal,
     });
@@ -414,9 +413,9 @@ export async function prepareAdapterExchange(
         transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
           kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
           abortSignal: upstream.signal,
-          timeoutMs: connectMs,
+          timeoutMs: sendConnectMs(),
           sendBudget: adapterDispatchBudget,
-          onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
+          onPhysicalSend: send => { antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send); },
           onRecoveryWithheld: noteAdapterRecoveryWithheld,
           stream: parsed.stream,
           executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -496,7 +495,7 @@ export async function prepareAdapterExchange(
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
             body: builtInitialRequest.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream,
+          }, recovery), upstream.signal, sendConnectMs(), parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
@@ -654,7 +653,7 @@ export async function prepareAdapterExchange(
       } else {
         try {
           retryRequest = await transportState.activeAdapter.buildRequest(parsed, {
-            headers: requestState.selectedForwardHeaders,
+            headers: requestState.selectedForwardHeaders, completedToolBlocks: requestState.completedToolBlocks,
             providerName: route.providerName,
             translatorBudget,
             abortSignal: upstream.signal,
@@ -713,11 +712,11 @@ export async function prepareAdapterExchange(
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
-                timeoutMs: connectMs,
+                timeoutMs: sendConnectMs(),
                 sendBudget: adapterDispatchBudget,
                 onPhysicalSend: send => {
                   if (preserveFailureResponse) replacementAdmitted = true;
-                  noteAdapterPhysicalSend(retryEstimate, send);
+                  antigravityDenial.beforeSend(); noteAdapterPhysicalSend(retryEstimate, send);
                   chargeFastDowngradeWorkflowSend();
                 },
                 onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -791,7 +790,7 @@ export async function prepareAdapterExchange(
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-                  }, recoveryKind), upstream.signal, connectMs, parsed.stream,
+                  }, recoveryKind), upstream.signal, sendConnectMs(), parsed.stream,
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                     dispatchOverride: oauthDispatch(retryRequest),
                     onPhysicalDispatch: deferredRefetch ? () => {
@@ -883,23 +882,23 @@ export async function prepareAdapterExchange(
     const rotateAntigravityAuth = async (
       failedResponse: Response,
       recovery: AttemptRecoveryKind,
+      modelAccountId?: string,
     ): Promise<Response | null> => {
       const sent = transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot;
       if (!antigravityPoolActivated || !sent
         || transportState.genericFailovers >= transportState.genericFailoverLimit) return null;
-      const nextId = rotateAntigravityAccountOnAuthRefusal(
+      const nextId = modelAccountId ?? rotateAntigravityAccountOnAuthRefusal(
         antigravityPoolActivated, sent.accountId, sent.generation, route.modelId,
       );
       if (!nextId) return null;
       const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
-      const hop = reserveCredentialHop("auth-recovery",
-        `${route.providerName}|${route.modelId}|antigravity-auth`,
-        !adapterOwnsDispatch && genericRefetchCountsSends());
-      if (!hop.allowed) return null;
-      try {
-        const snapshot = await failoverAccountSnapshot(route.providerName, nextId);
-        const admitted = await applyFailoverSnapshot(snapshot);
-        if (admitted?.accountId !== nextId) return null;
+      return recoverAntigravityAccount({ nextId, failedResponse, adapterOwnsDispatch,
+        reserve: () => reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|antigravity-auth`,
+          !adapterOwnsDispatch && genericRefetchCountsSends()),
+        applyFailoverSnapshot, setPermit: permit => { sendBudgetState.pendingHopPermit = permit; },
+        complete: () => { transportState.genericFailovers += 1; },
+        refetch: onDispatch => rebuildAndRefetch(recovery, onDispatch, failedResponse),
+        prepare: () => {
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -913,23 +912,18 @@ export async function prepareAdapterExchange(
           transportState.activeAdapter.name, logCtx.accountLogLabel);
         recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName,
           route.provider, transportState.activeAdapter.name);
-        sendBudgetState.pendingHopPermit = hop.permit;
-        const result = await rebuildAndRefetch(recovery, () => {
-          if (!adapterOwnsDispatch) hop.permit?.use();
-        }, failedResponse);
-        if ("failed" in result) return result.failed === failedResponse ? null : result.failed;
-        transportState.genericFailovers += 1;
-        try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-        return result;
-      } catch {
-        return null;
-      } finally {
-        sendBudgetState.pendingHopPermit = undefined;
-        hop.permit?.release();
-      }
+        },
+      });
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
+      const modelRotation = await antigravityDenial.recover(upstreamResponse,
+        transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot, {
+          config, model: route.modelId, enabled: antigravityPoolActivated && transportState.activeAdapter.name === "google",
+          remaining: transportState.genericFailovers < transportState.genericFailoverLimit, signal: options.abortSignal,
+          rotate: id => rotateAntigravityAuth(upstreamResponse, "oauth-account-403", id),
+        });
+      if (modelRotation) { upstreamResponse = modelRotation; continue recovery; }
       if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
@@ -1934,7 +1928,7 @@ export async function prepareAdapterExchange(
         errorType: normalized.type, code: normalized.code,
         message: "Structured upstream failure observed before client formatting",
       });
-      const message = normalized.cyberPolicy
+      const message = antigravityDenial.message(route.modelId, normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
         : enrichOpenCodeZenUpstreamMessage(
@@ -1953,7 +1947,7 @@ export async function prepareAdapterExchange(
             // never reach enrichOpenCodeZenUpstreamMessage here.
             supportsHttpSameKeyRetry: true,
           },
-        );
+        ));
       const retryAfter = normalized.cyberPolicy
         ? undefined
         : resolveClientRetryAfter({
@@ -1962,7 +1956,7 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      return formatErrorResponse(
+      return formatUpstreamFailureResponse(upstreamResponse, normalized.code,
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
@@ -1980,9 +1974,9 @@ export async function prepareAdapterExchange(
   return {
     upstream,
     cleanupUpstreamAbort,
-    connectMs,
-    stallTimeoutMs,
-    localUpstream,
+    get connectMs() { return resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: this.localUpstream }); },
+    get stallTimeoutMs() { return resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: this.localUpstream }); },
+    get localUpstream() { return isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl); },
     upstreamResponse,
     thinkingSignatureRecovery,
     refetchThinkingSignature,

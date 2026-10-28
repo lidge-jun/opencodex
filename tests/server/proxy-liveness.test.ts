@@ -25,6 +25,7 @@ import {
   readyProtocolMetadata,
 } from "../../src/remote/protocol";
 import { getDefaultConfig } from "../../src/config";
+import { buildPeerFeatures } from "../../src/remote/features";
 
 function healthz(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -886,7 +887,7 @@ describe("remote readiness protocol metadata", () => {
       expect(readyProtocolMetadata(
         { ...getDefaultConfig(), runtimeRole },
         new Request("https://hub.example.test/readyz"),
-      )).toEqual(metadata);
+      )).toEqual({ ...metadata, features: buildPeerFeatures() });
     }
   });
 
@@ -902,6 +903,7 @@ describe("remote readiness protocol metadata", () => {
       protocol: 1,
       minimumClientProtocol: 1,
       managementUrl: "http://hub.example.test:8443",
+      features: buildPeerFeatures(),
     });
   });
 

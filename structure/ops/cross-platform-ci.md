@@ -92,13 +92,26 @@ The published launcher (`bin/ocx.mjs`) starts the bundled Bun, which is not the 
 Bun keys `.pile` entries by source hash and deletes an entry written in another release's format,
 so the two versions sharing one cache evict each other on every start, and each launcher child
 loaded its CLI graph cold (a 15 s Windows `spawnSync` timeout in run 38697651428). The launcher
-therefore passes its child `<cache>/bun-<version>` (`src/lib/bun-transpiler-cache-scope.mjs`);
-`tests/cli/bun-transpiler-cache-scope.test.ts` covers it.
+therefore passes its child a `bun-<version>` leaf appended beneath the configured cache
+(`src/lib/bun-transpiler-cache-scope.mjs`); `tests/cli/bun-transpiler-cache-scope.test.ts`
+covers it.
 Server children started on the bundled runtime from a different Bun (startup-health probe,
 dashboard startup install, Windows tray) get the same scope through `durableBunChildEnv` in
-`src/lib/bun-runtime.ts`; an already scoped path is re-scoped in place, never nested.
+`src/lib/bun-runtime.ts`. Scoping never leaves the configured path: when the path's own leaf is
+already `bun-<version>` of the runtime being started it is kept unchanged, and a changed version
+nests one more `bun-<version>` level beneath it.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
+Local `bun run typecheck` uses the installed Bun runtime's native checker with the root
+`tsconfig.json`, strict options and `src/` scope. `--no-script` prevents a future package `check`
+script from replacing type checking, and the command emits no files. `bun run typecheck:tsc`
+retains the installed TypeScript compiler for comparison and fallback. CI and release preflight
+invoke `tsc` directly; GUI build checks and the separate `testRunnerBun` pin keep their own roles.
+The `prepublishOnly` hook runs `typecheck:tsc` after `audit:high` and before `build:gui`,
+stopping on either audit or compiler failure.
+`tests/ci-workflows/ci-gui-typecheck-gate.test.ts` exercises both package commands against the root
+compiler options, including strict failures in unimported source files and a conflicting `check` script,
+and runs the publish hook with safe audit/build recorders to verify compiler selection and fail-fast order.
 Across the jobs, the workflow runs:
 
 ```bash

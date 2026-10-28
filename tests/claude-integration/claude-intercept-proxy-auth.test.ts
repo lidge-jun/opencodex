@@ -1,7 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import * as filesystem from "node:fs";
-import { connect, createServer } from "node:net";
+import { connect } from "node:net";
+import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeInterceptProxyTokenPath, ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
@@ -94,14 +95,6 @@ test("a linked credential directory never grants authority", () => {
   expect(readFileSync(join(external, "proxy-token"), "utf8")).toBe("D".repeat(43) + "\n");
 });
 
-async function unusedPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("no test port");
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return address.port;
-}
 function connectStatus(port: number, token?: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port }, () => {
@@ -129,14 +122,17 @@ test("a live intercept adopts an explicitly recreated token without restarting",
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   const { startClaudeIntercept } = await import("../../src/claude/intercept/runtime");
   const { applyDesktopFirstParty } = await import("../../src/claude/desktop-first-party");
-  const port = await unusedPort();
   const config = { port: 10100, defaultProvider: "openai", providers: {},
-    claudeCode: { intercept: { enabled: true, port, picker: false } } };
+    claudeCode: { intercept: { enabled: true, port: 0, picker: false } } };
   let handle: Awaited<ReturnType<typeof startClaudeIntercept>> = null;
   try {
     handle = await startClaudeIntercept({ config, configDir: root, publicPort: 10100,
-      dispatch: async () => new Response("local fixture") });
+      dispatch: async () => new Response("local fixture"),
+      startProxy: (_port, options) => startConnectProxy(0, options) });
     expect(handle).not.toBeNull();
+    const port = handle!.proxyPort;
+    expect(port).toBeGreaterThan(0);
+    config.claudeCode.intercept.port = port;
     expect(applyDesktopFirstParty(config, { opencodexConfigDir: root, claudeConfigDir: claudeHome }).ok).toBe(true);
     const old = readClaudeInterceptProxyToken(root)!;
     expect(await connectStatus(port, old)).toBe(200);
@@ -147,6 +143,7 @@ test("a live intercept adopts an explicitly recreated token without restarting",
     const current = readClaudeInterceptProxyToken(root)!;
     expect(current).not.toBe(old);
     const settings = JSON.parse(readFileSync(join(claudeHome, "settings.json"), "utf8"));
+    expect(Number(new URL(settings.env.HTTPS_PROXY).port)).toBe(port);
     expect(new URL(settings.env.HTTPS_PROXY).password).toBe(current);
     expect(await connectStatus(port, current)).toBe(200);
     expect(await connectStatus(port, old)).toBe(407);

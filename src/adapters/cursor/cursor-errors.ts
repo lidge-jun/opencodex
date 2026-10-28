@@ -297,7 +297,8 @@ export function classifyCursorError(message: string, sizeContext?: CursorSizeCon
     lower.includes("rate limit") ||
     lower.includes("rate-limit") ||
     lower.includes("too many requests") ||
-    lower.includes("throttling")
+    lower.includes("throttling") ||
+    lower.includes("failed with http 429")
   ) return "Cursor rate limit exceeded";
 
   if (
@@ -309,7 +310,9 @@ export function classifyCursorError(message: string, sizeContext?: CursorSizeCon
     lower.includes("invalid token") ||
     lower.includes("expired token") ||
     lower.includes("authentication") ||
-    lower.includes("access denied")
+    lower.includes("access denied") ||
+    lower.includes("failed with http 401") ||
+    lower.includes("failed with http 403")
   ) return "Cursor authentication failed";
 
   // gRPC FAILED_PRECONDITION is deterministic and non-retryable (unlike UNAVAILABLE):

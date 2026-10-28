@@ -1,5 +1,5 @@
 import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
-import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
@@ -37,6 +37,7 @@ import {
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
+import { resolveVertexApiKeyProject, VERTEX_PROJECT_AUTO } from "./google-vertex-key-project";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
@@ -992,7 +993,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       : {}),
 
     /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
       // adapter-scoped replay state pointing at call ids that never went out. These
@@ -1225,7 +1226,16 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const apiKey = resolveVertexApiKey(provider.apiKey);
-        const vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        let vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        if (apiKey && vertexEndpoint.kind === "project" && vertexEndpoint.project === VERTEX_PROJECT_AUTO) {
+          // Unresolved keys use express for this request so Google's status drives key failover.
+          const project = await resolveVertexApiKeyProject(apiKey, {
+            signal: incoming?.abortSignal,
+            provider,
+            providerName: incoming?.providerName,
+          });
+          vertexEndpoint = project ? { ...vertexEndpoint, project } : { kind: "express" };
+        }
         const url = vertexInferenceUrl(vertexEndpoint, parsed.modelId, method, streamParam);
         vertexReplayModel = vertexReplayModelKey(vertexEndpoint, parsed.modelId);
         vertexReplaySession = vertexReplaySessionId(parsed);
@@ -1294,9 +1304,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
+      const appendDecoded = (fragment: string): void => {
+        if (!fragment) return;
+        // TextDecoder emits complete code points, so only new text needs UTF-8 measurement.
+        const nextBytes = bufferBytes + Buffer.byteLength(fragment);
+        const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
+        try {
+          buffer += fragment;
+          reservation.commitRetained();
+        } catch (error) {
+          reservation.release();
+          throw error;
+        }
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        bufferBytes = nextBytes;
+      };
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -1488,13 +1512,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const nextBuffer = buffer + decoder.decode(value, { stream: true });
-          const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
-          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
-          buffer = nextBuffer;
-          appendReservation.commitRetained();
-          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-          bufferBytes = nextBufferBytes;
+          const decoded = decoder.decode(value, { stream: true });
+          appendDecoded(decoded);
           // Cap incomplete frames before waiting for a newline — otherwise a single
           // unterminated data: payload can grow without bound.
           if (buffer.length > MAX_SSE_FRAME_BYTES) {
@@ -1503,9 +1522,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return;
           }
 
+          // The retained suffix contains no newline; an unfinished line needs no rescan.
+          if (!decoded.includes("\n")) continue;
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualBytes = Buffer.byteLength(buffer);
           const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
           residualReservation.commitRetained();
           budget.releaseRetained(bufferBytes, { kind: "live_transient" });
@@ -1526,7 +1547,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           }
           if (sawLiveness && !sawContentEvent) yield { type: "heartbeat" };
         }
-        buffer += decoder.decode();
+        appendDecoded(decoder.decode());
         if (buffer.trim().length > 0) {
           const residual = buffer.trim();
           if (residual.startsWith(":")) {

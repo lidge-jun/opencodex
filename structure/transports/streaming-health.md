@@ -21,7 +21,7 @@ Responses WebSocket terminal frames normalize known `incomplete_details.reason` 
 
 ## Heartbeat and stall deadline
 
-RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.
+Header and JSON policy follow [local deadlines](timeouts.md). Responses and direct-client watchdogs read live serving locality across refreshed continuation legs and reset silence ticks on locality changes. RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.
 
 Native Chat uses the same resolved `stallTimeoutSec` with a pending-upstream-read allowance that
 pauses under downstream backpressure. Its Chat error and cancellation contract is documented in
@@ -246,7 +246,7 @@ returns the same downstream SSE contract. The canonical `openai` provider uses
 upstream WebSocket by default; `providers.openai.upstreamWebsocket: false` sends
 its streaming turns over HTTP/SSE instead. This explicit choice also makes
 native mid-turn steering and injection unavailable on that provider. It does
-not change the endpoint, credential, or downstream event format.
+not change the endpoint, credential, or downstream event format. The [upstream connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314) preserves an actual reasoning-inclusion header for HTTP/SSE clients; it cannot modify a client-facing WebSocket upgrade that already completed.
 Its WSS route checks NO_PROXY first, then selects the
 first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
 route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the
@@ -358,7 +358,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

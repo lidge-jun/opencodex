@@ -10,10 +10,10 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 - Home peut se connecter à Child avec une clé OpenSSH.
 - Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
 - OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
-- Les deux ordinateurs utilisent macOS ou Linux.
+- Les ordinateurs peuvent utiliser macOS, Linux ou Windows x64. Windows nécessite OpenSSH Server et Windows PowerShell, sans Git Bash ni curl.
 - Le tableau de bord qui ajoute un Child depuis Home est ouvert sur Home ou via une session Hub appairée. Transformer l’ordinateur actuel en Child exige une session de tableau de bord appairée par l’opérateur ; une session locale sans identifiant ne peut pas valider ce changement de routage.
 
-SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut être lancée des deux côtés : depuis Home, comme décrit ci-dessous, ou depuis Child, comme décrit dans la section « Connecter cet ordinateur comme Child ».
+SSH par mot de passe n'est pas pris en charge. Une liaison peut être lancée depuis Home ou Child. Windows utilise PowerShell via la même connexion OpenSSH vérifiée.
 
 ## Ajouter un Child depuis `#remote`
 
@@ -55,7 +55,7 @@ Le rôle **Child** exige également qu’OpenCodex fonctionne en mode autonome s
 
 - **Connected** signifie que le tunnel SSH est prêt et que Child peut utiliser la liaison Home.
 - **Reconnecting** signifie que le tunnel est réessayé. Les requêtes peuvent temporairement renvoyer `503` avec `Retry-After`. Sur un Child connecté depuis son propre tableau de bord, une requête attend d’abord jusqu’à 15 secondes le retour du tunnel.
-- **Failed** signifie que la liaison nécessite une intervention. Vérifiez l’authentification SSH, la clé d’hôte confirmée, la redirection ou le délai indiqué. Le côté qui ouvre le tunnel SSH réessaie de lui-même après une mise en veille, une panne ou un redémarrage (Home pour un Child qu’il a ajouté, le Child pour une liaison qu’il a rejointe depuis son propre tableau de bord) : environ une fois par minute après un délai dépassé ou une erreur de redirection, et toutes les cinq minutes après une erreur d’authentification. Une clé d’hôte modifiée n’est jamais réessayée. Pour réessayer tout de suite, choisissez **Retry** dans le tableau de bord du Home ou exécutez `ocx link reconnect --link-id <id>` sur le Home. Le tunnel de cette liaison redémarre sans redémarrer OpenCodex.
+- **Failed** signifie que la liaison nécessite une intervention. Vérifiez l’authentification SSH, la clé d’hôte confirmée, la redirection ou le délai indiqué. Le côté qui ouvre le tunnel SSH réessaie de lui-même après une mise en veille, une panne ou un redémarrage (Home pour un Child qu’il a ajouté, le Child pour une liaison qu’il a rejointe depuis son propre tableau de bord) : une minute après un délai dépassé ou une erreur de redirection, puis avec une attente qui double après chaque nouvel échec, jusqu’à cinq minutes, et toutes les cinq minutes après une erreur d’authentification. Une clé d’hôte modifiée n’est jamais réessayée. Pour réessayer tout de suite, choisissez **Retry** dans le tableau de bord du Home ou exécutez `ocx link reconnect --link-id <id>` sur le Home. Le tunnel de cette liaison redémarre sans redémarrer OpenCodex.
 
 Une liaison en échec ne bascule pas silencieusement vers un fournisseur local.
 

@@ -28,7 +28,17 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-停止正在运行的代理（按 PID），移除 PID 文件，并恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
+停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
+
+对于已连接的 hub 客户端，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
+
+显式停止 Remote Link Child 时，若共享配置恢复成功，会恢复原生 Codex 路由、目录和已备份的恢复会话历史元数据，并移除托管的 Grok 配置。已保存的 Home 连接会保留，可用 `ocx disconnect` 移除。要再次从 Codex 使用 Home，请先运行 `ocx start`（已安装服务时使用 `ocx service start`），再运行 `ocx sync --restart-codex`。仅启动不会重新应用路由；sync 不会重新创建 Grok 配置块。
+
+若在停止服务前无法确认连接所有权，停止 API 会返回 HTTP 409 和 `sharedTeardown: "refused"`，并保持代理和服务管理器运行。请等待正在进行的连接或断开操作完成后重试。
+
+停止已连接的客户端时，命令会依据受保护的本地运行时记录验证监听器的身份证明。客户端监听器和普通代理都必须通过此验证；普通代理还必须通过经过身份验证的读取确认配置保留能力。对于旧版或无法验证的运行时，命令会在停止服务或进程前拒绝操作。请通过管理该运行时的应用或服务更新并重启它，然后重试。
+
+对于已停止的客户端，命令会确认服务管理器未活动且已知本地端点没有运行时，然后返回正常的“未运行”结果。
 
 ### `ocx restart`
 
@@ -136,7 +146,7 @@ ocx status --json
 
 通过无需认证的 `GET /readyz` 端点检查同步后的就绪状态。就绪时返回 `200`；状态为 `pending` 或
 终态 `failed` 时返回 `503`，并带有 `Retry-After: 1`。HTTP 仅返回经脱敏的身份字段
-`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`。`protocol` 是 Hub 当前的远程协议版本，`minimumClientProtocol` 是兼容的最低客户端协议版本，`managementUrl` 是浏览器可见的规范管理 origin。不支持 `/readyz` 的旧代理会按 `unreachable` 失败关闭；
+`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`。`protocol` 是 Hub 当前的远程协议版本，`minimumClientProtocol` 是兼容的最低客户端协议版本，`managementUrl` 是浏览器可见的规范管理 origin。不支持 `/readyz` 的旧代理会按 `unreachable` 失败关闭；
 `/healthz` 是独立的存活检查，不是就绪检查。默认只探测一次；`--wait` 会轮询到就绪或超时，但遇到终态
 `failed` 会立即退出。默认超时为 45 秒；`--timeout <seconds>` 必须与 `--wait` 一起使用，取值范围为 1–300 秒的正整数。CLI JSON
 输出 `{ready, status, pid, port}`，其中 `status` 为 `ready`、`pending`、`failed` 或
@@ -152,6 +162,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 
 从每个已配置的提供方获取实时模型列表，并将合并后的目录重新注入 Codex。在添加提供方后运行，或用于刷新可用模型。
@@ -163,6 +175,8 @@ ocx status --json
 `--restart-app-server-only` 恢复以前的窄范围行为：仅向当前用户拥有、匹配的 app-server / code-mode-host 进程发送 `SIGTERM`，桌面应用保持运行（当前活跃会话仍可能被打断）。如果与 `--restart-codex` 或 `--restart-desktop-app` 一起使用，窄范围优先，因为丢失进行中的对话无法恢复，而过期的选择器可以。
 
 当命令在 Codex 应用内部运行时，重启会交给分离的 helper，当前会话会随应用一起结束。
+
+**指定来源的同步。** `ocx sync --expect-link <linkId>`（Remote Link Child）和 `ocx sync --expect-hub-key <apiKeyId>`（hub 客户端）只有在本机仍连接到该链接或使用该密钥时才会同步。否则不做任何更改，也不同步本地提供方，命令以退出码 5 结束，stderr 最后一行为 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`。格式错误或重复的标志以退出码 2 结束。详情见[英文参考](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)。
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -288,7 +302,7 @@ Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的�
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
+在 `http://127.0.0.1:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
 
 ## 更新
 

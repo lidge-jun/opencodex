@@ -8,6 +8,37 @@ import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
+test("the refused startup fixture proves absence across both loopback families", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-refused-start-probe-"));
+  const child = Bun.spawn([
+    process.execPath, "--preload", repoPath("tests/fixtures/refused-local-probe-preload.ts"), "-e", `
+      import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from ${JSON.stringify(repoPath("src/server/proxy-liveness.ts"))};
+      console.log(JSON.stringify(await observeProxyLiveness({ ...START_OWNERSHIP_LIVENESS,
+        readPidFn: () => null, readRuntimeFn: () => null,
+        configFn: () => ({ port: 42101, hostname: "127.0.0.1" }),
+        loopbackAvailabilityFn: () => "available", sleepFn: async () => {},
+      })));
+    `,
+  ], {
+    cwd: root,
+    env: { HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex") },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const deadline = setTimeout(() => child.kill(), watchdogMs(10_000));
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(code, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ kind: "absent", live: null });
+    expect(stderr.match(/\[refused-probe\] ECONNREFUSED/g)).toHaveLength(6);
+  } finally {
+    clearTimeout(deadline);
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+    removeTreeWithRetry(root);
+  }
+}, Math.max(30_000, watchdogMs(10_000) + 5_000));
+
 // The real handleStart checks ownership, then awaits its configured-port /healthz
 // probe. Commit a desktop claim while answering that probe: the lease-held recheck
 // must refuse before the connected-client branch. The client runtime's own fence
@@ -128,12 +159,10 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = watchdogMs(10_000);
   try {
-    // A port nothing listens on, so the start path's liveness probe reads absent.
-    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
-    const freePort = probe.port;
-    probe.stop(true);
+    // The child preload refuses the configured-port probe deterministically;
+    // the ownership fence must still prevent all runtime publication.
     writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
-      port: freePort,
+      port: 42101,
       hostname: "127.0.0.1",
       codexAutoStart: false,
       syncResumeHistory: false,
@@ -156,6 +185,8 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
     }));
     child = Bun.spawn([
       process.execPath,
+      "--preload",
+      repoPath("tests/fixtures/refused-local-probe-preload.ts"),
       "--preload",
       repoPath("tests/fixtures/client-runtime-claim-preload.ts"),
       repoPath("src/cli/index.ts"),
@@ -182,6 +213,7 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
       }),
     ]);
     const output = result[2] || result[1];
+    expect(result[2], output).toContain("[refused-probe] ECONNREFUSED");
     // The claim landed on the connected-client branch, after the recovery fence passed.
     expect(result[2], output).toContain("[claim-preload] desktop claim committed at client runtime load");
     expect(result[0], output).toBe(0);

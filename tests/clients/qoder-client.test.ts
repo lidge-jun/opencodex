@@ -5,10 +5,14 @@ import { dirname, join } from "node:path";
 import { buildClientConfigText, buildClientContribution, buildQoderClientConfig, EXPORT_CLIENTS, qoderConfigPath, type ExportContext } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore } from "../../src/integrations/store";
-import { applyIntegration, disableIntegration, refreshIntegration, restoreIntegration, type IntegrationWriteInput } from "../../src/integrations/writer";
+import { applyIntegration, disableIntegration, overwriteIntegration, refreshIntegration, restoreIntegration, type IntegrationWriteInput } from "../../src/integrations/writer";
+import { previewIntegration } from "../../src/integrations/mutation-plan";
+import { readIntegrationState } from "../../src/integrations/state";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { handleExportCommand } from "../../src/cli/export-command";
+import { canonicalContribution, fingerprint, fragmentPathsOf, semanticContribution } from "../../src/integrations/ownership";
+import type { ManagedContribution } from "../../src/clients/config-export";
 import { handleManagementAPI } from "../../src/server/management-api";
 
 const config = {
@@ -25,10 +29,10 @@ const context: ExportContext = {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
 
-function fixture() {
+function fixture(clientId: "qoder" | "qoder-cn" = "qoder") {
   const home = mkdtempSync(join(tmpdir(), "ocx-qoder-test-"));
   roots.push(home);
-  const path = qoderConfigPath({}, home);
+  const path = INTEGRATION_CLIENTS[clientId].configPath({}, home);
   mkdirSync(dirname(path), { recursive: true });
   const original = {
     theme: "dark", providers: { other: { type: "custom" } },
@@ -37,7 +41,7 @@ function fixture() {
   const before = JSON.stringify(original, null, 4) + "\n";
   writeFileSync(path, before);
   const input: IntegrationWriteInput = {
-    clientId: "qoder", config, port: 10100, models: context.models,
+    clientId, config, port: 10100, models: context.models,
     home, env: {}, store: createIntegrationStateStore(join(home, "store")),
   };
   return { path, original, before, input, read: () => JSON.parse(readFileSync(path, "utf8")) };
@@ -107,17 +111,17 @@ describe("Qoder client integration", () => {
     expect(JSON.parse(readFileSync(join(relocated, "settings.json"), "utf8"))).toEqual({ theme: "dark" });
   });
 
-  test("exports both JSON catalogs with the requested field casing and normalized model order", () => {
+  test("exports only the provider catalog with normalized model order and context limits", () => {
     const doc = buildQoderClientConfig(context);
     expect(doc.providers.opencodex).toEqual({
       type: "openai-compatible", protocol: "openai", displayName: "opencodex",
       baseUrl: context.baseUrl, apiKey: "opencodex-loopback", defaultModel: "mock/a",
-      models: [{ model: "mock/a" }, { model: "mock/b" }],
+      models: [
+        { model: "mock/a", displayName: "mock/a", contextWindow: 200000 },
+        { model: "mock/b", displayName: "mock/b", contextWindow: 128000 },
+      ],
     });
-    expect(doc.modelConfigs.customModels).toEqual([
-      { provider: "opencodex", apiKey: "opencodex-loopback", model: "mock/a", baseURL: context.baseUrl, displayName: "mock/a", maxInputTokens: 200000 },
-      { provider: "opencodex", apiKey: "opencodex-loopback", model: "mock/b", baseURL: context.baseUrl, displayName: "mock/b", maxInputTokens: 128000 },
-    ]);
+    expect(doc).not.toHaveProperty("modelConfigs");
     const exported = buildClientConfigText("qoder", context);
     expect(exported.format).toBe("json");
     expect(exported.mediaType).toContain("application/json");
@@ -144,7 +148,7 @@ describe("Qoder client integration", () => {
     writeFileSync(f.path, JSON.stringify(applied));
     const updated = { ...f.input, models: [context.models[0]!] };
     expect(refreshIntegration(updated).ok).toBe(true);
-    expect(f.read().modelConfigs.customModels).toHaveLength(2);
+    expect(f.read().modelConfigs.customModels).toHaveLength(1);
     expect(f.read().modelConfigs.customModels.find((m: { provider: string }) => m.provider === "other")).toEqual(f.original.modelConfigs.customModels[0]);
     expect(disableIntegration({ ...updated, config: { ...config, hostname: "0.0.0.0" } }).ok).toBe(true);
     expect(f.read()).toEqual({ ...f.original, theme: "light" });
@@ -162,7 +166,98 @@ describe("Qoder client integration", () => {
     expect(readFileSync(f.path, "utf8")).toBe(f.before);
   });
 
-  test("refuses ambiguous model selectors instead of owning another provider's entry", () => {
-    expect(() => buildClientContribution("qoder", { ...context, models: [{ namespaced: "mock/a,b", provider: "mock", id: "a,b" }] })).toThrow("selector");
+  test("provider model IDs do not require legacy array selectors", () => {
+    const contribution = buildClientContribution("qoder", {
+      ...context, models: [{ namespaced: "mock/a,b", provider: "mock", id: "a,b" }],
+    });
+    expect(contribution.fragments.map(fragment => fragment.path)).toEqual([["providers", "opencodex"]]);
   });
+
+  test.each([false, true])("legacy refresh removes only owned duplicate rows (edited=%s)", edited => {
+    const f = fixture();
+    expect(applyIntegration(f.input).ok).toBe(true);
+    const provider = {
+      type: "openai-compatible", protocol: "openai", displayName: "opencodex",
+      baseUrl: context.baseUrl, apiKey: "opencodex-loopback", defaultModel: "mock/a",
+      models: [{ model: "mock/a" }, { model: "mock/b" }],
+    };
+    const legacyModels = [
+      { provider: "opencodex", apiKey: "opencodex-loopback", model: "mock/a", baseURL: context.baseUrl, displayName: "mock/a", maxInputTokens: 200000 },
+      { provider: "opencodex", apiKey: "opencodex-loopback", model: "mock/b", baseURL: context.baseUrl, displayName: "mock/b", maxInputTokens: 128000 },
+    ];
+    const legacy: ManagedContribution = {
+      clientId: "qoder",
+      fragments: [
+        { path: ["providers", "opencodex"], value: provider },
+        ...legacyModels.map(model => ({
+          path: ["modelConfigs", "customModels", `[v2:provider=opencodex,model=${model.model}]`], value: model,
+        })),
+      ],
+    };
+    const document = f.read();
+    document.providers.opencodex = provider;
+    document.modelConfigs.customModels = [...f.original.modelConfigs.customModels, ...legacyModels];
+    const text = JSON.stringify(document);
+    writeFileSync(f.path, text);
+    f.input.store!.putRecord({
+      ...f.input.store!.readRecords().qoder!,
+      fileFingerprint: fingerprint(text),
+      blockFingerprint: fingerprint(canonicalContribution(legacy)),
+      semanticBlockFingerprint: fingerprint(semanticContribution(legacy)),
+      fragmentPaths: fragmentPathsOf(legacy),
+    });
+    if (edited) document.modelConfigs.customModels[1].maxInputTokens = 123456;
+    else document.theme = "light";
+    const before = JSON.stringify(document);
+    writeFileSync(f.path, before);
+    const result = refreshIntegration(f.input);
+    if (edited) {
+      expect(result).toMatchObject({ ok: false, reason: "conflict" });
+      expect(readFileSync(f.path, "utf8")).toBe(before);
+    } else {
+      expect(result).toMatchObject({ ok: true });
+      expect(f.read().modelConfigs.customModels).toEqual(f.original.modelConfigs.customModels);
+      expect(f.read().providers.opencodex).toEqual(buildQoderClientConfig(context).providers.opencodex);
+      expect(f.input.store!.readRecords().qoder!.fragmentPaths).toEqual([["providers", "opencodex"]]);
+      expect(refreshIntegration(f.input)).toMatchObject({ ok: true, changed: false });
+      expect(disableIntegration(f.input).ok).toBe(true);
+      expect(f.read()).toEqual({ ...f.original, theme: "light" });
+    }
+  });
+
+  for (const clientId of ["qoder", "qoder-cn"] as const) {
+    const unowned = { provider: "opencodex", model: "mock/a", apiKey: "user-placeholder", displayName: "mine" };
+
+    test.each([false, true])(`${clientId}: an unowned opencodex row for an exported model refuses before writing (recorded=%s)`, recorded => {
+      const f = fixture(clientId);
+      if (recorded) expect(applyIntegration(f.input).ok).toBe(true);
+      const document = f.read();
+      document.modelConfigs.customModels.push(unowned);
+      const before = JSON.stringify(document, null, 2);
+      writeFileSync(f.path, before);
+      const records = JSON.stringify(f.input.store!.readRecords());
+      expect(readIntegrationState(f.input)).toMatchObject({ state: "conflict", reason: "unowned-key" });
+      for (const operation of ["apply", "overwrite", "disable"] as const) {
+        expect(previewIntegration(f.input, { operation })).toMatchObject({ canApply: false, refusalReason: "conflict" });
+      }
+      const writes = recorded
+        ? [refreshIntegration(f.input), applyIntegration(f.input), overwriteIntegration(f.input), disableIntegration(f.input)]
+        : [applyIntegration(f.input), overwriteIntegration(f.input)];
+      for (const result of writes) expect(result).toMatchObject({ ok: false, reason: "conflict", message: expect.stringContaining("modelConfigs.customModels") });
+      expect(readFileSync(f.path, "utf8")).toBe(before);
+      expect(JSON.stringify(f.input.store!.readRecords())).toBe(records);
+    });
+
+    test(`${clientId}: opencodex rows for other models and other providers' rows for exported models do not conflict`, () => {
+      const f = fixture(clientId);
+      const document = f.read();
+      document.modelConfigs.customModels.push({ ...unowned, model: "mock/z" }, { ...unowned, provider: "elsewhere" });
+      writeFileSync(f.path, JSON.stringify(document));
+      expect(readIntegrationState(f.input)).toMatchObject({ state: "absent" });
+      expect(applyIntegration(f.input)).toMatchObject({ ok: true, state: "current" });
+      expect(f.read().modelConfigs.customModels).toEqual(document.modelConfigs.customModels);
+      expect(disableIntegration(f.input).ok).toBe(true);
+      expect(f.read()).toEqual(document);
+    });
+  }
 });

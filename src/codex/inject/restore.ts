@@ -2,6 +2,8 @@ import { restoreApprovedCodexProviders } from "../provider-routing";
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./config-write-section";
 import { assertCodexHomeOwner, codexHomeIsAbsent, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
 import { loadConfig } from "../../config";
+import { StopRestoreOwnershipError } from "../../client/restore-ownership";
+import { withHistoryWriteSerialization } from "../history-lock";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
 import { withCatalogWriteSerialization } from "../catalog-write-serialization";
@@ -371,6 +373,12 @@ export function resolveRestoreHistoryDisposition(
 export interface RestoreConfigOptions {
   /** Strip `[model_providers.opencodex]` too, accepting that tagged threads stop opening. */
   removeProviderTable?: boolean;
+  /** Synchronous caller policy and exclusion, repeated at every async restore write boundary. */
+  withWriteGuard?: <T>(write: () => T) => T;
+}
+
+function guardedRestoreWrite<T>(options: RestoreConfigOptions, write: () => T): T {
+  return options.withWriteGuard ? options.withWriteGuard(write) : write();
 }
 
 /** The config/profile half of a native restore, reported as one artifact. */
@@ -385,7 +393,7 @@ function restoreCodexConfigInline(
    * shared write lock. Splitting it let a foreign write land between the pieces
    * and left preimage compensation replaying over bytes that writer committed.
    */
-  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, (held) => {
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, (held) => guardedRestoreWrite(options, () => {
     beginCodexWriteSection(held);
     assertCodexHomeOwner(getCodexHome());
     beforeRestoreConfigForTests?.(kind);
@@ -397,7 +405,7 @@ function restoreCodexConfigInline(
       if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
     }
     return result;
-  });
+  }));
   if (!locked.ok) {
     // Nothing was captured or written — there is nothing to compensate.
     return {
@@ -530,13 +538,14 @@ function restoreCodexConfigInlineImpl(
 function restoreCodexCatalogArtifact(
   revalidateDesiredState: boolean,
   journaledCatalogPath: string | null,
+  options: RestoreConfigOptions = {},
 ): CodexRestoreCatalogResult {
   const owningCodexHome = getCodexHome();
   try {
-    const restored = withCatalogWriteSerialization(owningCodexHome, permit =>
+    const restored = withCatalogWriteSerialization(owningCodexHome, permit => guardedRestoreWrite(options, () =>
       revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())
         ? null
-        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath),
+        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath)),
       { intent: "restore", writer: "codex-restore" });
     return restored.kind === "completed" && restored.value !== null
       ? { state: "ok", changed: restored.value.removed > 0, ...restored.value, message: "Codex catalog restored." }
@@ -568,14 +577,15 @@ function restoreCodexCatalogArtifact(
  * that lost race into the discriminated `desired_enabled` skip.
  */
 export async function restoreNativeCodexAsync(
-  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { revalidateDesiredState?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
   if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return finishApprovedProviderRestore(await restoreNativeCodexAsyncImpl(options), options.revalidateDesiredState);
+    const result = await restoreNativeCodexAsyncImpl(options);
+    return guardedRestoreWrite(options, () => finishApprovedProviderRestore(result, options.revalidateDesiredState));
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     if (!(error instanceof CodexRestoreRefusal)) throw error;
@@ -584,14 +594,14 @@ export async function restoreNativeCodexAsync(
 }
 
 async function restoreNativeCodexAsyncImpl(
-  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean },
+  options: RestoreConfigOptions & { revalidateDesiredState?: boolean },
 ): Promise<CodexNativeRestoreResult> {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed. The
     // history worker must not launch — it would turn a read-mostly courtesy
     // result into a history mutation on a home we do not own.
-    cleanExternalProviderJournal();
+    guardedRestoreWrite(options, () => cleanExternalProviderJournal());
     return externalProviderRestoreResult(activeProvider);
   }
 
@@ -653,7 +663,7 @@ async function restoreNativeCodexAsyncImpl(
         admitted: witness,
         readAdmissionUnderLock: () => witness,
       },
-      (ctx) => {
+      (ctx) => guardedRestoreWrite(options, () => {
         assertCodexHomeOwner(getCodexHome());
         if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
           throw new CodexWriteLockSkipped("desired_enabled");
@@ -695,7 +705,7 @@ async function restoreNativeCodexAsyncImpl(
             currentTxId: ctx.expectation.txId,
           },
         };
-      },
+      }),
     );
     if (coordinated.status === "skipped") return desiredEnabledRestoreSkip();
     if (coordinated.status !== "acquired") {
@@ -708,10 +718,10 @@ async function restoreNativeCodexAsyncImpl(
           : `Codex configuration was not restored: ${coordinated.message}`,
       };
     } else {
-      recordCodexNativeTransactionProvenance(
+      guardedRestoreWrite(options, () => recordCodexNativeTransactionProvenance(
         coordinated.value.preImages,
         coordinated.value.receipt.currentTxId,
-      );
+      ));
       config = coordinated.value.config;
       transitionReceipt = coordinated.value.receipt;
     }
@@ -729,8 +739,10 @@ async function restoreNativeCodexAsyncImpl(
   }
 
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
+  guardedRestoreWrite(options, () => notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath }));
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath, options);
+  // Catalog failures are artifact results; a caller-policy refusal must also stop later work.
+  guardedRestoreWrite(options, () => {});
   // Re-asked after the config half, because the store can paginate mid-transaction. Deciding
   // the history job from the pre-write answer alone would spawn a Worker whose own preflight
   // is now guaranteed to refuse, and report that refusal as a restore failure on a home that
@@ -742,8 +754,15 @@ async function restoreNativeCodexAsyncImpl(
     : await runCodexHistoryJob({
       ...resolveCodexHistoryJobTarget(),
       ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
+      ...(options.withWriteGuard ? { guardStopOwnership: true } : {}),
       operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
     });
+  if (outcome.kind === "failed" && outcome.restoreBoundary) {
+    // Preserve the Worker's observed refusal even if the connection changes again
+    // before the parent resumes. The parent guard latches this typed boundary.
+    const boundary = outcome.restoreBoundary;
+    guardedRestoreWrite(options, () => { throw new StopRestoreOwnershipError(boundary); });
+  }
   if (transitionReceipt) {
     resolveCodexHistoryTransition(transitionReceipt, outcome);
   }
@@ -797,14 +816,15 @@ function homeOwnerRestoreRefusal(error: CodexHomeOwnerRefusal): CodexNativeResto
 }
 
 export function restoreNativeCodex(
-  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { skipHistory?: boolean; revalidateDesiredState?: boolean } = {},
 ): CodexNativeRestoreResult {
   if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return finishApprovedProviderRestore(restoreNativeCodexImpl(options), options.revalidateDesiredState);
+    const result = restoreNativeCodexImpl(options);
+    return guardedRestoreWrite(options, () => finishApprovedProviderRestore(result, options.revalidateDesiredState));
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     throw error;
@@ -812,11 +832,11 @@ export function restoreNativeCodex(
 }
 
 function restoreNativeCodexImpl(
-  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { skipHistory?: boolean; revalidateDesiredState?: boolean } = {},
 ): CodexNativeRestoreResult {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
-    cleanExternalProviderJournal();
+    guardedRestoreWrite(options, () => cleanExternalProviderJournal());
     return externalProviderRestoreResult(activeProvider);
   }
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
@@ -831,11 +851,12 @@ function restoreNativeCodexImpl(
   const journaledCatalogPath = journaledInjectedCatalogPath() ?? readCodexCatalogPath();
   const config = restoreCodexConfigInline("sync", options);
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
+  guardedRestoreWrite(options, () => notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath }));
   // Same mid-transaction pagination re-check as the async path.
   const historyStoodDown = historyStandsDown
     || resolveRestoreHistoryDisposition(options.removeProviderTable).kind === "stand-down";
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath, options);
+  guardedRestoreWrite(options, () => {});
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
   // (Windows: WAL writer lock -> seconds of stalling + a false warning on every stop).
@@ -848,11 +869,22 @@ function restoreNativeCodexImpl(
   }
   // `skipHistory` is how the async wrapper takes this work for itself: the
   // native files come down here, and history runs in the Worker under H.
+  let historyLockFailure: CodexRestoreHistoryResult | undefined;
   const rawHistory = options.skipHistory || historyStoodDown
     ? { rows: 0, files: 0 }
-    : syncCodexHistoryProvider("openai", undefined, undefined, {
-        skipWhenProvablyNoop,
-      });
+    : (() => {
+        const target = resolveCodexHistoryJobTarget();
+        const restore = () => syncCodexHistoryProvider("openai", target.canonicalStateDbPath, target.canonicalBackupPath, {
+          skipWhenProvablyNoop, withWriteGuard: options.withWriteGuard,
+        });
+        if (!options.withWriteGuard) return restore();
+        const locked = withHistoryWriteSerialization(target.canonicalCodexHome, target.canonicalStateDbPath, () =>
+          restore());
+        if (locked.kind === "completed") return locked.value;
+        // H availability says nothing about connection ownership; Grok must still clean up.
+        historyLockFailure = failedHistoryRestoreFromOutcome({ kind: "blocked", reason: locked.reason });
+        return { rows: 0, files: 0 };
+      })();
   const history: CodexRestoreHistoryResult = historyStoodDown
     ? {
         state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,
@@ -861,7 +893,7 @@ function restoreNativeCodexImpl(
       }
     : options.skipHistory
     ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "History restoration runs asynchronously." }
-    : rawHistory.failed
+    : historyLockFailure ?? (rawHistory.failed
       ? failedHistoryRestore(rawHistory.failureReason, undefined, rawHistory)
       : {
           state: "ok",
@@ -872,7 +904,7 @@ function restoreNativeCodexImpl(
           message: rawHistory.rows > 0
             ? `Resume history metadata restored from opencodex backup (${rawHistory.rows} thread(s)); original providers preserved.`
             : "No backed-up resume-history metadata was pending; untracked routed history was left unchanged.",
-        };
+        });
   const message = catalog.removed > 0
     ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
     : config.message;

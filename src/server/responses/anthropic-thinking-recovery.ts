@@ -130,6 +130,7 @@ export function createAnthropicThinkingRecovery(
       || response.status !== "completed" || !Array.isArray(response.output) || response.output.length === 0
       || !rejectedScope
       || rejectedScope.clientThreadId !== parsed._reasoningReplayScope?.clientThreadId
+      || rejectedScope.clientPrincipalId !== parsed._reasoningReplayScope?.clientPrincipalId
       || JSON.stringify(rejectedScope.current) !== JSON.stringify(parsed._reasoningReplayScope?.current)) return;
     remembered = true;
     rememberReasoningReplayOpaqueBlobRejection(rejectedScope, rejectedPayloads);

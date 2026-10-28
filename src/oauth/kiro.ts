@@ -205,11 +205,54 @@ function profileArnFromWhoami(parsed: Record<string, unknown>): string | undefin
       : undefined);
 }
 
+/**
+ * `kiro-cli whoami --format json` prints its identity as one JSON object, but once an IAM Identity
+ * Center profile is selected kiro-cli 2.32 follows that object with a human-readable `Profile:`
+ * block on stdout. Parsing the whole stream then failed, which silently dropped the user email that
+ * tells organization users apart (#6641). Only the leading top-level object is identity evidence;
+ * it must start the output and end its line, so text on later lines is ignored while a second
+ * value on the same line makes the identity unreadable.
+ */
+function parseWhoamiObject(stdout: string): Record<string, unknown> | undefined {
+  const start = stdout.search(/\S/);
+  if (start < 0 || stdout[start] !== "{") return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < stdout.length; index++) {
+    const char = stdout[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+      continue;
+    }
+    if (char === "\"") inString = true;
+    else if (char === "{" || char === "[") depth++;
+    else if (char === "}" || char === "]") {
+      depth--;
+      if (depth > 0) continue;
+      if (!/^[ \t]*(?:\r?\n|$)/.test(stdout.slice(index + 1))) return undefined;
+      const parsed: unknown = JSON.parse(stdout.slice(start, index + 1));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Same-session identity reported by `kiro-cli whoami --format json`: the lower-cased user email
+ * and a structurally valid profile ARN. Any failure (non-zero exit, unreadable output, a thrown
+ * runner) yields an empty identity, so a login falls back to the SQLite import instead of failing.
+ */
 async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal): Promise<{ email?: string; profileArn?: string }> {
   try {
     const result = await runner(["whoami", "--format", "json"], signal);
     if (result.exitCode !== 0) return {};
-    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    const parsed = parseWhoamiObject(result.stdout);
+    if (!parsed) return {};
     const email = typeof parsed.email === "string" ? parsed.email.trim().toLowerCase() : "";
     const profileArn = profileArnFromWhoami(parsed);
     return {

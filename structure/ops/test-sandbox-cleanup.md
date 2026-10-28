@@ -6,9 +6,49 @@
 LocalAppData. `src/codex/windows-local-appdata.ts` calls `SHGetKnownFolderPath` in-process on Windows
 x64, loading Shell32/Ole32 from the OS-resolved system directory. It uses `KF_FLAG_DEFAULT_PATH`
 and a null token, bounds UTF-16 decoding, and frees the allocation even when the API fails.
+`src/codex/windows-current-sid.ts` reads the effective SID the same way: `OpenProcessToken`,
+`GetTokenInformation(TokenUser)` and `ConvertSidToStringSidW` from the same system directory,
+with a bounded SID read, `LocalFree` and `CloseHandle` on every exit. A cold PowerShell start
+cannot breach the lookup budget on x64 because no child process starts (#7544).
 Unsupported FFI retains the bounded trusted PowerShell helper; native API failures refuse.
+`src/lib/windows-native-principal.ts` reuses that token reader for the ACL identity pair and
+translates its live SID with `LookupAccountSidW`, preserving native UTF-16 account/domain names.
+The async resolver runs native work in `src/lib/windows-native-principal-worker.ts`; callers have
+independent monotonic deadlines while one shared job stays owned through Worker closure. Expired
+results do not enter the identity cache or the ACL timeout memo. The sync resolver rejects an
+elapsed budget before caching; unsupported architectures retain the trusted PowerShell helper.
+Token, SID allocation and DLL cleanup finish before the Worker posts its result and exits.
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.
+
+## Bun test lock generations
+
+`scripts/test-run-lock.ts` serializes updated runners' authoritative acquire, stale
+retirement, same-run/inherited member registration and owner release through
+`scripts/test-run-lock-gate.ts`. A synchronous `BEGIN IMMEDIATE` holds the gate
+through liveness checks and filesystem changes; polling and callbacks run outside.
+The gate is the permanent `${lockPath}.gate.sqlite` sibling. It is never renamed,
+unlinked or PID/mtime-reclaimed. The existing effective-user runtime/ACL boundary
+protects it; redirected and hardlinked gate paths are refused. SQLite owns its
+file descriptors, with no separate filesystem open/close of the gate inode.
+
+Acquire retries SQLite busy within its existing bounded wait. Synchronous owner
+release retries the gate in bounded slices under a ten-second elapsed deadline,
+then fails without deleting the canonical lock. Process death releases the
+gate's OS lock. The next runner applies
+the existing conservative process-start/PID/member evidence to directory state.
+Owner publication probes before exposing a new directory; failed publication
+never recursively deletes through the current canonical path. Retirement checks
+directory identity and owner contents before and after quarantine rename. An
+unexpected displaced object is preserved rather than restored over another owner.
+Only the original owner capability releases a generation; joined release is a no-op.
+
+The canonical name, version 1 owner records, member names and legacy live-PID veto
+remain compatible. This does not stop an old in-flight executable that ignores the
+gate and already decided to rename/delete a previous generation. Finish pre-update
+test runners before upgrading; metadata compatibility is not mixed-version race
+freedom. `tests/ci-workflows/test-run-lock-generation.test.ts` exercises private
+paths, delayed generation transitions, member/release ordering and gate-holder death.
 
 ## Sandbox lifecycle
 
@@ -52,22 +92,38 @@ protected roots resolve at check time and compare case-insensitively on macOS an
 directory is also a protected removal tree.
 `tests/claude-integration/claude-config-home-isolation.test.ts` pins each layer.
 
+The write guard arms without the preload too. Bun reads `bunfig.toml` from the current working
+directory, so `bun test` started outside the repository loads no preload and keeps the real HOME.
+`isTestHomeGuardArmed()` therefore also arms when the entry module (`Bun.main`) has a Bun
+test-file name, and publishes `OCX_TEST_HOME_GUARD=1` so the processes it spawns inherit the arming. No
+production entrypoint has such a name, and `NODE_ENV` is never consulted. An explicit
+`OCX_TEST_HOME_GUARD=0` disarms, which is how a case exercises a production branch. Such a run
+refuses OAuth, Codex account-pool, refresh-intent, `auth.json` and config writes instead of
+sandboxing them; `tests/ci-workflows/test-home-guard-unpreloaded.test.ts` drives each one from a
+cwd without `bunfig.toml` against a fake real home, and checks that a plain `bun` process still persists (#7407).
+
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation
 starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
 one promise. After teardown starts only the lifecycle's own abort reason is absorbed; any other
 error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before
 draining producers/reaps and restoring or removing a home. The helper does not replace
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).
 It settles producers, then each root's config flights, closes the request-history SQLite index,
-drains each root's ACL work, and only then removes drained roots. A producer or history failure
-blocks every removal; a root-specific drain failure preserves that root while other drained roots
-can be removed. Removal failures do not stop later roots. Environment restoration runs in finally,
-and the first failure is rethrown. Undrained roots remain for run-level sandbox cleanup.
-`tests/ci-workflows/fixture-teardown-helper.test.ts` verifies ordering and failure gating with injected owners.
+drains each root's ACL work, then asks `nativeMainOwnerHomesOpenAtOrBelow` whether a native-main
+owner at or below the root is still open, acquiring (descriptor and SQLite handle held while its hardener
+runs), waiting on a retry, or closing; only roots that pass both are removed. An open owner fails
+that root at once with an error naming the owner home, without spending the removal retry budget.
+A producer or history failure blocks every removal; a root-specific drain or owner failure
+preserves that root while other ready roots can be removed. Removal failures do not stop later
+roots. Environment restoration runs in finally, and the first failure is rethrown. Undrained roots
+remain for run-level sandbox cleanup.
+`tests/ci-workflows/fixture-teardown-helper.test.ts` verifies ordering and failure gating with injected
+owners, and with a real owner whose hardener is paused mid-acquisition.
 
 `tests/helpers/spawn-test-child.ts` owns behavior and warm-up children on the parent's live
 event loop. It captures output continuously, kills at the child deadline, and bounds exit/pipe

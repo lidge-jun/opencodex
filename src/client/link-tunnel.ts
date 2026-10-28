@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { readFile as readFileAsync } from "node:fs/promises";
@@ -13,17 +14,19 @@ import {
   CLIENT_TUNNEL_RETRY_POLICY,
   classifySshStderr,
   dueForSpawn,
-  failedTunnel,
+  failedSpawnTunnel,
   IDLE,
   reduceTunnel,
   type StderrClass,
   type TunnelState,
 } from "../link/tunnel-state";
 import { isLinkPort } from "../link/ports";
-import { ownsIpv4LoopbackListener } from "../server/port-reclaim";
+import { inspectIpv4LoopbackListener, type LoopbackOwnerLookupResult } from "../server/port-reclaim";
+import type { LinkDiagnosticSink } from "../link/diagnostics";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { clientLinkStatePath, readClientLinkState, type ClientLinkState } from "./link-state";
-import type { LinkTunnelGate } from "./link-relay";
+import type { LinkTunnelGate, LinkAdmissionResult } from "./link-relay";
+import { nextLinkConnectionGeneration } from "../link/relay-auth";
 
 /**
  * The client-owned `ssh -N -L 127.0.0.1:<tunnelPort>:127.0.0.1:<peerListenerPort> <alias>`
@@ -104,6 +107,8 @@ export interface ClientLinkSupervisor extends LinkTunnelGate {
   /** Stops the tunnel (TERM, up to 5 s, KILL). The runtime calls this before stopping its listener. */
   stop(): Promise<void>;
   status(): ClientLinkSupervisorStatus;
+  /** Changes on every transition into connected, initial or recovery; undefined while not connected. */
+  connectionGeneration(): string | undefined;
 }
 
 /** Read-only status bridge for a client whose persisted sidecar cannot be trusted. */
@@ -134,7 +139,8 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   /** The link key for the keyed readiness probe. The runtime passes its cached key source. */
   linkKey?: () => string | null;
   /** Async local IPv4 LISTEN ownership; an unknown or foreign owner never receives the link key. */
-  ownsLoopbackListener?: (port: number, pid: number) => Promise<boolean>;
+  inspectLoopbackListener?: (port: number, pid: number) => Promise<LoopbackOwnerLookupResult>;
+  diagnostic?: LinkDiagnosticSink;
   fetchImpl?: typeof fetch;
   now?: () => number;
   random?: () => number;
@@ -563,6 +569,10 @@ async function probeTunnel(fetchImpl: typeof fetch, tunnelPort: number, key: str
   }
 }
 
+/**
+ * Own the Child's SSH lifecycle and reconnect holds. Each connected() call checks fresh listener
+ * ownership and fences results against tunnel replacement or stop; diagnostics cannot admit it.
+ */
 export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}): ClientLinkSupervisor {
   const sidecarPath = (): string => clientLinkStatePath(deps.configDir);
   const readSidecar = deps.readSidecar ?? readWhenFileChanges(sidecarPath, () => readClientLinkState(sidecarPath()));
@@ -573,7 +583,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   const policy = CLIENT_TUNNEL_RETRY_POLICY;
   const isAlive = deps.isAlive ?? defaultIsAlive;
   const linkKey = deps.linkKey ?? (() => null);
-  const ownerLookup = deps.ownsLoopbackListener ?? ownsIpv4LoopbackListener;
+  const ownerLookup = deps.inspectLoopbackListener ?? inspectIpv4LoopbackListener;
   const fetchImpl = deps.fetchImpl ?? fetch;
   const setSupervisorTimer = deps.setTimer ?? ((callback: () => void, ms: number) => {
     const interval = setInterval(callback, ms);
@@ -594,6 +604,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let adoptedRecord: ClientTunnelPidfile | null = null;
   let tunnelPort: number | null = null;
   let ownerGeneration = 0;
+  /** Minted on every transition into connected from the process-wide sequence (relay-auth.ts). */
+  let connection: string | undefined;
   let state: TunnelState = IDLE;
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
@@ -620,9 +632,16 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     if (pid === null || pid === undefined || (adopted !== null && !adoptedRecord)) return null;
     return { pid, generation: ownerGeneration };
   };
-  const listenerOwnedByTunnel = async (port: number): Promise<boolean> => {
+  const listenerOwnedByTunnel = async (port: number, context?: { requestId?: string }): Promise<LinkAdmissionResult> => {
     const candidate = ownerCandidate(port);
-    if (!candidate) return false;
+    if (!candidate) return { kind: "unavailable" };
+    const checkId = randomUUID();
+    const report = (kind: LinkAdmissionResult["kind"], elapsedMs = 0): LinkAdmissionResult => {
+      const check = { kind, elapsedMs, checkId, generation: candidate.generation, state: state.kind };
+      if (kind !== "match") try { deps.diagnostic?.({ event: "owner_lookup", outcome: kind, requestId: context?.requestId,
+        checkId, generation: candidate.generation, state: state.kind, elapsedMs }); } catch { /* best effort */ }
+      return check;
+    };
     if (adopted !== null) {
       const record = adoptedRecord;
       const identity = record ? await inspectAdoptedIdentity(record, deps) : "unknown";
@@ -640,16 +659,28 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
           invalidateOwnerProof();
           setState(IDLE);
         }
-        return false;
+        return report(identity === "mismatch" ? "identity_mismatch" : "identity_unknown");
       }
     }
-    const owned = await Promise.resolve().then(() => ownerLookup(port, candidate.pid)).catch(() => false);
-    return owned && !stopping && ownerGeneration === candidate.generation
-      && ownerCandidate(port)?.pid === candidate.pid;
+    const result = await Promise.resolve().then(() => ownerLookup(port, candidate.pid))
+      .catch((): LoopbackOwnerLookupResult => ({ kind: "lookup_error", elapsedMs: 0 }));
+    if (stopping || failure !== undefined || ownerGeneration !== candidate.generation || ownerCandidate(port)?.pid !== candidate.pid) {
+      return report("stale", result.elapsedMs);
+    }
+    return report(result.kind, result.elapsedMs);
   };
-  const connected = async (): Promise<boolean> => started && !stopping && failure === undefined
-    && state.kind === "connected" && linkId !== null && tunnelPort !== null
-    && await listenerOwnedByTunnel(tunnelPort);
+  const connected = async (context?: { requestId?: string }): Promise<LinkAdmissionResult> => {
+    if (!started || stopping || failure !== undefined || state.kind !== "connected" || linkId === null || tunnelPort === null) {
+      return { kind: "unavailable" };
+    }
+    const result = await listenerOwnedByTunnel(tunnelPort, context);
+    // State may change during the asynchronous lookup or an optional diagnostic callback.
+    if (result.kind === "match" && (!started || stopping || failure !== undefined
+      || state.kind !== "connected" || result.generation !== ownerGeneration)) {
+      return { ...result, kind: "stale" };
+    }
+    return result;
+  };
 
   const settleWaiters = (): void => {
     if (waiters.size === 0) return;
@@ -659,6 +690,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   const setState = (next: TunnelState): void => {
+    if (next.kind === "connected" && state.kind !== "connected") connection = nextLinkConnectionGeneration();
     state = next;
     settleWaiters();
   };
@@ -733,7 +765,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
         peerListenerPort: sidecar.peerListenerPort,
       }, deps);
     } catch {
-      setState(failedTunnel("forward", timestamp, policy, state.kind === "failed" ? state.since : timestamp));
+      // A due retry that cannot start counts as a failed retry, so the backoff keeps its step.
+      setState(failedSpawnTunnel(state, "forward", timestamp, policy));
       deps.warn?.("client link tunnel could not be started");
       return;
     }
@@ -800,7 +833,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     probeFlight = flight;
     const wasConnected = state.kind === "connected";
     void (async () => {
-      if (!await listenerOwnedByTunnel(tunnelPort)) return;
+      if ((await listenerOwnedByTunnel(tunnelPort)).kind !== "match") return;
       if (probeFlight !== flight || stopping || flight.abort.signal.aborted
         || child !== flight.child || adopted !== flight.adopted) return;
       const key = linkKey();
@@ -808,7 +841,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       const result = await probeTunnel(fetchImpl, tunnelPort, key, flight.abort.signal);
       // An aborted probe, or one whose listener changed while it ran, proves nothing.
       if (probeFlight !== flight || stopping || child !== flight.child || adopted !== flight.adopted
-        || !await listenerOwnedByTunnel(tunnelPort)) return;
+        || (await listenerOwnedByTunnel(tunnelPort)).kind !== "match") return;
       applyProbe(result, wasConnected);
     })().catch(() => undefined).finally(() => {
       if (probeFlight === flight) probeFlight = undefined;
@@ -957,6 +990,10 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       await stopTunnel();
       failure = undefined;
     },
+    connectionGeneration(): string | undefined {
+      if (!started || stopping || failure !== undefined || state.kind !== "connected") return undefined;
+      return connection;
+    },
     status(): ClientLinkSupervisorStatus {
       if (failure) return failure;
       if (!child && !linkId && adopted === null) return { kind: "stopped" };
@@ -971,7 +1008,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     pending,
     connected,
     waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-      if (state.kind === "connected") return connected();
+      if (state.kind === "connected") return connected().then(result => result.kind === "match");
       if (!pending() || waiters.size >= CLIENT_LINK_MAX_HOLDS || signal?.aborted || !(timeoutMs > 0)) {
         return Promise.resolve(false);
       }

@@ -918,6 +918,7 @@ export async function retryCodexPoolOnAlternateAccount(
     if (binding) {
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
+        headers: retryHeaders,
         parsed,
         preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(retryProvider)
           && parsed._nativeReasoningRetention?.accountSwitch === true,

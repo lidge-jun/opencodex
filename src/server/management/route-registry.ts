@@ -53,6 +53,8 @@ export type ExemptionReason =
   | "dead"
   /** Desktop shell internal display-state POST; the CLI has no app updater state to publish. */
   | "desktop-internal"
+  /** Dashboard-only discovery for an interaction the CLI does not expose. */
+  | "gui-only"
   /**
    * A verb is owed but belongs to a later work-phase. BOUNDED: requires `owner` and
    * `ownerDoc`, and the parity test asserts that tracked doc exists and names the route.
@@ -95,6 +97,7 @@ export interface ManagementRoute {
 /** Every reachable management route. */
 export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management-api
+  { method: "GET", path: "/api/stop", module: "server/management-api", mutates: false },
   { method: "POST", path: "/api/stop", module: "server/management-api", mutates: true },
   // codex/auth-api
   { method: "GET", path: "/api/codex-auth/preserve-signed-in", module: "codex/auth-api/routes", mutates: false },
@@ -170,11 +173,15 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
   { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
   { method: "GET", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Certificate status is available over authenticated HTTP while the desktop compatibility runtime/CLI status contract is integrated." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires a confirmed local dashboard session; raw admin tokens cannot enroll or remove OS trust." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires an operator-paired local dashboard session; raw admin tokens and automatic loopback sessions cannot enroll or remove OS trust." } },
   { method: "GET", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Experimental runtime status is authenticated HTTP while the native compatibility UI and CLI contract are integrated." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Native app launch and account-wide UI trial require explicit local dashboard confirmation." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Native app launch and account-wide UI trial require explicit confirmation from an operator-paired local dashboard session." } },
   { method: "GET", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "The persisted startup preference is currently owned by the local desktop compatibility panel." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an explicit local GUI action and fresh field revision." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an operator-paired local GUI action and fresh field revision." } },
+  // server/management/codex-cli-update-routes
+  { method: "GET", path: "/api/codex/cli-update/plan", module: "server/management/codex-cli-update-routes", mutates: false, exempt: { reason: "local-transport", why: "The CLI runs the same proof-bound plan builder locally; the authenticated route also supplies the dashboard plan." } },
+  { method: "POST", path: "/api/codex/cli-update/apply", module: "server/management/codex-cli-update-routes", mutates: true, exempt: { reason: "session-only", why: "HTTP apply requires a confirmed trusted loopback GUI session; the CLI invokes the same durable job owner locally." } },
+  { method: "GET", path: "/api/codex/cli-update/jobs/{jobId}", module: "server/management/codex-cli-update-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "The CLI status command reads the same protected job record directly and does not use job IDs as authorization." } },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },
@@ -370,6 +377,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-presets", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
+  { method: "GET", path: "/api/quota-pool", module: "server/management/quota-pool-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The ocx.quota-pool/1 read is a machine contract GOAT consumes over management and the link relay; the CLI shows the same caches through ocx provider quota and ocx account.", owner: "ocx-1 quota pool", ownerDoc: "structure/quota-pool.md" } },
+  { method: "GET", path: "/api/fallback", module: "server/management/fallback-routes", mutates: false },
+  { method: "PUT", path: "/api/fallback", module: "server/management/fallback-routes", mutates: true },
   { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-key-pacing-routes", mutates: false },
   { method: "GET", path: "/api/providers", module: "server/management/provider-routes", mutates: false },
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
@@ -395,6 +405,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/routing-profiles/dry-run", module: "server/management/routing-profile-routes", mutates: true },
   { method: "PUT", path: "/api/routing-profiles", module: "server/management/routing-profile-routes", mutates: true },
   // server/management/session-routes
+  { method: "POST", path: "/api/session/remember", module: "server/management/session-routes", mutates: true, exempt: { reason: "session-only", why: "Explicit admin-token exchange for a revocable HttpOnly device cookie, restricted to a same-origin HTTPS dashboard or loopback. The CLI does not own a browser cookie jar." } },
   { method: "POST", path: "/api/session/logout", module: "server/management/session-routes", mutates: true, exempt: { reason: "session-only", why: "Logs out the CURRENT gui-session and requires its own Origin and CSRF. There is nothing for a CLI verb to log out of: the CLI holds an admin token, and the admin token is refused here precisely so it cannot end a consent session it never established." } },
   // server/management/sidebar-routes
   { method: "GET", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: false },
@@ -441,6 +452,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/codex-app-server", module: "server/management/system-routes", mutates: false, mechanism: "path-constant" },
   { method: "POST", path: "/api/system/codex-restart", module: "server/management/system-routes", mutates: true, mechanism: "path-constant" },
   { method: "POST", path: "/api/providers/reload", module: "server/management/provider-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "capability-principal", why: "Gated on the local-provider-reload-capability principal (provider-routes.ts:467), not an operator action." } },
+  { method: "GET", path: "/api/client-integrations/hermes/profiles", module: "server/management/hermes-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "gui-only", why: "The dashboard discovers selectable Hermes profiles; the CLI intentionally has no Hermes profile selector." } },
   { method: "GET", path: "/api/client-integrations/{clientId}", module: "server/management/integration-routes", mutates: false, mechanism: "prefix-decode" },
   { method: "PUT", path: "/api/client-integrations/{clientId}", module: "server/management/integration-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/request-history/{id}", module: "server/management/request-history-routes", mutates: false, mechanism: "slice" },

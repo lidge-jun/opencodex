@@ -1,5 +1,10 @@
 # Transport Inventory
 
+Shared header helpers and bounded local JSON reads follow the
+[local timeout contract](timeouts.md). Disabling
+their clocks retains byte caps, cancellation, manual redirects and transport credential fences.
+
+WorkBuddy AI uses bounded fixed-origin login requests and shared Chat inference transport; see the [WorkBuddy contract](../providers/workbuddy.md).
 OpenCode Go's Gemini model uses the [Go Gemini transport contract](../providers/google.md#opencode-go-gemini-transport)
 through the Google adapter and the default server fetch path.
 
@@ -33,15 +38,17 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
-| Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
+| Tool identity digests | `src/adapters/tool-call-id.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/kiro-wire.ts`, `src/responses/muse-tool-name-alias.ts` | Rewritten Anthropic call IDs and Google, Kiro and Muse tool names take eight lowercase hexadecimal characters from `Bun.SHA256.hash(..., "hex")` over the original or salted UTF-8 string. Prefix limits and collision policies are adapter-specific. Request-scoped allocators keep distinct identities separate even when UTF-8 encoding produces the same bytes; tool-name maps restore the original names. `tests/adapters/tool-identity-hash.test.ts` pins the wire bytes, numeric and salted collisions, and Google declaration/call/result/selector agreement. |
+| AWS eventstream | `src/lib/eventstream-decoder.ts` | Kiro's prelude and message checksums use `Bun.hash.crc32` over the supplied byte view, with unsigned IEEE CRC-32 results and incremental seed support. Corrupt or truncated frames fail decoding. The streaming decoder rejects advertised sizes above 16 MiB per frame or 128 KiB per header block once the corresponding prelude bytes are available. `tests/responses/eventstream-decoder.test.ts` covers fixed wire bytes, offset views, seeded checksums, corruption, and fragmented input. |
+| Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped and decorated-opening `exec`/`apply_patch` prefixes stay held. Routed canonical `apply_patch` publishes only the stable prefix after its exact opening line, withholds a rewritable terminal decoration, and fails before successful completion if the authoritative repaired input no longer extends emitted progress. Each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
-| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts`, `src/adapters/google-wire-shape.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. Its transient ladder uses the shared `TRANSIENT_RETRY_MAX_ATTEMPTS` constant, also used to fund each eligible generic OAuth account in the [request send budget](responses-spend.md#credential-hop-reservations). Antigravity 403 normalization reads at most 4096 bytes for at most two seconds and emits a validation marker only for a complete structured `VALIDATION_REQUIRED` reason; an unsafe or incomplete body falls back to status-only text. The Google-family wrapper reuses shared abort/deadline helpers, upstream error normalization, and policy-aware wire-body repair: strict initial schema loss sends nothing, while strict repair withholding returns the original 400 without a changed send. The final compiler produces the [content-free tool-schema loss contract](../providers/google.md#google-tool-schema-loss-reporting). `google-wire-shape.ts` remains diagnostic-only. |
+| Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts`, `src/adapters/google-wire-shape.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. Its transient ladder uses the shared `TRANSIENT_RETRY_MAX_ATTEMPTS` constant, also used to fund each eligible generic OAuth account in the [request send budget](responses-spend.md#credential-hop-reservations). A `Retry-After` on a retryable 429/503 is the earliest resend: the two-second local maximum bounds only the wrapper's own jittered backoff, and an instruction past the shared `RETRY_AFTER_CEILING_MS` (60 seconds) ends with that upstream response, `Retry-After` intact, instead of an early resend. Antigravity 403/404 normalization reads at most 4096 bytes for at most two seconds and emits a validation marker only for a complete structured `VALIDATION_REQUIRED` reason; an unsafe, incomplete or erroring body falls back to status-only text with the original HTTP status; caller cancellation propagates. Model-404 denial provenance requires an exact model ResourceInfo under the [account refusal contract](responses-failover.md#account-refusal-and-rotation-boundaries). The Google-family wrapper reuses shared abort/deadline helpers, upstream error normalization, and policy-aware wire-body repair: strict initial schema loss sends nothing, while strict repair withholding returns the original 400 without a changed send. The final compiler produces the [content-free tool-schema loss contract](../providers/google.md#google-tool-schema-loss-reporting). `google-wire-shape.ts` remains diagnostic-only. |
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
 | Anthropic image ingress | `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Oversized or unsupported images are normalized or rejected before reaching upstream. An image's ladder position is pinned to its own fixed-size digest of content and canonical media type rather than recomputed from recency each request (#4532); appending a newer image therefore cannot demote and re-encode older images and bust Anthropic's prompt prefix cache. Position bytes count toward the shared retained-memory budget but are pinned — the shared evictor clears normalization cache slots first and never drops a position mid-request; positions shrink only through the store's own entry-count cap at request end. Unseen images still take the age-tier pyramid's first position, the total byte budget still binds, and a 413 `tierBias` retry still applies. Recorded positions only move down the ladder, so the store is monotonic. |
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
 | Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/http1-bidi.ts`, `src/adapters/cursor/live-models.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts`, `src/adapters/cursor/checkpoint-store.ts` | Thread continuity is the point: a retry must not start a new Cursor thread, and a validated checkpoint must not rebuild the full root history. HTTP/2 remains the default; an explicit `http1.1`/`h1` pin maps the bidi run onto Cursor's `RunSSE` receive stream plus sequenced `BidiAppend` sends, and applies to live discovery too. |
 | Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
-| Chat Completions inbound | `src/server/chat-completions.ts`, `src/server/chat-native.ts`, `src/chat/`, `src/adapters/openai-chat.ts` | Inbound translation onto the same routing pipeline. The content mapper preserves image URLs and supported detail, including screenshot-bearing tool results; target adapters own image placement on their wire. Image-free tool results stay strings. The native handler owns pin/cap normalization; both adapter builders share explicit gateway-object and tool-bearing effort-omission policy, while the native builder preserves unknown or undeclared raw behavior and removes effort for explicit empty declarations or no-reasoning models. On the response side, the upstream `service_tier` echo relays on every delivery shape (`src/chat/outbound.ts` projections, `src/server/chat-native-sse.ts` chunks); an upstream without the field gets no injected key. |
+| Chat Completions inbound | `src/server/chat-completions.ts`, `src/server/chat-native.ts`, `src/chat/`, `src/adapters/openai-chat.ts` | Inbound translation onto the same routing pipeline. The content mapper preserves image URLs and supported detail, including screenshot-bearing tool results; target adapters own image placement on their wire. Image-free tool results stay strings. The native handler owns pin/cap normalization; both adapter builders share explicit gateway-object and tool-bearing effort-omission policy, while the native builder preserves unknown or undeclared raw behavior and removes effort for explicit empty declarations or no-reasoning models. On the response side, the upstream `service_tier` echo relays on every delivery shape (`src/chat/outbound.ts` projections, `src/server/chat-native-sse.ts` chunks); an upstream without the field gets no injected key. A failed Responses stream whose code is a terminal refusal (`isTerminalRefusalCode`, including the `invalid_prompt` a later sidecar-iteration plan refusal ends with) is answered as a client refusal instead of a status inferred from its wording: the buffered collector returns HTTP 400 `invalid_request_error` with that code, while an already committed stream keeps its HTTP status and ends with an SSE error frame carrying `invalid_request_error` and the code (`tests/providers/command-code-plan-denial.test.ts`). |
 | Hosted search relay | `src/server/search.ts`, `src/web-search/devin-executor.ts` | A resolved Devin route uses Cognition's bounded non-inference `GetWebSearchResults` RPC with the active account's credential and allowlisted tenant; other routes use the verbatim ChatGPT relay, or an explicitly configured web-search sidecar backend when no forward provider exists. Distinct from the web-search sidecar loop below. |
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. Artifact downloads go through the pinned-IP transport with a 10 s connect deadline (`DOWNLOAD_CONNECT_TIMEOUT_MS`) that bounds TCP/TLS setup on its own, in addition to the 60 s idle timer, and `pinnedHttpsGet` accepts a per-call `connectTimeoutMs`. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. Auto session and intent requests stay on the credential-captured origin; adapter construction follows the [Copilot Auto contract](../providers-and-adapters.md#github-copilot-auto-selection). |
@@ -87,7 +94,7 @@ not cap process RSS or the conversation messages accumulated across completed me
 opaque metadata, normal tool passthrough, coalesced-tail accounting, and consumer cancellation on
 both execution paths. Final client tool output also follows the [explicit empty client-catalog
 boundary](responses-wire-shapes.md#declared-tool-membership-by-inbound-wire); internal media tool
-execution keeps its existing behavior.
+execution rejects explicitly unfinished tool ends and never fulfills media or re-asks after an incomplete, failed or truncated terminal.
 
 ## Bounded response ingestion and OrcaRouter login
 
@@ -271,7 +278,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 ## Account quota failure diagnostics
 
-`src/providers/quota/antigravity.ts` retries a quota-summary 403 once with `User-Agent: antigravity/1.0`, releasing the first response body and preserving the bearer, project and pinned accounting endpoint. A 401 is not retried; redirects remain blocked, and a repeated 403 remains unavailable with `access_denied`. Other retry failures retain the models fallback, whose User-Agent remains the IDE fingerprint, as do discovery and inference.
+`src/providers/quota/antigravity.ts` requests the quota summary with the Antigravity CLI User-Agent, because Cloud Code Assist includes the Gemini 4 Argon group only for the CLI client family; under the IDE fingerprint the same account reports only the Gemini and Claude groups. It retries a quota-summary 403 once with `User-Agent: antigravity/1.0`, releasing the first response body and preserving the bearer, project and pinned accounting endpoint. A 401 is not retried; redirects remain blocked, and a repeated 403 remains unavailable with `access_denied`. Other retry failures retain the models fallback, whose User-Agent remains the IDE fingerprint, as does non-Argon inference.
 
 Antigravity account quota probes expose only a closed `quotaFailure` category when the read is unavailable. Typed transport failures, rejected destinations, redirects, denied access, rate limits and unusable bodies are distinguished; successful fallback clears the earlier failure. The last attempted endpoint determines the diagnosis. When the credential side throws before the probe (missing account, failed refresh, no project) the category is `account_unavailable`, or `timeout` when that failure was a request deadline. A 401/403 category does not change account health, entitlement or routing eligibility.
 
@@ -357,6 +364,17 @@ fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
 
+Response payload is delivered as bytes arrive, in raw slices of at most 64 KiB, rather than
+waiting to fill a slice or an entire declared HTTP chunk. The next pull validates a completed
+chunk's trailing CRLF before reading another chunk; premature EOF and malformed framing still
+error the body. Fixed-length completion releases the socket as soon as the declared bytes are
+queued, without requiring an extra consumer pull. Terminal reader cleanup discards unread bytes;
+only the successful SOCKS handshake preserves bytes for the next socket owner. Payload reads
+use existing byte views instead of accumulating an exact-length copy. Coding limits,
+certificate verification, proxy selection and upload ownership are unchanged.
+`tests/lib/socks5-tls-lifecycle.test.ts` also covers partial payloads, compressed SSE, delayed
+framing, truncation, cancellation and connection release.
+
 The upload and the answer are read together. One reader consumes the socket for the whole
 exchange, starting before the request body is finished, because a peer may answer a request it
 has not finished receiving and a caller's body stream may stall. Each body read and drain wait
@@ -375,6 +393,22 @@ response is decoded and stops advertising the coding and the coded length, and a
 is refused by name rather than surfaced as bytes no caller can read. Buffered decoded SOCKS5
 bodies stop at 32 MiB; event streams may continue beyond that while decoded bytes stay within
 the greater of 32 MiB or 128 times the coded bytes consumed, so highly compressed bombs stop.
+
+## Internal response media types
+
+`src/lib/http-response-semantics.ts` compares the exact Content-Type type/subtype
+case-insensitively, ignoring surrounding whitespace and semicolon parameters. The internal JEV
+decision invoker, routed compact collector, compaction recovery, shared combo preflight, and native
+Responses delivery use this rule to select SSE decoding. `Text/Event-Stream; charset=UTF-8` selects the event-stream path; a different
+subtype or a parameter that merely mentions `text/event-stream` does not. Response headers and
+body bytes retain their original values. The JEV, reasoning-retention routing, and compaction
+recovery suites cover the resulting decision, opaque compact output, and recovery dispatch. The combo
+preflight leaves explicit non-SSE types unread; its caller-controlled missing-type fallback remains available.
+Native delivery also matches JSON exactly before bounded decoding; unrelated types retain the raw relay.
+Its canonical missing-type SSE fallback and plaintext V2 typed-event classification retain their own
+admission rules. The buffered required-tool guard inspects only exact JSON media types. Native delivery,
+missing-type fallback, plaintext classification and required-tool body ownership are covered by
+`tests/responses/passthrough-media-type.test.ts`.
 
 ## Raw transport null-body statuses
 
@@ -405,6 +439,9 @@ failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to th
 end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
 is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
+Pinned identity and decoded response delivery follow the
+[stream-buffer accounting contract](byte-accounting.md#stream-buffer-accounting), including
+socket backpressure and inactivity timing while the local reader is paused.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
@@ -456,6 +493,12 @@ are request-local and excluded from diagnostics. HTTPS proxy identity is verifie
 against its configured host. HTTP Basic usernames with colons and malformed CONNECT
 response headers are rejected. Header size remains bounded even when a delimiter
 and early target bytes arrive together; remaining bytes are handed to the caller.
+HTTP/HTTPS CONNECT borrows the first response fragment. Additional fragments grow
+owned header storage geometrically, capped at `maxHeaderBytes`, so accumulated
+prefixes are copied only when storage grows. Delimiter scans examine initialized
+bytes from the new suffix plus the split-delimiter overlap. Coalesced target bytes
+inside and beyond the header buffer are restored in wire order before handoff.
+A complete first-fragment header needs no accumulation copy.
 
 `src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS spellings use its
 remote-DNS behavior and existing zero-to-255-byte credential-field limits, including

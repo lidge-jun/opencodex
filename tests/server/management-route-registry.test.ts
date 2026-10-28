@@ -1,9 +1,15 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
+import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
+import * as updateJobs from "../../src/codex/cli-update-job";
+import * as cliUpdatePlanModule from "../../src/codex/cli-update-plan";
+import * as cliUpdateWorkerModule from "../../src/codex/cli-update-job-worker";
+import type { ManagementContext } from "../../src/server/management/context";
+import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { scanRoutes, distinctRoutes } from "../helpers/management-route-scan";
@@ -59,9 +65,244 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("dashboard plan uses the shared proof-bound production inspection path", async () => {
+    const proof = "P".repeat(43);
+    const root = process.platform === "win32" ? "C:\\fixture-only" : "/tmp/fixture-only";
+    const candidate = process.platform === "win32" ? "C:\\fixture-only\\codex.cmd" : "/tmp/fixture-only/codex";
+    const env: NodeJS.ProcessEnv = { [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({ version: 1, proof, anthropicEnvSlots: [],
+      codexCliInspectionEnv: { codexCliPath: candidate, path: root, pathExt: null, managerRoots: {}, transportEnv: {},
+        arch: process.arch, configDir: root } }) };
+    initializeNodeLauncherContext(["bun", "test", `${NODE_LAUNCH_PROOF_PREFIX}${proof}`], env);
+    try {
+      const request = new Request("http://localhost/api/codex/cli-update/plan");
+      const ctx: ManagementContext = { req: request, url: new URL(request.url), config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+        deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ applicable: false, schemaVersion: 1 });
+    } finally { initializeNodeLauncherContext(["bun", "test"], {}); }
+  });
+
+  test("a gated registry child leaves concurrent management requests responsive", async () => {
+    // Regression for the planning P1: a slow npm query must not park the proxy event
+    // loop. The gated child answers like npm view --json but only once the release
+    // file appears — with its own cap so a regression cannot hang the suite — and it
+    // runs through the production async spawn runner, not a mocked event loop.
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-gated-npm-")));
+    const gateFile = join(dir, "release");
+    const integrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
+    const mainJson = JSON.stringify({ name: "@openai/codex", version: "1.4.2",
+      optionalDependencies: { "@openai/codex-linux-x64": "1.4.2" },
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz" } });
+    const backingJson = JSON.stringify({ name: "@openai/codex-linux-x64", version: "1.4.2",
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex-linux-x64/-/codex-linux-x64-1.4.2.tgz" } });
+    const gatedSpawn: cliUpdatePlanModule.CodexCliUpdateSpawn = (_bin, args, options) =>
+      cliUpdatePlanModule.spawnCodexCliUpdateMetadata(process.execPath, [
+        "-e",
+        'const fs=require("node:fs"),g=process.env.OCX_GATE_FILE,a=process.env.OCX_GATE_ANSWER,d=Date.now()+Number(process.env.OCX_GATE_CAP_MS);'
+        + 'const t=setInterval(()=>{if(!fs.existsSync(g)&&Date.now()<=d)return;clearInterval(t);process.stdout.write(a+"\\n",()=>process.exit(0))},15)',
+      ], { ...options, windowsVerbatimArguments: false,
+        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: "4000",
+          OCX_GATE_ANSWER: args.join(" ").includes("@openai/codex-linux-x64@") ? backingJson : mainJson } });
+    const managed = { schemaVersion: 1, candidateAvailable: true, candidateVersion: "1.0.0",
+      candidateSource: "environment", selectionAttested: true,
+      versionEvidence: { kind: "package-manifest" }, provenance: "npm-global", managed: true,
+      reason: "managed_npm_global", location: "<npm-global>/@openai/codex",
+      installDigest: "a".repeat(64), installContentDigest: "c".repeat(64),
+      packageVersion: "1.0.0", shim: { status: "not-tracked", backingKind: null },
+      evidence: ["package_manifest", "global_npm_layout"] };
+    const realPlan = cliUpdatePlanModule.createCodexCliUpdatePlan;
+    // The route dispatches into another realm: parent planner spies cannot reach it.
+    // This dispatch seam tests HTTP + real async metadata-child behavior only;
+    // cli-update-worker.test.ts separately exercises the actual Worker boundary.
+    const planner = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker").mockImplementation(() =>
+      realPlan({ platform: "linux", inspectionDeps: { arch: "x64" }, inspect: async () => managed as never,
+        spawnProcess: gatedSpawn,
+        scanProcessesAsync: async () => ({ kind: "observed", processes: [] }) }));
+    const oldHome = process.env.OPENCODEX_HOME;
+    const emptyHome = join(dir, "empty-home");
+    mkdirSync(emptyHome, { recursive: true });
+    process.env.OPENCODEX_HOME = emptyHome;
+    try {
+      const makeCtx = (pathname: string): ManagementContext => {
+        const req = new Request(`http://localhost${pathname}`);
+        return { req, url: new URL(req.url), config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+          deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+          convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+          syncClaudeAgentDefsBestEffort: async () => {} };
+      };
+      const planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
+      // Let the first gated child spawn, then an unrelated request must still answer.
+      const firedAt = Date.now();
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const concurrent = await Promise.race([
+        handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/jobs/11111111-2222-3333-4444-555555555555"))
+          .then(response => ({ kind: "responded" as const, response })),
+        new Promise<{ kind: "blocked" }>(resolve => setTimeout(() => resolve({ kind: "blocked" }), 3_000)),
+      ]);
+      // Under a synchronous spawn this race can only settle after the child cap.
+      expect(concurrent.kind).toBe("responded");
+      // A parked event loop defers BOTH arms past the child cap, so the response
+      // arriving "first" is not enough — the wall clock is the discriminator.
+      expect(Date.now() - firedAt).toBeLessThan(2_500);
+      if (concurrent.kind === "responded") {
+        // POSIX reads an empty store (404); Windows refuses the unsupported store
+        // lane (503). Either way the unrelated request answered while planning waited.
+        expect([404, 503]).toContain(concurrent.response?.status ?? 0);
+      }
+      writeFileSync(gateFile, "release");
+      const response = await planPromise;
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ applicable: true, targetVersion: "1.4.2" });
+      expect(planner).toHaveBeenCalledTimes(1);
+    } finally {
+      planner.mockRestore();
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("plan dispatch failure returns HTTP 503 without a second dispatch", async () => {
+    const dispatch = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker")
+      .mockRejectedValue(new Error("plan_unavailable"));
+    const req = new Request("http://localhost/api/codex/cli-update/plan");
+    const ctx: ManagementContext = { req, url: new URL(req.url),
+      config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+      deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+      syncClaudeAgentDefsBestEffort: async () => {} };
+    try {
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toEqual({ error: "plan_unavailable" });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally { dispatch.mockRestore(); }
+  });
+
+  test("Codex CLI HTTP apply requires a GUI session and trusted loopback before admission", async () => {
+    const config = { port: 10100, providers: {} } as import("../../src/types").OcxConfig;
+    const request = new Request("http://localhost/api/codex/cli-update/apply", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: true }),
+    });
+    const ctx: ManagementContext = { req: request, url: new URL(request.url), config, deps: {}, version: "test",
+      principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+      syncClaudeAgentDefsBestEffort: async () => {} };
+    const response = await handleCodexCliUpdateRoutes(ctx);
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
+    ctx.principal = "gui-session";
+    ctx.trustedLoopbackIngress = false;
+    const untrustedIngress = await handleCodexCliUpdateRoutes(ctx);
+    expect(untrustedIngress?.status).toBe(403);
+    expect(await untrustedIngress?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
+    ctx.trustedLoopbackIngress = true;
+    ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: false }) });
+    const unconfirmed = await handleCodexCliUpdateRoutes(ctx);
+    expect(unconfirmed?.status).toBe(400);
+    ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: true,
+        prefix: "/tmp/ignored", executable: "/tmp/ignored", managed: true, selectionAttested: true }) });
+    const clientEvidence = await handleCodexCliUpdateRoutes(ctx);
+    expect(clientEvidence?.status).toBe(400);
+  });
+
+  test.each(["job_store_busy", "store_full"])("HTTP admission %s schedules no worker and only contention advertises retry", async code => {
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockImplementation(() => { throw new Error(code); });
+    const worker = spyOn(updateJobs, "runCodexCliUpdateJob");
+    try {
+      const req = new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId: "busy-response-01", planId: "e".repeat(32), confirmed: true }) });
+      const ctx: ManagementContext = { req, url: new URL(req.url),
+        config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
+        principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toEqual({ error: code });
+      expect(response?.headers.get("Retry-After")).toBe(code === "job_store_busy" ? "1" : null);
+      expect(worker).not.toHaveBeenCalled();
+    } finally { admission.mockRestore(); worker.mockRestore(); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
+    const outer = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-")));
+    const parent = join(outer, "private-parent"), configDir = join(parent, "ocx");
+    const oldHome = process.env.OPENCODEX_HOME;
+    try {
+      chmodSync(outer, 0o700);
+      mkdirSync(parent, { mode: 0o700 }); chmodSync(parent, 0o700);
+      mkdirSync(configDir, { mode: 0o700 }); chmodSync(configDir, 0o700);
+      process.env.OPENCODEX_HOME = realpathSync.native(configDir);
+      const makeRequest = () => new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId: "lost-response-retry-01", planId: "e".repeat(32), confirmed: true }) });
+      const ctx: ManagementContext = { req: makeRequest(), url: new URL("http://localhost/api/codex/cli-update/apply"),
+        config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
+        principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const storeDir = join(configDir, "codex-cli-update-jobs"), heldLock = join(storeDir, "admission.lock");
+      mkdirSync(storeDir, { mode: 0o700 }); chmodSync(storeDir, 0o700);
+      mkdirSync(heldLock, { mode: 0o700 });
+      const worker = spyOn(updateJobs, "runCodexCliUpdateJob");
+      try {
+        const busy = await handleCodexCliUpdateRoutes(ctx);
+        expect(busy?.status).toBe(503);
+        expect(await busy?.json()).toEqual({ error: "job_store_busy" });
+        expect(busy?.headers.get("Retry-After")).toBe("1");
+        expect(worker).not.toHaveBeenCalled();
+        expect(existsSync(join(storeDir, "jobs.json"))).toBe(false);
+      } finally { worker.mockRestore(); rmSync(heldLock, { recursive: true }); }
+      ctx.req = makeRequest();
+      const first = await handleCodexCliUpdateRoutes(ctx);
+      const firstBody = await first!.json();
+      ctx.req = makeRequest();
+      const retry = await handleCodexCliUpdateRoutes(ctx);
+      const retryBody = await retry!.json();
+      const diagnostic = (body: { error?: unknown }) => JSON.stringify({ error:
+        typeof body.error === "string" && ["invalid_request", "idempotency_conflict", "store_full",
+          "unsupported_store", "unsafe_store", "admission_failed"].includes(body.error) ? body.error : null });
+      expect(first?.status, diagnostic(firstBody)).toBe(202);
+      expect(retry?.status, diagnostic(retryBody)).toBe(202);
+      expect(retryBody.job.jobId).toBe(firstBody.job.jobId);
+      let status: { jobId?: string; ownerState?: string; outcome?: string; reason?: string } = {};
+      for (let i = 0; i < 100; i += 1) {
+        const statusRequest = new Request(`http://localhost/api/codex/cli-update/jobs/${firstBody.job.jobId}`);
+        ctx.req = statusRequest; ctx.url = new URL(statusRequest.url);
+        status = await (await handleCodexCliUpdateRoutes(ctx))!.json() as typeof status;
+        if (status.ownerState === "finished") break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(status).toMatchObject({ jobId: firstBody.job.jobId, ownerState: "finished", outcome: "refused" });
+      expect(["not_managed", "mutation_evidence_unverified"].includes(status.reason ?? "")).toBe(true);
+    } finally {
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(outer, { recursive: true });
+    }
+  });
+
   test("data-key reveal is declared as a dashboard-session-only read", () => {
     expect(MANAGEMENT_ROUTES.find(route => route.method === "POST" && route.path === "/api/keys/reveal"))
       .toMatchObject({ module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only" } });
+  });
+
+  test("the constant-backed Hermes profile list is explicitly declared", () => {
+    expect(MANAGEMENT_ROUTES.find(route =>
+      route.method === "GET" && route.path === "/api/client-integrations/hermes/profiles"))
+      .toMatchObject({
+        module: "server/management/hermes-profile-routes",
+        mutates: false,
+        mechanism: "path-constant",
+        exempt: { reason: "gui-only" },
+      });
   });
 
   test("every route resolvable from source is declared in the registry", () => {

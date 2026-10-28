@@ -1,8 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, REMOTE_PLATFORM_UNSUPPORTED, remoteOcxArgv } from "../../link/ssh-argv";
+import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../../link/ssh-argv";
 import { parseFingerprintLine } from "../../link/fingerprint";
+import { requireRemotePlatform } from "../../link/remote-platform";
+import type { SshRunner } from "../../link/ssh-runner";
 import { LINK_CATALOG_MAX_BYTES, LINK_RELAY_VERIFY_MS, isChildHealth, linkCommandBudget, linkRestartBudget, parseChildHttp, remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../link/remote-probe";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { SshRunnerError, boundHint, sshFailureHint, sshRunnerErrorHint, type SshRunResult } from "../../link/ssh-runner";
@@ -24,7 +26,6 @@ async function serialized(state: LinkRouteState, alias: string, action: () => Pr
 }
 
 function remoteFailure(result: SshRunResult, code: string, message: string): Response | null {
-  if (result.code === REMOTE_PLATFORM_UNSUPPORTED) return fail("remote_platform_unsupported", "Remote Link Children require macOS or Linux; Windows is unsupported.", 409);
   if (result.code === REMOTE_COMMAND_NOT_FOUND) return fail("remote_ocx_missing", "ocx was not found on the remote host.", 502, sshFailureHint(result.stderr));
   return result.code === 0 ? null : fail(code, message, 502, sshFailureHint(result.stderr));
 }
@@ -44,22 +45,23 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
       const started = now();
       const result = await runner.run(buildProbeArgv({ alias, tempKnownHostsFile: path }), { timeoutMs: 30_000 });
       const latency = Math.max(0, now() - started);
-      if (result.code !== 0) return fail("probe_failed", "SSH host probing failed.", 502, sshFailureHint(result.stderr));
+      if (result.code !== 0 || result.stdout.trim() !== "ocx-link-probe") return fail("probe_failed", "SSH host probing failed.", 502, sshFailureHint(result.stderr));
       const fp = await runner.run(buildFingerprintArgv(path), { timeoutMs: 10_000 });
       if (fp.code !== 0) return fail("fingerprint_failed", "The SSH host fingerprint could not be read.", 502, sshFailureHint(fp.stderr));
       const parsed = parseFingerprintLine(fp.stdout.trim());
       const line = readFileSync(path, "utf8").trim().split(/\r?\n/).filter(Boolean).at(-1);
       if (!line) return fail("fingerprint_failed", "The SSH probe did not record a host key.", 502);
+      const remotePlatform = await requireRemotePlatform(runner, alias, path);
       let ocxVersion: string | undefined;
       if (body.includeVersion === true) {
-        const versionResult = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"]), knownHostsFile: path }), { timeoutMs: 30_000 });
+        const versionResult = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path }), { timeoutMs: 30_000 });
         const denied = remoteFailure(versionResult, "version_probe_failed", "The remote ocx version could not be read.");
         if (denied) return denied;
         const parsedVersion = parseVersion(versionResult.stdout);
         if (!parsedVersion) return fail("remote_ocx_unrecognized", "The remote ocx did not report an OpenCodex version.", 502);
         ocxVersion = parsedVersion.version;
       }
-      state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency });
+      state.pendingHosts.set(alias, { alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, knownHostLine: line, probedAt: now(), sshLatencyMs: latency, remotePlatform });
       state.confirmedHosts?.delete(alias);
       return Response.json({ alias, fingerprint: parsed.fingerprint, keyType: parsed.keyType, ...(ocxVersion === undefined ? {} : { ocxVersion }) });
     } catch (error) { return fail("probe_failed", "SSH host probing failed.", 502, sshRunnerErrorHint(error)); }
@@ -84,7 +86,9 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
     writeFileSync(path, pending.knownHostLine + "\n", { mode: 0o600 });
     try {
       const started = now();
-      const result = await runnerFor(ctx).run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"]), knownHostsFile: path }), { timeoutMs: 30_000 });
+      const runner = runnerFor(ctx);
+      const remotePlatform = pending.remotePlatform ?? await requireRemotePlatform(runner, alias, path);
+      const result = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["--version"], remotePlatform), knownHostsFile: path }), { timeoutMs: 30_000 });
       const denied = remoteFailure(result, "version_probe_failed", "The remote ocx version could not be confirmed.");
       if (denied) return denied;
       const version = parseVersion(result.stdout);
@@ -93,7 +97,7 @@ export async function confirmHost(ctx: ManagementContext, state: LinkRouteState)
       if (cmp >= 0 && version.parts[cmp]! < MIN_REMOTE_OCX[cmp]!) return fail("remote_ocx_outdated", "The remote OpenCodex is older than 2.66.0.", 409, boundHint("opencodex " + version.version));
       if (state.pendingHosts.get(alias) !== pending || now() - pending.probedAt > PROBE_TTL_MS) return fail("host_confirmation_expired", "The SSH host probe changed or expired.", 409);
       withConfigMutationLockSync(() => putKnownHost(knownHostsFile(ctx), alias, pending.knownHostLine));
-      const confirmed = { ...pending, sshLatencyMs: Math.max(pending.sshLatencyMs ?? 0, now() - started), ocxVersion: version.version };
+      const confirmed = { ...pending, remotePlatform, sshLatencyMs: Math.max(pending.sshLatencyMs ?? 0, now() - started), ocxVersion: version.version };
       (state.confirmedHosts ??= new Map()).set(alias, confirmed);
       state.pendingHosts.delete(alias);
       return Response.json({ alias, fingerprint: pending.fingerprint, ocxVersion: version.version });
@@ -122,6 +126,8 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     writeFileSync(knownHosts, confirmed.knownHostLine + "\n", { mode: 0o600 });
     const runner = runnerFor(ctx), budget = linkCommandBudget(confirmed.sshLatencyMs);
     const run = (argv: readonly string[], timeoutMs = budget, maxOutputBytes?: number) => runner.run(buildExecArgv({ alias, argv, knownHostsFile: knownHosts }), { timeoutMs, ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }) });
+    let remotePlatform: "posix" | "windows";
+    const ocx = (args: readonly string[]) => remoteOcxArgv(args, remotePlatform);
     let record: LinkStore["links"][number] | undefined, input: Uint8Array | undefined;
     let remoteMayBeConnected = false, phase = "remote_port";
     const failed = async (response: Response): Promise<Response> => {
@@ -132,26 +138,27 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       return Response.json({ ...payload, residual: true, recovery: "Run ocx disconnect and ocx restart on the Child before retrying." }, { status: outcome.status });
     };
     try {
-      const chosen = await run(remoteOcxArgv(["link", "port"]));
+      remotePlatform = confirmed.remotePlatform ?? await requireRemotePlatform(runner, alias, knownHosts);
+      const chosen = await run(ocx(["link", "port"]));
       const denied = remoteFailure(chosen, "remote_port_failed", "The remote link port could not be determined.");
       if (denied) return denied;
       const remotePort = parsePort(chosen.stdout);
       if (!remotePort) return fail("remote_port_failed", "The remote link port could not be determined.", 502);
       phase = "child_preflight";
-      const configured = await run(remoteOcxArgv(["config", "show", "--json"]));
+      const configured = await run(ocx(["config", "show", "--json"]));
       let childConfig: unknown = null;
       try { if (configured.code === 0) childConfig = JSON.parse(configured.stdout); } catch { /* fail closed */ }
       if (!isRecord(childConfig) || !port(childConfig.port)) return fail("child_preflight_failed", "The Child effective configuration could not be read.", 502);
       if ((childConfig.runtimeRole ?? "standalone") !== "standalone") return fail("child_restart_unsupported", "The Child must run standalone OpenCodex; an existing Hub or Child cannot be converted by Add Child.", 409);
       const childPort = childConfig.port;
-      if ((await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409);
-      const before = await run(remoteChildHttpArgv(childPort, "healthz"));
+      if (remotePlatform === "posix" && (await run(REMOTE_CURL_PREFLIGHT)).code !== 0) return fail("child_curl_missing", "Install curl on the Child before connecting a Remote Link.", 409);
+      const before = await run(remoteChildHttpArgv(childPort, "healthz", LINK_RELAY_VERIFY_MS, remotePlatform));
       const beforeHealth = before.code === 0 ? parseChildHttp(before.stdout) : null;
       if (!isChildHealth(beforeHealth, "standalone", childPort)) return fail("child_restart_unsupported", "The Child must run a standalone OpenCodex with bound restart support; update or disconnect it before linking.", 409);
       state.confirmedHosts?.delete(alias);
       phase = "home_setup";
       const id = newLinkId(), issued = issueKey(ctx, "link:" + alias);
-      record = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString() };
+      record = { id, alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date(now()).toISOString(), remotePlatform };
       withConfigMutationLockSync(() => {
         const current = readStoreFor(ctx);
         if (current.links.some(link => link.alias === alias && link.direction === "hub-initiated")) throw new Error("link exists");
@@ -164,22 +171,22 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
       phase = "remote_connect";
       input = new TextEncoder().encode(JSON.stringify({ apiKeyId: issued.id, key: issued.key }));
       remoteMayBeConnected = true;
-      const connected = await runner.run(buildExecArgv({ alias, argv: remoteOcxArgv(["connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id]), knownHostsFile: knownHosts }), { stdin: input, timeoutMs: budget });
+      const connected = await runner.run(buildExecArgv({ alias, argv: ocx(["connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id]), knownHostsFile: knownHosts }), { stdin: input, timeoutMs: budget });
       const connectDenied = remoteFailure(connected, "remote_connect_failed", "The Child enrollment command failed.");
       if (connectDenied) return await failed(connectDenied);
       input.fill(0);
       phase = "child_restart";
-      const restarted = await run(remoteOcxArgv(["restart"]), linkRestartBudget(confirmed.sshLatencyMs));
+      const restarted = await run(ocx(["restart"]), linkRestartBudget(confirmed.sshLatencyMs));
       if (restarted.code !== 0) return await failed(fail("child_restart_failed", "The Child restart could not be verified.", 502, sshFailureHint(restarted.stderr)));
       phase = "child_relay";
       const deadline = now() + LINK_RELAY_VERIFY_MS, remaining = () => Math.max(1, deadline - now());
-      const health = await run(remoteChildHttpArgv(childPort, "healthz", remaining()), remaining());
+      const health = await run(remoteChildHttpArgv(childPort, "healthz", remaining(), remotePlatform), remaining());
       if (!isChildHealth(health.code === 0 ? parseChildHttp(health.stdout) : null, "client", childPort)) return await failed(fail("child_runtime_not_client", "The Child is not serving the client runtime after restart.", 502));
       let admitted = false;
       const unsubscribe = state.listener.onAuthenticatedCatalog(keyId => { if (keyId === issued.id) admitted = true; });
       try {
         if (now() >= deadline) return await failed(fail("child_relay_timeout", "The Child relay verification deadline expired.", 502));
-        const catalog = await run(remoteChildHttpArgv(childPort, "v1/catalog", remaining()), remaining(), LINK_CATALOG_MAX_BYTES);
+        const catalog = await run(remoteChildHttpArgv(childPort, "v1/catalog", remaining(), remotePlatform), remaining(), LINK_CATALOG_MAX_BYTES);
         let data: unknown = null;
         try { if (catalog.code === 0) data = parseChildHttp(catalog.stdout); } catch { /* malformed is not a completed catalog */ }
         if (!isRecord(data) || !Array.isArray(data.models) || !admitted || now() > deadline) return await failed(fail("child_relay_failed", "The Child did not relay a complete authenticated catalog through this Home.", 502));

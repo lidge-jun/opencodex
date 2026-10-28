@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # удалить прежние управляемые pre-push и post-merge
 bun run dev:proxy    # прокси-API в режиме разработки
 bun run dev:gui      # dev-сервер дашборда (другой терминал)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # полный набор тестов (по умолчанию)
 ```
 
@@ -123,7 +123,7 @@ Pull request'ы с ребейзом приветствуются: ребейз �
 
 ## Конвенции
 
-- **Только ES Modules** (`import`/`export`), TypeScript, режим `strict`. Держите `bun x tsc --noEmit`
+- **Только ES Modules** (`import`/`export`), TypeScript, режим `strict`. Держите `bun run typecheck`
   без ошибок.
 - **Не более ~500 строк на файл** — разделяйте по ответственности (сайдкары `web-search/` и
   `vision/` — хорошие примеры небольших сфокусированных модулей за единым `index.ts`).

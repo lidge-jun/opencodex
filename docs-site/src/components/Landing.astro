@@ -111,6 +111,7 @@ const fr = {
 	'Installation guide': 'Guide d’installation',
 	'All releases and checksums': 'Toutes les versions et sommes de contrôle',
 	'Desktop app guide': 'Guide de l’app de bureau',
+	'Code signing policy': 'Politique de signature du code',
 	'Desktop App': 'App de bureau',
 	'Latest release': 'Dernière version',
 	'Star on GitHub': 'Ajouter une étoile sur GitHub',
@@ -343,6 +344,12 @@ const docsMap = [
 			<a href={`${prefix}getting-started/installation/`}>{t('Installation guide', '설치 가이드', '安装指南', 'Руководство по установке', 'インストールガイド', '安裝指南', 'Kurulum kılavuzu')}</a>
 			<a href="https://github.com/lidge-jun/opencodex/releases/latest">{t('All releases and checksums', '전체 릴리스와 체크섬', '所有版本与校验和', 'Все релизы и контрольные суммы', 'すべてのリリースとチェックサム', '所有版本與校驗碼', 'Tüm sürümler ve sağlama toplamları')}</a>
 			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>
+		</p>
+		<!-- SignPath Foundation's terms require this attribution, verbatim, and the code signing
+		     policy link on the download page; the policy page exists in English only. -->
+		<p class="lp-dl-foot">
+			<span>Free code signing provided by <a href="https://about.signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.</span>
+			<a href={`${base}reference/code-signing/`}>{t('Code signing policy', '코드 서명 정책', '代码签名策略', 'Политика подписи кода', 'コード署名ポリシー', '程式碼簽署政策', 'Kod imzalama politikası')}</a>
 		</p>
 	</section>
 

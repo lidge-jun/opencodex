@@ -7,12 +7,17 @@
  * own config under OpenCode. Neither proves LazyCodex is installed, and `~/.omo` exists for all
  * of them, so this reads only LazyCodex's footprint inside CODEX_HOME: the Codex plugin
  * `omo@sisyphuslabs` enabled in config.toml (the key LazyCodex's own doctor checks) and an
- * installed copy of it carrying the `lazycodex-install.json` receipt its installer writes.
+ * installed copy of it. A copy counts when it carries the plugin manifest, which every install
+ * route writes, or the `lazycodex-install.json` receipt only the npx installer writes: a copy the
+ * plugin's auto-update syncs from the marketplace has no receipt, and an update leaves the old
+ * version directory behind empty.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const LAZYCODEX_PLUGIN_ID = "omo@sisyphuslabs";
+
+const INSTALL_MARKERS = [join(".codex-plugin", "plugin.json"), "lazycodex-install.json"];
 
 export interface LazyCodexDetection {
   readonly detected: boolean;
@@ -35,7 +40,7 @@ function pluginInstalled(codexHome: string): boolean {
   const root = join(codexHome, "plugins", "cache", "sisyphuslabs", "omo");
   try {
     return readdirSync(root, { withFileTypes: true })
-      .some(entry => entry.isDirectory() && existsSync(join(root, entry.name, "lazycodex-install.json")));
+      .some(entry => entry.isDirectory() && INSTALL_MARKERS.some(marker => existsSync(join(root, entry.name, marker))));
   } catch {
     return false;
   }

@@ -8,6 +8,7 @@ import {
   JEV_MAX_CANDIDATE_FIELD_CHARS,
 } from "./types";
 
+import { isDecisionsEndpoint } from "./jev-decision-contract";
 import {
   exchangeJevDecision,
   JEV_PROVIDER_ID,
@@ -25,6 +26,8 @@ export const JEV_MAX_CANDIDATES = 64;
 /** Ollama's System One choice questions accept 2..26 options; other services share the floor. */
 const SELF_HOSTED_MIN_OPTIONS = 2;
 const SELF_HOSTED_MAX_OPTIONS = 26;
+const DECISIONS_MIN_OPTIONS = 2;
+const DECISIONS_MAX_OPTIONS = 255;
 
 const TASK_CHARS = 500;
 const TASK_HEAD_CHARS = 320;
@@ -80,6 +83,8 @@ export interface JevCandidate {
   /** Optional operator note sent as decision evidence for this target only. */
   modelProfile?: string;
   quota?: JevQuotaSignal;
+  /** Internal native identity from ordinary routing; never replaces the configured allowlist. */
+  quotaIdentity?: { provider: string; model: string } | null;
 }
 
 /**
@@ -107,6 +112,10 @@ export interface JevDecision {
   confidence?: number;
   chosenProbability?: number;
   usage?: Record<string, number>;
+  /** Set when an opt-in session pin (#7525) supplied this decision without asking the backend. */
+  pinned?: true;
+  /** `session` with `pinned`; otherwise why an existing session pin was released first. */
+  pinReason?: import("./jev-session-pin-config").JevSessionPinReason;
 }
 
 export interface ResolveJevDecisionOptions {
@@ -564,19 +573,46 @@ export function parseJevDecision(
   payload: unknown,
   candidates: readonly JevCandidate[],
 ): Pick<JevDecision, "targetKey" | "effort" | "confidence" | "chosenProbability" | "usage"> {
-  if (!isRecord(payload) || !isRecord(payload.answers) || !isRecord(payload.answers.route)) {
+  if (!isRecord(payload)) {
     throw new Error("missing JEV route decision");
   }
-  const answer = payload.answers.route;
+  let answer: Record<string, unknown> | undefined;
+  if (isRecord(payload.answers) && isRecord(payload.answers.route)) {
+    answer = payload.answers.route as Record<string, unknown>;
+  } else if (Array.isArray(payload.answers)) {
+    const routeAnswers = payload.answers.filter((a): a is Record<string, unknown> => isRecord(a) && a.name === "route");
+    if (routeAnswers.length === 1) {
+      answer = routeAnswers[0];
+    } else if (routeAnswers.length > 1) {
+      throw new Error("duplicate JEV route decision");
+    }
+  }
+  if (!answer) {
+    throw new Error("missing JEV route decision");
+  }
   const options = candidateOptions(candidates);
-  if (typeof answer.choice !== "string" || !options.has(answer.choice)) {
+  const choiceValue = typeof answer.choice === "string" ? answer.choice : (typeof answer.value === "string" ? answer.value : undefined);
+  if (!choiceValue || !options.has(choiceValue)) {
     throw new Error("unknown JEV route choice");
   }
 
   let chosenProbability: number | undefined;
   if (answer.probabilities !== undefined) {
-    const probabilities = answer.probabilities;
-    if (!isRecord(probabilities)) throw new Error("invalid JEV route probabilities");
+    let probabilities: Record<string, unknown>;
+    if (Array.isArray(answer.probabilities)) {
+      probabilities = {};
+      for (const item of answer.probabilities) {
+        if (!isRecord(item)) throw new Error("invalid JEV route probabilities");
+        const k = typeof item.choice === "string" ? item.choice : (typeof item.value === "string" ? item.value : undefined);
+        if (!k) throw new Error("invalid JEV route probabilities");
+        if (Object.hasOwn(probabilities, k)) throw new Error("invalid JEV route probabilities");
+        probabilities[k] = item.probability;
+      }
+    } else if (isRecord(answer.probabilities)) {
+      probabilities = answer.probabilities as Record<string, unknown>;
+    } else {
+      throw new Error("invalid JEV route probabilities");
+    }
     const expected = [...options.keys()].sort();
     const actual = Object.keys(probabilities).sort();
     if (expected.length !== actual.length || expected.some((key, index) => key !== actual[index])) {
@@ -587,7 +623,7 @@ export function parseJevDecision(
       throw new Error("invalid JEV route probabilities");
     }
     const numeric = values as number[];
-    const selected = probabilities[answer.choice] as number;
+    const selected = probabilities[choiceValue] as number;
     if (Math.abs(numeric.reduce((sum, value) => sum + value, 0) - 1) > 0.02
       || selected < Math.max(...numeric) - 1e-6) {
       throw new Error("inconsistent JEV route distribution");
@@ -595,7 +631,7 @@ export function parseJevDecision(
     chosenProbability = selected;
   }
 
-  const option = options.get(answer.choice)!;
+  const option = options.get(choiceValue)!;
   const confidence = typeof answer.confidence === "number"
     && Number.isFinite(answer.confidence)
     && answer.confidence >= 0
@@ -628,6 +664,31 @@ export function fallbackDecision(
  * Every operational or response failure returns the supplied first-eligible fallback. A caller
  * abort is the exception: request cancellation remains cancellation and is rethrown by identity.
  */
+function formatDecisionsInput(state: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof state.task === "string" && state.task.trim()) {
+    parts.push(`Task: ${state.task.trim()}`);
+  }
+  if (isRecord(state.signals)) {
+    const sigs: string[] = [];
+    if (state.signals.has_image === true) sigs.push("has_image");
+    if (state.signals.tool_history === true) sigs.push("tool_history");
+    if (sigs.length > 0) parts.push(`Signals: ${sigs.join(", ")}`);
+  }
+  if (typeof state.previous_assistant === "string" && state.previous_assistant.trim()) {
+    parts.push(`Recent Assistant: ${state.previous_assistant.trim()}`);
+  }
+  if (isRecord(state.step) && state.step.type === "tool_step") {
+    const step = state.step;
+    const toolName = isRecord(step.tool_call) && typeof step.tool_call.name === "string" ? step.tool_call.name : "";
+    const toolOutput = typeof step.last_tool_output_tail === "string" ? step.last_tool_output_tail : "";
+    if (toolName || toolOutput) {
+      parts.push(`Recent Tool Call: ${toolName}\nTool Output: ${toolOutput}`.trim());
+    }
+  }
+  return parts.length > 0 ? parts.join("\n\n") : JSON.stringify(state);
+}
+
 export async function resolveJevDecision(options: ResolveJevDecisionOptions): Promise<JevDecision> {
   const now = options.now ?? Date.now;
   const startedAt = now();
@@ -641,15 +702,46 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
 
   let candidates = options.candidates;
   const exchanged = await exchangeJevDecision(options, (endpoint) => {
-    if (endpoint.descriptiveCriteria) {
+    const isDecisions = Boolean(endpoint.url && isDecisionsEndpoint(endpoint.url));
+    const optionCount = candidateOptions(options.candidates).size;
+    if (isDecisions) {
+      if (optionCount < DECISIONS_MIN_OPTIONS) return "no_choices";
+      if (optionCount > DECISIONS_MAX_OPTIONS) return "invalid";
+    } else if (endpoint.descriptiveCriteria) {
       // Self-hosted choice questions accept 2..26 options; decide locally instead of spending a
       // round-trip on a request the service will refuse.
-      const optionCount = candidateOptions(options.candidates).size;
       if (optionCount < SELF_HOSTED_MIN_OPTIONS) return "no_choices";
       if (optionCount > SELF_HOSTED_MAX_OPTIONS) return "invalid";
     }
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return "no_state";
+    if (isDecisions && endpoint.url) {
+      const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => {
+        const routeOptions = candidateOptions(rows);
+        return JSON.stringify({
+          model: endpoint.model,
+          input: formatDecisionsInput(state),
+          questions: [
+            {
+              name: "route",
+              type: "choice",
+              instructions: "Which target AND reasoning effort together best fit the next model call? Select sufficient capability and reasoning for a correct next step while avoiding unnecessary resource use.",
+              choices: [...routeOptions.entries()].map(([choice, opt]) => {
+                const cand = rows.find(r => r.key === opt.targetKey);
+                const desc = criterionDescription(opt.criterion, cand?.quota);
+                const note = cand?.modelProfile?.trim();
+                return {
+                  value: choice,
+                  description: note ? `${desc} (${note})` : desc,
+                };
+              }),
+            },
+          ],
+        });
+      }, REQUEST_LIMIT);
+      candidates = payload.candidates;
+      return { body: payload.body };
+    }
     const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => JSON.stringify({
       model: endpoint.model, state,
       questions: buildJevRouteQuestion(rows, { descriptiveCriteria: endpoint.descriptiveCriteria }),

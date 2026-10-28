@@ -9,6 +9,7 @@ import { hasInjectedCodexRouting } from "./injected-marker";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
+import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -76,6 +77,15 @@ interface Journal {
    * file we actually touched.
    */
   injectedCatalogPath?: string | null;
+  /**
+   * The marker-owned `[agents]` default values this injection wrote, keyed by TOML key.
+   *
+   * #7425: the marker comment proves OpenCodex wrote a line once, not that the value is still
+   * ours. A user (or a comment-preserving Codex settings writer) can change the value and keep
+   * the comment, and the next sync used to revert it. The recorded value is what tells an
+   * untouched managed line apart from an edited one. Null when no managed default was written.
+   */
+  injectedSubagentDefaults?: WrittenSubagentDefaults | null;
   /** Injection binding survives native snapshot replacement and is released by native restore. */
   opencodexHome?: string;
   pid: number;
@@ -106,6 +116,17 @@ function sha256(content: string | null): string | null {
   return content === null ? null : createHash("sha256").update(content).digest("hex");
 }
 
+function defaultOwnershipAllowsSnapshot(journal: Journal, config: string | null): boolean {
+  const written = parseInjectedSubagentDefaults(journal.injectedSubagentDefaults);
+  if (!written || config === null) return true;
+  // A first-injection hash may match after a later managed write. If the newer ownership
+  // evidence preserves a value that bare markers would remove, use field-level restore.
+  // An ambiguous transform likewise cannot authorize replaying the whole snapshot.
+  const byRecord = transformManagedSubagentDefaults(config, null, written);
+  const byMarker = transformManagedSubagentDefaults(config, null);
+  return byRecord.ok && byMarker.ok && byRecord.content === byMarker.content;
+}
+
 function compareJournalState(journal: Journal, config: string | null, profile: string | null) {
   const originalConfig = Buffer.from(journal.originalConfig, "base64").toString("utf-8");
   const originalProfile = journal.originalProfile === null
@@ -120,7 +141,10 @@ function compareJournalState(journal: Journal, config: string | null, profile: s
     originalProfile,
     configAlreadyOriginal,
     profileAlreadyOriginal,
-    configUnchanged: configAlreadyOriginal || (configHashKnown && sha256(config) === journal.injectedConfigHash),
+    configUnchanged: configAlreadyOriginal || (
+      configHashKnown && sha256(config) === journal.injectedConfigHash
+      && defaultOwnershipAllowsSnapshot(journal, config)
+    ),
     profileUnchanged: profileAlreadyOriginal || (profileHashKnown && sha256(profile) === (journal.injectedProfileHash ?? null)),
     unverified: (!configHashKnown && !configAlreadyOriginal) || (!profileHashKnown && !profileAlreadyOriginal),
   };
@@ -203,6 +227,8 @@ export interface InjectedJournalOwnership {
   injectedRootWebSearch?: string | null;
   /** Omitted by callers that removed no user `web_search` line. */
   replacedRootWebSearch?: string | null;
+  /** Omitted by callers that wrote no managed `[agents]` default, which is the value it then records. */
+  injectedSubagentDefaults?: WrittenSubagentDefaults | null;
 }
 
 export function markJournalInjectedState(
@@ -230,6 +256,7 @@ export function markJournalInjectedState(
   journal.injectedRealtimeWsBaseUrl = ownership.injectedRealtimeWsBaseUrl;
   journal.injectedRootWebSearch = ownership.injectedRootWebSearch ?? null;
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
+  journal.injectedSubagentDefaults = ownership.injectedSubagentDefaults ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
   journal.opencodexHome = opencodexHomeForInjection(journal.opencodexHome);
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal), undefined, hooks);
@@ -265,6 +292,24 @@ export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } =
 /** The catalog path the last injection wrote to, or null when none was recorded. */
 export function journaledInjectedCatalogPath(): string | null {
   return readJournal()?.injectedCatalogPath ?? null;
+}
+
+/**
+ * The managed `[agents]` default values the last injection wrote, or null when there is no
+ * record. The journal is read from disk, so only string values for the two known keys count.
+ */
+export function journaledInjectedSubagentDefaults(options: { readOnly?: boolean } = {}): WrittenSubagentDefaults | null {
+  return parseInjectedSubagentDefaults(readJournal(options.readOnly !== true)?.injectedSubagentDefaults);
+}
+
+function parseInjectedSubagentDefaults(recorded: unknown): WrittenSubagentDefaults | null {
+  if (typeof recorded !== "object" || recorded === null) return null;
+  const written: WrittenSubagentDefaults = {};
+  for (const key of ["default_subagent_model", "default_subagent_reasoning_effort"] as const) {
+    const value = (recorded as Record<string, unknown>)[key];
+    if (typeof value === "string") written[key] = value;
+  }
+  return Object.keys(written).length > 0 ? written : null;
 }
 
 export function removeJournal(hooks: AtomicWriteHooks = {}): void {
@@ -441,6 +486,12 @@ function warnIfJournalRetained(): void {
 
 export interface ReconcileJournalOptions {
   activeClientApiKeyId?: string;
+  /**
+   * #7423: an update stopped the previous proxy and handed its Codex routing to this one.
+   * A process-owned journal whose owner is gone is then adopted rather than replayed, so
+   * startup does not restore native config in the seconds before its own sync re-injects.
+   */
+  adoptUpdateHandover?: boolean;
 }
 
 export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean {
@@ -481,6 +532,15 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     if ((e as NodeJS.ErrnoException).code === "EPERM") {
       return false;
     }
+  }
+  if (options.adoptUpdateHandover) {
+    // The original baseline and injected-state hashes stay as written; only ownership moves.
+    // Published like every other journal write, so a replaced Codex home is refused rather
+    // than overwritten; a refusal preserves both the journal and the config.
+    const adopted = JSON.stringify({ ...journal, pid: process.pid, owner: { kind: "process", pid: process.pid } });
+    try { publishCodexArtifact(JOURNAL_PATH, handle, (path, hooks) => atomicWriteFile(path, adopted, undefined, hooks)); }
+    catch { console.error("⚠️ The Codex journal handed over by an update could not be adopted; the journal and configuration were preserved."); }
+    return false;
   }
   const restored = restoreJournalState({ heldConfigWriteLock: handle });
   if (restored.unverified) {

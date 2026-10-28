@@ -1,0 +1,8 @@
+{
+  "local-upstream-deadlines.test.ts": "responses",
+  "refreshed-upstream-deadlines.test.ts": "responses",
+  "chat-raw-reasoning-delivery.test.ts": "responses",
+  "chat-incomplete-length-reason.test.ts": "responses",
+  "openai-chat-required-tool.test.ts": "adapters/openai",
+  "responses-required-chat-tool.test.ts": "responses"
+}

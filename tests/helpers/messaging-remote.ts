@@ -15,7 +15,13 @@ export function remoteMessagingPair(handler?: (call: LocalCall) => unknown | Pro
     ? { data: [LOCAL_OTHER], nextCursor: null } : call.method === "thread/read" ? { thread: localFixtureThread(LOCAL_OTHER, "sender") } : undefined));
   const b = localMessagingFixture(handler);
   const aStore = new RemoteMessageStore(join(a.root, "ocx")), bStore = new RemoteMessageStore(join(b.root, "ocx"));
-  const aState = aStore.enable(remotePortCandidate()), bState = bStore.enable(remotePortCandidate());
+  const [aState, bState] = (() => {
+    // These owners share a host; keep the first port reserved while selecting the second.
+    const reserved = Bun.listen({ hostname: "127.0.0.1", port: 0, exclusive: true,
+      socket: { data(socket) { socket.end(); } } });
+    try { return [aStore.enable(reserved.port), bStore.enable(remotePortCandidate())] as const; }
+    finally { reserved.stop(true); }
+  })();
   const transaction = crypto.randomUUID(), incoming = capability();
   const reply = handleEnrollmentControl(bStore, { protocol: REMOTE_PROTOCOL, action: "enroll",
     params: { machine: aState.machine, transaction, returnCapability: incoming, port: aState.port } }) as { capability: string };

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../../src/adapters/openai-chat";
 import type { TranslatorBudget } from "../../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../../src/types";
@@ -459,4 +459,193 @@ data: [DONE]
     }
     expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: limit === 9 ? 1 : 0 });
   });
+});
+
+
+describe("negotiated block-stop tool completion", () => {
+  const completionHeader = { "x-opencodex-tool-completion": "block-stop-v1" };
+  const marker = (index: number, id: string) => ({ index, id, x_opencodex_completed: "block-stop-v1" });
+  const call = (index: number, id: string, args = '{"cmd":"pwd"}') => ({ index, id, function: { name: "shell", arguments: args } });
+  const tail = { choices: [{ delta: { content: "Later text" } }] };
+  const prepare = (adapter: ReturnType<typeof createOpenAIChatAdapter>) => adapter.buildRequest({ modelId: "fixture", stream: true, options: {},
+    context: { messages: [{ role: "user", content: "fixture", timestamp: 0 }], tools: [] } }, { completedToolBlocks: true });
+
+  async function events(frames: unknown[], optIn = true, acknowledged = true) {
+    const adapter = createOpenAIChatAdapter({ ...provider, ...(optIn ? { headers: completionHeader } : {}) });
+    prepare(adapter);
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(sse(frames), { headers: acknowledged ? completionHeader : {} }), undefined, undefined, { completedToolBlocks: true })) out.push(event);
+    return out;
+  }
+  test("a completed structured call reaches the client before later text, exactly once", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    expect(out.findIndex(e => e.type === "tool_call_end")).toBeLessThan(out.findIndex(e => e.type === "text_delta"));
+    expect(assembled(out)).toEqual([{ id: "call_a", name: "shell", args: '{"cmd":"pwd"}' }]);
+  });
+  test("both configuration opt-in and relay acknowledgment are required", async () => {
+    for (const [optIn, ack] of [[false, true], [true, false]]) {
+      const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")], optIn, ack);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("out-of-order completion waits for the original pending-call prefix", async () => {
+    const out = await events([chunkOf([call(0, "call_a"), call(1, "call_b")]), chunkOf([marker(1, "call_b")]), tail, chunkOf([marker(0, "call_a")]), chunkOf([], "tool_calls")]);
+    expect(assembled(out).map(c => c.id)).toEqual(["call_a", "call_b"]);
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+  });
+  test("later fragments for a completed call terminate rather than executing it again", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), chunkOf([{ index: 0, function: { arguments: " " } }]), chunkOf([], "tool_calls")]);
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.at(-1)?.type).toBe("error");
+  });
+  test("an invalid completion sequence still reports the usage already captured", async () => {
+    const out = await events([
+      chunkOf([call(0, "call_a")]),
+      chunkOf([marker(0, "call_a")]),
+      { choices: [], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } },
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]);
+    const error = out.at(-1);
+    expect(error?.type).toBe("error");
+    expect(error?.message).toContain("invalid negotiated tool completion sequence");
+    expect(error?.usage).toEqual({ inputTokens: 11, outputTokens: 7 });
+  });
+  test("root input calls stay buffered for existing freeform reconciliation", async () => {
+    const out = await events([chunkOf([call(0, "call_a", '{"input":"pwd"}')]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+  });
+  test("consumer cancellation after a completed call releases reservations without success", async () => {
+    const budget = createTestTranslatorBudget();
+    const adapter = createOpenAIChatAdapter({ ...provider, headers: completionHeader });
+    prepare(adapter);
+    const response = new Response(sse([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]), { headers: completionHeader });
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(response, budget, undefined, { completedToolBlocks: true })) {
+      out.push(event);
+      if (event.type === "tool_call_end") break;
+    }
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.some(e => e.type === "done" || e.type === "error")).toBe(false);
+    expect(response.body?.locked).toBe(false);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    expect(budget.snapshot().activeCalls).toBe(0);
+  });
+  test("trusted request construction cannot authorize another response parser", async () => {
+    const adapter = createOpenAIChatAdapter({ ...provider, headers: completionHeader });
+    prepare(adapter);
+    const body = sse([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    for (const streamContext of [undefined, { completedToolBlocks: false }]) {
+      const out: AdapterEvent[] = [];
+      for await (const event of adapter.parseStream(new Response(body, { headers: completionHeader }), undefined, undefined, streamContext)) out.push(event);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("a marker cannot claim another index or call ID", async () => {
+    for (const bad of [marker(1, "call_a"), marker(0, "call_b"), { ...marker(0, "call_a"), x_opencodex_completed: "future-v2" }]) {
+      const out = await events([chunkOf([call(0, "call_a")]), chunkOf([bad]), chunkOf([], "tool_calls")]);
+      expect(assembled(out)).toHaveLength(0);
+      expect(out.at(-1)?.type).toBe("error");
+    }
+  });
+  test("held serialized text and reasoning retain their place ahead of tools", async () => {
+    const held = { choices: [{ delta: { content: '<tool_call name="shell">' } }] };
+    const reasoning = { choices: [{ delta: { reasoning_content: "fixture reasoning" } }] };
+    const out = await events([held, reasoning, chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    const start = out.findIndex(e => e.type === "tool_call_start");
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(start);
+    expect(out.findIndex(e => e.type === "reasoning_raw_delta")).toBeLessThan(start);
+  });
+  test("24 reverse markers preserve pending order with no duplicate terminal calls", async () => {
+    const calls = Array.from({ length: 24 }, (_, i) => call(i, `call_${i}`));
+    const stops = Array.from({ length: 24 }, (_, i) => chunkOf([marker(23-i, `call_${23-i}`)]));
+    const out = await events([chunkOf(calls), ...stops, tail, chunkOf([], "tool_calls")]);
+    expect(assembled(out).map(c => c.id)).toEqual(calls.map(c => c.id));
+    expect(out.findLastIndex(e => e.type === "tool_call_end")).toBeLessThan(out.findIndex(e => e.type === "text_delta"));
+  });
+  test("invalid or non-object arguments retain the existing terminal path", async () => {
+    for (const args of ['{"cmd":', '[]', 'null', '"pwd"']) {
+      const out = await events([chunkOf([call(0, "call_a", args)]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("a later upstream error preserves the closed call but never reports success", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), { error: { message: "fixture stream failed", type: "server_error" } }]);
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.at(-1)?.type).toBe("error");
+    expect(out.some(e => e.type === "done")).toBe(false);
+  });
+});
+
+test("fragmented large SSE lines bound UTF-8 counting work without changing tool arguments", async () => {
+  const args = JSON.stringify({ code: "x".repeat(256 * 1024) });
+  const wire = new TextEncoder().encode(sse([
+    chunkOf([{ index: 0, id: "call_fragmented", function: { name: "review", arguments: args } }]),
+    chunkOf([], "tool_calls"),
+  ]));
+  let cursor = 0;
+  const source = new ReadableStream<Uint8Array>({ pull(controller) {
+    if (cursor === wire.length) { controller.close(); return; }
+    const next = Math.min(cursor + 512, wire.length);
+    controller.enqueue(wire.subarray(cursor, next)); cursor = next;
+  } });
+  let encodedCharacters = 0;
+  const original = TextEncoder.prototype.encode;
+  const counting = spyOn(TextEncoder.prototype, "encode").mockImplementation(function (this: TextEncoder, input?: string) {
+    encodedCharacters += input?.length ?? 0;
+    return original.call(this, input);
+  });
+  try {
+    const events: AdapterEvent[] = [];
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(source))) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "call_fragmented", name: "review", args }]);
+    expect(events.at(-1)?.type).toBe("done");
+    // A deterministic work bound, not a wall-clock test. Re-encoding the growing
+    // unfinished line for every 512-byte fragment exceeds this by orders of magnitude.
+    expect(encodedCharacters).toBeLessThan(wire.length * 8);
+  } finally { counting.mockRestore(); }
+});
+
+
+test("fragmented SSE carry preserves Unicode, CRLF and unterminated EOF frames", async () => {
+  for (const size of [1, 2, 3, 7, 512]) {
+    const args = JSON.stringify({ code: "é🐢汉字\r\n" });
+    const wire = new TextEncoder().encode(sse([
+      chunkOf([{ index: 0, id: "unicode", function: { name: "review", arguments: args } }]),
+      chunkOf([], "tool_calls"),
+    ]).replaceAll("\n", "\r\n").trimEnd());
+    let cursor = 0;
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (cursor >= wire.length) { controller.close(); return; }
+      controller.enqueue(wire.subarray(cursor, cursor + size)); cursor += size;
+    } });
+    const events: AdapterEvent[] = [];
+    const budget = createTestTranslatorBudget();
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(stream), budget)) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "unicode", name: "review", args }]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  }
+});
+
+
+test("fragmented invalid UTF-8 keeps decoder replacement and carry accounting", async () => {
+  const wire = new TextEncoder().encode(sse([
+    chunkOf([{ index: 0, id: "replacement", function: { name: "review", arguments: JSON.stringify({ code: "MARK" }) } }]),
+    chunkOf([], "tool_calls"),
+  ]));
+  const at = new TextDecoder().decode(wire).indexOf("MARK");
+  wire.set([0xed, 0xa0, 0x80], at); // Invalid UTF-8 surrogate, not three ASCII bytes.
+  const expected = JSON.stringify({ code: "���K" });
+  for (const size of [1, 2, 7]) {
+    let cursor = 0;
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (cursor >= wire.length) { controller.close(); return; }
+      controller.enqueue(wire.subarray(cursor, cursor + size)); cursor += size;
+    } });
+    const events: AdapterEvent[] = [];const budget = createTestTranslatorBudget();
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(stream), budget)) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "replacement", name: "review", args: expected }]);
+    expect(events.at(-1)?.type).toBe("done");expect(budget.snapshot().currentBytes).toBe(0);
+  }
 });

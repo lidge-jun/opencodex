@@ -1,12 +1,14 @@
 /**
  * `ocx models` subcommand — list configured models and manage custom models.
  */
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { resolveMatchedPrice, type MatchedPrice } from "../usage/cost";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { configuredContextWindow } from "../codex/catalog/provider-fetch";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
 import {
   configuredReasoningEfforts,
   modelRecordValue,
@@ -174,58 +176,61 @@ async function handleCustomAdd(args: string[], deps: ModelsCommandDeps): Promise
   if (!provider || !modelId) fail("provider and modelId are required", ADD_USAGE);
   if (!isValidProviderName(provider)) fail(`invalid provider name "${provider}"`);
 
-  const config = loadConfig();
-  if (!hasOwnProvider(config.providers, provider)) {
-    fail(`provider "${provider}" is not configured. See: ocx provider list`);
-  }
-
-  const displayName = displayNameValue?.trim() || undefined;
-  if (displayName?.includes("/")) fail("displayName must not contain /");
-
-  let contextWindow: number | undefined;
-  if (contextWindowValue !== undefined) {
-    contextWindow = Number(contextWindowValue);
-    if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
-      fail("context window must be a positive integer");
+  const { config, entry } = await withConfigDirHardeningSettled(getConfigDir(), () => {
+    const config = readCliConfigForMutation();
+    if (!hasOwnProvider(config.providers, provider)) {
+      fail(`provider "${provider}" is not configured. See: ocx provider list`);
     }
-  }
 
-  let inputModalities: string[] | undefined;
-  if (modalitiesValue !== undefined) {
-    inputModalities = modalitiesValue.split(",").map(value => value.trim());
-    const invalid = inputModalities.filter(value => !ALLOWED_MODALITIES.has(value));
-    if (inputModalities.length === 0 || invalid.length > 0) {
-      fail("modalities must be comma-separated values from text|image|audio");
+    const displayName = displayNameValue?.trim() || undefined;
+    if (displayName?.includes("/")) fail("displayName must not contain /");
+
+    let contextWindow: number | undefined;
+    if (contextWindowValue !== undefined) {
+      contextWindow = Number(contextWindowValue);
+      if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
+        fail("context window must be a positive integer");
+      }
     }
-    inputModalities = [...new Set(inputModalities)];
-  }
 
-  const parsed = parseReasoningArgs(reasoningEffortsValue, defaultEffortValue);
-  if (parsed.error) fail(parsed.error);
+    let inputModalities: string[] | undefined;
+    if (modalitiesValue !== undefined) {
+      inputModalities = modalitiesValue.split(",").map(value => value.trim());
+      const invalid = inputModalities.filter(value => !ALLOWED_MODALITIES.has(value));
+      if (inputModalities.length === 0 || invalid.length > 0) {
+        fail("modalities must be comma-separated values from text|image|audio");
+      }
+      inputModalities = [...new Set(inputModalities)];
+    }
 
-  const existing = config.customModels ?? [];
-  const slug = routedSlug(provider, modelId);
-  if (existing.some(model => routedSlug(model.provider, model.modelId) === slug)) {
-    fail(`custom model "${slug}" already exists`);
-  }
-  const known = knownModelIdsForProvider(provider, config.providers[provider], config);
-  if (encodedModelIdCollides(modelId, known)) {
-    fail(`custom model "${slug}" is ambiguous; it encodes to an existing model id`);
-  }
+    const parsed = parseReasoningArgs(reasoningEffortsValue, defaultEffortValue);
+    if (parsed.error) fail(parsed.error);
 
-  const entry: OcxCustomModel = {
-    id: randomUUID(),
-    provider,
-    modelId,
-    ...(displayName ? { displayName } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
-    ...(inputModalities ? { inputModalities } : {}),
-    ...(parsed.reasoningEfforts ? { reasoningEfforts: parsed.reasoningEfforts } : {}),
-    ...(parsed.defaultReasoningEffort ? { defaultReasoningEffort: parsed.defaultReasoningEffort } : {}),
-    addedAt: new Date().toISOString(),
-  };
-  config.customModels = [...existing, entry];
-  saveConfig(config);
+    const existing = config.customModels ?? [];
+    const slug = routedSlug(provider, modelId);
+    if (existing.some(model => routedSlug(model.provider, model.modelId) === slug)) {
+      fail(`custom model "${slug}" already exists`);
+    }
+    const known = knownModelIdsForProvider(provider, config.providers[provider], config);
+    if (encodedModelIdCollides(modelId, known)) {
+      fail(`custom model "${slug}" is ambiguous; it encodes to an existing model id`);
+    }
+
+    const entry: OcxCustomModel = {
+      id: randomUUID(),
+      provider,
+      modelId,
+      ...(displayName ? { displayName } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
+      ...(inputModalities ? { inputModalities } : {}),
+      ...(parsed.reasoningEfforts ? { reasoningEfforts: parsed.reasoningEfforts } : {}),
+      ...(parsed.defaultReasoningEffort ? { defaultReasoningEffort: parsed.defaultReasoningEffort } : {}),
+      addedAt: new Date().toISOString(),
+    };
+    config.customModels = [...existing, entry];
+    saveConfig(config);
+    return { config, entry };
+  });
   const sync = await syncCustomModelsIfLive(config, deps);
   printCustomMutation("added", entry, sync, wantsJson);
 }
@@ -256,7 +261,7 @@ async function handleCustomRemove(args: string[], deps: ModelsCommandDeps): Prom
     return;
   }
 
-  const config = loadConfig();
+  const config = readCliConfigForMutation({ passive: true });
   const existing = config.customModels ?? [];
   // Slug matching goes through the shared resolver so this command sees the same collision
   // class catalog filtering and persisted sync see (#2491). `slugEquals` compares the raw and
@@ -298,10 +303,18 @@ async function handleCustomRemove(args: string[], deps: ModelsCommandDeps): Prom
     return;
   }
 
-  const next = existing.filter((_, modelIndex) => modelIndex !== index);
-  config.customModels = next.length > 0 ? next : undefined;
-  saveConfig(config);
-  const sync = await syncCustomModelsIfLive(config, deps);
+  const savedConfig = await withConfigDirHardeningSettled(getConfigDir(), () => {
+    const fresh = readCliConfigForMutation();
+    const current = fresh.customModels ?? [];
+    if (JSON.stringify(current.find(row => row.id === model.id)) !== JSON.stringify(model)) {
+      fail("custom model changed before removal; inspect it before retrying");
+    }
+    const next = current.filter(row => row.id !== model.id);
+    fresh.customModels = next.length > 0 ? next : undefined;
+    saveConfig(fresh);
+    return fresh;
+  });
+  const sync = await syncCustomModelsIfLive(savedConfig, deps);
   printCustomMutation("removed", model, sync, wantsJson);
 }
 

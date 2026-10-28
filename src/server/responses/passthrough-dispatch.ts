@@ -20,6 +20,7 @@ import { transientSendCapFor } from "./request-send-budget";
 import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
+import { resolveConnectTimeoutMs } from "../../stall-timeout";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
@@ -746,7 +747,8 @@ export async function preparePassthroughExchange(
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
     const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal ?? req.signal);
-    const connectMs = config.connectTimeoutMs ?? 200_000;
+    const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(request.url) }) : 0;
+    const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) });
     /**
      * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
      *
@@ -828,7 +830,7 @@ export async function preparePassthroughExchange(
         body: request.body,
       }, "connection-reset"),
       signal,
-      connectMs,
+      sendConnectMs(),
       true,
       providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         httpOnly: true,
@@ -1025,7 +1027,7 @@ export async function preparePassthroughExchange(
             method: request.method,
             headers: request.headers,
             body: request.body,
-          }, recovery), upstream.signal, connectMs, upstreamRequestsStream,
+          }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               httpOnly: canonicalBufferedJson,
               nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
@@ -1165,7 +1167,7 @@ export async function preparePassthroughExchange(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, innerRecovery), upstream.signal, connectMs, upstreamRequestsStream,
+            }, innerRecovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 httpOnly: canonicalBufferedJson,
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
@@ -1318,7 +1320,7 @@ export async function preparePassthroughExchange(
                 body: request.body,
               }, recovery),
               upstream.signal,
-              connectMs,
+              sendConnectMs(),
               upstreamRequestsStream,
               oauthReplayExecutor,
               route.provider.authMode === "forward",
@@ -1431,7 +1433,7 @@ export async function preparePassthroughExchange(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, recovery), upstream.signal, connectMs, upstreamRequestsStream,
+            }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 httpOnly: canonicalBufferedJson,
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
@@ -1578,7 +1580,7 @@ export async function preparePassthroughExchange(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, recovery), upstream.signal, connectMs, upstreamRequestsStream,
+            }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 httpOnly: canonicalBufferedJson,
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
@@ -1943,10 +1945,8 @@ export async function preparePassthroughExchange(
     upstreamResponse, request, config, upstream.signal, logCtx, rebuildAndRefetch,
   );
   // Where this relay dials upstream. Local infrastructure (loopback / private / `.local` / `.lan`)
-  // is operator-trusted and its silent phases are normal, so an unset stall budget resolves to
-  // disabled for it. Provider rotation above keeps the same endpoint origin, so the routed
-  // provider's baseUrl is the stable classification source.
-  const localUpstream = isLocalUpstream(route.provider.baseUrl);
+  // is operator-trusted and its silent phases are normal. Use the refreshed serving URL.
+  const localUpstream = isLocalUpstream(request.url);
 
   return {
     kind: undefined,
@@ -1986,7 +1986,7 @@ export async function preparePassthroughExchange(
     noteInspectedPayload,
     rememberPassthroughResponseChecked,
     upstream,
-    connectMs,
+    connectMs: resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
     localUpstream,
     upstreamResponse,
     terminalOutcomeRecorded: preOutputRefusals.outcomeRecorded,
