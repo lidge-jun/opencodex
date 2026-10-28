@@ -1194,7 +1194,12 @@ export async function collectAnthropicMessage(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
+      // Frame on LF only after normalizing CRLF/CR line endings, holding a trailing CR until the
+      // next chunk shows whether its LF follows, so a CRLF stream folds like an LF one.
+      const incoming = buffer + decoder.decode(value, { stream: true });
+      const heldCr = incoming.endsWith("\r");
+      const normalized = (heldCr ? incoming.slice(0, -1) : incoming).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
+      buffer = replaceRetained(buffer, normalized, "live_transient");
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) !== -1) {
         const rawFrame = buffer.slice(0, sep);
@@ -1207,10 +1212,13 @@ export async function collectAnthropicMessage(
           const dataValue = sseFieldValue(line, "data");
           if (dataValue !== null) dataLine += dataValue;
         }
-        if (!eventName || !dataLine) continue;
+        if (!dataLine) continue;
         let data: unknown;
         try { data = JSON.parse(dataLine); } catch { continue; }
-        if (isRec(data)) handle(eventName, data);
+        if (!isRec(data)) continue;
+        // A data-only frame is named by its payload type, the same rule the stream tap applies.
+        const name = eventName || (typeof data.type === "string" ? data.type : "");
+        if (name) handle(name, data);
       }
     }
   } finally {

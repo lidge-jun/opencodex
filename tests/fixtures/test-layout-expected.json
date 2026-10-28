@@ -468,7 +468,7 @@
   "claude-intercept-settings.test.ts": "claude-integration", "claude-intercept-no-proxy.test.ts": "claude-integration", "claude-management-api.test.ts": "claude-integration",
   "claude-manual-env.test.ts": "gui", "claude-messages-endpoint.test.ts": "claude-integration",
   "claude-native-fast-1m-ingress.test.ts": "claude-integration",
-  "claude-messages-thread.test.ts": "claude-integration", "messages-native.test.ts": "claude-integration",
+  "claude-messages-thread.test.ts": "claude-integration", "messages-native.test.ts": "claude-integration", "messages-native-clean-eof.test.ts": "claude-integration",
   "messages-native-decline-trace.test.ts": "claude-integration", "messages-native-oauth.test.ts": "claude-integration",
   "messages-native-opaque-state.test.ts": "claude-integration", "messages-surface-matrix.test.ts": "claude-integration",
   "claude-model-info.test.ts": "claude-integration", "claude-models-discovery.test.ts": "claude-integration",
