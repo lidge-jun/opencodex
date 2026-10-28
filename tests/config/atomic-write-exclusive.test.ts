@@ -123,3 +123,30 @@ test("exclusive cleanup preserves a shared inode even before publication", () =>
     expect(readdirSync(home.root)).toEqual(["shared-original"]);
   } finally { home.remove(); }
 });
+
+test("a filesystem reporting zero inode identity still accepts ordinary private writes", () => {
+  const home = createTempHome("ocx-zero-identity-");
+  try {
+    const ordinary = home.path("config.json");
+    const exclusive = home.path("recovery.bak");
+    const module = pathToFileURL(repoPath("src/config/atomic-write.ts")).href;
+    const child = Bun.spawnSync([process.execPath, "--eval", `import { mock } from 'bun:test'; import * as fs from 'node:fs';
+      const real = { ...fs };
+      const zero = stats => { if (typeof stats?.ino === 'bigint') Object.defineProperty(stats, 'ino', { value: 0n }); return stats; };
+      mock.module('node:fs', () => ({ ...real,
+        fstatSync: (fd, options) => zero(real.fstatSync(fd, options)),
+        lstatSync: (path, options) => zero(real.lstatSync(path, options)),
+      }));
+      const { atomicWriteFile, atomicWriteFileNoFollow } = await import(${JSON.stringify(module)});
+      atomicWriteFile(${JSON.stringify(ordinary)}, 'ordinary-save');
+      console.log('ordinary-ok');
+      try { atomicWriteFileNoFollow(${JSON.stringify(exclusive)}, 'recovery', undefined, {}, { exclusive: true }); console.log('exclusive-ok'); }
+      catch { console.log('exclusive-refused'); }`], { env: { ...process.env } });
+    const output = child.stdout.toString() + child.stderr.toString();
+    expect(child.exitCode, output).toBe(0);
+    expect(output).toContain("ordinary-ok");
+    expect(output).toContain("exclusive-refused");
+    expect(readFileSync(ordinary, "utf8")).toBe("ordinary-save");
+    expect(existsSync(exclusive)).toBe(false);
+  } finally { home.remove(); }
+});

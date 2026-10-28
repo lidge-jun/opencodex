@@ -134,11 +134,13 @@ function assertResolvedTargetAllowed(path: string, target: string): void {
   assertNotRealHomeUnderTest(dirname(target));
 }
 
-function assertPrivateTempDescriptor(path: string, descriptor: number): void {
+// Zero dev/ino is refused only where publication relies on stable identity (exclusive
+// recovery copies); ordinary saves must keep working on filesystems that report zero.
+function assertPrivateTempDescriptor(path: string, descriptor: number, requireStableIdentity = false): void {
   const opened = fstatSync(descriptor, { bigint: true });
   const linked = lstatSync(path, { bigint: true });
   if (!opened.isFile() || !linked.isFile()
-    || opened.dev === 0n || opened.ino === 0n
+    || (requireStableIdentity && (opened.dev === 0n || opened.ino === 0n))
     || opened.dev !== linked.dev || opened.ino !== linked.ino) {
     throw new Error("atomic temporary file identity changed before write");
   }
@@ -199,6 +201,7 @@ function writePrivateTempFile(
   content: string,
   timeoutMemoKey: string,
   onCreated: (descriptor: number) => void,
+  requireStableIdentity = false,
 ): void {
   const descriptor = openSync(path, "wx", 0o600);
   try {
@@ -212,11 +215,11 @@ function writePrivateTempFile(
     if (process.platform !== "win32") {
       fchmodSync(descriptor, 0o600);
     }
-    assertPrivateTempDescriptor(path, descriptor);
+    assertPrivateTempDescriptor(path, descriptor, requireStableIdentity);
     writeFileSync(descriptor, content, { encoding: "utf-8" });
     // Second assertion, after the content write: the object this path resolves
     // to is still the object the ACL was applied to and the one we just wrote.
-    assertPrivateTempDescriptor(path, descriptor);
+    assertPrivateTempDescriptor(path, descriptor, requireStableIdentity);
   } finally {
     closeSync(descriptor);
   }
@@ -239,6 +242,7 @@ function writePrivateTempFileWith(
   write: (descriptor: number) => void,
   timeoutMemoKey: string,
   onCreated: (descriptor: number) => void,
+  requireStableIdentity = false,
 ): void {
   const descriptor = openSync(path, "wx", 0o600);
   try {
@@ -247,9 +251,9 @@ function writePrivateTempFileWith(
       hardenSecretPath(path, { required: true, timeoutMemoKey });
     }
     if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
-    assertPrivateTempDescriptor(path, descriptor);
+    assertPrivateTempDescriptor(path, descriptor, requireStableIdentity);
     write(descriptor);
-    assertPrivateTempDescriptor(path, descriptor);
+    assertPrivateTempDescriptor(path, descriptor, requireStableIdentity);
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
@@ -310,7 +314,7 @@ function atomicWriteFileToTarget(
     return current;
   };
   const effective: AtomicWriteIO = io ?? {
-    write: (tempPath, value) => writePrivateTempFile(tempPath, value, path, created),
+    write: (tempPath, value) => writePrivateTempFile(tempPath, value, path, created, exclusive),
     harden: tempPath => {
       // No chmod on the Windows branch: there it sets the read-only ATTRIBUTE,
       // which is not the secret boundary and is not what protects this file, and
@@ -331,7 +335,7 @@ function atomicWriteFileToTarget(
     // A streaming writer bypasses the string form of `write` and nothing else. Every later
     // step -- harden, the pre-rename hooks, the rename and the whole residual-cleanup path,
     // which still scrubs through `effective.write(tmp, "")` -- is shared with the string form.
-    if (typeof content === "function") writePrivateTempFileWith(tmp, content, path, created);
+    if (typeof content === "function") writePrivateTempFileWith(tmp, content, path, created, exclusive);
     else effective.write(tmp, content);
     hooks.afterTempWrite?.(tmp, target);
     if (exclusive) assertIdentity(tmp);

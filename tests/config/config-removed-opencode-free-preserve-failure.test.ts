@@ -45,4 +45,3 @@ test("a failed retired-entry check keeps old OS-store references across the save
     expect(readCredentialGeneration()?.keyAccounts ?? []).toContain("synthetic-exception-account");
   });
 });
-
