@@ -68,12 +68,21 @@ export async function withMuseLimitObservation(
     // The same public provider-scoped digest as src/codex/account-label.ts; no credentials.
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${PROVIDER}\0${accounts.activeAccountId}`));
     const accountLabel = `o${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("").slice(0, 6)}`;
-    const response = await fetchImpl(`${apiBase}/api/logs?provider=${PROVIDER}&account=${accountLabel}&limit=1`, { signal });
+    // The server bounds retained history; a tail limit can hide a later-started request that finalized earlier.
+    const response = await fetchImpl(`${apiBase}/api/logs?provider=${PROVIDER}&account=${accountLabel}`, { signal });
     if (!response.ok) return reports;
     const body = await response.json() as { logs?: unknown[] };
-    // Only the latest matching request can establish exhaustion. A newer successful turn wins.
-    const observation = Array.isArray(body.logs) && body.logs.length === 1
-      ? museLimitReport(body.logs[0], accountLabel) : null;
+    // Select by request start time, not finalization order. Attempts on another final account are not evidence.
+    let latest: unknown;
+    let latestTimestamp = -Infinity;
+    for (const value of Array.isArray(body.logs) ? body.logs : []) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const row = value as Record<string, unknown>;
+      if (row.provider !== PROVIDER || row.accountLogLabel !== accountLabel
+        || typeof row.timestamp !== "number" || !Number.isFinite(row.timestamp)) continue;
+      if (row.timestamp >= latestTimestamp) { latest = row; latestTimestamp = row.timestamp; }
+    }
+    const observation = museLimitReport(latest, accountLabel);
     return observation ? { ...reports, [PROVIDER]: observation } : reports;
   } catch {
     return reports;

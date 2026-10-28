@@ -1230,12 +1230,13 @@ request translation rather than passthrough reports none. An account that has no
 served a streaming turn simply shows no quota, which is not an error. Rate limits apply
 per team, not per key.
 
-When the current Muse account's latest request explicitly reports subscription exhaustion
+When the current Muse account's latest-started retained request explicitly reports subscription exhaustion
 with a future reset time, the dashboard quota strip can show that observed limit even if
 Meta omitted the normal usage frame. The Muse chip includes a reset countdown. This reads
 local request-log evidence and never sends a model request. It does not classify an unnamed
 window as five-hour or weekly, and a newer successful request or an elapsed reset removes
-this fallback.
+this fallback. The fallback selects by request start time across the server-bounded matching
+log history, so an older request that finishes later cannot hide a newer success.
 
 For a supported setup, use `meta-model` above with your own key.
 

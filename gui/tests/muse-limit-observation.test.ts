@@ -39,7 +39,7 @@ test("fallback reads bind the latest request to the active account and never inv
     const url = String(input); paths.push(url);
     if (url === "/api/providers") return Response.json([{ name: "meta-muse", authMode: "oauth", baseUrl: "https://api.meta.ai/v1" }]);
     if (url.startsWith("/api/oauth/accounts?")) return Response.json({ activeAccountId: "fixture-muse-account", accounts: [{ id: "fixture-muse-account" }] });
-    if (url === "/api/logs?provider=meta-muse&account=o527765&limit=1") return Response.json({ logs: [{ ...row, timestamp: Date.now(), upstreamError: `Subscription quota exhausted. Your usage window resets at ${new Date(Date.now() + 3600000).toISOString().replace(/\.\d{3}Z$/, "Z")}.` }] });
+    if (url === "/api/logs?provider=meta-muse&account=o527765") return Response.json({ logs: [{ ...row, timestamp: Date.now(), upstreamError: `Subscription quota exhausted. Your usage window resets at ${new Date(Date.now() + 3600000).toISOString().replace(/\.\d{3}Z$/, "Z")}.` }] });
     throw Error("unexpected request");
   }) as typeof fetch;
   const result = await withMuseLimitObservation({}, "", new AbortController().signal, fetcher);
@@ -76,4 +76,57 @@ test("a local evidence failure preserves other provider reports", async () => {
   const reports = { openai: { updatedAt: now, quota: { weeklyPercent: 20 } } };
   const failed = (async () => new Response(null, { status: 503 })) as typeof fetch;
   expect(await withMuseLimitObservation(reports, "", new AbortController().signal, failed)).toBe(reports);
+});
+
+async function observeFinalizedRows(logs: unknown[]) {
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "https://dashboard.example");
+    if (url.pathname === "/api/providers") return Response.json([{ name: "meta-muse", authMode: "oauth", baseUrl: "https://api.meta.ai/v1" }]);
+    if (url.pathname === "/api/oauth/accounts") return Response.json({ activeAccountId: "fixture-muse-account", accounts: [{ id: "fixture-muse-account" }] });
+    if (url.pathname === "/api/logs") {
+      expect(url.searchParams.get("provider")).toBe("meta-muse");
+      expect(url.searchParams.get("account")).toBe("o527765");
+      const limit = Number(url.searchParams.get("limit") ?? logs.length);
+      // Match queryRequestLogs: limits select the tail of finalization-ordered retained rows.
+      return Response.json({ logs: logs.slice(-limit) });
+    }
+    throw Error("unexpected request");
+  }) as typeof fetch;
+  return withMuseLimitObservation({}, "", new AbortController().signal, fetcher);
+}
+
+function overlappingRows() {
+  const started = Date.now() - 2000;
+  const refusal = { ...row, timestamp: started,
+    upstreamError: `Subscription quota exhausted. Your usage window resets at ${new Date(started + 3600000).toISOString().replace(/\.\d{3}Z$/, "Z")}.` };
+  return { refusal, success: { ...refusal, status: 200, timestamp: started + 1000 } };
+}
+
+test("a later-started success wins when an older refusal finalizes last", async () => {
+  const { refusal, success } = overlappingRows();
+  expect(await observeFinalizedRows([success, refusal])).toEqual({});
+});
+
+test("a later-started refusal remains visible when an older success finalizes last", async () => {
+  const { refusal, success } = overlappingRows();
+  const latest = { ...refusal, timestamp: success.timestamp };
+  const reports = await observeFinalizedRows([latest, { ...success, timestamp: refusal.timestamp }]);
+  expect(reports["meta-muse"]?.observed).toBe(true);
+  expect(reports["meta-muse"]?.updatedAt).toBe(latest.timestamp);
+});
+
+test("a later-started success is retained beyond fifty older finalizations", async () => {
+  const { refusal, success } = overlappingRows();
+  const older = Array.from({ length: 51 }, (_, index) => ({ ...refusal, timestamp: refusal.timestamp - index }));
+  expect(await observeFinalizedRows([success, ...older])).toEqual({});
+});
+
+test("latest-start selection ignores malformed timestamps and other final provider/account identities", async () => {
+  const { refusal, success } = overlappingRows();
+  const reports = await observeFinalizedRows([
+    refusal, { ...success, provider: "xai" }, { ...success, accountLogLabel: "o000000" },
+    { ...success, timestamp: "later" }, { ...success, timestamp: null }, {}, [], null,
+  ]);
+  expect(reports["meta-muse"]?.observed).toBe(true);
+  expect(reports["meta-muse"]?.updatedAt).toBe(refusal.timestamp);
 });
