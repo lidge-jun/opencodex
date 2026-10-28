@@ -83,6 +83,12 @@ test("completed drain hands off to a healthy child while the real parent is stil
 appendFileSync(${JSON.stringify(pidsPath)}, process.pid + "\\n");
 console.error("[restart-fixture " + process.pid + "] loading runner");
 await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))});\n`);
+  // Resolve/transpile this same product graph once. Three cold source imports on Windows
+  // otherwise spend the handoff watchdog on fixture loading before exercising ownership.
+  // Keep the recognized source-launch path and all real process/discovery/recovery calls.
+  const built = await Bun.build({ entrypoints: [entry], target: "bun" });
+  if (!built.success) throw new AggregateError(built.logs, "restart fixture bundle failed");
+  await Bun.write(entry, built.outputs[0]!);
   const child = Bun.spawn([process.execPath, entry, "start", "parent"], {
     cwd: repoRoot(), env: { ...process.env, HOME: owned.root, USERPROFILE: owned.root,
       OPENCODEX_HOME: owned.configDir, CODEX_HOME: owned.codexHome,

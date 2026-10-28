@@ -142,3 +142,6 @@ observes registered descendant exits before removing the home; a cleanup failure
 `tests/fixtures/restart-parent-ownership-runner.ts` journals process phases and captures the
 fence probe's output continuously. Failure assertions include that evidence and the replacement
 handoff log, including when the parent is terminated before its probe returns.
+The fixture bundles its unchanged product graph once into the recognized source-launch entry
+before spawning. The handoff watchdog and outer test budget retain their original limits;
+repeated cold module resolution/transpilation is setup, rather than handoff work.

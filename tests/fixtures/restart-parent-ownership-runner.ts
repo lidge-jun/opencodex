@@ -62,7 +62,7 @@ if (parent) {
     fetch: () => Response.json({ service: "opencodex", pid: process.pid }) });
   setServerRef(listener);
   const port = listener.port!;
-  writeFileSync(join(home, "config.json"), JSON.stringify({ port, hostname: "127.0.0.1", providers: {} }));
+  writeFileSync(join(home, "config.json"), JSON.stringify({ port, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} }));
   writePid(process.pid); writeRuntimePort({ pid: process.pid, port, hostname: "127.0.0.1" });
   let scheduled!: () => void | Promise<void>;
   let beforeHandoff: unknown;
