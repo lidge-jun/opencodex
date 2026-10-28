@@ -15,9 +15,11 @@ import { isProcessAlive } from "../../src/lib/process-control";
 let home: TempHome | undefined;
 let settleProcesses: (() => Promise<void>) | undefined;
 afterEach(async () => {
-  await settleProcesses?.();
+  const settle = settleProcesses, owned = home;
   settleProcesses = undefined;
-  home?.remove(); home = undefined;
+  home = undefined;
+  await settle?.();
+  owned?.remove();
 });
 function fixture(): TempHome { return home = createTempHome("ocx-restart-parent-ownership-"); }
 
@@ -170,7 +172,7 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
     expect(result).toMatchObject({ parentPid: parent.pid, parentAliveBeforeRecovery: true,
       observed: "absent", parentExited: true });
     expect(result.parentResult).toMatchObject({ code: 0, pid: parent.pid,
-      beforeHandoff: { refused: true, pidUnchanged: true },
+      beforeHandoff: { refused: true, pidUnchanged: true, observed: "unknown", endpointsRefused: [true, true] },
       successorPid: result.pid, successorRuntime: { pid: result.pid, port: result.port } });
     expect(readFileSync(owned.path("restart-handoff.log"), "utf8")).toContain("is serving port");
   } catch (error) {
@@ -187,7 +189,9 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
         stdout: "ignore", stderr: "ignore",
       });
       try {
-        appendFileSync(pidsPath, foreign.pid + "\n");
+        appendFileSync(pidsPath, (process.platform === "win32"
+          ? String(foreign.pid)
+          : JSON.stringify({ pid: foreign.pid, start: "stale-journal-identity" })) + "\n");
         await settleProcesses();
         expect(isProcessAlive(foreign.pid)).toBe(true);
       } finally {

@@ -147,6 +147,6 @@ failure retains the home. A controlled foreign process injected at a stale journ
 `tests/fixtures/restart-parent-ownership-runner.ts` journals process phases and captures the
 fence probe's output continuously. Failure assertions include that evidence and the replacement
 handoff log, including when the parent is terminated before its probe returns.
-The fixture bundles its unchanged product graph once into the recognized source-launch entry
-before spawning. The handoff watchdog and outer test budget retain their original limits;
-repeated cold module resolution/transpilation is setup, rather than handoff work.
+The fixture bundles the product graph once into the recognized source-launch entry before
+spawning. Cold module resolution and transpilation count as setup, not handoff work. The
+18-second handoff watchdog starts after spawn; bundling counts against the outer test budget.

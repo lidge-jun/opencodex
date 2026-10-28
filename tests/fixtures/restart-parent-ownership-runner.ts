@@ -49,10 +49,17 @@ async function recover(): Promise<void> {
 
 if (probe) {
   const before = readPidFileValue();
+  const runtime = readRuntimePort()!;
+  const observed = await observeProxyLiveness();
+  const endpointsRefused = await Promise.all(["127.0.0.1", "[::1]"].map(async host => {
+    try { await fetch(`http://${host}:${runtime.port}/healthz`, { signal: AbortSignal.timeout(1_000) }); return false; }
+    catch (error) { return ["ECONNREFUSED", "ConnectionRefused"].includes((error as NodeJS.ErrnoException).code ?? ""); }
+  }));
   let refused = false;
   try { await recover(); }
   catch (error) { refused = (error as Error).message.includes("ownership is unverified"); }
-  console.log(JSON.stringify({ refused, pidUnchanged: before === readPidFileValue() }));
+  console.log(JSON.stringify({ refused, pidUnchanged: before === readPidFileValue(),
+    observed: observed.kind, endpointsRefused }));
   process.exit(refused ? 0 : 2);
 }
 
