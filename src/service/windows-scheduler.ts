@@ -95,11 +95,23 @@ export function setQuerySchtasksForTests(next: ((args: string[]) => string) | nu
   querySchtasksForTests = next;
 }
 
-export function schtasks(args: string[]): string {
+export function schtasks(args: string[], io: {
+  run?: (args: string[]) => string;
+  probeTask?: () => WindowsSchedulerTaskProbe;
+} = {}): string {
   try {
-    return querySchtasks(args);
+    return (io.run ?? querySchtasks)(args);
   } catch (error) {
-    throw toWindowsSchtasksError(error, args);
+    let taskPresent = false;
+    const normalized = args.map(arg => arg.toLowerCase());
+    const taskIndex = normalized.indexOf("/tn");
+    if (normalized[0] === "/delete" && taskIndex > 0 && normalized[taskIndex + 1] === TASK
+      && error && typeof error === "object" && "status" in error && error.status === 1) {
+      try {
+        taskPresent = (io.probeTask ?? probeWindowsSchedulerTask)().status === "present";
+      } catch { /* An unreadable task is not proof of an access denial. */ }
+    }
+    throw toWindowsSchtasksError(error, args, taskPresent);
   }
 }
 
@@ -174,6 +186,10 @@ export async function inspectWindowsSchedulerServiceStatus(io: {
 }
 
 export function schtasksErrorDetail(error: unknown): string {
+  if (error && typeof error === "object"
+    && ("status" in error || "stderr" in error || "stdout" in error)) {
+    return toWindowsSchtasksError(error, ["/query"]).message;
+  }
   return error instanceof Error ? error.message : String(error);
 }
 

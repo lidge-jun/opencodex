@@ -24,9 +24,9 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 `src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of
 Responses and Chat conversion. `src/server/audio-upstream.ts` resolves explicit data-plane keys
 on both listeners and substitutes stored OpenAI credentials. Direct stored-main access claims
-the enclosing admission lease and derives its account header only from that stored credential;
+the enclosing admission lease, asynchronously resolves the current file or Codex-owned keyring credential under the request signal, and derives its account header only from that credential;
 caller-supplied account selection is never retained. Pool uses the existing sidecar account resolver. A selected
-ChatGPT authentication failure never falls through to the paid OpenAI provider.
+ChatGPT authentication failure never falls through to the paid OpenAI provider; transient native-main lookup failures retain the shared retryable 503 response.
 
 The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
 body, required model, and optional prompt, language and JSON/text response format. Unknown or

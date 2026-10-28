@@ -953,7 +953,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1069,7 +1069,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             config.claudeCode?.desktopProfile,
             desktopInputs.nativeContextCap,
           );
-          const { buildAnthropicModelInfos } = await import("../../claude/model-info");
+          const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
           const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
@@ -1097,51 +1097,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                   ? nativeFastEligible(model.id)
                   : catalogRowFastEligible(model)
               : undefined,
-            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels },
+            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels }, configuredRoutedDisplayName(config),
           );
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
-          // Codex client → Codex catalog shape: native gpt + namespaced routed models,
-          // cloned from a native template so required fields (base_instructions, etc.) are present.
-          // Pass the subagent picks so featured models lead by priority (matches the on-disk file).
-          // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
-          // on-disk sync; codex-rs keeps them out of the picker itself).
-          const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          // Account rows use the same hidden-inclusive supported set as on-disk sync. This lets a
-          // newly re-enabled native reappear under each selector before the next sync, while the
-          // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
-          const catalogNativeSlugs = accountSelectors.length > 0
-            ? [...new Set([
-              ...availableAccountNativeSlugs,
-              ...accountNativeSlugs,
-            ])]
-            : nativeSlugs;
-          const entries = buildCatalogEntries(
-            loadCatalogTemplate(),
-            catalogNativeSlugs,
-            goOrdered,
-            config.subagentModels,
-            websocketsEnabled(config),
-            maMode as "v1" | "default" | "v2",
-            exactComboSlugs,
-            accountSelectors,
-            suppressedBareNativeSlugs,
-            new Set(),
-            nativeContextLimits(config),
-            accountNativeSlugs,
-            accountNativeSlugsBySelector,
-            config.keepNativeChatGptOnV1 === true,
-            config.modelPickerOrder,
-          );
-          return jsonResponse({
-            models: applyNativeVisibility(
-              entries,
-              disabledModels,
-              accountSelectors.length > 0,
-              new Set(accountNativeSlugs),
-            ),
-          }, 200, req, policy);
+          const { buildCodexModelList } = await import("../codex-model-list");
+          return jsonResponse(buildCodexModelList({
+            config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
+            accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
+            suppressedBareNativeSlugs, disabledModels,
+          }), 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).

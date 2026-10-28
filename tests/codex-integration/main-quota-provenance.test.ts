@@ -46,6 +46,11 @@ const QUOTA_PROVENANCE_IMPORT_PROLOGUE = `
         import { getAccountQuota, getMainPolicyQuota } from ${JSON.stringify(repoPath("src/codex/quota.ts"))};
         import { observeMainQuotaIdentity, matchesMainQuotaCredential } from ${JSON.stringify(repoPath("src/codex/main-account-cache.ts"))};
 `;
+const KEYRING_QUOTA_RESTART_IMPORTS = `${QUOTA_PROVENANCE_IMPORT_PROLOGUE}
+        import { resolveCodexAuthContext } from ${JSON.stringify(repoPath("src/codex/auth-context.ts"))};
+        import { initializeMainAccountPolicyBinding } from ${JSON.stringify(repoPath("src/codex/account-lifecycle.ts"))};
+        import { setNativeMainRefreshResolutionForTests } from ${JSON.stringify(repoPath("src/codex/native-main-refresh-mode.ts"))};
+`;
 
 let testDir: string;
 let previousHome: string | undefined;
@@ -341,7 +346,83 @@ describe("main policy quota durability and lifecycle", () => {
       source: QUOTA_PROVENANCE_IMPORT_PROLOGUE,
       cwd: repoRoot(),
     });
+    await warmModuleGraph({ graph: "codex/keyring-quota-restart-eval", source: KEYRING_QUOTA_RESTART_IMPORTS, cwd: repoRoot() });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  for (const scenario of [
+    { name: "verified replacement", account: "fixture-main-b", tag: "known", selected: true },
+    { name: "same account", account: "fixture-main-a", tag: "known", selected: false },
+    { name: "untagged quota", account: "fixture-main-b", tag: "missing", selected: false },
+    { name: "invalid quota tag", account: "fixture-main-b", tag: "invalid", selected: false },
+    { name: "unknown RPC identity", account: "", tag: "known", selected: false },
+    { name: "manually paused", account: "fixture-main-b", tag: "known", selected: false, paused: true },
+    { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
+    { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file" },
+  ]) {
+    test(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, () => {
+      const writer = writerFor("fixture-main-a");
+      setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() / 1000 + 3600 }, undefined, writer);
+      setAccountQuotaFromParsed("fixture-stored", { weeklyPercent: 33 });
+      const snapshot = JSON.parse(flushPersistence());
+      if (scenario.tag === "missing") delete snapshot.mainPolicyQuota;
+      if (scenario.tag === "invalid") snapshot.mainPolicyQuota.identityKey = "invalid-fixture-identity";
+      writeSnapshot(snapshot);
+      const script = `
+        ${KEYRING_QUOTA_RESTART_IMPORTS}
+        globalThis.fetch = async () => { throw new Error("unexpected fixture network request"); };
+        setNativeMainRefreshResolutionForTests({ mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fixture/codex", version: "0.162.1" });
+        const before = getAccountQuota("__main__");
+        const account = ${JSON.stringify(scenario.account)};
+        const token = account ? "header." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600,
+          "https://api.openai.com/auth": { chatgpt_account_id: account } })).toString("base64url") + ".fixture" : "opaque-fixture-token";
+        const fileOwned = ${JSON.stringify(scenario.source === "file")};
+        let initialized;
+        if (fileOwned) {
+          const authPath = process.env.CODEX_HOME + "/auth.json";
+          await Bun.write(authPath, JSON.stringify({ tokens: { access_token: token, account_id: account } }));
+          initialized = initializeMainAccountPolicyBinding(authPath);
+        }
+        let reads = 0;
+        const config = { port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: true,
+          pausedCodexAccountIds: ${JSON.stringify(scenario.paused ? [MAIN] : [])},
+          providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } } };
+        let selected = false;
+        let failure;
+        try {
+          const result = await resolveCodexAuthContext(new Headers(), config, "pool", {
+            nativeMainRefreshDependencies: { codexAuthStatus: async () => { reads++; return { authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true }; } },
+            primeCodexPoolQuotas: async () => {},
+            beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+          });
+          selected = result.kind === "main-pool" && result.chatgptAccountId === account;
+        } catch (error) { failure = error.name; }
+        console.log(JSON.stringify({ fixture: "cold-keyring-quota", before, selected, failure, reads, initialized,
+          legacy: getAccountQuota("__main__"), policy: getMainPolicyQuota(), stored: getAccountQuota("fixture-stored"),
+          paused: config.pausedCodexAccountIds }));
+      `;
+      const child = Bun.spawnSync({ cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env,
+        timeout: process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000 });
+      expect(child.exitCode).toBe(0);
+      const line = child.stdout.toString().split("\n").find(row => row.startsWith('{"fixture":"cold-keyring-quota"'));
+      expect(line).toBeDefined();
+      const result = JSON.parse(line!);
+      expect(result.before.weeklyPercent).toBe(100);
+      expect(result.selected).toBe(scenario.selected);
+      expect(result.stored.weeklyPercent).toBe(33);
+      expect(result.paused).toEqual(scenario.paused ? [MAIN] : []);
+      if (scenario.source === "file") expect(result.initialized).toBe(true);
+      if (scenario.selected) {
+        expect(result.reads).toBe(scenario.source === "file" ? 0 : 2);
+        expect(result.legacy).toBeNull();
+        expect(result.policy).toBeNull();
+      } else {
+        expect(result.failure).toBeDefined();
+        expect(result.reads).toBe(scenario.paused || scenario.source === "file" ? 0 : 1);
+        expect(result.legacy.weeklyPercent).toBe(100);
+        if (scenario.account === "fixture-main-a") expect(result.policy.weeklyPercent).toBe(100);
+      }
+    }, SPAWN_BUDGET_MS);
+  }
 
   for (const unavailable of [true, false]) {
     test(`persisted ${unavailable ? "unavailable" : "legacy"} null remains identity-bound and cannot authorize spending`, () => {

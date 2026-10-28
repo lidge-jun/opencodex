@@ -155,5 +155,19 @@ describe("Google wire compiler", () => {
       generationConfig: { thinkingConfig: { includeThoughts: "yes", thinkingLevel: "high" } },
     });
     expect(notRequested.body.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+
+    // Explicit thinkingBudget (or thinking_budget) is preserved when thinkingLevel is absent.
+    const withBudget = compileGoogleWireBody({
+      generationConfig: { thinkingConfig: { thinkingBudget: 8192, includeThoughts: true } },
+    });
+    expect(withBudget.body.generationConfig).toEqual({
+      thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
+    });
+    const withDynamicBudget = compileGoogleWireBody({
+      generationConfig: { thinkingConfig: { thinking_budget: -1 } },
+    });
+    expect(withDynamicBudget.body.generationConfig).toEqual({
+      thinkingConfig: { thinkingBudget: -1 },
+    });
   });
 });

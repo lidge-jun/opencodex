@@ -4,6 +4,10 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join, posix } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
+import {
+  beginCodexCliSelectionParentWrite,
+  CodexCliSelectionMutationBusyError,
+} from "./cli-update-selection-gate";
 import { resolveCodexHomeDir } from "./home";
 import { decodeOverlayState } from "./shim-state-file";
 import { redactSecretString, redactUserPath } from "../lib/redact";
@@ -382,19 +386,30 @@ export function persistCodexRuntime(
   deps: ResolveCodexRuntimeDeps = {},
   origin: CodexRuntimePinOrigin = "pinned",
 ): void {
-  const configDir = deps.configDir ?? getConfigDir();
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  const payload: PersistedCodexRuntimeState = {
-    version: 1,
-    command: runtime.command,
-    source: runtime.source,
-    selectedVersion: runtime.version,
-    updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
-    origin,
-  };
-  // Invalidate process authority before the persisted replacement is visible.
-  clearCodexRuntimeResolveCache();
-  atomicWriteFile(codexRuntimeStatePath(configDir), `${JSON.stringify(payload, null, 2)}\n`);
+  // A cli-update worker holds the shared selection gate from its final process
+  // scan through its installer spawn; this write must not slip into that
+  // window, so a held gate is an immediate busy rather than a wait. Checked
+  // BEFORE the mkdir and the resolve-cache invalidation so a busy refusal
+  // changes nothing at all.
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) throw new CodexCliSelectionMutationBusyError();
+  try {
+    const configDir = deps.configDir ?? getConfigDir();
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const payload: PersistedCodexRuntimeState = {
+      version: 1,
+      command: runtime.command,
+      source: runtime.source,
+      selectedVersion: runtime.version,
+      updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+      origin,
+    };
+    // Invalidate process authority before the persisted replacement is visible.
+    clearCodexRuntimeResolveCache();
+    atomicWriteFile(codexRuntimeStatePath(configDir), `${JSON.stringify(payload, null, 2)}\n`);
+  } finally {
+    selectionWrite.exit();
+  }
 }
 
 /**
@@ -405,20 +420,29 @@ export function persistCodexRuntime(
  * folds the persisted `updatedAt` into its key, and a removed file has no stamp to fold.
  */
 export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): void {
-  const configDir = deps.configDir ?? getConfigDir();
-  clearCodexRuntimeResolveCache();
+  // Same gate as persistCodexRuntime, checked before the cache invalidation
+  // and outside the swallowing catch: a busy refusal must stay an error, not
+  // become a silent "already removed".
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) throw new CodexCliSelectionMutationBusyError();
   try {
-    unlinkSync(codexRuntimeStatePath(configDir));
-  } catch (error) {
-    // An already-missing file is the success case: the pin is gone, which is the point.
-    // Anything else means the pin SURVIVES and stays authoritative, so every later
-    // resolve re-probes the same dead path — #4035 unfixed, silently. Say so once.
-    const code = (error as NodeJS.ErrnoException | null)?.code;
-    if (code === "ENOENT") return;
-    console.warn(
-      `[opencodex] Could not remove the stale Codex runtime pin at ${displayCodexRuntimePath(codexRuntimeStatePath(configDir))}`
-      + ` (${code ?? "unknown error"}). It will be re-probed until the file is removed.`,
-    );
+    const configDir = deps.configDir ?? getConfigDir();
+    clearCodexRuntimeResolveCache();
+    try {
+      unlinkSync(codexRuntimeStatePath(configDir));
+    } catch (error) {
+      // An already-missing file is the success case: the pin is gone, which is the point.
+      // Anything else means the pin SURVIVES and stays authoritative, so every later
+      // resolve re-probes the same dead path — #4035 unfixed, silently. Say so once.
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT") return;
+      console.warn(
+        `[opencodex] Could not remove the stale Codex runtime pin at ${displayCodexRuntimePath(codexRuntimeStatePath(configDir))}`
+        + ` (${code ?? "unknown error"}). It will be re-probed until the file is removed.`,
+      );
+    }
+  } finally {
+    selectionWrite.exit();
   }
 }
 

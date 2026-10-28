@@ -181,8 +181,9 @@ still cover the rule, which is a judgement only review makes.
   are assembled partly from upstream text. An unknown upstream execution state is attributed to a
   cause that refuses an automatic resend rather than to one that permits it, and the resend verdict
   the pair implies is computed at read time and never persisted.
-  A proxy replay refusal is one such fact: the deferred logger in `src/server/relay.ts` reads the
-  in-process `isReplayRefusalResponse` marker and passes a synthetic `transport-ambiguous` cause
+  A proxy replay refusal is one such fact: the deferred HTTP logger in `src/server/relay.ts` and
+  the client WebSocket handler in `src/server/index/websocket-handler.ts` read the in-process
+  `isReplayRefusalResponse` marker and pass a synthetic `transport-ambiguous` cause
   hint, so its 429 keeps the `upstream_reset_replay_refused` code but is never attributed as a
   provider rate limit; refusal-like provider text alone cannot establish it.
   Enforced by `tests/lib/failure-attribution.test.ts`.

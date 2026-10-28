@@ -1,5 +1,9 @@
 {
+  "claude-native-fast-1m-ingress.test.ts": "claude-integration",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
+  "claude-config-root-writer-barrier.test.ts": "claude-integration",
+  "claude-config-root-late-admission.test.ts": "claude-integration",
+  "claude-config-root-stale-updates.test.ts": "claude-integration",
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",
   "server-live-close.test.ts": "server",
@@ -25,6 +29,7 @@
   "aside-profiles-catalog-refresh.test.ts": "clients",
   "client-catalog-compatibility.test.ts": "clients",
   "opencode-kilo-refresh.test.ts": "clients",
+  "hermes-catalog-refresh.test.ts": "clients",
   "client-export-reasoning-metadata.test.ts": "clients",
   "client-export-reasoning-controls.test.ts": "clients",
   "client-export-live-wire.test.ts": "clients",

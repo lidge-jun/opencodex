@@ -5,6 +5,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { getAnthropicSidecarAccessToken } from "../oauth/anthropic-routing";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
+import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
@@ -188,7 +189,7 @@ export async function runAnthropicWebSearch(
     "Content-Type": "application/json",
     "anthropic-version": "2023-06-01",
     "Accept": "text/event-stream",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": CLAUDE_CLI_USER_AGENT,
     "Authorization": `Bearer ${token}`,
     "anthropic-beta": ANTHROPIC_OAUTH_BETA,
     ...CLAUDE_CODE_HEADERS,

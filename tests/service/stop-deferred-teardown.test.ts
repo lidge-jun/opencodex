@@ -10,6 +10,8 @@ import type { CodexNativeRestoreResult } from "../../src/codex/inject";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath, repoPath } from "../helpers/repo-root";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
 
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
@@ -65,7 +67,7 @@ async function runParentStop(options: {
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
-  nativeSignal?: boolean; apiFailure?: boolean;
+  nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
@@ -126,8 +128,11 @@ describe("parent CLI shared teardown completion", () => {
     const reply = (request: Request) => {
       const path = new URL(request.url).pathname;
       if (request.method === "POST") return Response.json({ success: true, sharedTeardown: "not-owned" });
+      const nonce = request.headers.get(path === "/healthz" ? LOCAL_ATTESTATION_CHALLENGE_HEADER : LOCAL_MANAGEMENT_NONCE_HEADER);
+      const proof = nonce ? createLocalAttestationProof("C".repeat(43), nonce, childPid, target.port!) : null;
+      const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;
       return Response.json(path === "/healthz" ? { service: "opencodex", pid: childPid }
-        : { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: childPid });
+        : { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: childPid }, { headers });
     };
     const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       targetPaths.push(`${request.method} ${new URL(request.url).pathname}`);
@@ -161,7 +166,7 @@ describe("parent CLI shared teardown completion", () => {
       expect(proxyPaths).toEqual(["/__proxy-control"]);
       expect(proxyTokens).toEqual([]);
       expect(targetPaths).toEqual(["GET /healthz", "GET /api/stop", "POST /api/stop"]);
-      expect(targetTokens).toEqual([token, token]);
+      expect(targetTokens).toEqual([token]);
     } finally {
       if (watchdog) clearTimeout(watchdog);
       if (child && child.exitCode === null) { child.kill(); await child.exited; }
@@ -213,6 +218,13 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.calls).toMatchObject({ service: 1, killed: 1, native: 0, grok: 0 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
     expect(outcome.exitCode).toBe(0);
+  });
+  test("connected stop never signals after a truncated stop refusal", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", nativeSignal: true, json: true,
+      serverTeardown: true, stopBodyFailure: true, response: null, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
+    expect(outcome.exitCode).toBe(1);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
   });
   // #7563: nothing on a connected client writes its Codex routing, catalog or Grok block back
   // on start, so a stop that tore them down left them torn down.

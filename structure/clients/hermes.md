@@ -52,9 +52,20 @@ disconnected under its original home.
 each owned profile through the same coordinated writer; a record must name
 `.../profiles/<store name>/config.yaml`, and a store naming another client refuses the cleanup.
 
-Hermes has no automatic catalog refresh, for the default profile or any other; a stale profile is
-updated by an explicit Apply. The unscoped journal lists the root store only, so named-profile history
-is read and undone from that profile's page. The CLI has no profile selector.
+Catalog fan-out in `src/integrations/catalog-refresh.ts` refreshes only the default profile, resolved
+from the caller's environment, with the root ownership store. It never enumerates named stores.
+Named profiles retain their catalog until explicit Apply; their status reports `stale` / Update needed
+against the current roster on the profile page. The CLI has no named-profile selector. Before an
+automatic Hermes refresh that would write a catalog update, the writer checks its actual preflight bytes against the ownership record's
+full-file fingerprint, so edits outside managed fragments also refuse. A current contribution returns
+unchanged without writing or adopting a new fingerprint. Explicit Apply of a pending
+catalog change preserves those edits and records the new baseline; Apply with an unchanged contribution
+is a no-op and does not adopt file drift. Disabled or unowned profiles are not
+reconnected, and a failure is reported per client without stopping catalog fan-out.
+The unscoped journal lists the root store only, so named-profile history
+is read and undone from that profile's page.
 `tests/clients/hermes-profile-routes.test.ts` and `tests/clients/hermes-profiles.test.ts` cover
 discovery, scoping, journal and undo isolation, plan binding, flights, ownership moves, junction swaps
 and uninstall.
+`tests/clients/hermes-catalog-refresh.test.ts` covers default-only updates, visible named-profile
+staleness, disabled connections, external edits during catalog loading and isolated IO failures.

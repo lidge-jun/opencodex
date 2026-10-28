@@ -1036,4 +1036,29 @@ describe("Antigravity authentication refusal selection", () => {
     expect(eligibleFailoverAccounts("google-antigravity", Date.now(), "cla")).not.toContain(a!);
     expect(eligibleFailoverAccounts("google-antigravity")).toEqual([b!]);
   });
+
+  test("clearGenericSessionAffinityForAccount evicts sessions pinned to a cooled or refused account while keeping sibling sessions", async () => {
+    const {
+      bindGenericSessionAccount,
+      clearGenericSessionAffinityForAccount,
+      genericSessionAccount,
+    } = await import("../../src/oauth/generic-session-affinity");
+    const [a, b] = await seedProvider("google-antigravity", 2);
+    const cfg = {
+      oauthAccountFailover: { enabled: true },
+      providers: {
+        "google-antigravity": {
+          authMode: "oauth",
+          oauthAccountFailover: { enabled: true, sessionAffinity: "conversation" },
+        },
+      },
+    } as unknown as OcxConfig;
+    bindGenericSessionAccount(cfg, "google-antigravity", "sess-a", a!);
+    bindGenericSessionAccount(cfg, "google-antigravity", "sess-b", b!);
+    expect(genericSessionAccount(cfg, "google-antigravity", "sess-a")).toBe(a!);
+    expect(genericSessionAccount(cfg, "google-antigravity", "sess-b")).toBe(b!);
+    clearGenericSessionAffinityForAccount("google-antigravity", a!);
+    expect(genericSessionAccount(cfg, "google-antigravity", "sess-a")).toBeNull();
+    expect(genericSessionAccount(cfg, "google-antigravity", "sess-b")).toBe(b!);
+  });
 });

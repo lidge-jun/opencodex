@@ -484,6 +484,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       callerAnthropicBeta: options.callerAnthropicBeta,
       providerAccountUuid: oauthBinding?.providerAccountUuid,
       clientIdentity: options.clientIdentity,
+      sessionKey: oauthBinding?.sessionKey ?? options.sessionKey,
     });
     if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
     if (built.droppedBetas) {

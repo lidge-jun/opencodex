@@ -4,6 +4,10 @@ import * as childProcess from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CodexNativeRestoreResult } from "../../src/codex/inject";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
+
+const ATTESTATION_SECRET = "C".repeat(43);
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
   receipt: boolean;
@@ -21,6 +25,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   exitCleanup?: boolean;
   nativeSignal?: boolean;
   apiFailure?: boolean;
+  stopBodyFailure?: boolean;
   proxyProbePort?: number;
   alreadyStopped?: boolean;
   absence?: "dead" | "unknown" | "live";
@@ -37,13 +42,15 @@ if (options.proxyProbePort) {
   const origin = `http://127.0.0.1:${options.proxyProbePort}`;
   const control = await fetch(`${origin}/__proxy-control`, { signal: AbortSignal.timeout(2000) }).then(r => r.json());
   if (control.via !== "proxy") throw new Error("proxy environment control was not intercepted");
+  writeFileSync(join(process.env.OPENCODEX_HOME!, "runtime-port.json"), JSON.stringify({
+    pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1", attestationSecret: ATTESTATION_SECRET,
+  }));
   const { assertConnectedClientStopSupported } = await import("../../src/cli/stop-restore");
   await assertConnectedClientStopSupported({ pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1" });
   const { stopProxyGracefully } = await import("../../src/lib/process-control");
-  const { directLocalHttpFetch } = await import("../../src/server/direct-local-http");
   const result = await stopProxyGracefully(process.pid, {
     runtimeEndpoint: { port: options.proxyProbePort, hostname: "127.0.0.1" },
-    fetchFn: directLocalHttpFetch, waitExit: () => true,
+    waitExit: () => true,
   });
   if (result !== true) throw new Error("direct stop request failed");
   console.log(JSON.stringify({ ok: true, control: control.via }));
@@ -107,7 +114,7 @@ const state = await import("../../src/config/process-state");
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
-  readRuntimePort: () => options.alreadyStopped || options.noRuntimeRecord ? null : endpoint,
+  readRuntimePort: () => options.alreadyStopped || options.noRuntimeRecord ? null : { ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET },
   removePid() {},
   removeRuntimePort() {},
 }));
@@ -167,23 +174,27 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (init?.method === "GET") {
     probes.push(url);
     if (init.redirect !== "error") return unexpected("redirectable compatibility probe");
+    const requestHeaders = new Headers(init.headers);
+    if (requestHeaders.has("x-opencodex-api-key")) return unexpected("credential on compatibility probe");
+    const nonce = requestHeaders.get(url.endsWith("/healthz") ? LOCAL_ATTESTATION_CHALLENGE_HEADER : LOCAL_MANAGEMENT_NONCE_HEADER);
+    const proof = nonce ? createLocalAttestationProof(ATTESTATION_SECRET, nonce, fakePid, endpoint.port) : null;
+    const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;
     if (url.endsWith("/healthz")) {
-      if (new Headers(init.headers).has("x-opencodex-api-key")) return unexpected("credential on health probe");
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
-        ...(!options.serverTeardown && !options.clientServer ? { role: "client" } : {}) });
+        ...(!options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
     }
     if (!url.endsWith("/api/stop")) return unexpected(`GET ${url}`);
     if (options.clientServer === "unknown") throw new Error("fixture probe unavailable");
     if (options.clientServer === "legacy") return Response.json({ error: "not found" }, { status: 404 });
     if (options.clientServer === "unauthorized") return new Response(null, { status: 401 });
     if (options.clientServer === "redirect") return Response.redirect("http://example.test/", 302);
-    if (options.clientServer === "malformed") return new Response("{bad json");
-    if (options.clientServer === "oversized") return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(4097)); c.close(); } }));
+    if (options.clientServer === "malformed") return new Response("{bad json", { headers });
+    if (options.clientServer === "oversized") return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(4097)); c.close(); } }), { headers });
     if (options.clientServer === "body-timeout") return new Response(new ReadableStream({ start(c) {
       init.signal?.addEventListener("abort", () => c.error(init.signal!.reason), { once: true });
-    } }));
+    } }), { headers });
     return Response.json({ schema: "ocx-stop-capabilities/1", connectedClientOwnership: true,
-      pid: options.clientServer === "wrong-pid" ? fakePid + 1 : fakePid });
+      pid: options.clientServer === "wrong-pid" ? fakePid + 1 : fakePid }, { headers });
   }
   if (!url.startsWith("http://127.0.0.1:10100/api/stop")) return unexpected(`fetch(${url})`);
   urls.push(url);
@@ -197,8 +208,13 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 // Only the real proxy-environment mode above exercises TCP; other cases inject responses.
 const direct = await import("../../src/server/direct-local-http");
 mock.module("../../src/server/direct-local-http", () => ({ ...direct,
-  directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit) => {
+  directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit, io?: { onResponseStatus?: (status: number) => void }) => {
     if (!alive && String(input).endsWith("/healthz")) throw Object.assign(new Error("fixture listener closed"), { code: "ECONNREFUSED" });
+    if (options.stopBodyFailure && init?.method === "POST") {
+      urls.push(String(input));
+      io?.onResponseStatus?.(409);
+      throw new Error("fixture truncated stop refusal");
+    }
     return globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
   },
 }));

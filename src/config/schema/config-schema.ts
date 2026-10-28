@@ -1,6 +1,7 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
+import { isAppendOnlyToolLoadingModels } from "../../claude/inbound-tool-loading";
 import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
@@ -174,6 +175,13 @@ export const configSchema = z.object({
   // `.catch`, and because a config object can be built without this schema at all — but in
   // `resolveInboundBodyLimitBytes()`, which every reader goes through.
   maxInboundBodyBytes: z.number().int()
+    .min(0)
+    .optional()
+    .catch(undefined),
+  // Match the per-body load/degrade contract: malformed hand edits retain providers.
+  // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
+  // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  maxConcurrentInboundBodyBytes: z.number().int()
     .min(0)
     .optional()
     .catch(undefined),
@@ -408,7 +416,10 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
+    if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
+    }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
     }

@@ -1010,7 +1010,7 @@ export const ko: Record<TKey, string> = {
   "sub.featured": "추천",
   "sub.advanced": "고급",
   "sub.orderHintAria": "이 순서가 쓰이는 방식",
-  "sub.orderHint": "여기서 선택해 표시된 순서가 Codex 모델 피커 최상단 1~5위와 {cmd}의 기본 모델 후보를 결정합니다.",
+  "sub.orderHint": "여기서 선택해 표시된 순서가 Codex 모델 피커 최상단 1~5위와 {cmd}의 기본 모델 후보를 결정합니다. 모델 피커에 표시되는 추천 모델이 5개 미만이면 남은 슬롯은 카탈로그 우선순위에 따라 노출됩니다. 표시되는 추천 모델이 5개이면 목록이 채워지지만, 사용자 지정 모델 피커 순서가 카탈로그 우선순위를 바꾸는 경우는 예외입니다.",
   "sub.noneSelected": "선택된 항목 없음 — 아래 목록에서 선택하세요.",
   "sub.models": "모델",
   "sub.search": "모델 검색(네이티브 gpt + 라우팅)…",

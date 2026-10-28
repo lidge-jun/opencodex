@@ -35,6 +35,7 @@ import { decodeOverlayState } from "../shim-state-file";
 
 import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
+import { isPlainObject } from "../../lib/plain-data";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
 import {
   parsePersistedCodexRuntime,
@@ -681,11 +682,13 @@ export function readCurrentCodexModelsCache(): RawCatalog | null {
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
   const bundled = bundledCodexCatalogSnapshot();
+  const fromRows = (catalog: RawCatalog | null) => findSupportedNativeTemplate(catalog
+    ? { ...catalog, models: (catalog.models ?? []).filter(isPlainObject) } : null);
   // Template inheritance only. The validity gates in this file keep `findNativeTemplate`
   // so a catalog carrying only a newly launched native row stays valid (#2813).
-  const native = findSupportedNativeTemplate(readCatalog(catalogPath))
-    ?? findSupportedNativeTemplate(readCatalogBackup(catalogPath))
-    ?? findSupportedNativeTemplate(readCatalog(activeCodexModelsCachePath()))
-    ?? findSupportedNativeTemplate(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
+  const native = fromRows(readCatalog(catalogPath))
+    ?? fromRows(readCatalogBackup(catalogPath))
+    ?? fromRows(readCatalog(activeCodexModelsCachePath()))
+    ?? fromRows(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
   return native ? JSON.parse(JSON.stringify(native)) : null;
 }

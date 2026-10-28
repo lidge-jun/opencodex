@@ -74,6 +74,9 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-delivery.ts",
   // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).
   "combo-required-tool-contract.ts",
+  // Reached from passthrough-delivery.ts: streaming combo children enforce the caller's required tool (#7456).
+  "combo-required-tool-stream.ts",
+  "combo-required-tool-fulfillments.ts",
   "buffered-sse-json.ts",
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",
@@ -83,6 +86,7 @@ export const RESPONSES_CORE_MODULES = [
   "run-turn-execution.ts",
   "adapter-dispatch.ts",
   "antigravity-validation-refusal.ts",
+  "antigravity-model-denial-recovery.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",

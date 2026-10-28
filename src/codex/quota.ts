@@ -827,6 +827,15 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
   return structuredClone(mainPolicyQuota.quota);
 }
 
+/** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
+export function discardMismatchedMainQuota(): void {
+  hydrateAccountQuotasFromDisk();
+  const observedIdentity = getObservedMainQuotaIdentityKey();
+  // Untagged/malformed snapshots and a matching identity retain their existing restrictions.
+  if (observedIdentity !== undefined && mainPolicyQuota
+    && mainPolicyQuota.identityKey !== observedIdentity) clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+}
+
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
   hydrateAccountQuotasFromDisk();
   return accountQuota.entries();

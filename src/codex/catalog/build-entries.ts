@@ -51,6 +51,7 @@ import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
 import { applyConfiguredUltraFast, configuredUltraFastSlugs } from "./configured-tiers";
 import { applyNativeUltraFastTier } from "./native-ultrafast";
+import { applyNativePriority, retainedNativeSourcePriorities, type NativePrioritySource } from "./native-priority";
 
 export interface ObservedCatalogEntryBuildInput {
   readonly template: RawEntry | null;
@@ -74,6 +75,7 @@ export interface ObservedCatalogEntryBuildInput {
   readonly accountNativeSlugsBySelector?: ReadonlyMap<string, readonly string[]>;
   /** Codex-only manual selector metadata; deliberately independent of live permission. */
   readonly reserve?: ReserveCatalogProjection;
+  readonly nativeSource?: NativePrioritySource;
 }
 
 /** Build entries with the process-observed Codex feature state. */
@@ -93,6 +95,7 @@ export function buildCatalogEntries(
   accountNativeSlugsBySelector?: ReadonlyMap<string, readonly string[]>,
   keepNativeChatGptOnV1 = false,
   modelPickerOrder: readonly string[] = [],
+  nativeSource?: NativePrioritySource,
 ): RawEntry[] {
   const entries = buildCatalogEntriesFromObservedState({
     template,
@@ -111,6 +114,7 @@ export function buildCatalogEntries(
     openaiContextCap: contextCap,
     accountNativeSlugs,
     accountNativeSlugsBySelector,
+    nativeSource,
   });
   // Live discovery does not run the disk merge; use the same captured declarations and row fences.
   const configured = configuredUltraFastSlugs(goModels);
@@ -143,6 +147,7 @@ export function buildCatalogEntriesFromObservedState({
   accountNativeSlugs,
   accountNativeSlugsBySelector,
   reserve,
+  nativeSource,
 }: ObservedCatalogEntryBuildInput): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -209,7 +214,7 @@ export function buildCatalogEntriesFromObservedState({
     .map(catalogModelSlug));
   for (const slug of gptSlugs.filter(slug => !isCodexControlPlaneModel(slug))) {
     const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap);
-    if (rank.has(slug)) native.priority = rank.get(slug)!;
+    applyNativePriority(native, slug, rank, featured?.length ?? 0, nativeSource);
     nativeEntries.push(native);
     const nativeAlias = nativeAliasesBySlug.get(slug);
     if (!nativeAlias || collisionSkipped.has(nativeAlias)) {
@@ -239,7 +244,7 @@ export function buildCatalogEntriesFromObservedState({
       ?? gptSlugs;
     const accountNativeEntries = selectorNativeSlugs.filter(slug => slug !== NATIVE_RESERVE_MODEL && !isCodexControlPlaneModel(slug)).map(slug => (
       nativeEntriesBySlug.get(slug)
-        ?? deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap)
+        ?? applyNativePriority(deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, new Set(), openaiContextCap), slug, rank, featured?.length ?? 0, nativeSource)
     ));
     if (reserve?.mainSelectors.includes(selector)) accountNativeEntries.push(reserve.source);
     for (const [nativeIndex, native] of accountNativeEntries.entries()) {
@@ -684,12 +689,7 @@ export function mergeCatalogEntriesFromObservedState({
     return staleComboKeys.has(key) && !currentNonComboKeys.has(key);
   });
   const catalogModelsForMerge = [...detachedCatalogModels, ...restoredComboShadows];
-  const nativePriority = (slug: string, fallback: unknown): number => {
-    const base = baseline.get(slug)
-      ?? (typeof fallback === "number" ? fallback : 9);
-    if (rank.has(slug)) return rank.get(slug)!;
-    return featured.length > 0 ? Math.max(base, featured.length + 100) : base;
-  };
+  const nativeSource: NativePrioritySource = { baseline, retainedBySlug: retainedNativeSourcePriorities(catalogModelsForMerge) };
   const nativeSourceEntries = includeNativeOpenAi
     ? catalogModelsForMerge
     .filter(m => typeof m.slug === "string"
@@ -707,10 +707,9 @@ export function mergeCatalogEntriesFromObservedState({
       if (shouldUpgradeToUpstreamEntry(m)) {
         const upstream = upstreamNativeEntry(slug)!;
         const finished = finishUpstreamNativeEntry(upstream, 9, openaiContextCap);
-        finished.priority = nativePriority(slug, upstream.priority);
-        return finished;
+        return applyNativePriority(finished, slug, rank, featured.length, nativeSource);
       }
-      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m[SPAWN_PRIORITY_FIELD] ?? m.priority) });
+      const preserved = normalizeServiceTiers(applyNativePriority({ ...m }, slug, rank, featured.length, nativeSource));
       // Recompute spawn rank from current featured models, not a prior picker override.
       delete preserved[SPAWN_PRIORITY_FIELD];
       // Older natives kept from disk still need the mock top tiers (max + ultra always
@@ -736,12 +735,12 @@ export function mergeCatalogEntriesFromObservedState({
         template ? JSON.parse(JSON.stringify(template)) : null,
         slug,
         "OpenAI native model (Codex OAuth passthrough).",
-        nativePriority(slug, upstreamNativeEntry(slug)?.priority),
+        9,
         undefined,
         new Set(),
         openaiContextCap,
       );
-      entry.priority = nativePriority(slug, upstreamNativeEntry(slug)?.priority);
+      applyNativePriority(entry, slug, rank, featured.length, nativeSource);
       native.push(entry);
     }
   }

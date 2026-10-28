@@ -27,6 +27,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | 后台服务的可选恢复：一个小型守护进程探测 `/healthz`，当代理进程仍存活但在连续探测中约一分钟毫无响应时将其终止，由服务管理器（任务计划程序、launchd、systemd、WinSW）重新启动。仅受管服务子进程会启动它；卡住进程持有的请求不会重放。每小时最多 3 次。需要重启。自动恢复需要数字绑定地址（或默认的 localhost/通配符映射）；不监控 DNS 绑定名称。记录的地址或端口发生更改时会停止监控。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
+| `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | 选择由谁刷新 `CODEX_HOME` 中的原生主 ChatGPT 登录。密钥环应答只对本次查询有效：缺失或被扣留的令牌使本次凭据准备失败；后续查询即使返回相同令牌也可以使用。不保留永久拒绝状态，已取得令牌的请求可继续完成。文件凭据行为保持不变。包括自动选择在内的完整行为见[英文 Server fields](/reference/configuration/server/#server-fields)。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用重定向到选定模型，并保留为请求配置的推理强度。默认源前缀为 `gpt-6-luna`, `gpt-5.6-luna`；0.144.x 及更早客户端使用 `gpt-5.4-mini`，可通过 `sourceModels` 恢复。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 在可用时启用 | Web 搜索侧车选项。 |
