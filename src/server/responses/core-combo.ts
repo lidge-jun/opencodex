@@ -117,7 +117,8 @@ import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { requiredToolContractOf } from "./combo-required-tool-contract";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { settleOperatorReplacement } from "../../lib/upstream-retry";
+import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { attributeFinalRequest } from "../request-log-failure-attribution";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
@@ -486,6 +487,18 @@ export async function executeComboResponses(
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the failed
     // target whose response is returned, including an earlier quota refusal on exhaustion.
+    // The ingress finalizer cannot stamp this child once activeAttempt is cleared below.
+    if (childLog.activeAttempt) {
+      attributeFinalRequest({
+        status: childLog.activeAttempt.status,
+        terminalSource: childLog.terminalSource,
+        transportPhase: childLog.transportPhase,
+        causeHint: childLog.causeHint,
+        outputObserved: childLog.firstOutputMs !== undefined,
+        locallyAnswered: childLog.localTerminalReason !== undefined,
+        attempt: childLog.activeAttempt,
+      });
+    }
     Object.assign(logCtx, childLog, {
       requestedModel,
       model: requestedModel,
@@ -1271,6 +1284,12 @@ export async function executeComboResponses(
       Date.now() - started,
       failure.usage,
     );
+    if (isReplayRefusalResponse(failure.response)) {
+      // Numeric 429 is a client replay policy here, not an upstream quota observation.
+      childLog.causeHint = "transport-ambiguous";
+      childLog.terminalSource = "synthetic";
+      childLog.errorCode = attempt.errorCode = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    }
     if (failure.upstreamCode === "input_admission_refused" && attempt.sendCount === 0) {
       attempt.errorCode = failure.upstreamCode;
       localAdmissionRefusals?.push(failure.upstreamMessage ?? "");

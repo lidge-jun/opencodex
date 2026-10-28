@@ -1412,6 +1412,7 @@
   "codex-ws-handshake.test.ts": "responses", "codex-ws-handshake-validation.test.ts": "responses",
   "ws-upstream-socks5.test.ts": "responses",
   "ws-replay-refusal-attribution.test.ts": "responses",
+  "combo-replay-refusal-attribution.test.ts": "responses",
   "ws-upstream.test.ts": "responses",
   "xai-client.test.ts": "images",
   "xai-empty-catalog-tool-choice.test.ts": "providers/xai",

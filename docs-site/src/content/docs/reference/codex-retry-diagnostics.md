@@ -38,10 +38,11 @@ identical at this layer and are checked differently.
 
 A proxy-generated `upstream_reset_replay_refused` response also uses status 429:
 upstream execution is unknown, so OCX refuses an automatic resend. Its log cause
-is `transport-ambiguous`, not provider rate limiting. On a direct provider route this applies to client HTTP
-and WebSocket ingress independently of `upstreamWebsocket`; a failure that a combo
-rebuilds from a child does not yet keep this attribution. Older builds can
-misrecord a client WebSocket refusal as `rate-limit` / `rate_limit_exceeded`;
+is `transport-ambiguous`, not provider rate limiting. This applies to direct provider
+routes and combo child failures on client HTTP and WebSocket ingress independently
+of `upstreamWebsocket`. Synthetic refusals do not cool combo targets or count as
+account rate limits; genuine upstream 429s retain their rate-limit handling. Older builds can
+misrecord a WebSocket or combo refusal as `rate-limit` / `rate_limit_exceeded`;
 that combination alone does not establish exhausted quota. `headers-only` is a
 response-progress stage, not proof that the provider returned headers. Correct
 attribution does not diagnose or repair the original connection reset.
