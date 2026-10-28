@@ -425,18 +425,19 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     assignment: profile.assignments[route]!,
   }));
   const rendered = renderDesktopProfile(profile, profileModels);
-  const listed = filterDesktopModelsByVisibility(
+  const selected = filterDesktopModelsByVisibility(
     rendered.map(model => ({ ...model, anthropicFamilyTier: model.family })),
     rendered.map(model => model.route),
     visibility,
   );
+  // Match the writer's empty-selection fallback without changing the saved intent.
+  const listed = selected.length > 0 ? selected : rendered;
   return {
     profile,
     models,
     rendered,
     visibility: visibility ?? null,
-    // What the next apply writes, in order: `rendered` narrowed by visibility. Empty means the
-    // writer would fall back to the full list (see generateDesktop3pModels).
+    // What the next apply writes, including generateDesktop3pModels' empty-selection fallback.
     listed: listed.map(({ route, name, label, family, isFamilyDefault }) => ({ route, name, label, family, isFamilyDefault: !!isFamilyDefault })),
     port: config.port,
   };

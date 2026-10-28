@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,8 +21,11 @@ import {
   parseDesktopModelVisibility,
 } from "../../src/claude/desktop-model-visibility";
 import type { OcxConfig } from "../../src/types";
+import { buildClaudeDesktopState } from "../../src/server/management/shared";
+import * as desktopState from "../../src/server/management/shared";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 /*
  * #7702: a per-client Claude Desktop model selection. It narrows only the written Desktop
@@ -104,6 +107,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock> | null = null;
 
 function startServer() {
   return startServerImpl(0, {
@@ -120,6 +124,7 @@ beforeEach(() => {
   previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   isolatedCodexHome = installIsolatedCodexHome("ocx-desktop-visibility-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-desktop-visibility-"));
+  lifecycleLock = isolateClientLifecycleLock(testDir);
   process.env.OPENCODEX_HOME = testDir;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   saveConfig({
@@ -132,14 +137,16 @@ beforeEach(() => {
   } as OcxConfig);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (testDir) await removeTreeAfterBackgroundWork(testDir);
+  lifecycleLock?.restore();
+  lifecycleLock = null;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
 });
 
 test("an invalid hand-edited selection is dropped alone; providers survive", () => {
@@ -195,6 +202,57 @@ test("dashboard save persists the selection, apply writes only selected rows, an
     expect((await put({ profile: savedBody.profile, visibility: null })).status).toBe(200);
     expect(loadConfig().claudeCode?.desktopModelVisibility).toBeUndefined();
   } finally {
+    await server.stop(true);
+  }
+});
+
+test("the next-apply projection matches the writer when every selected model disappears", async () => {
+  const config = loadConfig();
+  const initial = await buildClaudeDesktopState(config);
+  const profile = reconcileDesktopProfile(initial.profile, [{ route: "mock/gone", label: "Gone" }]);
+  profile.defaults.opus = "mock/gone";
+  config.claudeCode = {
+    ...config.claudeCode,
+    desktopProfile: profile,
+    desktopModelVisibility: { mode: "include", routes: ["mock/gone"] },
+  };
+  const state = await buildClaudeDesktopState(config);
+  const written = generateDesktop3pModels([], [
+    { provider: "mock", id: "keep-model" }, { provider: "mock", id: "hide-model" },
+  ], state.profile, undefined, desktop3pModelOptions(config.claudeCode));
+  expect(state.models.find(model => model.route === "mock/gone")?.available).toBe(false);
+  expect(state.visibility).toEqual({ mode: "include", routes: ["mock/gone"] });
+  expect(state.profile.defaults.opus).toBe("mock/gone");
+  expect(state.listed.map(model => model.name)).toEqual(written.map(model => model.name));
+  expect(state.listed).toHaveLength(2);
+});
+
+test("a visibility change during discovery refuses a stale replacement", async () => {
+  const server = startServer();
+  const endpoint = new URL("/api/claude-desktop", server.url);
+  const put = (body: unknown) => fetch(endpoint, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let discovery: ReturnType<typeof spyOn> | undefined;
+  try {
+    const initial = await fetch(endpoint).then(response => response.json()) as { profile: unknown };
+    expect((await put({ profile: initial.profile })).status).toBe(200);
+    const buildState = desktopState.buildClaudeDesktopState;
+    let changed = false;
+    discovery = spyOn(desktopState, "buildClaudeDesktopState").mockImplementation(async (...args) => {
+      const result = await buildState(...args);
+      if (!changed) {
+        changed = true;
+        const concurrent = loadConfig();
+        concurrent.claudeCode = { ...concurrent.claudeCode, desktopModelVisibility: { mode: "include", routes: ["mock/keep-model"] } };
+        saveConfig(concurrent);
+      }
+      return result;
+    });
+    const response = await put({ profile: initial.profile, visibility: { mode: "include", routes: ["mock/hide-model"] } });
+    expect(changed).toBe(true);
+    expect(response.status).toBe(409);
+    expect(loadConfig().claudeCode?.desktopModelVisibility).toEqual({ mode: "include", routes: ["mock/keep-model"] });
+  } finally {
+    discovery?.mockRestore();
     await server.stop(true);
   }
 });

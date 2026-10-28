@@ -573,7 +573,7 @@ export default function ClaudeDesktop({
   const noneVisible = visibilityCounts(data.models, visibility).selected === 0 && data.models.some(model => model.available);
   // Saved but not yet written: Desktop's list differs from what the saved selection produces.
   const savedPreview = Array.isArray(data.rendered) ? applyPreview(desiredDesktopList(data.rendered, savedVisibility), status?.appliedModels ?? null) : null;
-  const pendingApply = !dirty && effectiveMode === "gateway" && !!savedPreview && (savedPreview.added.length > 0 || savedPreview.removed.length > 0);
+  const pendingApply = effectiveMode === "gateway" && !!savedPreview && (savedPreview.added.length > 0 || savedPreview.removed.length > 0);
 
   return (
     <>

@@ -980,7 +980,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       const initial = loadConfig();
       const current = await buildClaudeDesktopState(initial);
       // #7702: absent keeps the stored selection, null clears it (list every model).
-      const { parseDesktopModelVisibility, desktopRouteVisible } = await import("../../claude/desktop-model-visibility");
+      const { parseDesktopModelVisibility, desktopRouteVisible, readDesktopModelVisibility, sameDesktopModelVisibility } = await import("../../claude/desktop-model-visibility");
       const visibility = body.visibility === undefined || body.visibility === null ? body.visibility : parseDesktopModelVisibility(body.visibility);
       if (visibility && !current.models.some(model => model.available && desktopRouteVisible(visibility, model.route))) {
         throw new Error("Claude Desktop needs at least one visible available model");
@@ -1018,6 +1018,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             || (latest && expectedProfile && !sameProfileContent(latest, expectedProfile))) {
             return { changed: false, value: null };
           }
+          if (visibility !== undefined && !sameDesktopModelVisibility(
+            readDesktopModelVisibility(persisted.claudeCode), readDesktopModelVisibility(initial.claudeCode),
+          )) return { changed: false, value: null };
           persisted.claudeCode = {
             ...(persisted.claudeCode ?? {}),
             desktopProfile: preserveDesktopAppliedState(latest ?? current.profile, rebuilt),

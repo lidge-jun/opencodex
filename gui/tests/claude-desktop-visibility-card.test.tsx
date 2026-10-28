@@ -146,3 +146,11 @@ test("clearing every shown model blocks saving", async () => {
   expect(container.textContent).toContain("Select at least one available model.");
   expect(button("Save").disabled).toBe(true);
 });
+
+test("editing a draft keeps a newer saved selection pending apply", async () => {
+  savedVisibility = { mode: "include", routes: ["prov/opus-0"] };
+  await mount();
+  await act(async () => { checkbox("Opus Model 1").click(); });
+  expect(container.querySelector(".claude-dirty")?.textContent).toBe("Unsaved changes");
+  expect(container.querySelector(".claude-status-bar")?.textContent).toContain("Saved — apply to update Desktop");
+});

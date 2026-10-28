@@ -39,13 +39,17 @@ with an empty static list has no usable picker. The management API refuses to sa
 `PUT /api/claude-desktop` (`src/server/management/agent-settings-routes.ts`) accepts `visibility`
 alongside `profile`. An absent field keeps the
 stored selection, `null` clears it, and an object replaces it. The selection is written in the
-same field-scoped config mutation as the profile. `GET /api/claude-desktop` (`buildClaudeDesktopState` in
+same field-scoped config mutation as the profile. A supplied replacement or clear compares the
+selection again inside that mutation; a concurrent visibility edit during discovery returns 409.
+An omitted selection preserves the latest persisted value. `GET /api/claude-desktop` (`buildClaudeDesktopState` in
 `src/server/management/shared.ts`) returns the selection,
 a per-model `visible` flag, and `listed`, the rows the next apply writes. `GET
 /api/claude-desktop/status` returns `appliedModels`, the names and labels Desktop runs now, read
 through the verified library reader. The dashboard derives its selected, available and applied
-counts and its added/removed preview from these fields. When the saved selection differs from the
-applied list, the status bar reports a pending apply rather than an up-to-date config.
+counts and its added/removed preview from these fields. `listed` includes the writer's full-list
+fallback when every selected model is unavailable, without changing the saved selection or default.
+When the saved selection differs from the applied list, the status bar reports a pending apply even
+while a newer draft has unsaved edits.
 
 A malformed hand-edited selection fails config validation at
 `claudeCode.desktopModelVisibility`. Salvage drops that one field, so the rest of the config loads.
