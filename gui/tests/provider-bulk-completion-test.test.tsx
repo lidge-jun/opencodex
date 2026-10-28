@@ -132,3 +132,37 @@ test("stop aborts the in-flight request and sends no more", async () => {
   expect(outcomes()).toEqual([["good", "ok"]]);
   expect(host.textContent).toContain("Stopped after 1 of 3 models");
 });
+
+test("stopped run cleanup preserves the restarted run and its Stop control", async () => {
+  const releases: Array<(response: Response) => void> = [];
+  answers.bad = () => new Promise<Response>(resolve => { releases.push(resolve); });
+  await render(); await runAll();
+  expect(requests).toHaveLength(2);
+  const firstSignal = requests[1]!.init.signal!;
+  await act(async () => { button("Stop")!.click(); });
+  expect(firstSignal.aborted).toBe(true);
+
+  await runAll();
+  expect(requests).toHaveLength(4);
+  const restartedSignal = requests[3]!.init.signal!;
+  expect(restartedSignal.aborted).toBe(false);
+  expect(button("Stop")).toBeDefined();
+
+  // Let the stopped request settle only after the next run is already in flight.
+  await act(async () => { releases[0]!(Response.json(success)); });
+  expect(requests).toHaveLength(4);
+  expect(outcomes()).toEqual([["good", "ok"]]);
+  expect(host.querySelector("[data-completion-bulk-state]")?.getAttribute("data-completion-bulk-state")).toBe("running");
+  expect(button(/^Testing/)!.disabled).toBe(true);
+  expect(button("Stop")).toBeDefined();
+  expect(restartedSignal.aborted).toBe(false);
+
+  await act(async () => { button("Stop")!.click(); });
+  expect(restartedSignal.aborted).toBe(true);
+  await act(async () => { releases[1]!(Response.json(success)); });
+  expect(requests).toHaveLength(4);
+  expect(outcomes()).toEqual([["good", "ok"]]);
+  expect(button("Stop")).toBeUndefined();
+  expect(button("Test all models")!.disabled).toBe(false);
+  expect(host.textContent).toContain("Stopped after 1 of 3 models");
+});

@@ -16,7 +16,7 @@ type DisableState = { kind: "idle" } | { kind: "busy" } | { kind: "done"; count:
 type Props = { apiBase: string; provider: string; models: string[] };
 
 /** A failure the upstream actually answered for this model; transport aborts and HTTP refusals are not evidence. */
-export function failedModelIds(rows: readonly Row[]): string[] {
+function failedModelIds(rows: readonly Row[]): string[] {
   return rows.filter(row => row.outcome === "failed").map(row => row.model);
 }
 
@@ -75,8 +75,10 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
         setRows(previous => [...previous, row]);
       }
     } finally {
-      if (flight.current === controller) flight.current = null;
-      setRunning(false);
+      if (flight.current === controller) {
+        flight.current = null;
+        setRunning(false);
+      }
     }
   }
 
