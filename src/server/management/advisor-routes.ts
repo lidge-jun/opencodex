@@ -14,6 +14,7 @@ import { readManagementJsonBodyOr } from "./body";
 import type { ManagementContext } from "./context";
 import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
 import { readConfigDiagnostics } from "../../config/diagnostics";
+import { armDetachedConfigBaseline } from "../../config/live-reconcile";
 import {
   ADVISOR_CONTEXT_SHARING_CONSENT_VERSION,
   ADVISOR_EFFORTS,
@@ -192,6 +193,9 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
       const disk = ctx.deps.saveConfigPreservingClaudeCode ? undefined : readConfigDiagnostics();
       if (disk?.source === "fallback") throw new Error("config_unavailable");
       const candidate = disk?.source === "file" ? disk.config : config;
+      // This fresh authority owns no live socket. Arm the same object passed to the
+      // saver so even new disk-only fields reconcile against its admitted read.
+      if (candidate !== config) armDetachedConfigBaseline(candidate);
       const snapshot = isRec(config.advisor) ? { ...config.advisor } : undefined;
       applyPatchInMemory(candidate, parsed.patch);
       try { persist(candidate); }

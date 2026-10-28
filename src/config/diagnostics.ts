@@ -839,12 +839,12 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
   }
 }
 
-export function readConfigFileSnapshot(): ConfigFileSnapshot {
+export function readConfigFileSnapshot(options: { passive?: boolean } = {}): ConfigFileSnapshot {
   try {
     const path = getConfigPath();
     const bytes = readFileSync(path);
     const raw = bytes.toString("utf-8");
-    return { diagnostics: configDiagnosticsFromText(raw, { path, bytes }), raw };
+    return { diagnostics: configDiagnosticsFromText(raw, options.passive ? undefined : { path, bytes }), raw };
   } catch (error) {
     if (isMissingPathError(error)) {
       return {
@@ -857,8 +857,9 @@ export function readConfigFileSnapshot(): ConfigFileSnapshot {
   }
 }
 
-export function readConfigDiagnostics(): ConfigDiagnostics {
-  return readConfigFileSnapshot().diagnostics;
+/** Passive observations project retired providers without publishing recovery backups. */
+export function readConfigDiagnostics(options: { passive?: boolean } = {}): ConfigDiagnostics {
+  return readConfigFileSnapshot(options).diagnostics;
 }
 
 /** Read-only init preflight. Occupied unsafe entries are never treated as absence. */

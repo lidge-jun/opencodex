@@ -8,7 +8,8 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, readConfigDiagnostics, readConfigAdmissionSnapshot, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, readConfigAdmissionSnapshot, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
@@ -251,7 +252,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
 
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
   const admitted = await withConfigDirHardeningSettled(getConfigDir(), () => {
-    const config = readConfigDiagnostics().config;
+    const config = readCliConfigForMutation();
 
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, name);
     if (namespaceCollision) {
@@ -402,17 +403,17 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
       if (setDefault) config.defaultProvider = name;
       validateAndSave(config);
     });
-    return { config, provConfig, registryEntry, markerCollision, removedCredentials };
+    if (!markerCollision) cleanupRemovedGcpCredentials(removedCredentials);
+    return { config, provConfig, registryEntry, markerCollision };
   });
   if (!admitted) return;
-  const { config, provConfig, registryEntry, markerCollision, removedCredentials } = admitted;
+  const { config, provConfig, registryEntry, markerCollision } = admitted;
   if (markerCollision) {
     console.error("Error: provider configuration changed while adding Pool 2; resolve the ownership collision first.");
     process.exitCode = 2;
     return;
   }
 
-  cleanupRemovedGcpCredentials(removedCredentials);
   let sync: LocalSyncResult | undefined;
   if (wantsSync) {
     try {
@@ -484,7 +485,7 @@ function handleRemove(args: string[]): void {
   }
   rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider remove <name> [--json]");
 
-  const config = readConfigDiagnostics().config;
+  const config = readCliConfigForMutation();
   if (!hasOwnProvider(config.providers, name)) {
     console.error(`Provider "${name}" is not configured.`);
     process.exit(1);
@@ -591,7 +592,7 @@ function handleSetDefault(args: string[]): void {
   }
   rejectUnknownArgs(restArgs.slice(1), "Usage: ocx provider set-default <name> [--json]");
 
-  const config = readConfigDiagnostics().config;
+  const config = readCliConfigForMutation();
   if (!hasOwnProvider(config.providers, name)) {
     console.error(`Provider "${name}" is not configured. Add it first: ocx provider add ${name}`);
     process.exit(1);

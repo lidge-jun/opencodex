@@ -7,7 +7,8 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { configuredContextWindow } from "../codex/catalog/provider-fetch";
-import { hasOwnProvider, isValidProviderName, loadConfig, readConfigDiagnostics, saveConfig } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
 import {
   configuredReasoningEfforts,
   modelRecordValue,
@@ -176,7 +177,7 @@ async function handleCustomAdd(args: string[], deps: ModelsCommandDeps): Promise
   if (!isValidProviderName(provider)) fail(`invalid provider name "${provider}"`);
 
   const { config, entry } = await withConfigDirHardeningSettled(getConfigDir(), () => {
-    const config = readConfigDiagnostics().config;
+    const config = readCliConfigForMutation();
     if (!hasOwnProvider(config.providers, provider)) {
       fail(`provider "${provider}" is not configured. See: ocx provider list`);
     }
@@ -260,7 +261,7 @@ async function handleCustomRemove(args: string[], deps: ModelsCommandDeps): Prom
     return;
   }
 
-  const config = readConfigDiagnostics().config;
+  const config = readCliConfigForMutation({ passive: true });
   const existing = config.customModels ?? [];
   // Slug matching goes through the shared resolver so this command sees the same collision
   // class catalog filtering and persisted sync see (#2491). `slugEquals` compares the raw and
@@ -303,7 +304,7 @@ async function handleCustomRemove(args: string[], deps: ModelsCommandDeps): Prom
   }
 
   const savedConfig = await withConfigDirHardeningSettled(getConfigDir(), () => {
-    const fresh = readConfigDiagnostics().config;
+    const fresh = readCliConfigForMutation();
     const current = fresh.customModels ?? [];
     if (JSON.stringify(current.find(row => row.id === model.id)) !== JSON.stringify(model)) {
       fail("custom model changed before removal; inspect it before retrying");

@@ -1,4 +1,5 @@
-import { loadConfig, readConfigDiagnostics, saveConfig } from "../config";
+import { loadConfig, saveConfig } from "../config";
+import { readCliConfigForMutation } from "./config-mutation";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import {
   CODEX_REASONING_LEVELS,
@@ -234,7 +235,7 @@ async function setEffort(
 
   // Offline persistence path: only reached when no live proxy was found before mutation
   const config = await withConfigDirHardeningSettled(getConfigDir(), () => {
-    const config = readConfigDiagnostics().config;
+    const config = readCliConfigForMutation();
     if (validatedMain !== undefined) {
       if (validatedMain === null) delete config.effortCap;
       else config.effortCap = validatedMain;

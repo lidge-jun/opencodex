@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { handleConfigCommand } from "../../src/cli/config-command";
@@ -10,6 +10,10 @@ import { handleAdvisorRoutes } from "../../src/server/management/advisor-routes"
 import * as advisorActivation from "../../src/lib/advisor-activation";
 import type { OcxConfig } from "../../src/types";
 import * as paths from "../../src/config/paths";
+import * as configModule from "../../src/config";
+import { armClaudeCodeBaseline, claudeCodeBaselineArmed } from "../../src/config/live-reconcile";
+import { CliUsageError } from "../../src/cli/runtime-api";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath,
   type IcaclsResult } from "../../src/lib/windows-secret-acl";
@@ -89,9 +93,10 @@ function holdParent() {
     release() { held = false; released.resolve(); } };
 }
 const operations = ["set", "unset", "import", "effort", "model-add", "model-remove", "provider-add", "provider-remove", "provider-default", "advisor"] as const;
-function requestAdvisor() {
+function requestAdvisor(liveConfig = fixture() as OcxConfig) {
   const url = new URL("http://localhost/api/advisor/settings");
-  advisorConfig = fixture() as OcxConfig;
+  advisorConfig = liveConfig;
+  armClaudeCodeBaseline(advisorConfig);
   return handleAdvisorRoutes({ url, req: new Request(url, { method: "PUT", body: JSON.stringify({ enabled: true }) }),
     config: advisorConfig, deps: {}, version: "test", trustedLoopbackIngress: false, guiSessionIssuance: null,
     convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
@@ -189,4 +194,118 @@ test("Advisor response snapshots the admitted phase before queued live edits", a
   expect(response?.status).toBe(200);
   expect((await response!.json()).settings.enabled).toBe(true);
   expect(advisorConfig?.advisor?.enabled).toBe(false);
+});
+
+const cliOperations = operations.filter(operation => operation !== "advisor");
+for (const operation of cliOperations) {
+  test.each([false, true])(`${operation} keeps retired-provider recovery inside admission (timeout=%s)`, async timeout => {
+    original = JSON.stringify({ ...fixture(), providers: { ...fixture().providers,
+      "opencode-free": { adapter: "openai-chat", baseUrl: "https://retired.example/v1", apiKey: "synthetic-recovery-secret" },
+    } });
+    writeFileSync(join(root, "config.json"), original);
+    const time = clock(), parent = holdParent(); await parent.entered;
+    const work = run(operation);
+    void work.then(parent.arrive, parent.arrive);
+    try {
+      await parent.reached; await turn();
+      expect(parent.descendants).toEqual([]);
+      expect(readdirSync(root).filter(name => name.includes("pre-opencode-free-removal"))).toEqual([]);
+      expect(readFileSync(join(root, "config.json"), "utf8")).toBe(original);
+      if (timeout) {
+        time.advance(1000);
+        expect(await work).toBe(1);
+        expect(readFileSync(join(root, "config.json"), "utf8")).toBe(original);
+        expect(parent.descendants).toEqual([]);
+        expect(readdirSync(root).filter(name => name.includes("pre-opencode-free-removal"))).toEqual([]);
+      }
+    } finally { parent.release(); await work; }
+    if (!timeout) {
+      expect(await work).toBe(0);
+      const backups = readdirSync(root).filter(name => name.includes("pre-opencode-free-removal") && name.endsWith(".bak"));
+      expect(backups.length).toBeGreaterThan(0);
+      expect(backups.some(name => readFileSync(join(root, name), "utf8") === original)).toBe(true);
+    }
+  });
+}
+
+test("GCP cleanup completes before a parent flight queued after provider publication", async () => {
+  const config = fixture();
+  Object.assign(config.providers.mock, { apiKey: "gcp-sa:writer-fixture" });
+  writeFileSync(join(root, "config.json"), JSON.stringify(config));
+  let deletions = 0;
+  setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => null, setPassword: () => {}, deletePassword: () => { deletions++; return true; } }));
+  restores.push(() => setProviderKeychainEntryFactoryForTests(null));
+  const released = deferred(), entered = deferred();
+  let held = false;
+  const descendants: string[] = [];
+  setAsyncIcaclsRunnerForTests(async () => { entered.resolve(); await released.promise; return success; });
+  setIcaclsRunnerForTests(args => {
+    if (held && args[0]?.startsWith(root + sep)) descendants.push(args[0]);
+    return success;
+  });
+  const barrier = paths.withConfigDirHardeningSettled;
+  const hook = spyOn(paths, "withConfigDirHardeningSettled").mockImplementation(<T>(dir: string, mutate: () => T) => barrier(dir, () => {
+    const result = mutate();
+    queueMicrotask(() => { held = true; paths.hardenConfigDir(); });
+    return result;
+  }));
+  restores.push(() => hook.mockRestore());
+  const work = handleProviderCommand(["add", "mock", "--force", "--adapter", "openai-chat", "--base-url", "https://mock.example/v1", "--json"]);
+  try {
+    await entered.promise; await turn();
+    expect(descendants).toEqual([]);
+    expect(deletions).toBe(1);
+    expect(existsSync(join(root, "local-credentials.json"))).toBe(true);
+  } finally { held = false; released.resolve(); await work; }
+});
+
+for (const operation of cliOperations) {
+  test.each([false, true])(`${operation} refuses malformed authority without overwriting bytes (late=%s)`, async late => {
+    const invalid = '{ "providers": { "operator-data": "preserve-me"';
+    const exit = spyOn(process, "exit").mockImplementation(() => { throw new Error("unexpected CLI exit"); });
+    restores.push(() => exit.mockRestore());
+    const parent = late ? holdParent() : undefined;
+    if (parent) await parent.entered;
+    else writeFileSync(join(root, "config.json"), invalid);
+    const work = run(operation).then(value => value, error => error);
+    if (parent) {
+      await parent.reached; await turn();
+      expect(parent.descendants).toEqual([]);
+      writeFileSync(join(root, "config.json"), invalid);
+      parent.release();
+    }
+    try {
+      const outcome = await work;
+      if (["set", "unset", "import", "effort"].includes(operation)) expect(outcome).toBe(2);
+      else expect(outcome).toBeInstanceOf(CliUsageError);
+      expect(readFileSync(join(root, "config.json"), "utf8")).toBe(invalid);
+      expect(readdirSync(root).filter(name => name.startsWith("config.json.invalid-"))).toEqual([]);
+      expect(existsSync(join(root, "config-mutation.sqlite"))).toBe(false);
+      expect(exit).not.toHaveBeenCalled();
+    } finally { parent?.release(); await work; }
+  });
+}
+
+test("Advisor preserves a disk edit between admitted read and saver lock", async () => {
+  const live = configModule.readConfigDiagnostics().config;
+  armClaudeCodeBaseline(live);
+  const persist = configModule.saveConfigPreservingClaudeCode;
+  let received: OcxConfig | undefined;
+  const hook = spyOn(configModule, "saveConfigPreservingClaudeCode").mockImplementation(candidate => {
+    received = candidate;
+    const disk = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+    disk.subagentEffortCap = "medium";
+    disk.advisor = { timeoutMs: 4321 };
+    writeFileSync(join(root, "config.json"), JSON.stringify(disk));
+    persist(candidate);
+  });
+  restores.push(() => hook.mockRestore());
+  const response = await requestAdvisor(live);
+  expect(response?.status).toBe(200);
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(saved.subagentEffortCap).toBe("medium");
+  expect(saved.advisor).toEqual({ enabled: true, timeoutMs: 4321 });
+  expect((await response!.json()).settings.timeoutMs).toBe(4321);
+  expect(received).toBeDefined();
+  expect(claudeCodeBaselineArmed(received!)).toBe(true);
 });

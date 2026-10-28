@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { readCliConfigForMutation } from "./config-mutation";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
@@ -288,7 +289,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         return { changed: JSON.stringify(fresh) !== before, value: undefined };
       }));
       if (outcome.status === "unavailable") {
-        throw new Error(outcome.reason === "conflict"
+        throw new CliUsageError(outcome.reason === "conflict"
           ? "config changed while applying this update; retry"
           : `config is ${outcome.reason}`);
       }
@@ -328,7 +329,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!path) throw new CliUsageError("import path is required", USAGE);
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
-      await withConfigDirHardeningSettled(getConfigDir(), () => saveConfig(validate(loadInput(path))));
+      await withConfigDirHardeningSettled(getConfigDir(), () => {
+        readCliConfigForMutation();
+        saveConfig(validate(loadInput(path)));
+      });
       printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);
       return;
     }
