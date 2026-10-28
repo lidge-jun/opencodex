@@ -82,6 +82,11 @@ const CASES: Array<[string, string, boolean, "ok" | "fail"]> = [
   ["message_stop with CR-only line endings", (partial + md("end_turn") + stop).replace(/\n/g, "\r"), false, "ok"],
   ["last event field wins: message_stop then ping", partial + 'event: message_stop\nevent: ping\ndata: {"type":"message_stop"}\n\n', false, "fail"],
   ["last event field wins: ping then message_stop", partial + 'event: ping\nevent: message_stop\ndata: {"type":"message_stop"}\n\n', false, "ok"],
+  ["event name with a trailing space is another event", partial + 'event: message_stop \ndata: {"type":"message_stop"}\n\n', false, "fail"],
+  ["event name with an extra leading space is another event", partial + 'event:  message_stop\ndata: {"type":"message_stop"}\n\n', false, "fail"],
+  ["stop reason under a trailing-space event name does not count", partial + 'event: message_delta \ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n', false, "fail"],
+  ["data lines split inside a JSON string are invalid JSON", partial + 'event: message_stop\ndata: {"type":"message_\ndata: stop"}\n\n', false, "fail"],
+  ["data lines split at JSON whitespace still parse", partial + 'event: message_stop\ndata: {"type":\ndata: "message_stop"}\n\n', false, "ok"],
   ["empty body", "", false, "fail"],
 ];
 

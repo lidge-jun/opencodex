@@ -59,18 +59,18 @@ export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: numb
 export function isHarmlessSseTail(tail: string): boolean {
   const lines = tail.split("\n").filter(line => line.trim() !== "");
   let event: string | null = null;
-  let data = "";
+  const data: string[] = [];
   for (const line of lines) {
     if (line.startsWith(":")) continue;
     const eventValue = sseFieldValue(line, "event");
-    if (eventValue !== null) { event = eventValue.trim(); continue; }
+    if (eventValue !== null) { event = eventValue; continue; }
     const dataValue = sseFieldValue(line, "data");
-    if (dataValue !== null) { data += dataValue; continue; }
+    if (dataValue !== null) { data.push(dataValue); continue; }
     return false;
   }
-  if (!data) return event === null || event === "ping";
+  if (data.length === 0) return event === null || event === "ping";
   try {
-    const payload: unknown = JSON.parse(data);
+    const payload: unknown = JSON.parse(data.join("\n"));
     return isRec(payload) && payload.type === "ping" && (event === null || event === "ping");
   } catch {
     return false;
@@ -126,11 +126,12 @@ export function tapAnthropicSseForLog(
     const lines = frame.split("\n");
     // SSE dispatches on the last event field of a frame.
     const eventLine = lines.map(l => sseFieldValue(l, "event")).findLast((v): v is string => v !== null);
-    const event = eventLine === undefined ? null : eventLine.trim();
+    // The value is used as SSE delivers it (one leading space stripped, nothing trimmed).
+    const event = eventLine === undefined ? null : eventLine;
     const dataLine = lines
       .map(l => sseFieldValue(l, "data"))
       .filter((v): v is string => v !== null)
-      .join("");
+      .join("\n");
     if (!dataLine) return;
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { data = null; }

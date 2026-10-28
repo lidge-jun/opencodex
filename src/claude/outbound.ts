@@ -1195,14 +1195,17 @@ export async function collectAnthropicMessage(
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
         const rawFrame = buffer.slice(0, sep);
         buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
+        // Event name and data as SSE dispatches them: the last event field, untrimmed, and the
+        // data fields joined by newlines.
         let eventName = "";
-        let dataLine = "";
+        const dataLines: string[] = [];
         for (const line of rawFrame.split("\n")) {
           const eventValue = sseFieldValue(line, "event");
-          if (eventValue !== null) { eventName = eventValue.trim(); continue; }
+          if (eventValue !== null) { eventName = eventValue; continue; }
           const dataValue = sseFieldValue(line, "data");
-          if (dataValue !== null) dataLine += dataValue;
+          if (dataValue !== null) dataLines.push(dataValue);
         }
+        const dataLine = dataLines.join("\n");
         if (!dataLine) continue;
         let data: unknown;
         try { data = JSON.parse(dataLine); } catch { continue; }
