@@ -1,7 +1,7 @@
 import { m365CopilotClaims } from "../../oauth/m365-copilot";
 import { getToneForModel, m365CopilotScenario } from "../../providers/m365-copilot-models";
 import { resolveProviderEgress } from "../../lib/provider-egress";
-import { effectiveProxyFor } from "../../lib/proxy-env";
+import { effectiveProxyFor, noProxyMatches } from "../../lib/proxy-env";
 import type { OcxProviderConfig } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -84,6 +84,7 @@ export function m365SocketDialOptions(route: M365TurnOptions["route"], url: stri
   if (egress.kind === "direct") return { headers };
   const https = new URL(url);
   https.protocol = "https:";
+  if (noProxyMatches(https)) return { headers };
   const inherited = effectiveProxyFor(https);
   return inherited ? { headers, proxy: inherited } : { headers };
 }

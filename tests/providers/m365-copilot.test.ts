@@ -229,4 +229,16 @@ describe("Microsoft 365 Copilot socket egress", () => {
     expect(() => m365SocketDialOptions({ fetch: globalThis.fetch }, socketUrl, headers)).toThrow("cannot use a custom fetch executor");
     expect(() => m365SocketDialOptions({ proxy: "" }, socketUrl, headers)).toThrow(/providers[.]m365-copilot[.]proxy is invalid/);
   });
+  test("inherited proxy respects the global bypass list without overriding an explicit provider proxy", () => {
+    const previousProxy = process.env.HTTPS_PROXY, previousNoProxy = process.env.NO_PROXY;
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    process.env.NO_PROXY = "substrate.office.com";
+    try {
+      expect(m365SocketDialOptions({}, socketUrl, headers).proxy).toBeUndefined();
+      expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("http://127.0.0.1:9/");
+    } finally {
+      if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+      if (previousNoProxy === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = previousNoProxy;
+    }
+  });
 });

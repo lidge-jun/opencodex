@@ -5,7 +5,7 @@ description: Sign in to Microsoft 365 Copilot and discover your account's live c
 
 Microsoft 365 Copilot is an experimental native provider, separate from GitHub Copilot. It connects directly to Microsoft's private ChatHub WebSocket service. It requires a work or school account with access to Microsoft 365 Copilot Chat; personal Microsoft accounts are not supported. Availability and quotas remain controlled by Microsoft.
 
-The built-in preset in this contributor change remains a proposal pending maintainer security review and a canonical-provider policy decision. The private endpoints described below are observed behavior, not a Microsoft-published API contract.
+The repository owner granted the built-in preset a canonical-provider policy exception; maintainer security re-review remains pending. The private endpoints described below are observed behavior, not a Microsoft-published API contract.
 
 ## Sign in
 
@@ -60,6 +60,4 @@ The primary sources below were checked on **October 28, 2026**. They establish M
 | Authentication identity | Microsoft's [Entra application dictionary](https://github.com/MicrosoftDocs/entra-docs/blob/main/.docutune/dictionaries/known-guids.json) identifies the client ID as M365 Chat Client. That proves the name, not permission for this connector to reuse it. The documented Graph Chat API has separate delegated permissions and requires a Copilot add-on license; this PR does not switch to that API or request its broader permissions. |
 | Maintenance contact | **@x3M3x**, the PR author, is the proposed connector maintenance contact. Report breakage through the repository's Provider or API compatibility issue form with the connector ID, OpenCodex version, browser and redacted error. The ownership arrangement is proposed pending acceptance; it implies no Microsoft affiliation or support commitment. |
 
-The documented-endpoint and private-protocol-authorization gaps mean this evidence is **insufficient to claim that the canonical-preset requirements are satisfied**. Successful tests establish functionality only. Security review and repository admission are separate maintainer decisions.
-
-If the private native connector cannot be admitted under policy, the proposed alternative is an **inert reference entry** in `src/providers/free-directory.ts`: empty `baseUrl`, `supportLevel: reference`, `verification: unverified`, `discovery: unsupported`, `liveModels: false`, links to Microsoft's product and documented API pages, and no `modelsUrl` or `lastVerified` claim for the private endpoint. That alternative would not register OAuth, publish model choices, or send credentials. It requires narrowing the upstream proposal; the working local connector stays intact pending an explicit scope decision.
+The documented-endpoint and private-protocol-authorization gaps remain. The repository owner's exception permits consideration of this preset under repository policy; it does not establish Microsoft authorization. Successful tests establish functionality only.
