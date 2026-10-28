@@ -22,22 +22,37 @@ export class ConfigWritePublishedError extends Error {
 
 /** The literal file, with no schema merge or default injection; preserve-only leaves it unprojected. */
 export function readRawConfigJson(projectRetired: boolean | "preserve-only" = false): Record<string, unknown> | undefined {
+  let configPath: string;
+  let bytes: Buffer;
+  let parsed: unknown;
   try {
-    const configPath = getConfigPath();
+    configPath = getConfigPath();
     if (!existsSync(configPath)) return undefined;
-    const bytes = readFileSync(configPath);
+    bytes = readFileSync(configPath);
     const raw = bytes.toString("utf-8").replace(/^\uFEFF/, "");
-    const parsed = JSON.parse(raw) as unknown;
+    parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    if (projectRetired) {
-      const projection = projectRetired === "preserve-only" ? structuredClone(parsed) : parsed;
-      projectRemovedOpenCodeFreeSnapshot(projection, { path: configPath, bytes });
-    }
-    return parsed as Record<string, unknown>;
   } catch {
     // Unreadable or corrupt: behave exactly as before. Never fail a save over protection.
     return undefined;
   }
+  if (projectRetired === "preserve-only") {
+    // Preservation is optional; its failure must not discard the parsed snapshot that the
+    // client-state guard and OS-store reference accounting depend on.
+    try {
+      projectRemovedOpenCodeFreeSnapshot(structuredClone(parsed), { path: configPath, bytes });
+    } catch {
+      console.warn("[opencodex] Could not check config.json for retired OpenCode Free entries before saving; no recovery copy was made.");
+    }
+  } else if (projectRetired) {
+    try {
+      projectRemovedOpenCodeFreeSnapshot(parsed, { path: configPath, bytes });
+    } catch {
+      // The in-place projection may be partial; keep the previous unreadable result.
+      return undefined;
+    }
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function failClosedClientPersistenceError(
