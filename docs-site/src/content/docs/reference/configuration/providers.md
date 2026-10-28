@@ -738,9 +738,7 @@ it does not restore the old name. Requests have a 60-second deadline covering th
 follow-up list refresh. A timeout does not undo a write: use **Retry** to check the current name
 before making another change.
 
-Claude Code's `/model` picker (Anthropic-flavor `GET /v1/models`) shows a routed row with an exact label as
-`<label> (<provider>)`, e.g. `Sonnet 5.5 (anthropic2)` and `Sonnet 5.5 (anthropic2) · 1M`; a row without an entry
-keeps `<model id> (<provider>)`; when global `fastMode` rewrites a Cursor row to its fast id in the readable style, that row keeps the listed id instead of the configured label. Aliases and catalog metadata do not relabel it; ids and native rows are unchanged.
+Claude Code's `/model` picker (Anthropic-flavor `GET /v1/models`) shows a routed row with an exact label as `<label> (<provider>)`, e.g. `Sonnet 5.5 (anthropic2)` and `Sonnet 5.5 (anthropic2) · 1M`; a row without an entry keeps `<model id> (<provider>)`; when global `fastMode` rewrites a Cursor row to its fast id in the readable style, that row keeps the listed id instead of the configured label. Aliases and catalog metadata do not relabel it; ids and native rows are unchanged.
 
 ## Codex catalog and root `config.toml` settings
 
