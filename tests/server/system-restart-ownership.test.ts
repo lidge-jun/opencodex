@@ -9,9 +9,15 @@ import { inspectOwnershipMutationLease } from "../../src/service/ownership-mutat
 import { serviceStatePaths } from "../../src/service/state";
 import { retireRestartParentOwnership } from "../../src/server/restart-parent-ownership";
 import { observeProxyLiveness } from "../../src/server/proxy-liveness";
+import { isProcessAlive, killProxy } from "../../src/lib/process-control";
 
 let home: TempHome | undefined;
-afterEach(() => { home?.remove(); home = undefined; });
+let settleProcesses: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  await settleProcesses?.();
+  settleProcesses = undefined;
+  home?.remove(); home = undefined;
+});
 function fixture(): TempHome { return home = createTempHome("ocx-restart-parent-ownership-"); }
 
 test("retirement removes only the current parent's records and releases the ownership lease", () => {
@@ -72,19 +78,44 @@ test("completed drain hands off to a healthy child while the real parent is stil
   const entry = owned.path("src", "cli", "index.ts");
   mkdirSync(owned.path("src", "cli"), { recursive: true });
   // The real process identity verifier recognizes this source-launch path.
-  writeFileSync(entry, `import ${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))};\n`);
+  const pidsPath = owned.path("fixture-pids");
+  writeFileSync(entry, `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(pidsPath)}, process.pid + "\\n");
+console.error("[restart-fixture " + process.pid + "] loading runner");
+await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))});\n`);
   const child = Bun.spawn([process.execPath, entry, "start", "parent"], {
     cwd: repoRoot(), env: { ...process.env, HOME: owned.root, USERPROFILE: owned.root,
       OPENCODEX_HOME: owned.configDir, CODEX_HOME: owned.codexHome,
       OCX_OWNER_REGISTRY_DIR: owned.path("registry"), XDG_RUNTIME_DIR: owned.root },
     stdout: "pipe", stderr: "pipe",
   });
-  const watchdog = setTimeout(() => child.kill(), 18_000);
+  let cleanup: Promise<void> | undefined;
+  settleProcesses = () => cleanup ??= (async () => {
+    // Stop the live parent tree first, including descendants still loading their entry.
+    // The test runner is outside that tree. Then join every registered fixture PID,
+    // including a detached replacement whose parent has already exited normally.
+    if (child.exitCode === null && isProcessAlive(child.pid)) killProxy(child.pid);
+    const pids = existsSync(pidsPath) ? readFileSync(pidsPath, "utf8").trim().split("\n").map(Number) : [];
+    for (const pid of pids) {
+      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) throw new Error("invalid fixture PID");
+      if (isProcessAlive(pid)) killProxy(pid);
+    }
+    await child.exited;
+  })();
+  const watchdog = setTimeout(() => {
+    void settleProcesses!().catch(error => console.error("restart fixture cleanup failed", error));
+  }, 18_000);
   try {
     const [code, stdout, stderr] = await Promise.all([
       child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
     ]);
-    expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+    const logPath = owned.path("restart-handoff.log");
+    const handoffLog = existsSync(logPath) ? readFileSync(logPath, "utf8") : "(not created)";
+    const phasesPath = owned.path("fixture-phases.log");
+    const phases = existsSync(phasesPath) ? readFileSync(phasesPath, "utf8") : "(not loaded)";
+    const probeOutput = ["probe.stdout.log", "probe.stderr.log"].map(name =>
+      existsSync(owned.path(name)) ? readFileSync(owned.path(name), "utf8") : "(not created)");
+    expect({ code, stdout, stderr, handoffLog, phases, probeOutput }).toMatchObject({ code: 0 });
     const resultPath = owned.path("child-result.json");
     for (let i = 0; i < 100 && !existsSync(resultPath); i++) await Bun.sleep(50);
     expect(existsSync(resultPath)).toBe(true);
@@ -97,6 +128,6 @@ test("completed drain hands off to a healthy child while the real parent is stil
     expect(readFileSync(owned.path("restart-handoff.log"), "utf8")).toContain("is serving port");
   } finally {
     clearTimeout(watchdog);
-    if (child.exitCode === null) { child.kill(); await child.exited; }
+    await settleProcesses();
   }
 }, 25_000);

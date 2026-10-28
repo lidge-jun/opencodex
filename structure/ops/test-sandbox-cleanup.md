@@ -135,3 +135,10 @@ are complete allowlists. Catalog tick children drain their config ACL
 flights/reaps before normal exit. Child work deadlines remain separate from outer test budgets,
 which reserve time for termination and teardown. The shared warm-up regressions exercise a live
 interval after work completes and a descendant retaining stdout after its parent exits.
+
+The completed-drain fixture in `tests/server/system-restart-ownership.test.ts` registers each
+fixture PID before loading the runner. Its watchdog stops the live parent tree, and teardown
+observes registered descendant exits before removing the home; a cleanup failure retains it.
+`tests/fixtures/restart-parent-ownership-runner.ts` journals process phases and captures the
+fence probe's output continuously. Failure assertions include that evidence and the replacement
+handoff log, including when the parent is terminated before its probe returns.
