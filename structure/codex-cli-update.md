@@ -414,7 +414,7 @@ proof is also required after restart: name disappearance alone cannot prove desc
 Observer failure leaves armed evidence fenced. Normal settlement also joins the observer before
 staging cleanup. Its HOME/profile/AppData, compiler temp and PowerShell analysis-cache paths all
 resolve inside that private staging root. Access/query failure, missing identity and
-armed or partial publication remain fenced. Parent admission additionally requires owner-process
+unproven armed or partial publication remain fenced. Parent admission additionally requires owner-process
 absence; same-process closed-worker recovery first seals its exact generation against another spawn.
 No recovery probe signals an installer. Terminal markers release only the proven token; alias homes
 read the same canonical store. The native-child restart regressions live in
@@ -431,13 +431,20 @@ renaming or changing the job receipt. It must pass the same private/no-follow fi
 token, carry a null child group, and match the published record's parent identity when present. Fresh
 parent absence and any published child's whole-group absence are required. Every unshadowed pending
 file must independently satisfy these checks; malformed, armed, foreign or unsafe evidence stays fenced.
+On Windows, a complete pending child may instead replace its published armed authority through the
+same protected flush, ACL verification and atomic rename path, retaining the pending file until rename.
+Both records must match token, parent
+PID and Job name; the armed PID/creation time must be null and the child identity complete. Publication
+requires parent absence, a matching terminal guardian proof, exact child lifetime absence/reuse and a
+fresh absent/zero-active Job check. Any read, validation or publication failure keeps admission fenced.
+Guardian death before terminal proof remains fenced, even when the primary and named Job are absent.
 Admission re-probes non-terminal lifetime evidence on every attempt, so later group exit is observed
 without retaining a pre-restart observer or caching a stale refusal.
 Absent recovery history admits ordinary callers, including a symlinked config home or ancestor.
 Existing evidence is read through the canonical home target with its trusted ancestry; a linked recovery
 store, unsafe target, or evidence that becomes unreadable stays fenced. Updater mutation eligibility
 retains its stricter canonical/no-alias policy. EPERM, unrelated malformed/partial records,
-and an armed record with no published child stay closed for
+and an armed record without a safely reconcilable child stay closed for
 operator inspection. PID reuse can delay recovery but cannot prove absence. The protected durable job
 ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it
 to success. Abandoned installation-prefix leases and staging after process death are not reclaimed by

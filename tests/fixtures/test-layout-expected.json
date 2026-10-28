@@ -46,6 +46,7 @@
     "service-proxy-env.test.ts": "service",
     "codex-cli-update-windows-apply.test.ts": "codex-integration",
     "codex-cli-update-windows-recovery.test.ts": "codex-integration",
+    "codex-cli-update-windows-pending.test.ts": "codex-integration",
     "codex-cli-update-windows-layout.test.ts": "codex-integration",
     "codex-quota-persistence.test.ts": "codex-integration",
     "bridge-terminal-refusal.test.ts": "adapters",

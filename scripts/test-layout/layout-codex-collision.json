@@ -15,6 +15,7 @@
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",
+  "codex-cli-update-windows-pending.test.ts": "codex-integration",
   "codex-cli-update-worker.test.ts": "codex-integration",
   "native-source-priority.test.ts": "codex-integration",
   "server-native-catalog-priority.test.ts": "server",
