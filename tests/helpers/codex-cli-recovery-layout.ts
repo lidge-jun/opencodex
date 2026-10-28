@@ -1,3 +1,4 @@
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
 // Real files and aliases under OS temp; injected POSIX ownership/modes and fsync.
 // This models path policy, not native macOS scheduling or crash durability.
 import { expect, spyOn } from "bun:test";
@@ -13,7 +14,7 @@ import { removeTreeWithRetry } from "./remove-tree";
 
 const scenario = process.argv[2]!;
 const macos = scenario.startsWith("macos");
-const root = fs.realpathSync.native(fs.mkdtempSync(join(os.tmpdir(), "ocx-recovery-layout-")));
+const root = createCodexCliTestRoot("ocx-recovery-layout-");
 const canonicalTemp = macos ? join(root, "private/var/folders/zz/user/T")
   : scenario.startsWith("linux-home") ? join(root, "home/user") : join(root, "tmp");
 fs.mkdirSync(canonicalTemp, { recursive: true });

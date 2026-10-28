@@ -1,10 +1,10 @@
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
 // Real persisted bytes and separate producer/reader processes. POSIX uid/mode,
 // liveness and directory fsync are injected; this is not native POSIX crash proof.
 import { expect, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCodexCliUpdateRecovery, codexCliUpdateRecoveryBlocksAdmission,
@@ -13,7 +13,7 @@ import { removeTreeWithRetry } from "./remove-tree";
 
 const scenario = process.argv[2]!, mode = process.argv[3];
 if (!mode) {
-  const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-recovery-restart-")));
+  const root = createCodexCliTestRoot("ocx-recovery-restart-");
   try {
     for (const stage of ["produce", "read"]) {
       const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), scenario, stage, root], {

@@ -1,6 +1,6 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
 import { assertTrustedCodexCliAncestry, createCodexCliApplyStaging,
@@ -11,7 +11,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 // Directory identities, lock creation and rename operations remain real.
 test.each(["foreign-owner", "group-write", "other-write", "foreign-sticky"])(
   "lease refuses a %s ancestor before its rename barrier can be crossed", scenario => {
-    const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-trusted-path-")));
+    const root = createCodexCliTestRoot("ocx-trusted-path-");
     const parent = join(root, "parent"), prefix = join(parent, "prefix");
     fs.mkdirSync(prefix, { recursive: true });
     const original = fs.lstatSync, uid = process.geteuid?.() ?? 1234;
@@ -50,7 +50,7 @@ test.each(["foreign-owner", "group-write", "other-write", "foreign-sticky"])(
 
 test.each(["root-sticky", "root-nonsticky", "user-sticky", "foreign-owner", "nested-write"])(
   "mutation and staging paths enforce the %s policy", scenario => {
-    const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-path-policy-")));
+    const root = createCodexCliTestRoot("ocx-path-policy-");
     const parent = join(root, "parent"), prefix = join(parent, "prefix");
     const nested = join(prefix, "lib/node_modules/@openai"); fs.mkdirSync(nested, { recursive: true });
     const lstat = fs.lstatSync;

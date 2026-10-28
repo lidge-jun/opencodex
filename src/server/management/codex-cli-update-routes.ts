@@ -19,7 +19,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
   const match = STATUS.exec(ctx.url.pathname);
   if (match && ctx.req.method === "GET") {
     try {
-      const job = readCodexCliUpdateJob(match[1]!);
+      const job = await readCodexCliUpdateJob(match[1]!);
       return job ? jsonResponse(job, 200, ctx.req, ctx.config) : jsonResponse({ error: "job_not_found" }, 404, ctx.req, ctx.config);
     } catch { return jsonResponse({ error: "job_state_unavailable" }, 503, ctx.req, ctx.config); }
   }
@@ -38,7 +38,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
     return jsonResponse({ error: "invalid_request" }, 400, ctx.req, ctx.config);
   }
   try {
-    const admitted = admitCodexCliUpdateJob({ requestId: value.requestId, planId: value.planId, confirmed: true });
+    const admitted = await admitCodexCliUpdateJob({ requestId: value.requestId, planId: value.planId, confirmed: true });
     if (admitted.kind === "accepted") {
       const work = runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
         () => runCodexCliUpdateApplyInWorker(value.planId as string, { jobId: admitted.job.jobId }));

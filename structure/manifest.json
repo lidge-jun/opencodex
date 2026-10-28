@@ -186,6 +186,7 @@
         "src/codex/cli-update-apply.ts",
         "src/codex/cli-update-job.ts",
         "src/codex/cli-update-job-execution.ts",
+        "src/codex/cli-update-job-store-windows.ts",
         "src/codex/cli-update-job-worker.ts",
         "src/codex/cli-update-selection-gate.ts",
         "src/codex/cli-update-recovery.ts",

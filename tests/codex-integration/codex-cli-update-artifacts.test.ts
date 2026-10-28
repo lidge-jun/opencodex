@@ -1,3 +1,4 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { codexCliArtifactSet, codexCliArtifactSetDigest, MAX_CODEX_ARCHIVE_BYTES, MAX_CODEX_MEMBER_BYTES, verifyCodexCliArchive, verifiedCodexCliContent } from "../../src/codex/cli-update-artifacts";
@@ -6,9 +7,8 @@ import { fixtureArtifact, fixtureArtifactSet, fixtureTar } from "../helpers/code
 import { applyCodexCliUpdate, cleanupCodexCliApply, verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
 import { parseCodexCliUpdateArgs, handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
-import { chmodSync, closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, ftruncateSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCodexCliApplyFixture, waitForApplyAdmission } from "../helpers/codex-cli-apply-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -16,7 +16,7 @@ import { observeCodexCliPreimage, sameCodexCliPreimage, sameCodexCliFiles, type 
 
 describe("Codex CLI apply artifacts", () => {
   test("real npm installs main and platform aliases from local tarballs into a private prefix offline", () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-apply-alias-"));
+    const root = createCodexCliTestRoot("ocx-apply-alias-");
     try {
       const f = createCodexCliApplyFixture(root, "linux", "x64");
       const modules = join(f.prefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules");
@@ -58,7 +58,7 @@ describe("Codex CLI apply artifacts", () => {
     expect(sameCodexCliFiles(original, new Map([["data", { size: 1, digest: "same", executable: false, mode: 0o600 }]]))).toBe(false);
   });
   test("preimage tracks absent target roots in addition to the unchanged selected main/nested backing", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-preimage-")));
+    const root = createCodexCliTestRoot("ocx-apply-preimage-");
     try {
       const main = join(root, "main"), nested = join(main, "node_modules", "backing"), target = join(root, "new-backing");
       mkdirSync(nested, { recursive: true }); writeFileSync(join(main, "package.json"), "old main\n");
@@ -88,7 +88,7 @@ describe("Codex CLI apply artifacts", () => {
     await expect(verifyCodexCliArchive(changed, f.artifacts.main)).rejects.toThrow();
   });
   test.each(["valid", "corrupt"] as const)("real-file archive %s closes its stream before return and preserves a reused sentinel fd", async kind => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-archive-lifetime-")));
+    const root = createCodexCliTestRoot("ocx-archive-lifetime-");
     const f = fixtureArtifactSet(), path = join(root, "artifact.tgz"), sentinelPath = join(root, "sentinel");
     writeFileSync(path, kind === "valid" ? f.main : Buffer.from("not gzip")); writeFileSync(sentinelPath, "sentinel");
     const create = fs.createReadStream;
@@ -135,7 +135,7 @@ describe("Codex CLI apply artifacts", () => {
     }
   });
   test.skipIf(process.platform === "win32")("real-file archive closure precedes repeated lease acquire/release without touching a sentinel fd", async () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-archive-lease-")));
+    const root = createCodexCliTestRoot("ocx-archive-lease-");
     const f = fixtureArtifactSet(), path = join(root, "artifact.tgz"); writeFileSync(path, f.main);
     const sentinel = openSync(join(root, "sentinel"), "wx+");
     try {
@@ -151,7 +151,7 @@ describe("Codex CLI apply artifacts", () => {
     } finally { closeSync(sentinel); removeTreeWithRetry(root); }
   });
   test.skipIf(process.platform === "win32")("lease descriptor-close failure is structured and still permits staging cleanup", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-close-failure-")));
+    const root = createCodexCliTestRoot("ocx-lease-close-failure-");
     const stage = join(root, "stage"); mkdirSync(stage);
     const lease = acquireCodexCliApplyLease(root); expect(lease.kind).toBe("acquired");
     if (lease.kind !== "acquired") throw new Error("fixture lease unavailable");
@@ -173,7 +173,7 @@ describe("Codex CLI apply artifacts", () => {
     await expect(verifyCodexCliArchive(bytes, fixtureArtifact(bytes))).rejects.toThrow("artifact_tar_invalid");
   });
   test("an oversized compressed file refuses from fstat without reading its sparse body", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-apply-archive-bound-"));
+    const root = createCodexCliTestRoot("ocx-apply-archive-bound-");
     try {
       const path = join(root, "oversize.tgz"), fd = openSync(path, "wx");
       try { ftruncateSync(fd, MAX_CODEX_ARCHIVE_BYTES + 1); } finally { closeSync(fd); }
@@ -205,7 +205,7 @@ describe("Codex CLI apply consumer", () => {
     await expect(waitForApplyAdmission(never, Promise.reject(new TypeError("fixture rejection")))).rejects.toThrow("apply rejected before admission: TypeError");
   });
   test("a lease cleanup exception is structured and cannot prevent staging cleanup", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cleanup-")));
+    const root = createCodexCliTestRoot("ocx-apply-cleanup-");
     const stage = join(root, "stage"); mkdirSync(stage); writeFileSync(join(stage, "artifact"), "owned fixture");
     try {
       const cleanup = cleanupCodexCliApply({ release: () => { throw new Error("private native error"); } }, stage);
@@ -215,7 +215,7 @@ describe("Codex CLI apply consumer", () => {
     } finally { removeTreeWithRetry(root); }
   });
   test("lease and staging cleanup failures are both retained without native error text", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cleanup-")));
+    const root = createCodexCliTestRoot("ocx-apply-cleanup-");
     const stage = join(root, "stage"); mkdirSync(stage);
     const remove = fs.rmSync;
     const spy = spyOn(fs, "rmSync").mockImplementation((path, options) => {
@@ -229,7 +229,7 @@ describe("Codex CLI apply consumer", () => {
     } finally { spy.mockRestore(); removeTreeWithRetry(root); }
   });
   test("the owned version probe waits for terminal exit and rejects unrelated version output", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-apply-version-"));
+    const root = createCodexCliTestRoot("ocx-apply-version-");
     try {
       const result = await verifyInstalledCodexVersion(process.execPath, "9.9.9", root, process.env);
       expect(result).toEqual({ terminal: true, ok: false, pid: null });
@@ -252,7 +252,7 @@ describe("Codex CLI apply consumer", () => {
   });
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed apply reaches its consumer with the exact plan ID and prints its public result", async () => {
     const planId = "a".repeat(32); let calls = 0; const logs: string[] = [], log = console.log;
-    const outer = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cli-job-")));
+    const outer = createCodexCliTestRoot("ocx-apply-cli-job-");
     const previousHome = process.env.OPENCODEX_HOME;
     const report = { outcome: "not_applied" as const, reason: "original_install_unchanged", planId,
       installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };

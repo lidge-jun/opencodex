@@ -1,3 +1,4 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -135,7 +136,7 @@ test("restart recovery uses durable group evidence and retains armed or inaccess
 });
 
 test("late verifier close after reap uncertainty releases only its admission owner", async () => {
-  const root = mkdtempSync(join(tmpdir(), "ocx-late-close-"));
+  const root = createCodexCliTestRoot("ocx-late-close-");
   const timers: { ms: number; callback(): void }[] = [];
   const child = Object.assign(new EventEmitter(), {
     stdout: Object.assign(new EventEmitter(), { destroy() {} }), kill() {}, unref() {},

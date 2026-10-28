@@ -66,6 +66,11 @@ const MAX_REQUEST_BYTES = MAX_NATIVE_BACKING_BYTES + (128 + 12) * MIB;
 const REPARSE = 0x400;
 const DIRECTORY = 0x10;
 const INVALID_HANDLE = 0xffffffffffffffffn;
+/** Compare the normalized DOS long name returned by an already-held handle. */
+export function windowsCanonicalPathMatches(path: string, canonical: string): boolean {
+  return canonical.startsWith("\\\\?\\")
+    && canonical.slice(4).toLowerCase() === win32.normalize(path).toLowerCase();
+}
 let openedForTests: (() => void) | undefined;
 /** Runs after handles are held, for real Windows sharing/rename regression fixtures. */
 export function setWindowsInstallationFilesOpenedForTests(callback?: () => void): void {
@@ -211,8 +216,7 @@ export async function inspectWindowsInstallationFiles(
       const length = k.GetFinalPathNameByHandleW!(handle, ffi.ptr(output), 32768, 0);
       if (!length || length >= 32768) throw new InspectionRefusal("inspection-failed");
       const canonical = output.toString("utf16le", 0, length * 2);
-      if (!canonical.startsWith("\\\\?\\")
-        || canonical.slice(4).toLowerCase() !== win32.normalize(path).toLowerCase()) {
+      if (!windowsCanonicalPathMatches(path, canonical)) {
         throw new InspectionRefusal("invalid-request");
       }
     };

@@ -6,13 +6,10 @@ import { getConfigDir } from "../config";
 import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
 import type { CodexCliApplyResult } from "./cli-update-apply";
 import { CODEX_CLI_JOB_REASONS as SAFE_REASONS, CODEX_CLI_JOB_CLEANUP_ERRORS,
+  CODEX_CLI_JOB_STORE_DIR, CODEX_CLI_JOB_STORE_FILE, CODEX_CLI_JOB_STORE_LOCK, CODEX_CLI_JOB_STORE_MAX_BYTES,
   CodexCliJobStoreBusyError, normalizeCodexCliJobResult, runCodexCliUpdateJobWork } from "./cli-update-job-execution";
 
-const MAX_BYTES = 256 * 1024;
 const MAX_JOBS = 64;
-const JOB_DIR = "codex-cli-update-jobs";
-const FILE = "jobs.json";
-const LOCK = "admission.lock";
 type JobStatus = "queued" | "running" | "applied" | "not_applied" | "refused" | "ambiguous";
 
 interface StoredJob {
@@ -39,8 +36,8 @@ const now = () => new Date().toISOString();
 
 function paths(configDir = getConfigDir()) {
   const config = resolve(configDir);
-  const dir = join(config, JOB_DIR);
-  return { config, dir, file: join(dir, FILE), lock: join(dir, LOCK) };
+  const dir = join(config, CODEX_CLI_JOB_STORE_DIR);
+  return { config, dir, file: join(dir, CODEX_CLI_JOB_STORE_FILE), lock: join(dir, CODEX_CLI_JOB_STORE_LOCK) };
 }
 function assertTrustedConfigAncestry(parent: string) {
   try { assertTrustedCodexCliAncestry(parent); }
@@ -90,6 +87,23 @@ function prepare(configDir?: string, create = false, createConfigRoot = false) {
     || realpathSync.native(p.dir) !== p.dir) throw new Error("unsafe_store");
   return p;
 }
+/** Shared ledger-body validation used by the POSIX reader and the Windows backend adapter. */
+function parseStoreBody(body: string | null): Store {
+  if (body === null) return { version: 1, jobs: [] };
+  const value = JSON.parse(body) as Store;
+  if (value.version !== 1 || !Array.isArray(value.jobs) || value.jobs.length > MAX_JOBS
+    || value.jobs.some(job => !job || typeof job !== "object" || !/^[0-9a-f-]{36}$/.test(job.id)
+      || !/^[0-9a-f]{64}$/.test(job.requestKey) || !/^[0-9a-f]{64}$/.test(job.payloadHash)
+      || !/^[0-9a-f-]{36}$/.test(job.generation) || !Number.isSafeInteger(job.revision) || job.revision < 0
+      || !["queued", "running", "applied", "not_applied", "refused", "ambiguous"].includes(job.status)
+      || typeof job.planId !== "string" || !/^[0-9a-f]{32}$/.test(job.planId)
+      || (job.reason !== null && (typeof job.reason !== "string" || !SAFE_REASONS.has(job.reason)))
+      || !Array.isArray(job.cleanupErrors) || job.cleanupErrors.length > 8
+      || job.cleanupErrors.some((item: unknown) => typeof item !== "string" || !CODEX_CLI_JOB_CLEANUP_ERRORS.has(item))
+      || typeof job.leaseRetained !== "boolean"
+      || typeof job.createdAt !== "string" || typeof job.updatedAt !== "string")) throw new Error("invalid_store");
+  return value;
+}
 function readStore(configDir?: string): Store {
   let p: ReturnType<typeof paths>;
   try { p = prepare(configDir); }
@@ -98,26 +112,14 @@ function readStore(configDir?: string): Store {
   try {
     fd = openSync(p.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_BYTES || (stat.mode & 0o077) !== 0
+    if (!stat.isFile() || stat.size > CODEX_CLI_JOB_STORE_MAX_BYTES || (stat.mode & 0o077) !== 0
       || stat.uid !== process.geteuid?.() || stat.nlink !== 1) throw new Error("unsafe_store");
     const lexical = lstatSync(p.file);
     if (lexical.isSymbolicLink() || lexical.dev !== stat.dev || lexical.ino !== stat.ino) throw new Error("unsafe_store");
-    const bytes = Buffer.alloc(MAX_BYTES + 1);
+    const bytes = Buffer.alloc(CODEX_CLI_JOB_STORE_MAX_BYTES + 1);
     const length = readSync(fd, bytes, 0, bytes.length, 0);
-    if (length > MAX_BYTES) throw new Error("unsafe_store");
-    const value = JSON.parse(bytes.subarray(0, length).toString("utf8")) as Store;
-    if (value.version !== 1 || !Array.isArray(value.jobs) || value.jobs.length > MAX_JOBS
-      || value.jobs.some(job => !job || typeof job !== "object" || !/^[0-9a-f-]{36}$/.test(job.id)
-        || !/^[0-9a-f]{64}$/.test(job.requestKey) || !/^[0-9a-f]{64}$/.test(job.payloadHash)
-        || !/^[0-9a-f-]{36}$/.test(job.generation) || !Number.isSafeInteger(job.revision) || job.revision < 0
-        || !["queued", "running", "applied", "not_applied", "refused", "ambiguous"].includes(job.status)
-        || typeof job.planId !== "string" || !/^[0-9a-f]{32}$/.test(job.planId)
-        || (job.reason !== null && (typeof job.reason !== "string" || !SAFE_REASONS.has(job.reason)))
-        || !Array.isArray(job.cleanupErrors) || job.cleanupErrors.length > 8
-        || job.cleanupErrors.some((item: unknown) => typeof item !== "string" || !CODEX_CLI_JOB_CLEANUP_ERRORS.has(item))
-        || typeof job.leaseRetained !== "boolean"
-        || typeof job.createdAt !== "string" || typeof job.updatedAt !== "string")) throw new Error("invalid_store");
-    return value;
+    if (length > CODEX_CLI_JOB_STORE_MAX_BYTES) throw new Error("unsafe_store");
+    return parseStoreBody(bytes.subarray(0, length).toString("utf8"));
   } finally { if (fd !== undefined) closeSync(fd); }
 }
 function rollbackInitializingLock(p: ReturnType<typeof paths>, lockIdentity: { dev: number; ino: number }, ownerIdentity?: { dev: number; ino: number }) {
@@ -143,7 +145,11 @@ function rollbackInitializingLock(p: ReturnType<typeof paths>, lockIdentity: { d
     if (ownsDirectory()) rmdirSync(p.lock);
   } catch { /* Unprovable initialization ownership stays fail-closed. */ }
 }
-function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof paths>) => T, createConfigRoot = false): T {
+/**
+ * POSIX admission mutex. Acquisition and release stay synchronous; the ledger body
+ * may await, so the lock directory is held until fn settles rather than until it returns.
+ */
+async function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof paths>) => T | Promise<T>, createConfigRoot = false): Promise<T> {
   const p = prepare(configDir, true, createConfigRoot);
   let lockIdentity: { dev: number; ino: number } | undefined;
   let ownerIdentity: { dev: number; ino: number } | undefined;
@@ -167,7 +173,7 @@ function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof pa
       lockIdentity = undefined;
       throw error;
     }
-    return fn(p);
+    return await fn(p);
   } finally {
     if (lockIdentity && ownerIdentity) {
       try {
@@ -188,7 +194,7 @@ function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof pa
 }
 function writeStore(p: ReturnType<typeof paths>, store: Store) {
   const body = JSON.stringify(store);
-  if (Buffer.byteLength(body) > MAX_BYTES) throw new Error("store_full");
+  if (Buffer.byteLength(body) > CODEX_CLI_JOB_STORE_MAX_BYTES) throw new Error("store_full");
   const temp = join(p.dir, `.jobs-${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
@@ -242,21 +248,60 @@ function dto(job: StoredJob): CodexCliUpdateJobDto {
     cleanupErrors: Object.freeze([...job.cleanupErrors]) });
 }
 
-export function readCodexCliUpdateJob(jobId: string, configDir?: string): CodexCliUpdateJobDto | null {
+/**
+ * Platform ledger primitives behind one admission lock. The POSIX branch wraps the
+ * synchronous fs helpers; the Windows branch binds the handle-pinned backend in
+ * cli-update-job-store-windows.ts. Every lifecycle rule below is written once
+ * against this surface so both backends project the identical DTO.
+ */
+interface LedgerIo {
+  readStore(): Promise<Store>;
+  writeStore(store: Store): Promise<void>;
+}
+
+/**
+ * One admission lock, one store body. The Windows backend loads lazily so the
+ * FFI-bearing module stays out of the POSIX import graph.
+ */
+async function withLedgerLock<T>(configDir: string | undefined, createConfigRoot: boolean,
+  fn: (io: LedgerIo) => Promise<T>): Promise<T> {
+  if (process.platform === "win32") {
+    const { withWindowsJobStoreLock } = await import("./cli-update-job-store-windows");
+    return withWindowsJobStoreLock(configDir, createConfigRoot, io => fn({
+      readStore: async () => parseStoreBody(await io.readStore()),
+      writeStore: async store => { await io.writeStore(JSON.stringify(store)); },
+    }));
+  }
+  return withLock(configDir, p => fn({
+    readStore: async () => validStore(configDir),
+    writeStore: async store => { writeStore(p, store); },
+  }), createConfigRoot);
+}
+
+/** Lock-free status read through the platform backend. */
+async function readLedgerStore(configDir?: string): Promise<Store> {
+  if (process.platform === "win32") {
+    const { readWindowsJobStore } = await import("./cli-update-job-store-windows");
+    return parseStoreBody(await readWindowsJobStore(configDir));
+  }
+  return readStore(configDir);
+}
+
+export async function readCodexCliUpdateJob(jobId: string, configDir?: string): Promise<CodexCliUpdateJobDto | null> {
   if (!/^[0-9a-f-]{36}$/.test(jobId)) return null;
-  const job = readStore(configDir).jobs.find(item => item.id === jobId);
+  const job = (await readLedgerStore(configDir)).jobs.find(item => item.id === jobId);
   return job ? dto(job) : null;
 }
 
 /** Persist dedupe admission before returning; a duplicate key never schedules a second installer. */
-export function admitCodexCliUpdateJob(input: { requestId: string; planId: string; confirmed: true; configDir?: string }):
-  { kind: "accepted" | "duplicate"; job: CodexCliUpdateJobDto; generation: string } {
+export async function admitCodexCliUpdateJob(input: { requestId: string; planId: string; confirmed: true; configDir?: string }):
+  Promise<{ kind: "accepted" | "duplicate"; job: CodexCliUpdateJobDto; generation: string }> {
   if (input.confirmed !== true || !/^[A-Za-z0-9._:-]{8,128}$/.test(input.requestId)
     || !/^[0-9a-f]{32}$/.test(input.planId)) throw new Error("invalid_request");
   const requestKey = digest(input.requestId);
   const payloadHash = digest(JSON.stringify({ planId: input.planId }));
-  return withLock(input.configDir, p => {
-    const store = validStore(input.configDir);
+  return withLedgerLock(input.configDir, true, async io => {
+    const store = await io.readStore();
     const existing = store.jobs.find(job => job.requestKey === requestKey);
     if (existing) {
       if (existing.payloadHash !== payloadHash) throw new Error("idempotency_conflict");
@@ -267,17 +312,17 @@ export function admitCodexCliUpdateJob(input: { requestId: string; planId: strin
     const record: StoredJob = { id: randomUUID(), requestKey, payloadHash, generation: randomUUID(), revision: 0,
       status: "queued", createdAt: stamp, updatedAt: stamp, planId: input.planId, outcome: null,
       reason: null, cleanupErrors: [], leaseRetained: false };
-    store.jobs.push(record); writeStore(p, store);
+    store.jobs.push(record); await io.writeStore(store);
     live.set(record.id, record.generation);
     return { kind: "accepted", job: dto(record), generation: record.generation };
-  }, true);
+  });
 }
 
 /** Updates are generation/revision fenced so an old worker cannot replace a newer state. */
-export function finishCodexCliUpdateJob(jobId: string, generation: string, expectedRevision: number,
-  result: CodexCliApplyResult, configDir?: string): CodexCliUpdateJobDto | null {
-  return withLock(configDir, p => {
-    const store = validStore(configDir);
+export async function finishCodexCliUpdateJob(jobId: string, generation: string, expectedRevision: number,
+  result: CodexCliApplyResult, configDir?: string): Promise<CodexCliUpdateJobDto | null> {
+  return withLedgerLock(configDir, false, async io => {
+    const store = await io.readStore();
     const index = store.jobs.findIndex(job => job.id === jobId);
     if (index < 0) return null;
     const current = store.jobs[index]!;
@@ -289,32 +334,35 @@ export function finishCodexCliUpdateJob(jobId: string, generation: string, expec
       && current.outcome === safe.outcome && current.reason === safe.reason
       && current.leaseRetained === safe.leaseRetained
       && JSON.stringify(current.cleanupErrors) === JSON.stringify(safe.cleanupErrors)) {
-      writeStore(p, store); live.delete(jobId); started.delete(jobId); return dto(current);
+      await io.writeStore(store); live.delete(jobId); started.delete(jobId); return dto(current);
     }
     if (current.generation !== generation || current.revision !== expectedRevision
       || live.get(jobId) !== generation || !started.has(jobId)) return dto(current);
     const next: StoredJob = { ...current, revision: current.revision + 1, status: safe.outcome,
       outcome: safe.outcome, reason: safe.reason, cleanupErrors: safe.cleanupErrors, leaseRetained: safe.leaseRetained, updatedAt: now() };
-    store.jobs[index] = next; writeStore(p, store); live.delete(jobId); started.delete(jobId);
+    store.jobs[index] = next; await io.writeStore(store); live.delete(jobId); started.delete(jobId);
     return dto(next);
   });
 }
 
 export async function runCodexCliUpdateJob(jobId: string, generation: string, run: () => Promise<CodexCliApplyResult>, configDir?: string): Promise<CodexCliUpdateJobDto | null> {
-  let ownsExecution = false;
+  // Reserve this invocation before any asynchronous store admission/publication.
+  // A contender must never release the admitted generation while its owner yields.
+  const ownsExecution = live.get(jobId) === generation && !started.has(jobId);
+  if (ownsExecution) started.add(jobId);
   return runCodexCliUpdateJobWork(run, {
-    begin: () => withLock(configDir, p => {
-      const store = validStore(configDir); const index = store.jobs.findIndex(job => job.id === jobId);
+    begin: () => withLedgerLock(configDir, false, async io => {
+      const store = await io.readStore(); const index = store.jobs.findIndex(job => job.id === jobId);
       if (index < 0 || store.jobs[index]!.generation !== generation) throw new Error("job_generation_changed");
-      if (live.get(jobId) !== generation || started.has(jobId)) throw new Error("job_not_owned");
+      if (!ownsExecution || live.get(jobId) !== generation) throw new Error("job_not_owned");
       const current = store.jobs[index]!; const next = { ...current, revision: current.revision + 1, status: "running" as const, updatedAt: now() };
-      store.jobs[index] = next; writeStore(p, store); started.add(jobId); ownsExecution = true; return next.revision;
+      store.jobs[index] = next; await io.writeStore(store); return next.revision;
     }),
     finish: (revision, result) => finishCodexCliUpdateJob(jobId, generation, revision, result, configDir),
     read: () => readCodexCliUpdateJob(jobId, configDir),
     release: () => {
-      if (live.get(jobId) === generation && (ownsExecution || !started.has(jobId))) {
-        live.delete(jobId); if (ownsExecution) started.delete(jobId);
+      if (ownsExecution && live.get(jobId) === generation) {
+        live.delete(jobId); started.delete(jobId);
       }
     },
   });

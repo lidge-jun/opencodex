@@ -1,8 +1,8 @@
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
 // Isolated POSIX contract model: real bytes/identity, injected uid/mode,
 // liveness and directory fsync. This is not native POSIX execution evidence.
 import { expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -10,7 +10,7 @@ import { createCodexCliUpdateRecovery, codexCliUpdateRecoveryBlocksAdmission } f
 import { recoverClosedCodexCliUpdateWorker } from "../../src/codex/cli-update-worker-recovery";
 import * as gate from "../../src/codex/cli-update-selection-gate";
 
-const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-recovery-store-")));
+const root = createCodexCliTestRoot("ocx-recovery-store-");
 const uid = process.geteuid?.() ?? 1234, realStat = fs.lstatSync;
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const geteuid = Object.getOwnPropertyDescriptor(process, "geteuid");

@@ -255,6 +255,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-inspection-context.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-job-execution.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-store-windows.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-job-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |

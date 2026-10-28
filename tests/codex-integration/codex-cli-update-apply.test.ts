@@ -1,9 +1,9 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, connect } from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyCodexCliUpdate, verifyInstalledCodexVersion, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
@@ -25,7 +25,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
 const posix = process.platform !== "win32";
 function fixture(targetNativeSource?: string) {
-  const root = mkdtempSync(join(tmpdir(), "ocx-apply-private-")); roots.push(root);
+  const root = createCodexCliTestRoot("ocx-apply-private-"); roots.push(root);
   return createCodexCliApplyFixture(root, process.platform, process.arch, targetNativeSource);
 }
 function depsFor(f: ReturnType<typeof fixture>, overrides: Partial<CodexCliApplyDeps> = {}): CodexCliApplyDeps {
@@ -247,7 +247,7 @@ async function postFixtureApply(base: string, session: { token: string; csrf: st
   return fetch(`${base}/api/codex/cli-update/apply`, { method: "POST", headers: fixtureSessionHeaders(session, true), body: JSON.stringify(body) });
 }
 test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-http-npm-module-"))); roots.push(root);
+  const root = createCodexCliTestRoot("ocx-http-npm-module-"); roots.push(root);
   writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, type: "module" }));
   const fakeBin = join(root, "bin"); mkdirSync(fakeBin);
   const node = Bun.which("node"); if (!node) throw new Error("fixture node unavailable");
@@ -277,7 +277,7 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
 });
 describe("default version verifier pre-child setup", () => {
   test("a mkdir failure is terminal without creating a child", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const root = createCodexCliTestRoot("ocx-version-setup-"); roots.push(root);
     const home = join(root, "version-home");
     writeFileSync(home, "not a directory\n");
     expect(await verifyInstalledCodexVersion("", "1.1.0", root, {})).toEqual({
@@ -286,7 +286,7 @@ describe("default version verifier pre-child setup", () => {
     expect(readFileSync(home, "utf8")).toBe("not a directory\n");
   });
   test("a synchronous spawn throw is terminal without creating a child", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const root = createCodexCliTestRoot("ocx-version-setup-"); roots.push(root);
     const command = "ocx-verifier\0must-not-spawn";
     expect(() => spawn(command, ["--version"], { cwd: root, env: {} })).toThrow(/null bytes/);
     expect(await verifyInstalledCodexVersion(command, "1.1.0", root, {})).toEqual({
@@ -298,7 +298,7 @@ describe("default version verifier pre-child setup", () => {
 
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("a held lease and an unsupported prefix are distinct refusal inputs", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-policy-"))); roots.push(root);
+    const root = createCodexCliTestRoot("ocx-lease-policy-"); roots.push(root);
     chmodSync(root, 0o700);
     const first = acquireCodexCliApplyLease(root);
     expect(first.kind).toBe("acquired");
@@ -442,7 +442,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       // original generation's late completion.
       const configDir = join(f.home, "ocx");
       const restartPlanId = "b".repeat(32);
-      const oldOwner = admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, confirmed: true, configDir });
+      const oldOwner = await admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, confirmed: true, configDir });
       oldOwnerWork = runCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, () => new Promise(resolve => {
         finishOldOwner = () => resolve({ outcome: "applied", reason: "verified_target", planId: restartPlanId,
           installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
@@ -467,7 +467,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       }
       finishOldOwner?.();
       const lateResult = await oldOwnerWork;
-      const staleWrite = finishCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, 1,
+      const staleWrite = await finishCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, 1,
         { outcome: "refused", reason: "late_result", planId: restartPlanId, installedVersion: null,
           targetVersion: null, installerExitCode: null, leaseRetained: false, verificationPid: null,
           cleanupErrors: [] }, configDir);

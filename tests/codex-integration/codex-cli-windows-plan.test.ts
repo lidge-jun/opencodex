@@ -11,24 +11,25 @@ import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-pl
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
+import { trackBackgroundWork } from "../../src/lib/background-work";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
 const liveWorkerRoots = new Set<string>();
-afterEach(() => {
+afterEach(async () => {
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
-    // A test timeout does not cancel its async body. Keep even that body's
-    // fixture owned until a real Worker close, never remove beneath native I/O.
+    // A test timeout does not cancel its async body. Retain fixtures until a real
+    // Worker close, or external reconciliation of an unsettled CLI process tree.
     if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
-    removeTreeWithRetry(root);
+    await removeTreeAfterBackgroundWork(root);
   }
 });
 // npm's independent cmd-shim fixture; no candidate is ever executed.
@@ -195,8 +196,12 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
-native("a Windows plan id with applicable=false cannot enter a management apply job", async () => {
+native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const f = fixture();
+  // A TEMP ancestry can be safe on hosted Windows. Create an actual unsupported
+  // config-root reparse point instead of inferring unsafe ACLs from the host path.
+  const ledgerTarget = join(f.root, "ledger-target"); mkdirSync(ledgerTarget);
+  symlinkSync(ledgerTarget, f.deps.configDir, "junction");
   const deps = { inspectionDeps: f.deps,
     resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
     scanProcesses: () => ({ kind: "observed" as const, processes: [] }) };
@@ -217,11 +222,13 @@ native("a Windows plan id with applicable=false cannot enter a management apply 
       syncClaudeAgentDefsBestEffort: async () => {} };
     const response = await handleCodexCliUpdateRoutes(ctx);
     expect(response?.status).toBe(503);
-    expect(await response?.json()).toEqual({ error: "unsupported_store" });
+    expect(await response?.json()).toEqual({ error: "unsafe_store" });
+    expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 
     let leaseAttempts = 0, installAttempts = 0;
     const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
       acquireLease: () => { leaseAttempts += 1; return null; },
+      resolveTarget: deps.resolveTarget, scanProcesses: deps.scanProcesses,
       install: async () => { installAttempts += 1; return { terminal: true, exitCode: 0 }; } });
     expect(apply).toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
     expect(leaseAttempts).toBe(0);
@@ -240,7 +247,9 @@ native("a published-size Windows npm backing binds; one past the shared finite l
   expect(process.env.SystemRoot).toBeDefined();
   const sparse = spawnSync(join(process.env.SystemRoot!, "System32", "fsutil.exe"), ["sparse", "setflag", binary],
     { windowsHide: true, encoding: "utf8", timeout: 5_000 });
-  expect(sparse.error).toBeUndefined(); expect(sparse.status).toBe(0);
+  expect({ error: sparse.error ?? null, status: sparse.status, signal: sparse.signal,
+    stdout: sparse.stdout?.trim() ?? null, stderr: sparse.stderr?.trim() ?? null })
+    .toMatchObject({ error: null, status: 0 });
   truncateSync(binary, 295_408_944);
   const report = await inspectCodexCliInstall(f.deps);
   expect(report.managed).toBe(true); expect(report.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -408,7 +417,11 @@ const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@opena
         // Pin this integration to current source, not a leftover generated bundle.
         worker = new Worker(url, { type: "module" });
         liveWorkerRoots.add(f.root);
-        worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+        const actualClose = Promise.withResolvers<void>();
+        void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+        worker.addEventListener("close", () => {
+          closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+        }, { once: true });
         return worker;
       },
     });
@@ -427,6 +440,7 @@ const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@opena
 }, 60_000);
 
 native("published Node CLI plan spawns no npm module while the toolchain closure is unverified", () => {
+  const started = performance.now();
   const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
   const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
   const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
@@ -451,7 +465,18 @@ const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@opena
     env: { ...env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
       OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
   });
-  expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+  if (run.error || run.status !== 0 || run.signal) {
+    // A failed synchronous result does not prove Node/Bun descendants have exited.
+    liveWorkerRoots.add(f.root);
+    // Keep the preload's ancestor sandbox too; only external ownership checks can release it.
+    void trackBackgroundWork("windows-plan-fixture-cli-unsettled", new Promise<void>(() => {}));
+    console.error(JSON.stringify({ layout: "prefix-local",
+      elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
+      errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
+  }
+  expect({ error: run.error ?? null, status: run.status, signal: run.signal,
+    stdout: run.stdout?.trim() ?? null, stderr: run.stderr?.trim() ?? null })
+    .toMatchObject({ error: null, status: 0 });
   const plan = JSON.parse(run.stdout);
   expect(plan.managed).toBe(true);
   expect(plan).toMatchObject({ applicable: false, planId: null, refusal: "target_unresolved",

@@ -1,7 +1,8 @@
+import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -423,7 +424,7 @@ describe("registry target resolution", () => {
     });
 
   test("a gated registry child keeps the event loop responsive while planning waits", async () => {
-    const dir = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-gated-npm-")));
+    const dir = createCodexCliTestRoot("ocx-update-gated-npm-");
     const gateFile = join(dir, "release");
     try {
       // The real resolver wiring: registry queries spawn the gated child through the
@@ -478,14 +479,14 @@ describe("registry metadata runner terminal lanes", () => {
     expect(result.stdout).not.toContain("�");
   });
   test("a binary that cannot be spawned settles null like spawnSync", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-meta-spawn-"));
+    const dir = createCodexCliTestRoot("ocx-meta-spawn-");
     try {
       const result = await spawnCodexCliUpdateMetadata(join(dir, "no-such-npm"), ["view"], OPTS);
       expect(result.status).toBeNull();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   test("the result waits for the child's real terminal event before settling", async () => {
-    const dir = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-meta-terminal-")));
+    const dir = createCodexCliTestRoot("ocx-meta-terminal-");
     const marker = join(dir, "terminal");
     try {
       const startedAt = Date.now();
@@ -826,7 +827,7 @@ describe("registry configuration isolation", () => {
   });
 
   test("real Node cannot write output sentinels outside the owned npm root", async () => {
-    const fixture = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-node-output-")));
+    const fixture = createCodexCliTestRoot("ocx-update-node-output-");
     const sentinels = {
       NODE_V8_COVERAGE: join(fixture, "escaped-coverage"),
       NODE_REDIRECT_WARNINGS: join(fixture, "escaped-warnings.log"),
@@ -920,7 +921,7 @@ describe("registry configuration isolation", () => {
   });
 
   test("real npm startup through the resolver seam cannot recreate an ambient Node compile cache", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ocx-update-node-cache-"));
+    const root = createCodexCliTestRoot("ocx-update-node-cache-");
     const home = join(root, "home"), temporaryRoot = join(root, "temp"), ambientCache = join(root, "ambient-cache");
     const previous = process.env.NODE_COMPILE_CACHE;
     let isolatedDir = "", observedCache: string | undefined, calls = 0;
@@ -965,7 +966,7 @@ describe("registry configuration isolation", () => {
   test.skipIf(process.platform === "win32")("real npm accepts both isolated config paths without any registry access", async () => {
     // POSIX uses a flat argv. Windows planning remains deferred; its quoted command
     // and file isolation are covered above without treating a shell line as argv.
-    const fakeHome = mkdtempSync(join(tmpdir(), "ocx-update-config-test-"));
+    const fakeHome = createCodexCliTestRoot("ocx-update-config-test-");
     let configReads = 0;
     let isolatedDir = "";
     try {
@@ -1003,7 +1004,7 @@ describe("registry configuration isolation", () => {
     // Runs real npm exactly once: the first captured query executes for real with a
     // disposable HOME while the rest stay stubbed. npm_config_offline makes the
     // registry leg fail fast without network; the residue assertions hold either way.
-    const fakeHome = mkdtempSync(join(tmpdir(), "ocx-update-test-home-"));
+    const fakeHome = createCodexCliTestRoot("ocx-update-test-home-");
     try {
       const calls: CapturedCall[] = [];
       const ownedDuringRun: string[] = [];

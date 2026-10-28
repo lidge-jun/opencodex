@@ -1,9 +1,9 @@
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
 // Isolated POSIX contract model over real files; uid/mode and directory fsync
 // are injected on Windows. This does not establish native POSIX scheduling.
 import { expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCodexCliUpdateRecovery, codexCliUpdateRecoveryBlocksAdmission,
   finishClosedCodexCliUpdateRecovery } from "../../src/codex/cli-update-recovery";
@@ -12,7 +12,7 @@ import * as gate from "../../src/codex/cli-update-selection-gate";
 import { removeTreeWithRetry } from "./remove-tree";
 
 const scenario = process.argv[2]!;
-const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-recovery-publication-")));
+const root = createCodexCliTestRoot("ocx-recovery-publication-");
 const canonical = join(root, "home"), alias = join(root, "alias");
 fs.mkdirSync(canonical);
 fs.symlinkSync(canonical, alias, process.platform === "win32" ? "junction" : "dir");

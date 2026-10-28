@@ -127,7 +127,7 @@ describe("Codex CLI job persistence failures", () => {
     try {
       const kinds = status === "queued" || status === "running" ? ["duplicate"] as const : ["accepted", "duplicate"] as const;
       for (const kind of kinds) {
-        admission.mockReturnValue({ kind, job, generation: randomUUID() }); runs = 0; worker.mockClear();
+        admission.mockResolvedValue({ kind, job, generation: randomUUID() }); runs = 0; worker.mockClear();
         for (const json of [false, true]) {
           log.mockClear();
           expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", result.planId, "--yes", ...(json ? ["--json"] : [])],
@@ -148,13 +148,13 @@ describe("Codex CLI job persistence failures", () => {
       leaseRetained: outcome !== "applied", cleanupErrors: unknown ? ["private/cleanup", "lease_release_exception"]
         : outcome === "applied" ? ["staging_cleanup_failed"] : ["lease_release_exception"],
       installedVersion: "private/installed", privateDetails: "private/internal-path" } as CodexCliApplyResult;
-    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockReturnValue({
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockResolvedValue({
       kind: "accepted", job: terminal, generation: randomUUID(),
     });
     let runs = 0, finishes = 0, releases = 0;
     const worker = spyOn(updateJobs, "runCodexCliUpdateJob").mockImplementation(async (_id, _generation, run) =>
-      runCodexCliUpdateJobWork(run, { begin: () => 1, read: () => null, release: () => { releases++; },
-        finish: () => { finishes++; throw new Error("unsafe_store"); } }));
+      runCodexCliUpdateJobWork(run, { begin: async () => 1, read: async () => null, release: async () => { releases++; },
+        finish: async () => { finishes++; throw new Error("unsafe_store"); } }));
     const log = spyOn(console, "log").mockImplementation(() => {});
     const error = spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -179,7 +179,7 @@ describe("Codex CLI job persistence failures", () => {
   });
 
   test("CLI leaves generic apply worker failures on the existing error path", async () => {
-    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockReturnValue({
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockResolvedValue({
       kind: "accepted", job: terminal, generation: randomUUID(),
     });
     const worker = spyOn(updateJobs, "runCodexCliUpdateJob").mockRejectedValue(new Error("job_store_busy"));
@@ -194,7 +194,7 @@ describe("Codex CLI job persistence failures", () => {
     } finally { error.mockRestore(); log.mockRestore(); worker.mockRestore(); admission.mockRestore(); }
   });
 
-  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["open", "partial-write"] as const)("owned lock initialization %s failure rolls back and permits later admission", failure => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["open", "partial-write"] as const)("owned lock initialization %s failure rolls back and permits later admission", async failure => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-init-");
     const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");
     const nativeOpen = fs.openSync, nativeWrite = fs.writeFileSync;
@@ -210,15 +210,15 @@ describe("Codex CLI job persistence failures", () => {
       return nativeWrite(...args);
     });
     try {
-      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir })).toThrow();
+      await expect(admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir })).rejects.toThrow();
       expect(existsSync(lock)).toBe(false);
       open.mockRestore(); write.mockRestore();
-      expect(admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir }).kind).toBe("accepted");
+      expect((await admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir })).kind).toBe("accepted");
       expect(existsSync(lock)).toBe(false);
     } finally { open.mockRestore(); write.mockRestore(); rmSync(outer, { recursive: true }); }
   });
 
-  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["directory", "owner-file"] as const)("initialization rollback refuses a replaced %s identity", replaced => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["directory", "owner-file"] as const)("initialization rollback refuses a replaced %s identity", async replaced => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-replaced-");
     const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");
     const nativeOpen = fs.openSync, nativeWrite = fs.writeFileSync;
@@ -241,7 +241,7 @@ describe("Codex CLI job persistence failures", () => {
       return nativeWrite(...args);
     });
     try {
-      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-01", planId: result.planId, confirmed: true, configDir })).toThrow();
+      await expect(admitCodexCliUpdateJob({ requestId: "initializer-replaced-01", planId: result.planId, confirmed: true, configDir })).rejects.toThrow();
       open.mockRestore(); write.mockRestore();
       const replacementLock = lstatSync(lock), replacementOwner = lstatSync(owner);
       expect(replacementLock.mode & 0o777).toBe(0o700);
@@ -255,7 +255,7 @@ describe("Codex CLI job persistence failures", () => {
       }
       expect(readFileSync(owner, "utf8")).toBe("replacement");
       expect(existsSync(replaced === "directory" ? `${lock}-original` : `${owner}-original`)).toBe(true);
-      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-02", planId: result.planId, confirmed: true, configDir })).toThrow("job_store_busy");
+      await expect(admitCodexCliUpdateJob({ requestId: "initializer-replaced-02", planId: result.planId, confirmed: true, configDir })).rejects.toThrow("job_store_busy");
     } finally { open.mockRestore(); write.mockRestore(); rmSync(outer, { recursive: true }); }
   });
 
@@ -291,6 +291,17 @@ describe("Codex CLI job persistence failures", () => {
     expect(attempts).toBe(8); expect(waits).toHaveLength(7);
   });
 
+  test("an asynchronously rejected busy contention yields and retries the awaited result", async () => {
+    let attempts = 0; const waits: number[] = [];
+    expect(await retryCodexCliJobStoreOperation(async () => { if (++attempts < 3) throw new CodexCliJobStoreBusyError(); return 7; },
+      async ms => { waits.push(ms); })).toBe(7);
+    expect(attempts).toBe(3); expect(waits).toEqual([25, 25]);
+    attempts = 0; waits.length = 0;
+    await expect(retryCodexCliJobStoreOperation(async () => { attempts++; throw new CodexCliJobStoreBusyError(); },
+      async ms => { waits.push(ms); })).rejects.toThrow("job_store_busy");
+    expect(attempts).toBe(8); expect(waits).toHaveLength(7);
+  });
+
   test("unknown accepted result codes cannot poison a later store read", () => {
     const safe = normalizeCodexCliJobResult({ ...result, reason: "private/unknown-reason",
       cleanupErrors: ["private/cleanup"] as never });
@@ -317,7 +328,7 @@ describe("Codex CLI job persistence failures", () => {
     const messages: string[] = [], previous = console.log;
     try {
       console.log = value => { messages.push(String(value)); };
-      expect(await handleCodexCliUpdateCommand(["status", randomUUID(), "--json"], { readJob: () => null })).toBe(1);
+      expect(await handleCodexCliUpdateCommand(["status", randomUUID(), "--json"], { readJob: async () => null })).toBe(1);
       expect(JSON.parse(messages.join("\n"))).toEqual({ error: "job_unavailable" });
     } finally { console.log = previous; }
   });
@@ -327,14 +338,14 @@ describe("Codex CLI job persistence failures", () => {
     const lock = join(configDir, "codex-cli-update-jobs", "admission.lock");
     let timer: ReturnType<typeof setTimeout> | undefined, runs = 0;
     try {
-      const admitted = admitCodexCliUpdateJob({ requestId: "lock-retry-00001", planId: result.planId, confirmed: true, configDir });
+      const admitted = await admitCodexCliUpdateJob({ requestId: "lock-retry-00001", planId: result.planId, confirmed: true, configDir });
       const job = await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => {
         runs++; mkdirSync(lock, { mode: 0o700 });
         timer = setTimeout(() => fs.rmdirSync(lock), 50);
         return result;
       }, configDir);
       expect(job).toMatchObject({ status: "applied", outcome: "applied", reason: "verified_target" });
-      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied" });
+      expect(await readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied" });
       expect(runs).toBe(1);
     } finally { clearTimeout(timer); rmSync(outer, { recursive: true }); }
   });
@@ -343,7 +354,7 @@ describe("Codex CLI job persistence failures", () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-fsync-retry-");
     let sync: ReturnType<typeof spyOn> | undefined;
     try {
-      const admitted = admitCodexCliUpdateJob({ requestId: "fsync-retry-0001", planId: result.planId, confirmed: true, configDir });
+      const admitted = await admitCodexCliUpdateJob({ requestId: "fsync-retry-0001", planId: result.planId, confirmed: true, configDir });
       const nativeSync = fs.fsyncSync; let calls = 0;
       const job = await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => {
         sync = spyOn(fs, "fsyncSync").mockImplementation(fd => {
@@ -354,7 +365,7 @@ describe("Codex CLI job persistence failures", () => {
       }, configDir);
       expect(job).toMatchObject({ status: "applied", reason: "verified_target" });
       expect(calls).toBeGreaterThan(2);
-      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied", reason: "verified_target" });
+      expect(await readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied", reason: "verified_target" });
       expect(JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")).jobs[0].revision).toBe(2);
     } finally { sync?.mockRestore(); rmSync(outer, { recursive: true }); }
   });
@@ -362,10 +373,10 @@ describe("Codex CLI job persistence failures", () => {
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("an accepted unknown result is persisted as readable fixed-code uncertainty", async () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-unknown-result-");
     try {
-      const admitted = admitCodexCliUpdateJob({ requestId: "unknown-result-01", planId: result.planId, confirmed: true, configDir });
+      const admitted = await admitCodexCliUpdateJob({ requestId: "unknown-result-01", planId: result.planId, confirmed: true, configDir });
       await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
         async () => ({ ...result, reason: "late_result", cleanupErrors: ["private/path"] as never }), configDir);
-      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ status: "ambiguous",
+      expect(await readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ status: "ambiguous",
         reason: "job_result_unknown", leaseState: "unknown", cleanupErrors: [] });
     } finally { rmSync(outer, { recursive: true }); }
   });
@@ -374,7 +385,7 @@ describe("Codex CLI job persistence failures", () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-worker-fence-");
     let release = () => {}, pending: Promise<unknown> | undefined;
     try {
-      const admitted = admitCodexCliUpdateJob({ requestId: "worker-fence-001", planId: result.planId, confirmed: true, configDir });
+      const admitted = await admitCodexCliUpdateJob({ requestId: "worker-fence-001", planId: result.planId, confirmed: true, configDir });
       pending = runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
         () => new Promise(resolve => { release = () => resolve(result); }), configDir);
       await Promise.resolve();
@@ -391,29 +402,29 @@ describe("Codex CLI job persistence failures", () => {
     try {
       let first = "";
       for (let index = 0; index < 64; index++) {
-        const admitted = admitCodexCliUpdateJob({ requestId: `retained-key-${index}`, planId: result.planId, confirmed: true, configDir });
+        const admitted = await admitCodexCliUpdateJob({ requestId: `retained-key-${index}`, planId: result.planId, confirmed: true, configDir });
         if (index === 0) first = admitted.job.jobId;
         expect(await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => result, configDir)).toMatchObject({ outcome: "applied" });
       }
-      expect(() => admitCodexCliUpdateJob({ requestId: "retained-key-65", planId: result.planId, confirmed: true, configDir })).toThrow("store_full");
-      expect(admitCodexCliUpdateJob({ requestId: "retained-key-0", planId: result.planId, confirmed: true, configDir }))
+      await expect(admitCodexCliUpdateJob({ requestId: "retained-key-65", planId: result.planId, confirmed: true, configDir })).rejects.toThrow("store_full");
+      expect(await admitCodexCliUpdateJob({ requestId: "retained-key-0", planId: result.planId, confirmed: true, configDir }))
         .toMatchObject({ kind: "duplicate", job: { jobId: first, outcome: "applied" } });
     } finally { rmSync(outer, { recursive: true }); }
   }, 30_000);
 });
 
 describe("Codex CLI update CLI", () => {
-  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed admission creates one missing config root without making reads write", () => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed admission creates one missing config root without making reads write", async () => {
     const { outer, parent } = privateStoreParent("ocx-cli-update-missing-parent-");
     const configDir = join(parent, "ocx");
     try {
-      expect(readCodexCliUpdateJob("12345678-1234-1234-1234-123456789012", configDir)).toBeNull();
+      expect(await readCodexCliUpdateJob("12345678-1234-1234-1234-123456789012", configDir)).toBeNull();
       expect(existsSync(configDir)).toBe(false);
       const missingParent = join(parent, "not-created");
-      expect(() => admitCodexCliUpdateJob({ requestId: "no-recursive-root-001", planId: "c".repeat(32), confirmed: true,
-        configDir: join(missingParent, "ocx") })).toThrow();
+      await expect(admitCodexCliUpdateJob({ requestId: "no-recursive-root-001", planId: "c".repeat(32), confirmed: true,
+        configDir: join(missingParent, "ocx") })).rejects.toThrow();
       expect(existsSync(missingParent)).toBe(false);
-      const accepted = admitCodexCliUpdateJob({ requestId: "missing-root-admission-01", planId: "a".repeat(32), confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "missing-root-admission-01", planId: "a".repeat(32), confirmed: true, configDir });
       const stat = lstatSync(configDir);
       expect({
         canonicalEqual: realpathSync.native(configDir) === configDir,
@@ -426,11 +437,11 @@ describe("Codex CLI update CLI", () => {
     } finally { rmSync(outer, { recursive: true }); }
   });
 
-  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed admission reuses an existing canonical config root", () => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed admission reuses an existing canonical config root", async () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-existing-root-");
     try {
       const before = lstatSync(configDir);
-      const accepted = admitCodexCliUpdateJob({ requestId: "existing-root-admission-01", planId: "b".repeat(32), confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "existing-root-admission-01", planId: "b".repeat(32), confirmed: true, configDir });
       const after = lstatSync(configDir);
       expect(accepted.kind).toBe("accepted");
       expect(after.dev).toBe(before.dev);
@@ -439,11 +450,11 @@ describe("Codex CLI update CLI", () => {
     } finally { rmSync(outer, { recursive: true }); }
   });
 
-  test.skipIf(!hasTrustedStickyTmp())("missing config root admission allows a root-owned sticky temporary ancestor", () => {
+  test.skipIf(!hasTrustedStickyTmp())("missing config root admission allows a root-owned sticky temporary ancestor", async () => {
     const stickyTmp = realpathSync.native("/tmp");
     const directConfig = join(stickyTmp, `ocx-cli-update-direct-sticky-${randomUUID()}`);
-    expect(() => admitCodexCliUpdateJob({ requestId: "direct-sticky-parent-001", planId: "d".repeat(32),
-      confirmed: true, configDir: directConfig })).toThrow("unsafe_store");
+    await expect(admitCodexCliUpdateJob({ requestId: "direct-sticky-parent-001", planId: "d".repeat(32),
+      confirmed: true, configDir: directConfig })).rejects.toThrow("unsafe_store");
     expect(existsSync(directConfig)).toBe(false);
     const outer = realpathSync.native(mkdtempSync(join(stickyTmp, "ocx-cli-update-sticky-parent-")));
     try {
@@ -452,7 +463,7 @@ describe("Codex CLI update CLI", () => {
       mkdirSync(parent, { mode: 0o700 });
       chmodSync(parent, 0o700);
       const configDir = join(parent, "ocx");
-      const accepted = admitCodexCliUpdateJob({ requestId: "sticky-parent-admission-001", planId: "d".repeat(32), confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "sticky-parent-admission-001", planId: "d".repeat(32), confirmed: true, configDir });
       const stat = lstatSync(configDir);
       expect(accepted.kind).toBe("accepted");
       expect((stat.mode & 0o077) === 0 && stat.isDirectory() && !stat.isSymbolicLink()
@@ -461,13 +472,13 @@ describe("Codex CLI update CLI", () => {
     } finally { rmSync(outer, { recursive: true }); }
   });
 
-  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("missing config root admission refuses a non-sticky shared ancestor before mkdir", () => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("missing config root admission refuses a non-sticky shared ancestor before mkdir", async () => {
     const { outer, parent } = privateStoreParent("ocx-cli-update-shared-ancestor-");
     const configDir = join(parent, "ocx");
     try {
       chmodSync(outer, 0o777);
-      expect(() => admitCodexCliUpdateJob({ requestId: "shared-ancestor-admission-01", planId: "e".repeat(32),
-        confirmed: true, configDir })).toThrow("unsafe_store");
+      await expect(admitCodexCliUpdateJob({ requestId: "shared-ancestor-admission-01", planId: "e".repeat(32),
+        confirmed: true, configDir })).rejects.toThrow("unsafe_store");
       expect(existsSync(configDir)).toBe(false);
     } finally {
       chmodSync(outer, 0o700);
@@ -477,34 +488,41 @@ describe("Codex CLI update CLI", () => {
 
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("existing config root refuses unsafe ancestry before admission or completion writes", async () => {
     const { outer, parent, configDir } = privateStoreRoot("ocx-cli-update-existing-shared-ancestor-");
-    let release: (() => void) | undefined;
+    let release!: () => void;
+    let signalEngineEntered!: () => void;
+    const engineEntered = new Promise<void>(resolve => { signalEngineEntered = resolve; });
+    const engineResult = new Promise<CodexCliApplyResult>(resolve => {
+      release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "f".repeat(32),
+        installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+        verificationPid: null, cleanupErrors: [] });
+    });
     let pending: Promise<unknown> | undefined;
     try {
-      const accepted = admitCodexCliUpdateJob({ requestId: "existing-shared-admission-001", planId: "f".repeat(32),
+      const accepted = await admitCodexCliUpdateJob({ requestId: "existing-shared-admission-001", planId: "f".repeat(32),
         confirmed: true, configDir });
-      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise(resolve => {
-        release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "f".repeat(32),
-          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
-          verificationPid: null, cleanupErrors: [] });
-      }), configDir);
-      await Promise.resolve(); // Worker admission now yields before invoking the engine.
-      if (!release) throw new Error("fixture job owner did not enter its awaited operation");
+      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => {
+        signalEngineEntered();
+        return engineResult;
+      }, configDir);
+      await Promise.race([engineEntered, pending.then(() => {
+        throw new Error("fixture job owner completed before entering its awaited operation");
+      })]);
       const ledger = join(configDir, "codex-cli-update-jobs", "jobs.json");
       const before = readFileSync(ledger);
       chmodSync(outer, 0o777);
-      expect(() => admitCodexCliUpdateJob({ requestId: "blocked-existing-admission-001", planId: "1".repeat(32),
-        confirmed: true, configDir })).toThrow("unsafe_store");
-      expect(() => readCodexCliUpdateJob(accepted.job.jobId, configDir)).toThrow("unsafe_store");
-      expect(() => finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1, {
+      await expect(admitCodexCliUpdateJob({ requestId: "blocked-existing-admission-001", planId: "1".repeat(32),
+        confirmed: true, configDir })).rejects.toThrow("unsafe_store");
+      await expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).rejects.toThrow("unsafe_store");
+      await expect(finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1, {
         outcome: "applied", reason: "verified_target", planId: "f".repeat(32), installedVersion: "1.0.0",
         targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [],
-      }, configDir)).toThrow("unsafe_store");
+      }, configDir)).rejects.toThrow("unsafe_store");
       await expect(runCodexCliUpdateJob(accepted.job.jobId, accepted.generation,
         async () => { throw new Error("unsafe ancestry must reject before running"); }, configDir)).rejects.toThrow("unsafe_store");
       expect(readFileSync(ledger)).toEqual(before);
     } finally {
       chmodSync(outer, 0o700);
-      release?.();
+      release();
       if (pending) await pending.catch(() => undefined);
       rmSync(outer, { recursive: true });
     }
@@ -537,12 +555,12 @@ describe("Codex CLI update CLI", () => {
     try {
       const requestId = "retry-key-0000001";
       const planId = "a".repeat(32);
-      const accepted = admitCodexCliUpdateJob({ requestId, planId, confirmed: true, configDir });
-      const replay = admitCodexCliUpdateJob({ requestId, planId, confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId, planId, confirmed: true, configDir });
+      const replay = await admitCodexCliUpdateJob({ requestId, planId, confirmed: true, configDir });
       expect(accepted.kind).toBe("accepted");
       expect(replay.kind).toBe("duplicate");
       expect(replay.job.jobId).toBe(accepted.job.jobId);
-      expect(() => admitCodexCliUpdateJob({ requestId, planId: "b".repeat(32), confirmed: true, configDir })).toThrow("idempotency_conflict");
+      await expect(admitCodexCliUpdateJob({ requestId, planId: "b".repeat(32), confirmed: true, configDir })).rejects.toThrow("idempotency_conflict");
       const previousHome = process.env.OPENCODEX_HOME;
       process.env.OPENCODEX_HOME = configDir;
       const statusLogs: string[] = [];
@@ -558,7 +576,7 @@ describe("Codex CLI update CLI", () => {
 
       let installerRuns = 0;
       const terminal = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, async () => {
-        expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
+        expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
         installerRuns += 1;
         return { outcome: "applied", reason: "verified_target", planId, installedVersion: "1.0.0", targetVersion: "1.1.0",
           installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
@@ -566,29 +584,37 @@ describe("Codex CLI update CLI", () => {
       expect(installerRuns).toBe(1);
       expect(terminal).toMatchObject({ status: "applied", outcome: "applied", ownerState: "finished" });
       expect(JSON.stringify(terminal)).not.toMatch(/ownerPid|generation|payloadHash|requestKey|token|path/i);
-      const stale = finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
+      const stale = await finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
         { outcome: "refused", reason: "late_result", planId, installedVersion: null, targetVersion: null,
           installerExitCode: null, leaseRetained: false, verificationPid: null, cleanupErrors: [] }, configDir);
       expect(stale?.status).toBe("applied");
-      expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)?.status).toBe("applied");
+      expect((await readCodexCliUpdateJob(accepted.job.jobId, configDir))?.status).toBe("applied");
     } finally { rmSync(outer, { recursive: true }); }
   });
 
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a new owner reports a live owner's job unknown; the original generation can finish without stale overwrite", async () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-restart-test-");
-    let release: () => void = () => {};
+    let release!: () => void;
+    let signalEngineEntered!: () => void;
+    const engineEntered = new Promise<void>(resolve => { signalEngineEntered = resolve; });
+    const engineResult = new Promise<CodexCliApplyResult>(resolve => {
+      release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "c".repeat(32),
+        installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+        verificationPid: null, cleanupErrors: [] });
+    });
     let pending: Promise<unknown> | undefined;
     try {
-      const accepted = admitCodexCliUpdateJob({ requestId: "restart-key-00001", planId: "c".repeat(32), confirmed: true, configDir });
-      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise(resolve => {
-        release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "c".repeat(32),
-          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
-          verificationPid: null, cleanupErrors: [] });
-      }), configDir);
-      await Promise.resolve();
-      expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "restart-key-00001", planId: "c".repeat(32), confirmed: true, configDir });
+      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => {
+        signalEngineEntered();
+        return engineResult;
+      }, configDir);
+      await Promise.race([engineEntered, pending.then(() => {
+        throw new Error("fixture job owner completed before entering its awaited operation");
+      })]);
+      expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
-      const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
+      const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
       const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 5_000,
         env: { ...process.env, OPENCODEX_HOME: configDir } });
       expect(child.error).toBeUndefined();
@@ -599,10 +625,10 @@ describe("Codex CLI update CLI", () => {
       release();
       const completed = await pending;
       expect(completed).toMatchObject({ status: "applied", ownerState: "finished" });
-      expect(finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
+      expect((await finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
         { outcome: "refused", reason: "late_result", planId: "c".repeat(32), installedVersion: null,
           targetVersion: null, installerExitCode: null, leaseRetained: false, verificationPid: null,
-          cleanupErrors: [] }, configDir)?.status).toBe("applied");
+          cleanupErrors: [] }, configDir))?.status).toBe("applied");
     } finally {
       release();
       if (pending) await pending.catch(() => undefined);
@@ -613,7 +639,7 @@ describe("Codex CLI update CLI", () => {
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("an exception without close evidence preserves child and lease uncertainty", async () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-unknown-child-test-");
     try {
-      const accepted = admitCodexCliUpdateJob({ requestId: "unknown-child-0001", planId: "f".repeat(32), confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "unknown-child-0001", planId: "f".repeat(32), confirmed: true, configDir });
       const result = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation,
         async () => { throw new Error("unobservable child exception"); }, configDir);
       expect(result).toMatchObject({ status: "ambiguous", outcome: "ambiguous", ownerState: "finished",
@@ -625,7 +651,7 @@ describe("Codex CLI update CLI", () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-live-child-test-");
     let child: ChildProcess | undefined;
     try {
-      const accepted = admitCodexCliUpdateJob({ requestId: "live-child-exception-001", planId: "9".repeat(32), confirmed: true, configDir });
+      const accepted = await admitCodexCliUpdateJob({ requestId: "live-child-exception-001", planId: "9".repeat(32), confirmed: true, configDir });
       const result = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, async () => {
         child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
         await new Promise<void>((resolve, reject) => {

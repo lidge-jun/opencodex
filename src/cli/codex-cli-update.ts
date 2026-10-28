@@ -310,8 +310,8 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "status") {
-      let job: ReturnType<typeof readCodexCliUpdateJob>;
-      try { job = (deps.readJob ?? readCodexCliUpdateJob)(parsed.jobId); }
+      let job: Awaited<ReturnType<typeof readCodexCliUpdateJob>>;
+      try { job = await (deps.readJob ?? readCodexCliUpdateJob)(parsed.jobId); }
       catch { unavailableJob(); return; }
       if (!job) { unavailableJob(); return; }
       printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
@@ -329,7 +329,7 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "apply") {
-      const admitted = admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId, confirmed: true });
+      const admitted = await admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId, confirmed: true });
       const apply = deps.applyUpdate
         ?? ((planId: string) => runCodexCliUpdateApplyInWorker(planId, { jobId: admitted.job.jobId }));
       let job: Awaited<ReturnType<typeof runCodexCliUpdateJob>>;

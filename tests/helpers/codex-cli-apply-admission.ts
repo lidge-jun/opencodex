@@ -1,8 +1,8 @@
+import { createCodexCliTestRoot } from "./codex-cli-fixture-root";
 // Isolated process: module substitution supplies only provenance evidence.
 // Apply, archive validation, filesystem, shared gate and both callers are real.
 import { expect, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as provenance from "../../src/codex/cli-install-provenance";
 import * as artifacts from "../../src/codex/cli-update-artifacts";
@@ -10,7 +10,7 @@ import * as files from "../../src/codex/cli-update-files";
 import { fixtureArtifactSet } from "./codex-cli-apply-artifact";
 import { removeTreeWithRetry } from "./remove-tree";
 
-const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "ocx-apply-admission-")));
+const root = createCodexCliTestRoot("ocx-apply-admission-");
 const lane = process.argv[2] ?? "terminal";
 const prefix = join(root, "prefix"), temporaryRoot = join(root, "temp");
 fs.mkdirSync(prefix); fs.mkdirSync(temporaryRoot);
