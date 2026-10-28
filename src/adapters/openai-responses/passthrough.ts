@@ -7,7 +7,7 @@ import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-to
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { Buffer } from "node:buffer";
-import type { IncomingMeta, ProviderAdapter } from "../base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER, isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
@@ -235,6 +235,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
+      const hostedToolSubstitutions: NonNullable<AdapterRequest["hostedToolSubstitutions"]>[number][] = [];
       if (forward) {
         // `metadata` is stripped on every forward route for compatibility with the canonical backend.
         // `max_output_tokens` is stripped only when this provider is the canonical backend.
@@ -255,6 +256,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           provider,
           parsed.modelId,
           parsed._openAiVirtualSelectedModelId,
+          hostedToolSubstitutions,
         );
         outBody = normalizeImageGenClientTools(outBody);
       }
@@ -503,6 +505,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body,
+        hostedToolSubstitutions,
         ...(isPlainObject(wireBody) && typeof wireBody.model === "string" ? { outboundModelId: wireBody.model } : {}),
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),

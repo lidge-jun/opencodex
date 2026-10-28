@@ -88,9 +88,9 @@ route-specific results rather than repeating this table.
 | `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. A settled `reset` lifts the account's local cooldown only when it is a quota refusal recorded before the claim was first journaled and the windows the grant reported cleared cover every window that refusal named (both windows when it named none). A refusal recorded while the claim was in flight, an entitlement refusal, or an uncovered window stays, including on a same-id replay. The cached quota is dropped and usage is reread with a fresh request, so the pool can select the account before the old deadline. Model-family exclusions stay until that reread proves a family is no longer rejected. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
-| `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 local dashboard required for POST; 409 stale, busy, or incomplete state |
-| `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 local dashboard required for POST; 409 unsupported build, untrusted certificate, or incomplete state |
-| `GET, POST /api/codex/desktop-compatibility/settings` | Read or save the next-start observation preference with its current revision | 403 local dashboard required for POST; 409 stale, invalid, or unconfirmed configuration |
+| `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 paired local dashboard required for POST; 409 stale, busy, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 paired local dashboard required for POST; 409 unsupported build, untrusted certificate, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/settings` | Read or save the next-start observation preference with its current revision | 403 paired local dashboard required for POST; 409 stale, invalid, or unconfirmed configuration |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -866,13 +866,16 @@ same selector is restored if that account id is added again.
 
 `GET /api/codex/desktop-compatibility/certificate` returns public certificate status:
 support, state, fingerprint, expiry, renewal notice, trust observation and any active operation.
+The certificate response also reports `mutationAuthorized` for the current session and ingress;
+this flag is read-only guidance, and each mutation checks authorization again.
 It never generates a key, decrypts private material or registers OS trust. Certificate trust alone
 does not mean a compatibility relay is running or the private key has been verified in this process.
 
 POST accepts `action: "prepare" | "trust" | "remove-trust" | "renew"` and `confirmed: true`.
 Trust actions also require the exact uppercase SHA-256 `fingerprint` returned by status.
-These mutations require a GUI-session principal from trusted loopback ingress; an admin token alone
-receives 403. They are intended for a local confirmation flow, not unattended certificate enrollment.
+These mutations require an operator-paired GUI-session principal from trusted loopback ingress;
+an admin token or an automatically issued loopback GUI session receives 403. They are intended for
+a local confirmation flow, not unattended certificate enrollment.
 
 Prepare stores a constrained 30-day authority with a Windows CurrentUser-DPAPI-protected private key.
 Subsequent preparations reuse it. Trust actions never create missing state or silently replace an
@@ -892,13 +895,17 @@ CurrentUser protection does not isolate secrets from other processes running as 
 
 ## Experimental Windows compatibility runtime
 
-`GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires a
-local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
+`GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires an
+operator-paired local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
 `observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
 The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
 the **Resume observation when OpenCodex starts** toggle saves the optional
 `desktopCompatibility.startOnProxyStart` preference. OpenCodex managed client mode does not offer these
 local controls or forward them to the shared hub.
+Open the dashboard at the configured loopback origin. Before changing compatibility settings,
+use the panel's `ocx gui pair --origin "<dashboard-origin>"` command and submit its one-use pairing
+code in the panel. Controls stay disabled until the new local session is verified; pairing does
+not itself change certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
 ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
@@ -942,7 +949,8 @@ Failed cleanup reports `cleanup-required`; it does not claim that the runtime is
 system proxy settings and application files are not modified by these runtime commands.
 
 The separate settings endpoint returns `{ startOnProxyStart, revision }`. POST requires
-`{ startOnProxyStart: boolean, revision, confirmed: true }` from a local GUI session. A stale
+`{ startOnProxyStart: boolean, revision, confirmed: true }` from an operator-paired local GUI
+session on trusted loopback ingress; an unpaired session receives 403. A stale
 revision refuses the write; a valid update preserves unrelated config fields and verifies
 the persisted result. This preference affects the next proxy start, never current runtime
 state, app launch or an Apply trial. An uncertain response must be followed by GET, not an

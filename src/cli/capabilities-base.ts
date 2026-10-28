@@ -88,13 +88,13 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["link","cleanup"],
-    summary: "Find Windows Remote Link Children and explain how to move them to Hub mode.",
+    summary: "Inspect Remote Link Child platforms and show disconnect guidance.",
     routes: [],
     flags: [{"name":"--link-id","value":"string","summary":"Check only this link."},{"name":"--json","value":"boolean","summary":"Emit {links, changed:false} as JSON."}],
     mutates: false,
     json: "payload",
     usage: "ocx link cleanup [--link-id <id>] [--json]",
-    details: ["Runs on the Home from its local link store. Asks each Home-initiated Child for uname -s over the link's pinned SSH trust; a Windows answer (Git Bash, MSYS, Cygwin, cmd or PowerShell) is reported with recovery steps.","Never revokes, disconnects or edits a link. A Windows Child needs ocx disconnect on itself, then ocx link revoke --force --yes on the Home, then ocx hub invite and ocx connect."],
+    details: ["Runs on the Home from its local link store. Asks each Home-initiated Child for its platform over the link's pinned SSH trust (the fixed %OS% probe, then uname -s) and reports Windows Children with disconnect guidance.","Never revokes, disconnects or edits a link. An ordinary ocx link revoke --yes disconnects a Windows Child through PowerShell over the recorded SSH trust."],
   },
   {
     command: ["remote-workspace","pair"],

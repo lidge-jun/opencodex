@@ -7,7 +7,7 @@ Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-
 A lock in the Codex credential store is governed by [descriptor identity and age](catalog.md#accounts-namespaces-and-pool-rotation), so the mere presence of its filename is neither acquisition nor release authority. Failed path-identity probes leave the lock for stale recovery and preserve the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
-
+Launcher credentials require a parsed managed provider transport matching the installation's loopback target or persisted local client connection; provider names and injection comments are not destination authority. Default profiles, project layers and destination-changing arguments suppress automatic token loading.
 The read-only CLI update plan follows the [isolated environment and process-observation contract](codex-cli-update.md).
 
 ## Orca source-owned account import
@@ -57,7 +57,7 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 ```
 
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
-the resolved `CODEX_HOME`.
+the resolved `CODEX_HOME`. For credential delivery, `src/cli/codex-launch-auth.ts` excludes an ancestor `.codex/config.toml` only when its realpath matches the home config and its lexical alias, ancestors and intermediate link targets pass ownership/ACL inspection. A protected symlinked user `.codex` qualifies; distinct files, replaceable aliases and failed inspections withhold the token as a project layer. Namespace ownership follows the [launcher contract](cli-management.md#head-and-help-navigation).
 
 Log Guard reclaim in `src/codex/log-guard/maintenance.ts` refuses a non-regular or redirected
 database path. It compares canonical path and full-width filesystem device and file identity
@@ -196,7 +196,7 @@ prior sibling runtime and `OPENCODEX_HOME`. Connected-client recycle issues it b
 the listener or removing that runtime record. `handleStart` consumes the record before any probe;
 a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
 the owner is down, and its journal recovery remains skipped.
-Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
+Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`codex`/`opencode`/`minimax`
 auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
 through `withoutSiblingMarker`.
 

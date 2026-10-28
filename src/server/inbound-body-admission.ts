@@ -1,5 +1,4 @@
 import {
-  MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
   MAX_DECOMPRESSED_BODY_BYTES,
   resolveInboundBodyLimitBytes,
 } from "./request-decompress";
@@ -7,17 +6,16 @@ import { withCors, type RequestPolicyView } from "./auth-cors";
 import { codexCompatibleUrl } from "../codex/context-compat";
 import { addFinalRequestLog, markLocalRequestLogRefusal } from "./request-log";
 import type { WorkflowRefusalLog } from "./workflow-refusal";
+import { inboundBodyBudget, bindInboundBodyLease, type InboundBodyBudget } from "./inbound-body-budget";
 
-/** Admission units, not a bound on process RSS or the size of parsed object graphs. */
-export const MAX_CONCURRENT_INBOUND_BODY_BYTES = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
-let reservedInboundBodyBytes = 0;
+export { configureInboundBodyBudget, MAX_CONCURRENT_INBOUND_BODY_BYTES } from "./inbound-body-budget";
 
 // Match the HTTP routes whose JSON readers use maxInboundBodyBytes. Keep the
 // current image/search/count_tokens support; management, audio, context relay,
 // and WebSocket frames have separate limits and are not part of this gate.
 // Exported so the contract tests classify the dispatcher's own route list
 // instead of copying it: a new loopback route has to land in one of these two
-// sets, or `tests/server/server-request-body-size.test.ts` fails.
+// sets, or `tests/server/inbound-body-admission.test.ts` fails.
 export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
   "/v1/responses",
   "/v1/responses/compact",
@@ -139,6 +137,7 @@ function retainUntilResponseSettles(response: Response, signal: AbortSignal, rel
  * EOF/error or settled cancellation. Call only at the admitted HTTP boundary,
  * after auth/origin checks, not from readers or internal combo/translation hops.
  * pathname is the same canonical pathname used by the server's dispatcher.
+ * The optional budget/wait override isolates lifecycle tests from the process-wide owner.
  */
 export async function withRaisedInboundBodyAdmission(
   req: Request,
@@ -146,6 +145,7 @@ export async function withRaisedInboundBodyAdmission(
   configuredLimit: number | undefined,
   work: () => Promise<Response>,
   onRefusal: (response: Response) => Response = response => response,
+  options?: { budget?: InboundBodyBudget; maxWaitMs?: number },
 ): Promise<Response> {
   const maxBytes = resolveInboundBodyLimitBytes(configuredLimit);
   if (req.method !== "POST" || !CONFIGURABLE_JSON_BODY_ROUTES.has(pathname)
@@ -159,18 +159,26 @@ export async function withRaisedInboundBodyAdmission(
     // protocol-specific 413 win over temporary capacity refusal, unchanged.
     return work();
   }
-  if (maxBytes > MAX_CONCURRENT_INBOUND_BODY_BYTES - reservedInboundBodyBytes) {
+  let lease;
+  try {
+    lease = await (options?.budget ?? inboundBodyBudget).acquire(maxBytes, req.signal, options?.maxWaitMs);
+  } catch (error) {
+    cancelUnreadBody(req, error);
+    throw error;
+  }
+  if (!lease) {
     const error = new InboundBodyCapacityError();
     cancelUnreadBody(req, error);
     return onRefusal(capacityResponse(pathname, error));
   }
-  reservedInboundBodyBytes += maxBytes;
-  let released = false;
-  const release = (): void => {
-    if (released) return;
-    released = true;
-    reservedInboundBodyBytes -= maxBytes;
-  };
+  // An immediate grant can race a disconnect before this async function resumes.
+  if (req.signal.aborted) {
+    lease.release();
+    cancelUnreadBody(req, req.signal.reason);
+    throw req.signal.reason;
+  }
+  const unbind = bindInboundBodyLease(req, lease);
+  const release = (): void => { unbind(); lease.release(); };
   try {
     return retainUntilResponseSettles(await work(), req.signal, release);
   } catch (error) {

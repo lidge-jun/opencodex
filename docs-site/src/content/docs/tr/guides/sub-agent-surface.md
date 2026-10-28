@@ -71,7 +71,7 @@ Bir ile dört arasında model öne çıkarırsanız Codex kalan yuvaları öncel
 | 3 | `deepseek/deepseek-v4-flash` | `5` | Alfabetik olarak kalan ilk yönlendirilmiş satır |
 | 4 | `google/gemini-3-pro` | `5` | Sonraki yönlendirilmiş satır |
 | 5 | `moonshot/kimi-k3` | `5` | Sonraki yönlendirilmiş satır |
-| 6+ | `zai/glm-5.2`, ardından yerel GPT satırları | `5`, ardından `102` | Beşin dışında |
+| 6+ | `zai/glm-5.2`, ardından yerel GPT satırları | `5`, ardından `102 + sourcePriority` | Beşin dışında |
 
 Kadro boşsa opencodex hiçbir satırı sabitlemez ve beş yuva kataloğun normal önceliklerine göre belirlenir.
 

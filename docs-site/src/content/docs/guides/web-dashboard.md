@@ -13,9 +13,11 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
-management ingress is enabled — auto-starting the proxy first if needed. In
-development you can run the GUI dev server separately against a running proxy:
+This opens the running proxy's address in your browser: `http://127.0.0.1:<port>` by default,
+or `http://[::1]:<port>` for a literal IPv6 loopback bind. These literal addresses preserve the
+configured origin required for local browser pairing. With hub management ingress enabled, it opens
+`http://127.0.0.1:<management port>`. The proxy starts automatically first if needed. In development
+you can run the GUI dev server separately against a running proxy:
 
 ```bash
 ocx start

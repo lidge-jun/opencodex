@@ -109,7 +109,7 @@ Operational contract when enabled:
   not postpone usage probes or clear a failed usage probe's unavailable status. Measurements
   whose known reset time has passed are discarded as unknown, including retained model-specific
   windows. Values without a known reset are preserved; missing data is never reported as zero usage.
-- Affinity is **process-local** (lost on proxy restart).
+- Affinity survives proxy restart within the same config home and provider instance (24-hour idle lifetime, newest 2,000 bindings). The private snapshot stores session digests and login fences, never raw session keys or tokens. Legacy accounts without a persistent login identity remain process-local until their next login. Token refresh preserves affinity; replacement login, account removal, pause/reauthentication and explicit runtime account selection invalidate it. A transient throttle detour preserves the original binding even when its pause expires before the retry commits.
 - A complete, structured **403** account-entitlement or billing refusal can rotate before
   output. Recognized cases include no Claude Code access, an expired/inactive subscription,
   and an insufficient Anthropic credit balance. The refused account loses its affinities and

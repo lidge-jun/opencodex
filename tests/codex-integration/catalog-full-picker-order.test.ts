@@ -63,7 +63,7 @@ test("sync refreshes native spawn rank when featured models change", () => {
 
   const demoted = mergeCatalogEntriesForSync(promoted, [], baseline, ["opencode-go/glm-5.3"], false);
   applyFullModelPickerOrder(demoted, order);
-  expect(demoted.find(entry => entry.slug === sol.slug)?.[SPAWN_PRIORITY_FIELD]).toBe(101);
+  expect(demoted.find(entry => entry.slug === sol.slug)?.[SPAWN_PRIORITY_FIELD]).toBe(110);
 });
 
 test("fresh routed rows do not inherit a previously ordered native template's guidance rank", () => {

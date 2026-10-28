@@ -38,6 +38,8 @@ export interface CliHead {
 export function parseCliHead(argv: string[]): CliHead {
   const command = argv[0];
   const args = argv;
+  // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
+  if (command === "codex") return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }

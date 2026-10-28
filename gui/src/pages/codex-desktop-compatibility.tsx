@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/shared";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
-import { CompatibilityApiError, readCompatibilityCertificate, readCompatibilityRuntime, readCompatibilitySnapshot, runCompatibilityAction,
+import { CompatibilityApiError, readCompatibilityCertificate, readCompatibilityRuntime, readCompatibilitySnapshot, runCompatibilityAction, validateCompatibilityPairing,
   type CompatibilityAction, type CompatibilitySnapshot } from "../desktop-compatibility-api";
 import { setClientResourceData, useClientResource } from "../client-resource";
 import DesktopCompatibilityStartupSetting from "./desktop-compatibility-startup-setting";
+import { ConnectPairingForm } from "../connect-pairing";
+import { standaloneApiTargets } from "../api-targets";
+import { SESSION_CHANGED_EVENT } from "../api";
 
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
@@ -19,6 +22,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   const [needsRefresh, setNeedsRefresh] = useState(false), [mutating, setMutating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null), [done, setDone] = useState(false);
   const [choice, setChoice] = useState<CompatibilityAction | null>(null), [acknowledged, setAcknowledged] = useState(false);
+  const [authorizationCurrent, setAuthorizationCurrent] = useState(true), [pairingStarted, setPairingStarted] = useState(false);
   const lifecycle = useRef({ alive: true, pending: false, generation: 0, operations: new Set<BoundedFetch>() });
   const certificateKey = `desktop-compatibility-certificate:${apiBase}`, runtimeKey = `desktop-compatibility-runtime:${apiBase}`;
   const certificate = useClientResource(certificateKey, signal => readCompatibilityCertificate(apiBase, signal), { enabled: active, deadlineMs: 15000, staleAfterMs: 0 });
@@ -28,14 +32,22 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   const busy = mutating || certificate.loading || runtime.loading;
   const readError = certificate.error ?? runtime.error;
   const error = actionError ?? (readError ? readError instanceof CompatibilityApiError ? readError.code : "connection_unconfirmed" : null);
+  const authorized = certificate.data?.mutationAuthorized === true && authorizationCurrent && error !== "local_dashboard_confirmation_required";
   useEffect(() => {
     const current = lifecycle.current; current.alive = true;
-    return () => { current.alive = false; current.generation++; current.pending = false;
+    const expire = (event: Event) => {
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane !== "machine") return;
+      current.generation++; current.pending = false;
+      for (const op of current.operations) { op.controller.abort(); op.clear(); } current.operations.clear();
+      setMutating(false); setAuthorizationCurrent(false); setNeedsRefresh(true); setChoice(null); setAcknowledged(false); setDone(false);
+    };
+    window.addEventListener(SESSION_CHANGED_EVENT, expire);
+    return () => { window.removeEventListener(SESSION_CHANGED_EVENT, expire); current.alive = false; current.generation++; current.pending = false;
       for (const op of current.operations) { op.controller.abort(); op.clear(); } current.operations.clear(); };
   }, []);
   const execute = useCallback(async (action?: CompatibilityAction) => {
     const current = lifecycle.current;
-    if (current.pending) return;
+    if (current.pending || (action && (!authorized || pairingStarted))) return;
     current.pending = true; const generation = ++current.generation;
     setMutating(true); setActionError(null); setDone(false); setNeedsRefresh(true);
     const op = createBoundedFetch(action ? 140000 : 15000); current.operations.add(op);
@@ -44,7 +56,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       const value = await readCompatibilitySnapshot(apiBase, op.signal);
       if (current.alive && current.generation === generation) {
         setClientResourceData(certificateKey, value.certificate); setClientResourceData(runtimeKey, value.runtime);
-        setNeedsRefresh(false); setDone(!!action); setChoice(null); setAcknowledged(false);
+        setNeedsRefresh(false); setAuthorizationCurrent(true); setDone(!!action); setChoice(null); setAcknowledged(false);
       }
     } catch (cause) {
       if (current.alive && current.generation === generation) { setActionError(cause instanceof CompatibilityApiError ? cause.code : "connection_unconfirmed"); setChoice(null); setAcknowledged(false); }
@@ -52,7 +64,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       current.operations.delete(op); op.clear();
       if (current.generation === generation) { current.pending = false; if (current.alive) setMutating(false); }
     }
-  }, [apiBase, certificateKey, runtimeKey]);
+  }, [apiBase, certificateKey, runtimeKey, authorized, pairingStarted]);
 
   const available = !!snapshot?.certificate.supported && !!snapshot.runtime.supported;
   const idle = snapshot?.runtime.phase === "off" && !snapshot.certificate.busy;
@@ -75,7 +87,11 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     <h2>{t("desktopCompat.title")}</h2>
     <p className="muted text-body">{t("desktopCompat.description")}</p>
     <p className="muted text-control">{t("desktopCompat.localOnly")}</p>
-    <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} />
+    <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !pairingStarted && !needsRefresh} />
+    {certificate.data?.supported && (!authorized || pairingStarted) && <ConnectPairingForm local target={standaloneApiTargets(apiBase).machine}
+      onPairingStart={() => { setPairingStarted(true); setChoice(null); setAcknowledged(false); setDone(false); }}
+      onConnected={signal => validateCompatibilityPairing(apiBase, signal)}
+      onCommitted={() => { setPairingStarted(false); void execute(); }} />}
     <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>
     {error && <div className="notice-err" role="alert"><p>{t(error in errorLabel ? errorLabel[error as keyof typeof errorLabel] : "desktopCompat.error")}</p><code>{error}</code></div>}
     {done && <p className="notice-ok" role="status">{t("desktopCompat.done")}</p>}
@@ -103,13 +119,13 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       })}</p>}
     </>}
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--space-2)" }}>
-      {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh}
+      {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh || !authorized || pairingStarted}
         onClick={() => {
           if (["trust", "remove-trust", "renew", "apply"].includes(action.action)) { setChoice(action); setAcknowledged(false); setDone(false); }
           else void execute(action);
         }}>{t(label[action.action])}</button>)}
     </div>
-    {choice && <fieldset disabled={busy}>
+    {choice && <fieldset disabled={busy || !authorized || pairingStarted}>
       <legend>{t(label[choice.action])}</legend>
       <p className="notice-warn">{t(choice.action === "apply" ? "desktopCompat.trialRisk" : "desktopCompat.risk")}</p>
       {choice.action === "apply" && <p className="muted text-control">{t("desktopCompat.cacheRefreshHint")}</p>}

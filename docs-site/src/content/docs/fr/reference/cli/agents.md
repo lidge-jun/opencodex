@@ -169,6 +169,39 @@ Les familles sont `opus`, `fable`, `sonnet` et `haiku` ; les nouveaux itinérai
 seulement quand cette famille est vide. Les anciens indicateurs d'application `--static`, `--hybrid` et `--discovery-only`
 restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglages Claude Code.
 
+### `ocx codex [codex args...]`
+
+La clé est fournie uniquement si la configuration et ses espaces de noms sont protégés contre les modifications par d’autres principaux ; l’utilisateur courant et les autorités privilégiées du système sont de confiance. Les processus du même utilisateur sont de confiance : un acteur disposant de vos droits d’écriture peut déjà lire votre fichier de clé OpenCodex. Le remplacement de configuration par ce même utilisateur entre vérification et démarrage natif est hors de ce modèle de menace ; le lanceur ne fige pas la configuration lors du transfert.
+
+Sur une installation Windows normale, les droits ProgramData par défaut permettent à d’autres utilisateurs de créer des dossiers. Les identifiants automatiques sont donc retenus même si `ProgramData\OpenAI\Codex` est absent. Le dossier de configuration système de Codex sous ProgramData doit exister et être accessible en écriture uniquement à Administrators/SYSTEM ; ses dossiers ancêtres doivent empêcher leur remplacement par d’autres utilisateurs. Demandez à un administrateur de vérifier la politique des dossiers. opencodex ne modifie jamais lui-même les ACL et ne fournit aucune commande de préparation.
+
+Vous pouvez aussi fournir la clé vous-même, par exemple en exportant `OPENCODEX_API_AUTH_TOKEN` ; `ocx codex` conserve sa valeur. Les fichiers de configuration système existants empêchent toujours les identifiants automatiques et nécessitent un examen séparé. Chaque motif de refus produit une courte ligne stderr précise, sans valeur de clé, contenu ni chemin de fichier de clé.
+
+Placez `--` avant une invite d’un seul mot pour éviter la sélection d’une sous-commande Codex inconnue.
+
+L’espace de configuration machine doit empêcher un autre utilisateur de créer les fichiers système absents. Un espace Windows ProgramData/OpenAI/Codex non protégé bloque l’injection sans créer de répertoire. macOS accepte les ACL de refus seules et les autorisations en lecture seule. Toute autorisation d’écriture, ajout, suppression, modification d’attributs, de sécurité ou de propriétaire est refusée, même après un refus. Les tags inconnus et erreurs d’inspection entraînent un refus.
+
+Un nouveau jeton de service est chargé uniquement si argv respecte la liste ci-dessous, si aucune variable non vide de proxy HTTP(S)/ALL ou `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` ne surcharge l’environnement (`CODEX_HOME` canonique est permis), et si les espaces home/config/système passent les contrôles de propriété. La configuration doit contenir uniquement les clés auditées et le fournisseur loopback géré exact, sans autre consommateur de clé ni couche de configuration. Tout argument hors liste, dont `-c`/`--config`, `-p`/`--profile`, les options inconnues et `resume`/`fork`, retient le jeton avec un diagnostic sans valeurs ; les identifiants explicites et les arguments sont préservés.
+
+Le répertoire canonique et `config.toml` doivent appartenir à l’utilisateur courant. POSIX refuse les écritures group/other ; Windows vérifie le SID propriétaire et refuse les droits d’écriture DACL hors utilisateur courant, SYSTEM et Administrators. Les droits de remplacement des ancêtres sont vérifiés. macOS exige aussi l’absence de préférences Codex forcées. Ces contrôles n’isolent pas un processus malveillant du même utilisateur ou d’un administrateur.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+Le chargement automatique interprète `CODEX_HOME` comme un chemin littéral, y compris `~` et les espaces, le vérifie et transmet le même chemin absolu canonique au processus enfant. Un répertoire illisible empêche le chargement. Toute valeur non vide de `HTTP_PROXY`, `HTTPS_PROXY` ou `ALL_PROXY`, quelle que soit la casse, empêche aussi le chargement indépendamment de `NO_PROXY` ; les lancements refusés et les identifiants exportés par l’utilisateur restent inchangés. Avec un nouveau jeton, `NO_PROXY` et `no_proxy` du processus enfant incluent `127.0.0.1` et `::1` en conservant les exclusions existantes. Activer `features.respect_system_proxy` ou transmettre `--enable`/`--disable` empêche le chargement automatique.
+
+Le lanceur tente de démarrer le proxy puis transmet les arguments d’origine à Codex, sans réécrire sa configuration. Les routes natives et les passerelles tierces sautent le démarrage. Une route inconnue avertit puis tente le démarrage ; un échec avertit et continue. L’aide, la version et les commandes internes comme `login`, `doctor` et `help` sautent le démarrage et la lecture automatique du jeton.
+
+Un `OPENCODEX_API_AUTH_TOKEN` absent est lu dans le `service-api-token` de cette installation uniquement si toute la configuration de transport du provider sélectionné correspond au bloc géré pour son écouteur loopback ou sa connexion client locale enregistrée. Le nom et les commentaires ne suffisent pas. Destinations inconnues ou distantes, profile par défaut, configuration de projet, `OPENAI_BASE_URL` et options transmises `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote` désactivent cette lecture. Les identifiants exportés et les arguments sont conservés ; les remplacements du fichier et les collisions avec les jetons d’administration sont refusés.
+
+Seul un wrapper autostart correspondant (`matched`) lance directement son Codex sous-jacent. Un état inconnu, y compris une exception d’inspection, exige un contournement vérifié ; les wrappers CMD Windows gérés doivent correspondre au modèle généré complet avant leur exécution avec `OCX_SHIM_BYPASS=1`. Les lanceurs npm ordinaires restent pris en charge. Un wrapper invérifiable ou obsolète entraîne le code de sortie 1 sans démarrer Codex ; actualisez-le avec `ocx codex-shim install`. Le lancement ne répare pas les shims ; le contrôle de contenu ne garantit ni la provenance du fichier Windows sous-jacent ni l’absence de remplacement concurrent.
+
+Aide du lanceur : `ocx help codex` ; aide de Codex : `ocx codex --help`. Le comportement ultérieur de `codex` seul est conservé.
+
 ### `ocx opencode [opencode args...]`
 
 Vérifiez que le proxy est actif, puis lancez opencode avec les blocs `provider.opencodex` et `providers.opencodex` générés dans la couche d’exécution intégrée d’OpenCode (`OPENCODE_CONFIG_CONTENT`). La configuration intégrée existante est préservée et seules ces deux clés sont remplacées pour ce lancement. Les fichiers `opencode.json` globaux ou propres au projet peuvent être lus afin de signaler une substitution existante, mais les fichiers sur disque ne sont jamais modifiés. Les modèles routés apparaissent sous la forme `opencodex/<provider>/<model>`. Un lancement ultérieur de `opencode` sans intermédiaire se comporte exactement comme auparavant.

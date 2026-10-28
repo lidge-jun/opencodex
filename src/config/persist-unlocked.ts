@@ -1,3 +1,5 @@
+import { publishCredentialSync } from "../local-credentials/generation";
+import { osStoreAccounts } from "../local-credentials/references";
 import { normalizeAccountAutoPauseRevisions, observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
 import { existsSync, readFileSync } from "node:fs";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -96,7 +98,9 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   let observedPublication = false;
   try {
     if (!unchanged) {
-      atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } });
+      // Register every OS-store reference on either side before a removal can land.
+      publishCredentialSync(() => atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } }),
+        { references: [...new Set([...osStoreAccounts(rawBeforeWrite), ...osStoreAccounts(persisted)])] });
       published = true;
     }
     // Publication, not successful cache refresh, is the rollback boundary. A

@@ -190,6 +190,28 @@ test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA
   }
 });
 
+test("Claude discovery labels routed rows from modelDisplayNames only; aliases stay Codex-only", async () => {
+  const config = configWithStaticModels();
+  Object.assign(config.providers.mock!, {
+    models: ["test-model", "other-model"],
+    modelContextWindows: { "test-model": 1_000_000 },
+    modelDisplayNames: { "test-model": "Test Model" },
+    modelAliases: { "other-model": "om" },
+  });
+  saveConfig(config);
+  const server = await startDiscoveryServer();
+  try {
+    const json = await fetch(new URL("/v1/models?flavor=anthropic&ids=cli", server.url))
+      .then(r => r.json()) as { data: { id: string; display_name: string }[] };
+    const byId = new Map(json.data.map(m => [m.id, m.display_name]));
+    expect(byId.get("ocx-claude-mock--test-model")).toBe("Test Model (mock)");
+    expect(byId.get("ocx-claude-mock--test-model[1m]")).toBe("Test Model (mock) · 1M");
+    expect(byId.get("ocx-claude-mock--other-model")).toBe("other-model (mock)");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("Codex discovery bounds proven custom Astra before any disk sync including a gateway namesake", async () => {
   const config = configWithStaticModels();
   config.providers.openai = {

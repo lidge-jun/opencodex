@@ -13,9 +13,11 @@ catalogue, les services auxiliaires, les réglages des sous-agents et le trafic 
 ocx gui
 ```
 
-Cette commande ouvre `http://localhost:<port>` dans votre navigateur — ou
-`http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre d'abord automatiquement le
-proxy si nécessaire. En développement, vous pouvez lancer séparément le serveur de développement de
+Cette commande ouvre l’adresse du proxy actif dans votre navigateur : `http://127.0.0.1:<port>` par défaut,
+ou `http://[::1]:<port>` pour une liaison à l’adresse de bouclage IPv6 littérale `::1`. Ces adresses conservent
+l’origine configurée nécessaire à l’appairage local du navigateur. Lorsque l’ingress de gestion du hub est activé,
+elle ouvre `http://127.0.0.1:<port de gestion>`. Le proxy démarre d’abord automatiquement si nécessaire.
+En développement, vous pouvez lancer séparément le serveur de développement de
 l'interface contre un proxy déjà actif :
 
 ```bash

@@ -14,8 +14,10 @@ trafiğini yönetmenin en kısa yoludur.
 ocx gui
 ```
 
-Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
+Bu komut tarayıcınızda çalışan proxy'nin adresini açar: varsayılan olarak `http://127.0.0.1:<port>`,
+IPv6 loopback adresi `::1` için ise `http://[::1]:<port>`. Bu adresler, yerel tarayıcı eşleştirmesi için
+gereken yapılandırılmış origin'i korur. Hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>`
+adresini açar. Gerekirse önce proxy otomatik olarak başlatılır. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash

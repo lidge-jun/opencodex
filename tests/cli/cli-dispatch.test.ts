@@ -625,7 +625,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // #7563 adds a connected client to the same gate; the sibling term is unchanged.
     expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";');
-    expect(stop).toContain("fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,");
+    expect(stop).not.toContain("fetchFn:");
     // The system env was never the sibling's to set, so its stop does not roll it back either.
     expect(stop).toContain("if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }");
     expect(stop).not.toMatch(/\n {2}try \{ revertSystemEnv\(\); \}/);

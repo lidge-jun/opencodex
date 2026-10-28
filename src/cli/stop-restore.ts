@@ -4,10 +4,12 @@ import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
-import { configuredAdminToken } from "../lib/admin-secrets";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
 import { directLocalHttpFetch } from "../server/direct-local-http";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { findLiveProxy, probeEndpointLiveness, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
 import { observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import type { StartExitTeardown } from "./dispatch";
@@ -27,34 +29,53 @@ const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
   "connected_client_stop_unsupported",
 );
 
-/** A positive, PID-bound contract is required; old and new builds may share a version. */
+/** Require the pinned runtime's proof before accepting its shutdown contract. */
 export async function assertConnectedClientStopSupported(target: ConnectedStopTarget | null): Promise<void> {
   if (!target) throw unsupportedConnectedStop();
   if (!isProcessAlive(target.pid)) return; // A manager may already have ended this exact target.
-  const origin = `http://${gracefulStopHost(target.hostname)}:${target.port}`;
-  const signal = AbortSignal.timeout(CONNECTED_STOP_PROBE_MS);
-  const probe = async (path: string, authenticated: boolean): Promise<Record<string, unknown> | null> => {
-    try {
-      const headers: Record<string, string> = {};
-      if (authenticated) {
-        const token = configuredAdminToken(process.env.OPENCODEX_HOME?.trim() || undefined, process.env);
-        if (token) headers["x-opencodex-api-key"] = token;
-      }
-      const response = await directLocalHttpFetch(`${origin}${path}`, { method: "GET", headers, redirect: "error", signal },
-        { timeoutMs: CONNECTED_STOP_PROBE_MS });
-      if (!response.ok) { void response.body?.cancel().catch(() => {}); return null; }
-      const body = await readBoundedResponseBody(response, { maxBytes: 4096, signal, fatalUtf8: true });
-      if (body.truncated) return null;
-      const parsed: unknown = JSON.parse(body.text);
-      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-    } catch { return null; }
+  const runtime = readRuntimePort(target.pid);
+  if (!runtime?.attestationSecret || runtime.pid !== target.pid || runtime.port !== target.port
+    || gracefulStopHost(runtime.hostname) !== gracefulStopHost(target.hostname)) throw unsupportedConnectedStop();
+  const endpoint = { ...target, hostname: gracefulStopHost(runtime.hostname) };
+  const readPinnedRuntime = () => {
+    const current = readRuntimePort(target.pid);
+    return current?.pid === runtime.pid && current.port === runtime.port && current.hostname === runtime.hostname
+      && current.attestationSecret === runtime.attestationSecret ? current : null;
   };
-  const health = await probe("/healthz", false);
-  // The native machine listener has always preserved integrations on signal and 404s /api/stop.
-  if (health?.service === "opencodex" && health.role === "client" && health.pid === target.pid) return;
-  const capability = await probe("/api/stop", true);
-  if (capability?.schema === "ocx-stop-capabilities/1"
-    && capability.pid === target.pid && capability.connectedClientOwnership === true) return;
+  const origin = `http://${endpoint.hostname}:${endpoint.port}`;
+  const deadline = Date.now() + CONNECTED_STOP_PROBE_MS;
+  const signal = AbortSignal.timeout(CONNECTED_STOP_PROBE_MS);
+  const readDocument = async (response: Response): Promise<Record<string, unknown> | null> => {
+    if (!response.ok) { void response.body?.cancel().catch(() => {}); return null; }
+    const body = await readBoundedResponseBody(response, { maxBytes: 4096, signal, fatalUtf8: true });
+    if (body.truncated) return null;
+    const parsed: unknown = JSON.parse(body.text);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  };
+  try {
+    const nonce = createLocalAttestationChallenge();
+    const response = await directLocalHttpFetch(`${origin}/healthz`, {
+      method: "GET", headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: nonce }, redirect: "error", signal,
+    }, { timeoutMs: CONNECTED_STOP_PROBE_MS });
+    if (!readPinnedRuntime() || !verifyLocalAttestationProof(runtime.attestationSecret, nonce, target.pid, target.port,
+      response.headers.get(LOCAL_ATTESTATION_PROOF_HEADER))) {
+      void response.body?.cancel().catch(() => {});
+      throw unsupportedConnectedStop();
+    }
+    const health = await readDocument(response);
+    if (!readPinnedRuntime() || health?.service !== "opencodex" || health.pid !== target.pid) throw unsupportedConnectedStop();
+    // Native machine listeners preserve integrations on signal and have no /api/stop route.
+    if (health.role === "client") return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw unsupportedConnectedStop();
+    const read = await fetchBoundLocalManagementRead({ ...endpoint, source: "runtime" }, LOCAL_MANAGEMENT_READ_PATHS.stop, {
+      readRuntime: readPinnedRuntime, timeoutMs: remaining, requireResponseProof: true,
+    });
+    if (read.kind !== "response") throw unsupportedConnectedStop();
+    const capability = await readDocument(read.response);
+    if (readPinnedRuntime() && capability?.schema === "ocx-stop-capabilities/1"
+      && capability.pid === target.pid && capability.connectedClientOwnership === true) return;
+  } catch { /* A missing or replaced runtime never grants shutdown authority. */ }
   throw unsupportedConnectedStop();
 }
 

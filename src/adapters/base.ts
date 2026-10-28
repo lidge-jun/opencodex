@@ -137,6 +137,8 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Caller tool identities replaced by hosted tools in this exact build; empty clears prior builds. */
+    hostedToolSubstitutions?: ReadonlyArray<{ name: string; namespace?: string; callType: string }>;
     /** Exact final wire model, captured before serialization for model-scoped transport gates. */
     outboundModelId?: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */

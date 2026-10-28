@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure, type ChatgptRefreshDiagnosticCode } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 export { classifyChatgptRefreshFailure } from "./chatgpt-refresh-failure";
@@ -56,6 +57,25 @@ export function loadCodexAccountStore(): LegacyCodexAccountStore {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export function inspectLocalCodexCredentialSlots(raw: Record<string, unknown> | null): { count: number; sourcePaths: string[] } {
+  if (raw === null) return { count: 0, sourcePaths: [] };
+  let count = 0;
+  const sourcePaths: string[] = [];
+  for (const value of Object.values(raw)) {
+    let credential: CodexAccountCredentials | undefined;
+    if (isCredentialRecord(value)) {
+      credential = value.credential;
+      if (!credential && value.deletedAt === undefined) throw new Error("Unrecognized Codex credential record");
+    } else if (isCredential(value)) credential = value;
+    else throw new Error("Invalid Codex credential record");
+    if (credential) {
+      count += 1;
+      if (credential.sourceAuthPath) sourcePaths.push(credential.sourceAuthPath);
+    }
+  }
+  return { count, sourcePaths };
 }
 
 function isCredential(value: unknown): value is CodexAccountCredentials {
@@ -176,7 +196,7 @@ function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  publishCredentialSync(() => atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n"));
   notifyCodexStoreLoaded(store);
 }
 

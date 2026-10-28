@@ -1332,6 +1332,13 @@ export interface OcxConfig {
    */
   maxInboundBodyBytes?: number;
   /**
+   * Aggregate admission budget, in bytes, for concurrent raised-limit inbound HTTP bodies.
+   * Omitted or 0 = the built-in 512 MiB budget. `resolveConcurrentInboundBodyLimitBytes()`
+   * clamps to [512 MiB, 2 GiB]; there is no disabled or unbounded mode. Changes take effect
+   * on proxy restart. This accounts for admitted bodies, not total process memory.
+   */
+  maxConcurrentInboundBodyBytes?: number;
+  /**
    * Opt-in Anthropic OAuth PROACTIVE routing (#294). Default OFF.
    * Sticky session affinity; new sessions may pick lowest known 5h usage.
    * Experimental — see docs and GUI warning before enabling.

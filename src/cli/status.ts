@@ -38,6 +38,8 @@ import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability"
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
 import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
+import { collectLocalCredentials, type LocalCredentialSnapshot } from "../local-credentials/inventory";
+import { collectLinkConnectionGeneration } from "./status-link";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -119,6 +121,14 @@ export type CliRemoteHubStatus = {
 };
 
 export type CliStatusJson = {
+  /**
+   * This installation's stored provider credentials, counted passively, with an opaque generation
+   * that changes on every credential publication. Omitted when the count cannot be proven complete
+   * or no live runtime observes the stores; absence never means zero.
+   */
+  localCredentials?: LocalCredentialSnapshot;
+  /** On a Remote Link Child: the current tunnel connection (`src/cli/status-link.ts`). Omitted when unknown. */
+  link?: { connectionGeneration: string };
   mainAccountHardLock?: CodexMainAccountPolicyHealth;
   /** OCX-11 fallback state; see src/cli/status-fallback.ts. */
   fallback?: import("./status-fallback").StatusFallback;
@@ -924,6 +934,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       deps: { findLiveProxy: async () => live },
     })
     : undefined;
+  // Child attestations for GOAT; local reads only, never the Home's projection.
+  const localCredentials = options.mainAccountPolicy ? await collectLocalCredentials() : undefined;
+  const connectionGeneration = options.mainAccountPolicy ? await collectLinkConnectionGeneration(live) : undefined;
   const pidFile = readPid();
   // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
@@ -1080,6 +1093,8 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
       ...(fallback ? { fallback } : {}),
+      ...(localCredentials === undefined ? {} : { localCredentials }),
+      ...(connectionGeneration === undefined ? {} : { link: { connectionGeneration } }),
       schemaVersion: 1,
       runtimeRole: config.runtimeRole ?? "standalone",
       proxy: {

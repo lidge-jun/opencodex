@@ -237,7 +237,7 @@ deliberate stop. Existing launchd jobs retain
 their old keepalive definition until `ocx service repair` rewrites and reloads the changed plist.
 New WinSW XML stamps `OCX_SERVICE_MANAGED=1`; parent command-line inference applies only to
 legacy registrations whose XML lacks that marker. Bare `OCX_SERVICE=1`
-is never the marker because `ocx claude` and `ocx opencode` companions carry it too; a
+is never the marker because `ocx claude`, `ocx codex`, and `ocx opencode` companions carry it too; Codex's client-token loading separately requires a managed loopback destination. A
 marker-less Windows registration is still recognised by the parent's command line naming
 this install's wrapper script, launcher or WinSW host as a complete token in any position,
 and an unreadable parent command line is no evidence and proceeds. POSIX keeps the

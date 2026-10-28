@@ -95,10 +95,19 @@ still measure the uncompressed body; native codec workspace is not a counted Jav
 ## Raised HTTP body admission
 
 `src/server/inbound-body-admission.ts` reserves the full resolved `maxInboundBodyBytes` allowance
-from a process-wide 512 MiB admission budget when the allowance exceeds the 256 MiB default.
+from the process-wide budget in `src/server/inbound-body-budget.ts` when it exceeds the 256 MiB default.
+`maxConcurrentInboundBodyBytes` preserves a 512 MiB default; an operator may explicitly select
+512 MiB through 2 GiB. `src/lib/inbound-body-policy.ts` resolves omission, zero or invalid numbers to
+512 MiB and clamps positive safe integers to that range. Startup captures the setting for all
+listeners; a config edit requires restart. Configuration changes the existing owner without
+discarding active leases or FIFO waiters; lowering capacity cannot erase outstanding charges.
 `src/server/index.ts` owns this lease in `runAdmittedHttpTurn`, after authentication and origin
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
-Missing or small Content-Length and compressed wire bodies do not reduce the reservation.
+Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
+After successful bounded JSON parsing, the reader reduces it to the largest observed wire/decoded
+size, including normalized JSON bytes when the existing translator measurement is enabled.
+This reduction never exceeds the original allowance. The measured charge remains live;
+parsing never frees the whole lease.
 An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
 
 The lease covers upload, parsing, downstream awaits and response consumption. It is released on
@@ -112,14 +121,22 @@ combo/translation calls share their HTTP owner's reservation rather than reservi
 The exact POST routes are Responses, compact, Chat Completions, Messages, count_tokens, image
 generations/edits and alpha search. Image/search/count_tokens retain their configured per-body
 limits. Management, audio, context relay and WebSocket frames retain their independent contracts.
-Capacity refusal happens before protocol handlers, with HTTP 503, `Retry-After: 1`, and code
+Capacity pressure queues at most 32 unread uploads in FIFO order for at most 120 seconds.
+Returning unused allowance or settling a lease wakes eligible waiters; abort and timeout detach
+their timers/listeners without changing another owner's reservation. A disconnect after a grant
+but before its caller resumes releases it without dispatch. Full/expired queues refuse before
+protocol handlers, with HTTP 503, `Retry-After: 1`, and code
 `server_busy`; Messages/count_tokens use the Anthropic `error`/`overloaded_error` envelope.
 The HTTP owner preserves receiving-listener CORS and records the refusal without reading the body.
 
-This is an allowance budget, not a measured RSS or parsed-heap cap. All covered requests, even small
-ones, serialize when configured above 256 MiB. It does not bound retained state beyond the HTTP
-lifetime or change default-cap concurrency. `tests/server/server-request-body-size.test.ts` covers
-lifecycle, cancellation races, protocol envelopes, and the real HTTP admission boundary.
+This is an allowance budget, not a measured RSS or parsed-heap cap. Explicitly selecting 2 GiB
+permits four full 512 MiB uploads and increases potential peak memory on raised-limit deployments.
+With the default 512 MiB budget, even a one-byte charge prevents another full 512 MiB allowance;
+shrinking alone does not resolve that case. Parsed small requests with an explicitly larger
+budget can overlap beyond four while their measured charges fit. Host RAM is not auto-detected.
+It does not bound state beyond the HTTP lifetime or change default-cap concurrency.
+`tests/server/inbound-body-admission.test.ts` covers lifecycle, cancellation races, protocol
+envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.
 
 ## Stream-buffer accounting
 

@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 /**
  * OAuth token store at ~/.opencodex/auth.json, keyed by provider name.
  *
@@ -423,7 +424,7 @@ function persist(store: AuthStore): void {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
   hardenConfigDir();
-  atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  publishCredentialSync(() => atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n"));
   notifyAuthStoreLoaded(store);
 }
 
@@ -466,7 +467,7 @@ function backupLegacyOnce(): void {
   // alone, and the copy is exclusive, so credentials are never written through a link.
   if (!existsSync(path) || directoryEntryExists(backup)) return;
   try {
-    copyFileSync(path, backup, fsConstants.COPYFILE_EXCL);
+    publishCredentialSync(() => copyFileSync(path, backup, fsConstants.COPYFILE_EXCL));
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
     try {
       // Register only the copy we just created. An unowned home still needs downgrade recovery.
@@ -497,8 +498,10 @@ function scrubLegacyBackup(providers: readonly string[]): void {
   try {
     const remaining = readLegacyBackupEntries(backup);
     for (const provider of providers) delete remaining[provider];
-    if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
-    else unlinkSync(backup);
+    publishCredentialSync(() => {
+      if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
+      else unlinkSync(backup);
+    });
   } catch (error) {
     if (errorCode(error) !== "ENOENT") {
       console.warn(`[oauth] could not remove deleted credentials from the legacy credential backup: ${error instanceof Error ? error.message : String(error)}`);
@@ -696,6 +699,31 @@ function normalizeAccountSet(raw: unknown): { set: ProviderAccountSet | null; wa
   if (!cred) return { set: null, wasLegacy: false };
   const id = newAccountId(cred);
   return { set: { activeAccountId: id, accounts: [{ id, credential: cred }] }, wasLegacy: true };
+}
+
+export function countLocalOAuthCredentialSlots(raw: Record<string, unknown> | null): number {
+  if (raw === null) return 0;
+  let count = 0;
+  for (const value of Object.values(raw)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid OAuth provider row");
+    const row = value as Record<string, unknown>;
+    if (Object.hasOwn(row, "accounts")) {
+      if (!Array.isArray(row.accounts) || typeof row.activeAccountId !== "string") throw new Error("Invalid OAuth account set");
+      const ids = new Set<string>();
+      for (const entry of row.accounts) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Invalid OAuth account");
+        const account = entry as Record<string, unknown>;
+        if (typeof account.id !== "string" || !account.id || ids.has(account.id)
+          || !normalizeCredential(account.credential)) throw new Error("Invalid OAuth credential slot");
+        ids.add(account.id);
+        count += 1;
+      }
+    } else {
+      if (!normalizeCredential(row)) throw new Error("Invalid legacy OAuth credential");
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function normalizeAuthStore(raw: unknown): { store: AuthStore; hadLegacy: boolean } {

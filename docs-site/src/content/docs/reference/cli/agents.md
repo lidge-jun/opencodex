@@ -963,6 +963,39 @@ native-mode flags are rejected; failed runtime save has no local fallback. Apply
 is a separate existing Desktop action on its machine, so verify host/context
 before choosing it. Rendered models are not proof of native application.
 
+### `ocx codex [codex args...]`
+
+The key is supplied only when the configuration and its namespaces are protected from other principals; the current user and privileged OS authorities are trusted. Same-user processes are trusted: an actor with your write access can already read your OpenCodex key file. Same-user configuration replacement between verification and native startup is outside this threat model; the launcher does not freeze configuration at handoff.
+
+On a normal Windows installation, default ProgramData permissions allow other users to create directories. Automatic credentials are therefore withheld even when `ProgramData\OpenAI\Codex` is absent. The system Codex configuration folder under ProgramData must exist and be writable only by Administrators/SYSTEM, and its ancestors must prevent replacement by other users. Ask an administrator to review the directory policy. opencodex never changes ACLs itself and provides no provisioning command.
+
+Alternatively, supply the key yourself, for example by exporting `OPENCODEX_API_AUTH_TOKEN`; `ocx codex` leaves it untouched. Existing system configuration files still withhold automatic credentials and require separate review. Each withholding reason produces one short, specific stderr diagnostic without key values, key-file contents or key-file paths.
+
+Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
+
+The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS accepts deny-only and read-only allow ACLs, but refuses any allow entry granting write, append, delete, attribute/security changes or ownership changes, even after a deny entry. Unknown tags and inspection errors refuse.
+
+A fresh service token is loaded only when argv is within the allowlist below, the environment has no nonempty HTTP(S)/ALL proxy or `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` overrides (canonical `CODEX_HOME` is allowed), and the home/config/system namespaces pass ownership checks. The configuration must contain only audited keys and the exact managed loopback provider, with no additional credential consumers or configuration layers. Every unsupported argument, including `-c`/`--config`, `-p`/`--profile`, unknown flags and `resume`/`fork`, withholds the token with a value-free diagnostic; explicit user credentials and original arguments are preserved.
+
+The canonical home directory and `config.toml` must belong to the current user. POSIX denies group/other writes; Windows checks owner SID and rejects DACL write grants outside the current user, SYSTEM and Administrators. Ancestor replacement permissions are checked too. macOS additionally requires no forced Codex configuration preferences. These checks exclude other-user writers; they do not isolate a malicious process running as the same user or an administrator.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+Automatic credential delivery resolves `CODEX_HOME` as a literal path (including `~` and whitespace), verifies that home, and passes its canonical absolute path to the child. An unreadable home skips loading. Any nonempty `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` variable, in any letter case, also skips loading regardless of `NO_PROXY`; denied launches and user-exported credentials remain unchanged. With a newly loaded token, both child `NO_PROXY` and `no_proxy` include `127.0.0.1` and `::1`, preserving existing bypass entries. Enabling `features.respect_system_proxy` or forwarding `--enable`/`--disable` skips automatic loading.
+
+Ensure the proxy is running, then launch Codex with the original arguments. Routing remains in Codex configuration; the launcher never rewrites it. Native and foreign routes skip startup. Unknown routing warns and attempts startup; a failed startup warns and continues. Help/version and internal commands such as `login`, `doctor`, and `help` skip startup and automatic token loading.
+
+A missing `OPENCODEX_API_AUTH_TOKEN` is read from this installation's `service-api-token` only when the selected provider's complete transport configuration matches the managed block for the configured loopback listener or persisted local client connection. Names and injection comments alone grant no credential access. Unknown or remote destinations, default profiles, project configuration, `OPENAI_BASE_URL`, and forwarded `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, or `--remote` options skip automatic loading. User-exported credentials and arguments are preserved; token-file overrides cannot select a different credential, and management-token collisions are refused.
+
+Only a matched autostart wrapper launches its backing Codex directly. Unknown state, including an inspection exception, requires a verified bypass; Windows CMD managed wrappers must match the complete current generated template before the selected absolute command runs with `OCX_SHIM_BYPASS=1`. Ordinary npm launchers remain supported. Unverifiable or obsolete wrappers refuse with exit 1 and start no Codex; run `ocx codex-shim install` to refresh them. This launch does not repair shims. The content check does not establish Windows backing-file provenance or prevent concurrent pathname replacement.
+
+Use `ocx help codex` for launcher help and `ocx codex --help` for Codex help. Launching plain `codex` later retains its existing behavior.
+
 ### `ocx opencode [opencode args...]`
 
 Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and

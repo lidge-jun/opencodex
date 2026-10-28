@@ -173,7 +173,7 @@ gets only the fixed placeholder in [tool-loop continuation](native-reasoning-ret
 
 ## Combo streaming commit boundary
 
-See [Combo streaming boundaries](responses-combo-boundaries.md#combo-streaming-commit-boundary) for preflight, turn-lease and hop-warning ownership.
+See [Combo streaming boundaries](responses-combo-boundaries.md#combo-streaming-commit-boundary) for preflight, turn-lease and hop-warning ownership. Native mandatory-tool streams follow the [streaming required-tool contract](responses-combo-boundaries.md#streaming-required-tool-contract): a held missing-call completion can fail over, while committed output ends in a typed failure without replay.
 
 Usage consumers preserve positive incomplete-history metadata and connected CLI usage follows the client-scoped hub contract, both specified in [usage accounting](../dashboard-and-usage.md#usage-accounting): readable totals are not a complete ledger, and local management and account data stay separate. Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity. The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`. Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration and records its isolated owner and support limits.
 

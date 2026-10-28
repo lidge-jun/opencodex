@@ -30,8 +30,8 @@ import { deliverPassthroughResponse } from "../../src/server/responses/passthrou
  *
  * The scope is exactly the safe half of the issue's acceptance criteria: buffered non-streaming
  * successful children, requests that explicitly require a tool, judged before any commit.
- * Streaming children keep their conservative preflight rules; the last tests here pin that no
- * judgment reaches past them.
+ * The streaming sibling now owns terminal judgment after commitment; its control below pins
+ * that the buffered fallback never replays visible text.
  */
 
 let testDir = "";
@@ -483,7 +483,7 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
     expect(hits).toEqual(["a"]);
   });
 
-  test("a streaming completed stream without call items is never re-judged", async () => {
+  test("a streaming missing-call completion fails without replaying committed text", async () => {
     const hits: string[] = [];
     const sse = (events: unknown[]) => new Response(
       events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
@@ -503,7 +503,8 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
     }), requiredRequest({ stream: true, tool_choice: "required" }));
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain("response.completed");
+    expect(body).toContain("required_tool_contract_unsatisfied");
+    expect(body).toContain("response.failed");
     expect(body).toContain("streamed text");
     expect(hits).toEqual(["a"]);
   });

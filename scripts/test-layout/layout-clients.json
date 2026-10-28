@@ -1,6 +1,9 @@
 {
   "claude-native-fast-1m-ingress.test.ts": "claude-integration",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
+  "claude-config-root-writer-barrier.test.ts": "claude-integration",
+  "claude-config-root-late-admission.test.ts": "claude-integration",
+  "claude-config-root-stale-updates.test.ts": "claude-integration",
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",
   "server-live-close.test.ts": "server",
@@ -149,5 +152,6 @@
   "hermes-profiles.test.ts": "clients",
   "hermes-profile-routes.test.ts": "clients",
   "cli-sync-expect-link.test.ts": "cli",
+  "link-connection-generation.test.ts": "clients",
   "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
 }

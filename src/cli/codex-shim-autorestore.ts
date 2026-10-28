@@ -19,6 +19,8 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
   if (command === "status" || command === "doctor") return true;
+  // The launcher owns shim handoff after classifying routing, including native fast paths.
+  if (command === "codex") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
   // Local messaging owns its helpers; even malformed usage must not repair/start anything.

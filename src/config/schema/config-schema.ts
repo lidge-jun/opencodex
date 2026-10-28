@@ -178,6 +178,13 @@ export const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Match the per-body load/degrade contract: malformed hand edits retain providers.
+  // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
+  // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  maxConcurrentInboundBodyBytes: z.number().int()
+    .min(0)
+    .optional()
+    .catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)

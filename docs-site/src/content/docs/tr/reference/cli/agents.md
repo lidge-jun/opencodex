@@ -187,6 +187,39 @@ başlar. `none` yalnızca o aile boş olduğunda geçerlidir. Eski uygulama
 bayrakları `--static`, `--hybrid` ve `--discovery-only` desteklenmeye devam
 eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın.
 
+### `ocx codex [codex args...]`
+
+Anahtar yalnızca yapılandırma ve ad alanları diğer güvenlik sorumlularının değişikliklerine karşı korunduğunda sağlanır; geçerli kullanıcı ve ayrıcalıklı işletim sistemi yetkilileri güvenilirdir. Aynı kullanıcının süreçlerine güvenilir: yazma yetkinize sahip bir aktör OpenCodex anahtar dosyanızı zaten okuyabilir. Doğrulama ile yerel başlatma arasında aynı kullanıcının yapılandırmayı değiştirmesi bu tehdit modelinin kapsamı dışındadır; başlatıcı aktarım sırasında yapılandırmayı dondurmaz.
+
+Normal Windows kurulumunda varsayılan ProgramData izinleri diğer kullanıcıların dizin oluşturmasına izin verir. Bu nedenle `ProgramData\OpenAI\Codex` yokken bile otomatik kimlik bilgileri verilmez. ProgramData altındaki sistem Codex yapılandırma klasörü mevcut olmalı ve yalnızca Administrators/SYSTEM tarafından yazılabilir olmalıdır; üst dizinler de diğer kullanıcıların değiştirmesine karşı korunmalıdır. Bir yöneticiden dizin politikasını incelemesini isteyin. opencodex ACL’leri kendisi hiçbir zaman değiştirmez ve hazırlık komutu sağlamaz.
+
+Alternatif olarak anahtarı kendiniz sağlayabilirsiniz; örneğin `OPENCODEX_API_AUTH_TOKEN` ortam değişkenini dışa aktarabilirsiniz. `ocx codex` bu değeri değiştirmez. Mevcut sistem yapılandırma dosyaları otomatik kimlik bilgilerini engellemeye devam eder ve ayrıca incelenmelidir. Her engelleme nedeni, anahtar değeri, anahtar dosyası içeriği veya yolu içermeyen kısa ve belirli bir stderr satırı üretir.
+
+Bilinmeyen bir Codex alt komutu seçilmesini önlemek için tek sözcüklü istemden önce `--` kullanın.
+
+Makine yapılandırma alanı, diğer kullanıcıların eksik sistem dosyalarını oluşturmasını da engellemelidir. Korunmayan Windows ProgramData/OpenAI/Codex alanı otomatik belirteci engeller; dizin oluşturulmaz. macOS yalnızca ret içeren ACL’leri ve salt okunur izinleri kabul eder. Yazma, ekleme, silme, öznitelik, güvenlik veya sahip değişikliği veren her izin, önce bir ret olsa da reddedilir. Bilinmeyen etiketler ve inceleme hataları da reddedilir.
+
+Yeni hizmet belirteci yalnızca argv aşağıdaki izin listesinde olduğunda, boş olmayan HTTP(S)/ALL proxy veya `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` ortam geçersiz kılmaları bulunmadığında (kanonik `CODEX_HOME` izinlidir) ve home/config/system ad alanları sahiplik denetimlerini geçtiğinde okunur. Yapılandırma yalnızca denetlenmiş anahtarları ve tam yönetilen loopback sağlayıcısını içermeli; ek kimlik bilgisi tüketicisi veya yapılandırma katmanı bulunmamalıdır. `-c`/`--config`, `-p`/`--profile`, bilinmeyen bayraklar ve `resume`/`fork` dahil liste dışındaki her argüman belirteci engeller ve değer içermeyen tanı üretir; açık kimlik bilgileri ve özgün argümanlar korunur.
+
+Kanonik dizin ve `config.toml` geçerli kullanıcıya ait olmalıdır. POSIX group/other yazmasını reddeder; Windows sahip SID’sini doğrular ve geçerli kullanıcı, SYSTEM ve Administrators dışındaki DACL yazma izinlerini reddeder. Üst yol değiştirme izinleri de denetlenir. macOS ayrıca zorunlu Codex tercihlerinin bulunmamasını gerektirir. Bu kontroller aynı kullanıcı veya yönetici olarak çalışan kötü amaçlı işlemleri yalıtmaz.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+Otomatik kimlik bilgisi yükleme, `CODEX_HOME` içindeki `~` ve boşlukları değişmez yol olarak yorumlar, doğrular ve aynı kurallı mutlak yolu alt sürece aktarır. Okunamayan dizinde yükleme atlanır. Büyük/küçük harfe bakılmaksızın boş olmayan `HTTP_PROXY`, `HTTPS_PROXY` veya `ALL_PROXY` değeri varsa `NO_PROXY` ne olursa olsun yükleme atlanır; reddedilen başlatmalar ve kullanıcının dışa aktardığı kimlik bilgileri değiştirilmez. Yeni token aktarılırken alt sürecin `NO_PROXY` ve `no_proxy` değerlerine mevcut istisnalar korunarak `127.0.0.1` ve `::1` eklenir. `features.respect_system_proxy` etkinleştirilirse veya `--enable`/`--disable` aktarılırsa otomatik yükleme atlanır.
+
+Başlatıcı proxy'yi başlatmayı dener ve özgün argümanları Codex'e aktarır; yapılandırmayı yeniden yazmaz. Yerel Codex ve yabancı ağ geçidi yolları proxy başlangıcını atlar. Bilinmeyen yol uyarıp başlangıcı dener; başarısızlık uyarır ve devam eder. Yardım, sürüm ve `login`, `doctor`, `help` gibi iç komutlar başlangıcı ve otomatik belirteç okumayı atlar.
+
+Eksik `OPENCODEX_API_AUTH_TOKEN`, yalnızca seçili provider'ın tüm taşıma yapılandırması bu kurulumun yapılandırılmış loopback dinleyicisi veya kayıtlı yerel istemci bağlantısı için yönetilen blokla eşleştiğinde bu kurulumun `service-api-token` dosyasından okunur. Adlar ve açıklamalar yetki vermez. Bilinmeyen veya uzak hedefler, varsayılan profile, proje yapılandırması, `OPENAI_BASE_URL` ve iletilen `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote` otomatik okumayı atlar. Kullanıcının dışa aktardığı kimlik bilgileri ve argümanlar korunur; belirteç dosyası geçersiz kılmaları ve yönetim belirteci çakışmaları reddedilir.
+
+Yalnızca eşleşen (`matched`) autostart wrapper arkasındaki Codex’i doğrudan başlatır. İnceleme istisnası dahil bilinmeyen durum doğrulanmış bypass gerektirir; yönetilen Windows CMD wrapper’ları `OCX_SHIM_BYPASS=1` ile çalışmadan önce güncel şablonun tamamıyla eşleşmelidir. Normal npm başlatıcıları desteklenir. Doğrulanamayan veya eski wrapper, Codex başlamadan çıkış kodu 1 ile reddedilir; `ocx codex-shim install` ile yenileyin. Bu başlatma shim’i onarmaz; içerik denetimi Windows backing dosyasının kaynağını veya eşzamanlı yol değişimini güvenceye almaz.
+
+Başlatıcı yardımı: `ocx help codex`; Codex yardımı: `ocx codex --help`. Sonraki düz `codex` çalıştırmasının davranışı korunur.
+
 ### `ocx opencode [opencode argumanlari...]`
 
 Proxy'nin çalıştığından emin olun, ardından OpenCode'un satır içi çalışma zamanı
