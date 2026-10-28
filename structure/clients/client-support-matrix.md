@@ -34,6 +34,19 @@ fields, reviewed claims and linked tests. Generation fails when one no longer ho
 
 Locale chrome lives in `scripts/client-support-matrix/locales.ts`; every locale defines every string.
 
+## Runtime results
+
+`scripts/client-support-matrix/runtime-verified.json` is required and starts with an empty `results` array.
+Each result is a reviewed human claim: one exact client product and version, run against one opencodex
+version, for a stated scenario, on a real calendar date, with an https evidence link.
+`scripts/client-support-matrix/runtime.ts` refuses malformed files, unknown rows, impossible dates,
+Markdown-breaking text, credentials in links and exact duplicates. The page shows the most recent result per
+client in its own column (ties break on product, versions and scenario) and counts the rest; the support
+level stays independent of it. Generation cannot prove that a linked page is public or shows success, and the
+privacy scan cannot either, so evidence is reviewed before a result is committed.
+`tests/ci-workflows/client-support-runtime.test.ts` covers the empty state, rendering, selection and every
+refusal, including through the CLI via `OCX_CLIENT_SUPPORT_RUNTIME_DATA`.
+
 ## Changing a client
 
 Adding or removing a client means adding or removing its metadata and running `bun run docs:clients`.

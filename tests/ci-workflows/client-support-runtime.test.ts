@@ -1,0 +1,127 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { collectRows, defaultInputs, renderPage, type MatrixInputs } from "../../scripts/generate-client-support-matrix";
+import { LOCALES, type MatrixLocale } from "../../scripts/client-support-matrix/locales";
+import { parseRuntimeResults, selectRuntimeResults, type RuntimeResult } from "../../scripts/client-support-matrix/runtime";
+import { repoRoot } from "../helpers/repo-root";
+
+const BASE = defaultInputs();
+const LOCALE_IDS = Object.keys(LOCALES) as MatrixLocale[];
+
+function result(overrides: Partial<RuntimeResult> = {}): RuntimeResult {
+  return {
+    client: "codex", product: "Codex CLI", clientVersion: "0.150.0", opencodexVersion: "2.40.0",
+    verifiedOn: "2026-10-20", scenario: "streamed reply with one tool call",
+    evidence: "https://github.com/lidge-jun/opencodex/pull/1", ...overrides,
+  };
+}
+
+function fileWith(results: unknown[], extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ schemaVersion: 1, results, ...extra });
+}
+
+function rowsWith(text: string | undefined) {
+  return collectRows({ ...BASE, runtimeResultsText: text } satisfies MatrixInputs);
+}
+
+function problems(text: string | undefined, ids = new Set(["codex", "qoder-cn"])): string[] {
+  return parseRuntimeResults(text, ids, "data.json").problems;
+}
+
+/** The "Runtime verified" cell of every table row on a rendered page. */
+function runtimeCells(page: string): string[] {
+  return page.split("\n").filter(line => line.startsWith("| ") && !line.startsWith("| ---"))
+    .slice(1).map(line => line.split(" | ")[6]!);
+}
+
+describe("client support runtime results", () => {
+  test("the committed file is empty, so no row claims a runtime result in any locale", () => {
+    const rows = collectRows();
+    expect(rows.some(row => row.runtime)).toBe(false);
+    for (const locale of LOCALE_IDS) {
+      const page = renderPage(rows, locale);
+      expect(page).toContain(LOCALES[locale].runtimeDefinition);
+      expect(new Set(runtimeCells(page))).toEqual(new Set(["—"]));
+    }
+  });
+
+  test("a result renders product, both versions, scenario, date and evidence on native and export rows", () => {
+    const rows = rowsWith(fileWith([
+      result(),
+      result({ client: "qoder-cn", product: "Qoder CN CLI", clientVersion: "1.1.70", scenario: "single chat turn" }),
+    ]));
+    const codex = rows.find(row => row.id === "codex")!;
+    const qoderCn = rows.find(row => row.id === "qoder-cn")!;
+    expect(codex.test).toBeDefined();
+    expect(qoderCn.test).toBeUndefined();
+    for (const locale of LOCALE_IDS) {
+      const page = renderPage(rows, locale);
+      const s = LOCALES[locale];
+      expect(page).toContain(`Codex CLI 0.150.0 + opencodex 2.40.0: streamed reply with one tool call (2026-10-20, [${s.evidenceLink}](https://github.com/lidge-jun/opencodex/pull/1))`);
+      expect(page).toContain("Qoder CN CLI 1.1.70 + opencodex 2.40.0: single chat turn (2026-10-20,");
+      // The support level is independent of the runtime column: Qoder CN stays implemented.
+      expect(page.split("\n").find(line => line.startsWith("| Qoder CN |"))).toContain("| implemented |");
+    }
+  });
+
+  test("the most recent result is shown, ties break on product, and the rest are counted", () => {
+    const older = result({ verifiedOn: "2026-09-01", opencodexVersion: "2.30.0" });
+    const recheck = result({ verifiedOn: "2026-10-25", opencodexVersion: "2.41.0" });
+    const otherProduct = result({ verifiedOn: "2026-10-25", product: "Codex App", scenario: "picker shows routed models" });
+    const forward = selectRuntimeResults([older, recheck, otherProduct]).get("codex")!;
+    const reversed = selectRuntimeResults([otherProduct, recheck, older]).get("codex")!;
+    expect(forward).toEqual(reversed);
+    expect(forward.result.product).toBe("Codex App");
+    expect(forward.others).toBe(2);
+    const page = renderPage(rowsWith(fileWith([older, recheck])), "root");
+    expect(page).toContain("Codex CLI 0.150.0 + opencodex 2.41.0");
+    expect(page).toContain("(+1 more recorded)");
+  });
+
+  test("every malformed file or result is refused with a reason", () => {
+    expect(problems(undefined)).toEqual(['data.json is missing; it is required (an empty "results" array is valid)']);
+    expect(problems("{")[0]).toStartWith("data.json is not valid JSON");
+    expect(problems("[]")).toEqual(["data.json must be an object with schemaVersion and results"]);
+    expect(problems(JSON.stringify({ schemaVersion: 2, results: [] }))).toEqual(["data.json: schemaVersion must be 1"]);
+    expect(problems(JSON.stringify({ schemaVersion: 1, results: {} }))).toEqual(["data.json: results must be an array"]);
+    expect(problems(fileWith([], { note: "x" }))).toEqual(["data.json: unknown top-level keys note"]);
+    const cases: Array<[Partial<RuntimeResult> | Record<string, unknown>, string]> = [
+      [{ scenario: " padded" }, "data.json results[0].scenario must be a non-empty string without surrounding whitespace"],
+      [{ product: "" }, "data.json results[0].product must be a non-empty string without surrounding whitespace"],
+      [{ clientVersion: 150 } as unknown as Partial<RuntimeResult>, "data.json results[0].clientVersion must be a non-empty string without surrounding whitespace"],
+      [{ scenario: "chat | tools" }, "data.json results[0].scenario contains characters that cannot appear in the table (| [ ] < > ` ( ) \\ or control characters)"],
+      [{ notes: "x" }, "data.json results[0]: unknown keys notes"],
+      [{ client: "nope" }, 'data.json results[0].client "nope" is not a row on the client support page'],
+      [{ verifiedOn: "2026-02-30" }, 'data.json results[0].verifiedOn "2026-02-30" is not a real YYYY-MM-DD date'],
+      [{ verifiedOn: "26-10-01" }, 'data.json results[0].verifiedOn "26-10-01" is not a real YYYY-MM-DD date'],
+      [{ evidence: "http://github.com/x" }, "data.json results[0].evidence must use https"],
+      // Assembled at runtime: the privacy scan rejects an address-shaped literal.
+      [{ evidence: ["https://user:pw", "github.com/x"].join("@") }, "data.json results[0].evidence must not carry credentials"],
+      [{ evidence: "https://github.com/x_(y)" }, "data.json results[0].evidence contains whitespace, angle brackets, parentheses or control characters"],
+      [{ evidence: "https://localhost/x" }, "data.json results[0].evidence must name a public host"],
+    ];
+    for (const [overrides, message] of cases) {
+      expect(problems(fileWith([{ ...result(), ...overrides }]))).toEqual([message]);
+    }
+    expect(problems(fileWith([result(), result({ evidence: "https://github.com/lidge-jun/opencodex/pull/2" })])))
+      .toEqual(["data.json results[1] duplicates an earlier result for codex (same product, versions, scenario and date)"]);
+    expect(problems(fileWith([result(), result({ scenario: "voice call" })]))).toEqual([]);
+  });
+
+  test("the CLI check refuses a bad results file and names the problem", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-client-support-"));
+    const bad = join(dir, "runtime.json");
+    writeFileSync(bad, fileWith([result({ verifiedOn: "2026-13-01" })]));
+    const run = (data: string) => Bun.spawnSync(["bun", "scripts/generate-client-support-matrix.ts", "--check"], {
+      cwd: repoRoot(), env: { ...process.env, OCX_CLIENT_SUPPORT_RUNTIME_DATA: data },
+    });
+    const invalid = run(bad);
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.stderr.toString()).toContain('verifiedOn "2026-13-01" is not a real YYYY-MM-DD date');
+    const missing = run(join(dir, "absent.json"));
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr.toString()).toContain("is missing; it is required");
+  });
+});

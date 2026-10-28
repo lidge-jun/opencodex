@@ -175,6 +175,7 @@
   "cli-capability-data.test.ts": "cli",
   "skill-ocx-generated.test.ts": "ci-workflows",
   "client-support-matrix.test.ts": "ci-workflows",
+  "client-support-runtime.test.ts": "ci-workflows",
   "cli-update-restart.test.ts": "cli",
   "cli-update-restart-child.test.ts": "cli",
   "cli-update-restart-transport.test.ts": "cli",
