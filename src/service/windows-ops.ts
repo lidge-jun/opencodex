@@ -840,10 +840,13 @@ export function isWindowsSchedulerEndBenign(error: unknown): boolean {
  * that *succeeds* while the wrapper survives and respawns. That verification lives
  * on the stop-verification path (poll across the restart window), not here.
  */
-export function stopWindows(): void {
+export function stopWindows(beforeMutation?: () => void): void {
+  let refused = false;
+  const gate = beforeMutation && (() => { try { beforeMutation(); } catch (error) { refused = true; throw error; } });
   try {
-    schtasks(["/end", "/tn", TASK]);
+    schtasks(["/end", "/tn", TASK], gate);
   } catch (error) {
+    if (refused) throw error;
     if (isWindowsSchedulerEndBenign(error)) return;
   }
 }

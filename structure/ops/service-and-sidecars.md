@@ -425,8 +425,7 @@ Live supervision is re-read separately from durable ownership before stop, packa
 service restoration and direct recovery. Each service command, Node/Bun update run and dashboard
 restart decision shares one `createSupervisionLatch()` from `src/service/desktop-supervision.mjs`:
 `desktop` or `unknown` with `desktopSeen: true` blocks; only a later `none` clears it.
-Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains.
-`src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
+Plain unknown/unsupported evidence preserves existing decisions unless an earlier block remains; `src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
 when blocked. A restoration refusal after a completed package swap does not undo that update.
 Service install, repair, start and restart refuse before mutation, including Windows XML staging,
 when live Desktop supervision is verified; `ocx stop` shows the Desktop notice. Windows probe acquisition and residual limits: [desktop supervision](desktop-supervision.md#runtime-ownership-from-the-apps-side).
@@ -435,9 +434,9 @@ or the post-install refresh): the manager's `ocx start` child cannot join it, an
 through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
 is made again after the release, and the lease is re-acquired before each fallback's ownership
 re-read so a claim landing in the unleased window is vetoed rather than killed unleased.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful manual-runtime update still prints the existing
-restart hint.
-
+Direct recovery retains the lease until readiness or its bounded deadline. If acquisition fails, Node and Bun return false before owner inspection or spawn and print static manual repair/start guidance without the error's details.
+`src/update/index.ts` rechecks service-home authority in the mutation caller after its final ownership or recovery-plan await, before proxy stop and each service repair. Service mutations also require `homePolicy.serviceAllowed`; a previously installed registration disappearing before full stop refuses, while recovery uses guarded direct start. No await separates these final checks from the control command. The dashboard worker in `src/update/job.ts` also checks service permission before stopping wrappers after its service import. Package replacement retains its separate stable-unknown package-only policy.
+The normal successful manual-runtime update still prints the existing restart hint. All three update lanes use the shared latched mutation gate described in [Update Supervised Recovery](update-supervised-recovery.md#service-home-authority), including fresh checks between blocking control calls and before terminal success.
 Every updater lane makes the same exception where the service manager starts the proxy outside
 the updater's process tree, so that proxy has to take the lease itself; held through the
 repair's health wait, the lease kept it from starting, and recovery fell through to a second,
@@ -453,7 +452,7 @@ service repair` and re-acquires it at the direct-start fallthrough, waiting long
 outlast one service-wrapper respawn, then re-runs the durable-owner and live-supervision veto under it before
 mutating the port, because a claim could have landed during the now-unleased refresh window. A
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
-the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.
+the refresh before it produced no serving proxy; an ownership veto ends as succeeded only after a fresh service-home check. CLI refresh and final fallback vetoes give home refusal precedence too.
 
 On Windows, `src/update/npm-invocation.mjs` reads copied shell-location keys case-insensitively,
 with exact-key precedence, no ambiguous alias selection, and the same absolute-path checks.
@@ -467,6 +466,7 @@ Other Scoop apps, version-directory entries (`NO_JUNCTION`), custom home-root Sc
 arbitrary descendants and cwd inside the resolved Node installation are not admitted.
 
 The Windows npm staging runner (`src/update/npm-install.mjs`) keeps a 180-second install budget and a separate 10-second join budget. Before cleanup or verification, it requires proof that the full installer tree exited, including when npm returns status zero.
+After that barrier and stage verification, the transaction's synchronous replacement callback rechecks home authority, owner, supervision and dead liveness before the live swap. A denied callback returns `authorize`, removes only the owned exited stage and leaves the old package usable; failure guidance classifies this as an untouched install. The same callback runs after synchronous npm staging. Pinned restart preparation separately checks current service permission inside its wrapper callback after the fresh home gate, so confirmed absence grants foreground cleanup without a global service stop.
 On Windows, `src/update/npm-install-job.ps1` creates the root atomically inside a private kill-on-close Job Object using `STARTUPINFOEX` and `PROC_THREAD_ATTRIBUTE_JOB_LIST`. It stays suspended until local exit-proof handling is armed. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` admits only stdin and npm's stderr, excluding the Job and supervisor result pipe; attribute lists and value buffers are freed. Windows 10+ Job List support is required: attribute setup or extended creation failure returns `EINSTALLJOIN` with a clear prerequisite and native error, without starting an unsupervised installer or retrying a legacy creation path. Timeout terminates the job, checks zero active members and waits for the root handle. The updater and recovery stay outside this job; a watchdog bounds supervisor startup/protocol failure.
 Missing exit proof retains the complete stage and marker. npm output drains before a successful join returns; failed supervision stops forwarding it. Windows timeout diagnostics retain `ETIMEDOUT` and the budget; stage failures retain owner-aware recovery through the untouched launcher. POSIX keeps the legacy synchronous install and status-only transaction; complete-tree timeout cleanup remains open there because process groups do not contain detached descendants.
 The npm transaction creates each staging directory exclusively and may clean that fresh path while the creating process still owns it. On POSIX it also creates the stage's `lib` directory, because npm's strict script policy plans the global tree before creating the prefix layout (#5760).

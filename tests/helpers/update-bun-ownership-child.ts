@@ -5,6 +5,7 @@ import * as processTools from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawnedNpmOperation } from "./npm-operation";
 import { repoPath } from "./repo-root";
 
 const realSpawnSync = processTools.spawnSync;
@@ -15,7 +16,19 @@ const authority = join(home, "authority.json");
 const runtime = join(home, "runtime-port.json");
 const leaseModule = pathToFileURL(repoPath("src/service/ownership-mutation-lease.mjs")).href;
 const trace: Array<Record<string, unknown>> = [];
-let running = true;
+let running = (!scenario.startsWith("home-unknown") && !scenario.startsWith("parent-package-only")) || scenario === "home-unknown-live";
+if (scenario.startsWith("parent-package-only")) process.argv.push("--update-package-only");
+if (scenario === "parent-package-only-result") process.argv.push("--update-worker-result");
+if (scenario === "home-unknown-pending") writeFileSync(join(home, "pending-teardown-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.unreadable.json"), "{broken");
+let homeReads = 0;
+let packageReplaced = false;
+const delegatedHome = scenario.startsWith("delegated-");
+if (delegatedHome) {
+  running = false;
+  const baseline = scenario === "delegated-known-unknown" || scenario === "delegated-post-replacement" ? "same"
+    : scenario === "delegated-malformed" ? "invalid-shape" : "unknown";
+  process.argv.push("--update-worker-home", baseline, "--update-worker-result");
+}
 const direct = scenario.startsWith("direct-");
 const reserved = direct ? Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("fixture") }) : undefined;
 const port = reserved?.port ?? 23456;
@@ -54,6 +67,18 @@ mock.module(repoPath("src/service.ts"), () => ({ ...service,
     const row = JSON.parse(readFileSync(authority, "utf8"));
     return { kind: "owned", revision: row.revision,
       ownership: { owner: row.owner, installId: row.installId, consentGeneration: row.consentGeneration } };
+  },
+}));
+mock.module(repoPath("src/update/service-home-authority.ts"), () => ({
+  inspectUpdateServiceHome: () => {
+    homeReads++;
+    if (scenario === "delegated-post-replacement") return { kind: packageReplaced ? "unknown" : "same" };
+    if (delegatedHome) return { kind: scenario === "delegated-unknown-known" ? "same" : "unknown" };
+    if (scenario === "home-changed-after-stop" && !running) return { kind: "unknown" };
+    if (scenario === "home-unknown-changed" && homeReads > 2) return { kind: "same" };
+    if (scenario === "home-changed" && homeReads > 2) return { kind: "unknown" };
+    if (scenario.startsWith("home-unknown")) return { kind: "unknown" };
+    return { kind: direct ? "absent" : "same" };
   },
 }));
 const state = await import("../../src/config/process-state");
@@ -109,8 +134,8 @@ mock.module("node:child_process", () => ({ ...processTools,
     Date.now = () => realNow() + clockOffset;
     return directChild;
   },
-  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) => {
-    if (args.includes("view")) return { status: 0, stdout: "99.0.0\n", stderr: "" };
+  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean } = {}) => {
+    if (spawnedNpmOperation(args, options) === "view") return { status: 0, stdout: "99.0.0\n", stderr: "" };
     const env = options.env ?? process.env;
     const phase = args.includes("stop") ? "stop" : args.includes("service") ? "recovery"
       : args.some(arg => arg.includes("@bitkyc08/opencodex")) ? "replacement" : "ancillary";
@@ -123,9 +148,10 @@ mock.module("node:child_process", () => ({ ...processTools,
       if (scenario === "unknown-runtime") writeFileSync(runtime, "{malformed");
     }
     if (phase === "replacement") {
+      packageReplaced = true;
       if (scenario === "replacement-throw") throw new Error("injected replacement failure");
       if (scenario === "foreign-owner") writeFileSync(authority, JSON.stringify({ revision: 2, owner: "desktop", installId: "owner-b", consentGeneration: 2 }));
-      if (direct || scenario === "package-fail" || scenario === "foreign-owner" || scenario === "recovery-throw") return { status: 1 };
+      if (direct || scenario === "home-unknown-fail" || scenario === "package-fail" || scenario === "foreign-owner" || scenario === "recovery-throw") return { status: 1 };
     }
     if (phase === "recovery") {
       if (scenario === "recovery-throw") throw new Error("injected recovery failure");

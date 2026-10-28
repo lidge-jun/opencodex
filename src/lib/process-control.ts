@@ -367,22 +367,31 @@ async function waitForStoppedPort(
   }
 }
 
-export function killProxy(pid: number): void {
+export function killProxy(pid: number, mayTerminate?: () => boolean): void {
   if (!isProcessAlive(pid)) return;
+  const authorize = () => {
+    if (mayTerminate && mayTerminate() !== true) throw Object.assign(new Error("Process termination refused"), { code: "EUPDATEAUTHORITY" });
+  };
   if (process.platform === "win32") {
     // Windows process.kill(SIGTERM/SIGINT) is TerminateProcess — not a graceful signal.
     // Graceful drain happens only via stopProxyGracefully() (POST /api/stop). This path
     // is the hard fallback: taskkill /T /F so the process tree exits (ghost LISTEN /
     // CLOSE_WAIT are then cleared by reclaimListenPort / SetTcpEntry).
     const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+    const args = ["/PID", String(pid), "/T", "/F"];
+    authorize();
     try {
-      execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], { stdio: "pipe", windowsHide: true });
+      execFileSync(taskkill, args, { stdio: "pipe", windowsHide: true });
     } catch (err) {
       if (isProcessAlive(pid)) throw err;
     }
   } else {
+    authorize();
     process.kill(pid, "SIGTERM");
-    if (!waitForExit(pid, 5000)) process.kill(pid, "SIGKILL");
+    if (!waitForExit(pid, 5000)) {
+      authorize();
+      process.kill(pid, "SIGKILL");
+    }
   }
   if (!waitForExit(pid, 5000)) throw new Error(`process ${pid} did not exit`);
 }

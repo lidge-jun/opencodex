@@ -1087,6 +1087,11 @@
       "scope": "Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback.",
       "documents": [
         "src/update/supervised-recovery.mjs",
+        "src/update/mutation-guard.mjs",
+          "src/update/guarded-runtime-ops.ts",
+          "src/update/guarded-port-reclaim.ts",
+          "src/update/guarded-tray-ops.ts",
+        "src/update/job-pinned-start.ts",
         "src/update/job-supervised-restart.ts",
         "src/update/job.ts"
       ]

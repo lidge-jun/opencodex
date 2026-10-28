@@ -726,11 +726,14 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
       ["src/cli/claude.ts", 'env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),'],
       ["src/cli/opencode.ts", opencodeStartEnv],
       ["src/cli/minimax.ts", opencodeStartEnv],
-      ["src/update/job.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
+      ["src/update/job-pinned-start.ts", "const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);"],
       ["src/update/index.ts", "const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));"],
     ] as const) {
       expect(readFileSync(repoPath(path), "utf8"), path).toContain(env);
     }
+    const worker = readFileSync(repoPath("src/update/job.ts"), "utf8");
+    expect(worker).toContain('import { spawnWorkerPinnedStart } from "./job-pinned-start"');
+    expect(worker).toContain("return spawnWorkerPinnedStart(restartCommand(false, installer, launcher, port), authorizeMutation,");
     // The package launcher's own post-update restart cannot import the helper; it deletes inline.
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_OF_PORT;");
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_HANDOFF_NONCE;");

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { guardedRun, guardedSpawnSync, UpdateMutationRefusedError } from "./mutation-guard.mjs";
 
 /**
  * Manager-mediated runtime recovery after an update (#7043).
@@ -26,7 +26,7 @@ function positivePid(value) {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
-function defaultRun(file, args) {
+function defaultRun(file, args, authorizeMutation = () => true) {
   // An armed test process must never reach the developer's real launchd or systemd job;
   // same refusal as `assertLiveServiceManagerAllowed` for the TypeScript service layer.
   if (process.env.OCX_TEST_HOME_GUARD === "1") {
@@ -37,7 +37,7 @@ function defaultRun(file, args) {
   const env = file === "systemctl" && !process.env.XDG_RUNTIME_DIR && typeof process.getuid === "function"
     ? { ...process.env, XDG_RUNTIME_DIR: `/run/user/${process.getuid()}` }
     : process.env;
-  const result = spawnSync(file, args, { encoding: "utf8", timeout: 20_000, windowsHide: true, env });
+  const result = guardedSpawnSync(authorizeMutation, "service", file, args, { encoding: "utf8", timeout: 20_000, windowsHide: true, env });
   if (result.error) {
     // A timeout kills only the waiting client; the manager's queued job keeps running.
     const timedOut = result.error.code === "ETIMEDOUT";
@@ -79,17 +79,24 @@ export function hasRestartableServiceManager(deps = {}) {
  * waiting while the manager may still complete the restart: callers must not start a competing
  * proxy on that answer.
  */
-export function restartServiceManagerJob(deps = {}) {
-  const { platform, uid, run } = resolve(deps);
+export function restartServiceManagerJob(deps = {}, authorizeMutation = () => false) {
+  try {
+  const { platform, uid } = resolve(deps);
+  const run = deps.run ?? ((file, args) => defaultRun(file, args, authorizeMutation));
   const result = platform === "darwin"
-    ? run("/bin/launchctl", ["kickstart", "-k", launchdTarget(uid)])
+    ? guardedRun(authorizeMutation, "service", run, ["/bin/launchctl", ["kickstart", "-k", launchdTarget(uid)]])
     : platform === "linux"
-      ? run("systemctl", ["--user", "restart", SYSTEMD_SERVICE_UNIT])
+      ? guardedRun(authorizeMutation, "service", run, ["systemctl", ["--user", "restart", SYSTEMD_SERVICE_UNIT]])
       : null;
   if (result === null) return { ok: false, reason: "no launchd or systemd manager on this platform" };
   if (result.timedOut) return { ok: false, unsettled: true, reason: "the service manager did not finish the restart in time" };
   if (!result.ok) return { ok: false, reason: result.stderr.split("\n")[0] || "the service manager refused the restart" };
   return { ok: true };
+  } catch (error) {
+    return error instanceof UpdateMutationRefusedError
+      ? { ok: false, refused: true, reason: "Automatic service restart refused; check 'ocx service status'." }
+      : { ok: false, reason: "the service manager restart failed" };
+  }
 }
 
 /** The manager's main PID for the job, or null when it reports none. Never throws. */

@@ -222,7 +222,7 @@ exit 0
     expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]');
     expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
     expect(launcher).toContain("!isBunGlobalInstall()");
-    expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher)");
+    expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher, homePolicy.authorizeMutation)");
     expect(launcher).toContain("runNpmSelfUpdate()");
     expect(launcher).toContain("runPnpmSelfUpdate()");
   });

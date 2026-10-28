@@ -71,7 +71,7 @@ function windowsSchtasks(): string {
 
 let querySchtasksForTests: ((args: string[]) => string) | null = null;
 
-export function querySchtasks(args: string[]): string {
+export function querySchtasks(args: string[], beforeMutation?: () => void): string {
   // The repository preload isolates HOME and OPENCODEX_HOME, but Task Scheduler is
   // machine-global. A partially-faked service test once fell through here and replaced the
   // user's real `opencodex-proxy` task with a launcher inside its temporary test home; the
@@ -86,8 +86,10 @@ export function querySchtasks(args: string[]): string {
       + "inject the scheduler operation instead of calling the live manager.",
     );
   }
-  if (querySchtasksForTests) return querySchtasksForTests(args);
-  return runFile(windowsSchtasks(), args);
+  if (querySchtasksForTests) { beforeMutation?.(); return querySchtasksForTests(args); }
+  const file = windowsSchtasks();
+  beforeMutation?.();
+  return runFile(file, args);
 }
 
 /** Test-only seam for Task Scheduler query used by presence probes. */
@@ -95,13 +97,18 @@ export function setQuerySchtasksForTests(next: ((args: string[]) => string) | nu
   querySchtasksForTests = next;
 }
 
-export function schtasks(args: string[], io: {
+export function schtasks(args: string[], control: (() => void) | {
   run?: (args: string[]) => string;
   probeTask?: () => WindowsSchedulerTaskProbe;
 } = {}): string {
+  const beforeMutation = typeof control === "function" ? control : undefined;
+  const io = typeof control === "function" ? {} : control;
+  let refused = false;
+  const gate = beforeMutation && (() => { try { beforeMutation(); } catch (error) { refused = true; throw error; } });
   try {
-    return (io.run ?? querySchtasks)(args);
+    return io.run ? io.run(args) : querySchtasks(args, gate);
   } catch (error) {
+    if (refused) throw error;
     let taskPresent = false;
     const normalized = args.map(arg => arg.toLowerCase());
     const taskIndex = normalized.indexOf("/tn");

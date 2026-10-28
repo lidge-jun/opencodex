@@ -50,14 +50,20 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     // update — the common Windows path — with a stale service it could have refreshed.
     expect(src).toContain('process.env.OCX_SERVICE === "1" && refreshRegisters');
     expect(src).toContain('const refreshRegisters = (svcArgs ?? []).includes("install")');
-    // Native WinSW installs must stop via stopWinswService, not Task Scheduler /end only.
-    expect(src).toContain("readServiceBackend");
-    expect(src).toContain("stopWinswService");
+    // Follow the extracted teardown helper through its import and restart call site.
+    expect(src).toContain('import { stopWindowsServiceWrappersBestEffort } from "./job-windows-restart"');
+    expect(src).toContain("(io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)(homePolicy.authorizeMutation);");
+    const restart = read("src/update/job-windows-restart.ts");
+    expect(restart).toContain("export function stopWindowsServiceWrappersBestEffort(authorizeMutation: UpdateMutationAuthorizer)");
+    expect(restart).toContain('if (process.platform !== "win32") return;');
+    // Native WinSW installs stop and return before Task Scheduler /end or wrapper cleanup.
+    expect(restart).toMatch(/if \(readServiceBackend\(\) === "native"\) \{\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedStopWinsw\(authorizeMutation\);\s*return;\s*\}\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedStopWindows\(authorizeMutation\);/);
+    expect(restart.indexOf("killWindowsServiceWrapperProcesses(authorizeMutation);")).toBeGreaterThan(restart.indexOf("guardedStopWindows(authorizeMutation);"));
     // The wrapper-killer script (and its self-exclusion) moved to the shared
     // lib/windows-service-wrappers so the updater and the service teardown path
     // cannot drift apart again. Follow the invariant to where it lives; the
     // matching rules themselves are covered by windows-service-wrappers.test.ts.
-    expect(src).toContain("killWindowsSchedulerWrappers");
+    expect(restart).toMatch(/const paths = \{\s*scriptPath: join\(getConfigDir\(\), "opencodex-service.cmd"\),\s*launcherPath: join\(getConfigDir\(\), "opencodex-service-launcher.vbs"\),\s*\};\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedKillWindowsWrappers\(authorizeMutation, paths\);/);
     expect(read("src/lib/windows-service-wrappers.ts")).toContain("$_.ProcessId -eq $PID");
     // Pinned-child cleanup is exercised through the retry loop in update/update-job.test.ts,
     // including exited children, live retry/final cleanup, and successful health probes.
