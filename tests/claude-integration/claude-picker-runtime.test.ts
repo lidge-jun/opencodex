@@ -842,7 +842,7 @@ describe("startClaudeIntercept wiring", () => {
         expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" }))
           .toMatchObject({ kind: "applied", entryId: original.entryId, proxyUrl: original.proxyUrl });
       } finally {
-        await first?.stop();
+        await stopAfterPickerSettles(first);
       }
       // The next restart adopts the held relay; the surviving selection restores in place.
       retry = true;
@@ -860,7 +860,7 @@ describe("startClaudeIntercept wiring", () => {
         expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" }))
           .toMatchObject({ kind: "applied", entryId: original.entryId, proxyUrl: restoredUrl });
       } finally {
-        await second?.stop();
+        await stopAfterPickerSettles(second);
       }
     } finally { await egress.close(); }
   });
