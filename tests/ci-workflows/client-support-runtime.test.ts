@@ -41,8 +41,9 @@ const URL_BREAKS = "data.json results[0].evidence contains whitespace or charact
 const PUBLIC_HOST = "data.json results[0].evidence must name a public host (not an IP address or a local or internal name)";
 
 describe("client support runtime results", () => {
-  test("the committed file is empty, so no row claims a runtime result in any locale", () => {
-    const rows = collectRows();
+  test("an empty results file leaves every row with a dash in every locale, and the committed file is valid", () => {
+    expect(() => collectRows()).not.toThrow();
+    const rows = rowsWith(fileWith([]));
     expect(rows.some(row => row.runtime)).toBe(false);
     for (const locale of LOCALE_IDS) {
       const page = renderPage(rows, locale);
@@ -104,6 +105,8 @@ describe("client support runtime results", () => {
       [{ scenario: "a &#124; b" }, TEXT_RULE("scenario")],
       [{ product: "Codex\u202eILC" }, TEXT_RULE("product")],
       [{ scenario: "tool_call" }, TEXT_RULE("scenario")],
+      [{ scenario: "see https://10.0.0.8/a" }, "data.json results[0].scenario must not contain a URL; put the link in evidence"],
+      [{ product: "www.internal.example/x" }, "data.json results[0].product must not contain a URL; put the link in evidence"],
       [{ notes: "x" }, "data.json results[0]: unknown keys notes"],
       [{ client: "nope" }, 'data.json results[0].client "nope" is not a row on the client support page'],
       [{ verifiedOn: "2026-02-30" }, 'data.json results[0].verifiedOn "2026-02-30" is not a real YYYY-MM-DD date'],
@@ -123,6 +126,9 @@ describe("client support runtime results", () => {
       [{ evidence: "https://localhost./x" }, PUBLIC_HOST],
       [{ evidence: "https://service.local./x" }, PUBLIC_HOST],
       [{ evidence: "https://ci.internal./x" }, PUBLIC_HOST],
+      [{ evidence: "https://localhost../x" }, PUBLIC_HOST],
+      [{ evidence: "https://service.local../x" }, PUBLIC_HOST],
+      [{ evidence: "https://example..com/x" }, PUBLIC_HOST],
     ];
     for (const [overrides, message] of cases) {
       expect(problems(fileWith([{ ...result(), ...overrides }]))).toEqual([message]);
