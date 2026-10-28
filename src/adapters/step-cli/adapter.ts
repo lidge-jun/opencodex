@@ -2,7 +2,7 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../ty
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { getConfigDir } from "../../config/paths";
 import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
-import { ConversationQueueFullError, conversationHandle, withConversationLock } from "./conversation";
+import { ConversationQueueFullError, ownedConversationHandle, withConversationLock } from "./conversation";
 import { STEP_CLI_HOST, STEP_CLI_TOOL_SERVER } from "./constants";
 import { sessionHandlers } from "./events";
 import { mapSessionFailure, refusal } from "./errors";
@@ -151,19 +151,22 @@ export function createStepCliAdapter(
         return;
       }
 
-      const sessions = deps.openSession ?? poolFor(getConfigDir(), deps, sessionHandlers);
-      // No identity on the wire means this request cannot belong to any existing conversation, so it
-      // gets a private one. Sharing a handle would leak one client's context to another.
-      const identified = conversationHandle(parsed, incoming);
+      let sessions: StepConversationHost;
+      try { sessions = deps.openSession ?? poolFor(getConfigDir(), deps, sessionHandlers); }
+      catch (error) { emit(mapSessionFailure(error)); return; }
+      // Admission owns the namespace; thread headers only select a conversation within it.
+      // Requests without caller ownership receive a private process.
+      const identified = ownedConversationHandle(parsed, incoming, provider);
       const ref: StepConversationRef = identified
         ? { handle: identified, sessionId: "" }
         : sessions.nextRef();
 
-      let session: StepConversationSession;
+      let session!: StepConversationSession;
       try {
         session = await sessions.open(ref);
         await session.handshake();
       } catch (error) {
+        await session?.close();
         emit(mapSessionFailure(error));
         return;
       }
@@ -195,6 +198,9 @@ export function createStepCliAdapter(
         // is no longer trustworthy and is closed.
         emit(mapSessionFailure(error));
         await session.close();
+      } finally {
+        // Keyless callers have no cross-request ownership proof. Their process is request-local.
+        if (!identified) await session.close();
       }
     },
   };
@@ -243,10 +249,8 @@ async function driveTurn(
   },
 ): Promise<void> {
   const { sessions, session, ref, tools, setTimer, clearTimer } = context;
-      // Decide what this turn IS before any side effect. Delivering a held tool result unblocks the
-      // CLI, and it may answer with frames immediately; the turn has to be registered before that
-      // happens or those frames arrive with no runtime to route them to and are dropped, leaving the
-      // turn to time out on a model that already answered.
+      // A matching held result resumes its original query. An abandoned call must finish
+      // unwinding without a turn before the replacement is registered.
       const held = sessions.takeHeldTool(ref);
       const heldResult = held ? latestToolResult(parsed) : undefined;
       // Matched by CALL ID, never by position: a client may follow a tool call with a new user
@@ -263,6 +267,13 @@ async function driveTurn(
       // text unstartable, and swallowing that text would lose the user's turn entirely.
       const abandonedQueryId = Boolean(held) && !heldMatches;
 
+      const catalogKey = JSON.stringify(tools.sdkTools);
+      if (held && (held.queryId !== currentQuery(session) || held.catalogKey !== catalogKey)) {
+        emit(refusal("The held StepCode call belongs to a different query or tool catalog.", 409, "step_cli_tool_owner_mismatch"));
+        await session.close();
+        return;
+      }
+
       // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
       // abandoned the call still carries the user's message and must keep it.
       const userText = continuedQuery ? undefined : pendingUserText(parsed);
@@ -277,6 +288,18 @@ async function driveTurn(
         return;
       }
 
+      if (abandonedQueryId && held) {
+        // Detach the old owner before releasing its hold: completion can arrive synchronously.
+        endTurn(session);
+        forgetQuery(session);
+        session.resolveHeldToolResult(
+          { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
+          { content: [{ type: "text", text: "" }], isError: true },
+        );
+        await session.interrupt(held.queryId);
+        await session.endInput(held.queryId);
+      }
+
       let settle!: () => void;
       const done = new Promise<void>(resolve => {
         settle = resolve;
@@ -287,14 +310,16 @@ async function driveTurn(
         emit,
         settle,
         emittedNames: tools.emittedNameMap,
+        catalogKey,
+        ...(continuedQuery && held ? { queryId: held.queryId } : {}),
       });
 
       // Registered FIRST, delivered second. See the comment above: the CLI can answer the moment it
       // receives the result.
-      if (held) {
+      if (held && continuedQuery) {
         const delivered = session.resolveHeldToolResult(
           { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
-          heldMatches && heldResult ? heldResult : { content: [{ type: "text", text: "" }], isError: true },
+          heldResult!,
         );
         if (!delivered) {
           endTurn(session);
@@ -314,12 +339,6 @@ async function driveTurn(
       let queryId: string | undefined;
       let deadlineTimer: unknown;
       try {
-        if (abandonedQueryId && currentQuery(session)) {
-          // The query that owned the abandoned call is still unwinding; stop it before starting a new
-          // one, since StepCode serves a single query per process.
-          await session.interrupt(currentQuery(session)!);
-          forgetQuery(session);
-        }
         if (!continuedQuery) {
           const started = await startQueryWithBusyRetry(session, {
             model: stepModelId(parsed.modelId),

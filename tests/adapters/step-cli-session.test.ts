@@ -388,8 +388,8 @@ describe("StepCode session pool", () => {
     );
     const ref = { handle: "conv", sessionId: "" };
     await pool.open(ref);
-    pool.rememberHeldTool(ref, { frameId: "frame-1", callId: "call-9" });
-    expect(pool.takeHeldTool(ref)).toEqual({ frameId: "frame-1", callId: "call-9" });
+    pool.rememberHeldTool(ref, { frameId: "frame-1", callId: "call-9", queryId: "q_1", catalogKey: "catalog" });
+    expect(pool.takeHeldTool(ref)).toEqual({ frameId: "frame-1", callId: "call-9", queryId: "q_1", catalogKey: "catalog" });
     expect(pool.takeHeldTool(ref)).toBeUndefined();
     await pool.closeAll();
   });

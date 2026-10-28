@@ -17,13 +17,27 @@ rejected before the peer has had a chance to offer a range.
 
 `query.input` reduces every message to text and images, so an assistant turn, a declared tool call
 and its result cannot be replayed through the wire: StepCode's conversation context lives only inside
-its own process. `session-pool.ts` therefore keys long-lived processes by the handle the client echoes
-back through `providerState`, and a process that dies is reported rather than restarted — a restart
+its own process. `conversation.ts` namespaces thread/affinity handles by the server's admitted
+`_reasoningReplayScope.clientPrincipalId` and physical provider identity. Headers and `providerState`
+cannot supply that authority. Requests without an admitted principal receive a private process that
+closes when the request ends; they cannot continue a held call across requests. A process that dies
+is reported rather than restarted — a restart
 would lose tool results the client already delivered, which this route cannot replay from a
 transcript.
 
-`permission.request` is answered immediately because the approval already happened upstream of the
-adapter. A `sdk_tool.invoke` is answered on the client's **next** request, not this one.
+Events and reverse callbacks must name the active turn's exact `queryId`. Permissions require an
+owning turn and a tool in that query's declared catalog; other permissions are denied. A
+`sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
+Changing the catalog while returning a held result closes the session. Abandoning a held call
+detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
+
+`session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. Late opens close
+their process before shutdown settles, and new opens and pool creation during proxy drain are
+refused. Session close is idempotent and clears held-request timers. Windows teardown uses the
+shared `src/adapters/coding-agent/process-tree.ts` helper (`taskkill /T /F`, bounded to five seconds)
+before releasing the wrapper; POSIX sessions use a separate process group. Cleanup verifies exit
+and reports failure if it cannot confirm termination. On Windows the OS PID check also handles
+Bun retaining null child exit fields after an external tree kill.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 
@@ -106,3 +120,6 @@ Tests: `tests/adapters/step-cli-frames.test.ts`, `tests/adapters/step-cli-sessio
 `tests/adapters/step-cli-tool-bridge.test.ts` and `tests/providers/step-cli-provider.test.ts`. The
 session tests drive a scripted peer, so permission hand-off, tool capture, the held reverse request
 and the single release of a tool result are all asserted without a real CLI or a real model call.
+Caller/query/catalog isolation is covered by `tests/adapters/step-cli-ownership.test.ts` and
+`tests/adapters/step-cli-query-race.test.ts`; shutdown races and a real dispatcher/descendant fixture
+are covered by `tests/adapters/step-cli-process-lifecycle.test.ts`.

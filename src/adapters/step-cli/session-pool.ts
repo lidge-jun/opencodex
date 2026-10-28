@@ -16,6 +16,8 @@ export interface StepConversationRef {
 export interface StepHeldTool {
   readonly frameId: string;
   readonly callId: string;
+  readonly queryId: string;
+  readonly catalogKey: string;
 }
 
 export interface StepSessionPoolOptions {
@@ -79,6 +81,8 @@ export class StepSessionPool implements StepConversationHost {
   readonly #sweepMs: number;
   #sweep: ReturnType<typeof setInterval> | undefined;
   #handleSeq = 0;
+  #closing = false;
+  #closePromise: Promise<void> | undefined;
 
   constructor(
     options: StepSessionPoolOptions,
@@ -100,12 +104,17 @@ export class StepSessionPool implements StepConversationHost {
 
   /** Open a session for a conversation, coalescing concurrent opens of the same handle. */
   async open(ref: StepConversationRef): Promise<StepCliSession> {
+    if (this.#closing) throw new StepSessionError("StepCode session pool is closing.");
     const existing = this.get(ref);
     if (existing) return existing;
     const inFlight = this.#opening.get(ref.handle);
     if (inFlight) return inFlight;
     const opening = (async () => {
       const session = await StepCliSession.open(this.#options.buildOptions(), this.#handlers, this.#deps);
+      if (this.#closing) {
+        await session.close();
+        return session;
+      }
       const entry: PoolEntry = { ref, session, heldTool: undefined };
       this.#entries.set(ref.handle, entry);
       session.onExit(() => {
@@ -172,12 +181,22 @@ export class StepSessionPool implements StepConversationHost {
     return this.#entries.size;
   }
 
-  async closeAll(): Promise<void> {
+  closeAll(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closing = true;
     this.#stopSweep();
-    this.#opening.clear();
+    const opening = [...this.#opening.values()];
     const entries = [...this.#entries.values()];
     this.#entries.clear();
-    await Promise.all(entries.map(entry => entry.session.close()));
+    this.#closePromise = (async () => {
+      const closed = await Promise.allSettled(entries.map(entry => entry.session.close()));
+      // An open owns its child until it returns. Its closing branch reaps that child before
+      // resolving, so shutdown cannot finish while a late open can still publish a session.
+      const opened = await Promise.allSettled(opening);
+      const failure = [...closed, ...opened].find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    })();
+    return this.#closePromise;
   }
 }
 

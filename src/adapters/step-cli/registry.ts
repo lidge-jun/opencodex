@@ -1,5 +1,5 @@
 import { getConfigDir } from "../../config/paths";
-import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
+import { didRunDrainStartHooks, didRunOptionalShutdownHooks, registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import type { AdapterEvent, OcxUsage } from "../../types";
 import { buildStepCliArgs } from "./profiles";
 
@@ -13,6 +13,7 @@ export const STEP_CLI_IDLE_TIMEOUT_MS = 10 * 60_000;
 import {
   resolveStepCliBinaryPath,
   stepCliProcessEnvironment,
+  StepSessionError,
   type StepSessionDeps,
   type StepSessionEvent,
 } from "./session";
@@ -46,6 +47,8 @@ export interface StepTurnRuntime {
   emit: (event: AdapterEvent) => void;
   settle: () => void;
   emittedNames: Map<string, string>;
+  catalogKey: string;
+  queryId?: string;
 }
 
 export const turnRuntimes = new WeakMap<StepConversationSession, StepTurnRuntime>();
@@ -65,6 +68,7 @@ export const lastQueryId = new WeakMap<StepConversationSession, string>();
 
 /** Attach a turn to the session that owns it, replacing any turn left behind. */
 export function beginTurn(session: StepConversationSession, turn: StepTurnRuntime): void {
+  lastAssistantUsage.delete(session);
   turnRuntimes.set(session, turn);
 }
 
@@ -91,6 +95,8 @@ export function assistantUsage(session: StepConversationSession): OcxUsage | und
 /** Remember which query this session is running, so an abandoned turn interrupts exactly that one. */
 export function rememberQuery(session: StepConversationSession, queryId: string): void {
   lastQueryId.set(session, queryId);
+  const turn = currentTurn(session);
+  if (turn) turn.queryId = queryId;
 }
 
 /** The query this session is running, if any. */
@@ -149,6 +155,7 @@ export function poolFor(
   deps: StepSessionDeps,
   handlers: { onEvent(event: StepSessionEvent): void },
 ): StepSessionPool {
+  if (didRunDrainStartHooks() || didRunOptionalShutdownHooks()) throw new StepSessionError("StepCode cannot open sessions while the proxy is shutting down.");
   ensureShutdownHook();
   const existing = pools.get(home);
   if (existing) return existing;

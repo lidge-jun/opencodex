@@ -1,4 +1,7 @@
 {
+  "step-cli-ownership.test.ts": "adapters",
+  "step-cli-process-lifecycle.test.ts": "adapters",
+  "step-cli-query-race.test.ts": "adapters",
   "step-cli-frames.test.ts": "adapters",
   "step-cli-conversation.test.ts": "adapters",
   "step-cli-run-turn.test.ts": "adapters",

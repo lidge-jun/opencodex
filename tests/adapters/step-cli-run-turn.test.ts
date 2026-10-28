@@ -48,6 +48,10 @@ class FakeSession implements StepConversationSession {
 
   /** Deliver a frame immediately, standing in for the CLI streaming it at this moment. */
   emitNow(frame: StepFrame): void {
+    const payload = frame.payload as Record<string, unknown>;
+    frame = { ...frame, payload: frame.kind === "request"
+      ? { queryId: `q_${this.#n}`, ...payload }
+      : { queryId: `q_${this.#n}`, message: payload } };
     if (frame.kind === "request") handleReverseRequest(this, frame);
     else handleRuntimeEvent(this, frame);
   }
@@ -120,8 +124,7 @@ class FakeSession implements StepConversationSession {
       for (const f of queued) {
         // Dispatch the way the real session does: reverse requests go to the reverse handler, events
         // to the event handler. The DECISIONS under test stay in the real functions.
-        if (f.kind === "request") handleReverseRequest(this, f);
-        else handleRuntimeEvent(this, f);
+        this.emitNow(f);
       }
     }, 0);
   }
@@ -184,16 +187,18 @@ function parsed(messages: unknown[]): OcxParsedRequest {
       tools: [{ name: "shell", description: "run", parameters: { type: "object" } }],
     },
     options: {},
+    _reasoningReplayScope: { clientPrincipalId: "test-caller", clientThreadId: "conv-1" },
   } as unknown as OcxParsedRequest;
 }
 
 const USER_ASK = [{ role: "user", content: "run it", timestamp: 0 }];
 
 describe("StepCode reverse requests are always answered", () => {
-  test("a permission request with no turn is still allowed", () => {
+  test("a permission request with no turn is denied", () => {
     const session = new FakeSession();
     handleReverseRequest(session, requestFrame("p1", "permission.request"));
-    expect(session.allowed).toEqual(["p1"]);
+    expect(session.allowed).toEqual([]);
+    expect(session.denied.map(entry => entry.id)).toEqual(["p1"]);
   });
 
   test("a tool call with no turn is refused, never dropped", () => {
@@ -821,7 +826,7 @@ describe("StepCode held-result delivery ordering", () => {
     const original = session.resolveHeldToolResult.bind(session);
     session.resolveHeldToolResult = (frame, result) => {
       const out = original(frame, result);
-      handleRuntimeEvent(session, eventFrame({ type: "status", status: "turn_complete" }));
+      session.emitNow(eventFrame({ type: "status", status: "turn_complete" }));
       return out;
     };
     session.stream = [];

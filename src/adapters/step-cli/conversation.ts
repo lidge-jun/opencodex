@@ -1,4 +1,5 @@
-import type { OcxParsedRequest } from "../../types";
+import { createHash } from "node:crypto";
+import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 import type { IncomingMeta } from "../base";
 
 /**
@@ -38,6 +39,25 @@ export function conversationHandle(parsed: OcxParsedRequest, incoming: IncomingM
   // client read another's context and deliver its tool result into another's query. The caller mints
   // a private ref instead, so an identity-less request gets its own process and forgets it.
   return undefined;
+}
+
+/** Headers select a conversation only inside the admission principal's provider namespace. */
+export function ownedConversationHandle(
+  parsed: OcxParsedRequest,
+  incoming: IncomingMeta,
+  provider: OcxProviderConfig,
+): string | undefined {
+  const principal = parsed._reasoningReplayScope?.clientPrincipalId;
+  const conversation = conversationHandle(parsed, incoming);
+  if (!principal || !conversation) return undefined;
+  const identity = parsed._reasoningReplayScope?.current;
+  // Reuse the server-owned replay principal and physical provider identity. Never accept a
+  // principal, provider name or continuation handle from request headers/providerState.
+  return createHash("sha256").update(JSON.stringify([
+    "step-cli", principal, incoming.providerName ?? identity?.providerName ?? "",
+    provider.adapter, provider.baseUrl, identity?.providerDestinationIdentity ?? "",
+    identity?.credentialIdentity ?? "", conversation,
+  ])).digest("hex");
 }
 
 /** How many turns may queue behind one conversation before a caller is told to retry. */

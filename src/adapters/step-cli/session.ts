@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { commandInvocation } from "../../lib/win-exec";
+import { killWindowsProcessTree } from "../coding-agent/process-tree";
 import type { WhichFn } from "../coding-agent/profile";
 import { buildStepCliEnv } from "./env";
 import {
@@ -43,6 +44,7 @@ export interface StepSessionDeps {
   now?: () => number;
   /** Test seam for Windows command-shim invocation. */
   platform?: NodeJS.Platform;
+  killWindowsProcessTree?: (pid: number) => void;
 }
 
 export interface StepSessionOptions {
@@ -140,6 +142,7 @@ export class StepCliSession {
 
   #child: ChildProcess | undefined;
   #closed = false;
+  #closePromise: Promise<void> | undefined;
   #handshake: Promise<StepFrame> | undefined;
   #sessionId: string | undefined;
   #lastActivityAt: number;
@@ -235,6 +238,7 @@ export class StepCliSession {
       env: this.#options.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      detached: this.#platform !== "win32",
       cwd: this.#options.cwd,
     });
     this.#child = child;
@@ -463,9 +467,10 @@ export class StepCliSession {
     });
   }
 
-  /** Answer a `permission.request`: allow, because the client already asked for this call. */
+  /** Answer a permission already checked against the owning turn and catalog. */
   allowPermission(frame: StepFrame): void {
     this.#respondOk(frame.id, { behavior: "allow" });
+    this.#releaseReverse(frame.id);
   }
 
   /**
@@ -477,17 +482,22 @@ export class StepCliSession {
    */
   refuseToolCall(frame: StepFrame, reason: string): void {
     this.#respondError(frame.id, "TOOL_NOT_AVAILABLE", reason);
-    const held = this.#held.get(frame.id);
+    this.#releaseReverse(frame.id);
+  }
+
+  #releaseReverse(id: string): void {
+    const held = this.#held.get(id);
     if (held) {
       held.answered = true;
       this.#clearTimer(held.timer as never);
-      this.#held.delete(frame.id);
+      this.#held.delete(id);
     }
   }
 
   /** Refuse a `permission.request` with a reason the model can act on. */
   denyPermission(frame: StepFrame, reason: string): void {
     this.#respondOk(frame.id, { message: reason });
+    this.#releaseReverse(frame.id);
   }
 
   /**
@@ -529,15 +539,13 @@ export class StepCliSession {
    */
   async endInput(queryId: string): Promise<void> {
     if (this.#closed) return;
-    await this.#send(this.#nextId(), "query.input_end", { queryId }, this.#options.requestTimeoutMs).catch(
-      () => undefined,
-    );
+    await this.#send(this.#nextId(), "query.input_end", { queryId }, this.#options.requestTimeoutMs);
   }
 
   /** StepCode's `query.interrupt`, used when the client aborts a turn mid-flight. */
   async interrupt(queryId: string): Promise<void> {
     if (this.#closed) return;
-    await this.#send(this.#nextId(), "query.interrupt", { queryId }).catch(() => undefined);
+    await this.#send(this.#nextId(), "query.interrupt", { queryId });
   }
 
   #installIdleSweep(): void {
@@ -560,40 +568,77 @@ export class StepCliSession {
   }
 
   /**
-   * Terminate the session: SIGTERM, then SIGKILL after the grace window, so a CLI mid-write cannot
-   * hold the proxy's own shutdown open.
+   * Reap the owned process tree before releasing this session. Concurrent callers share cleanup.
    */
-  async close(code = 0): Promise<void> {
+  close(code = 0): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
     this.#stopIdleSweep();
     const child = this.#child;
-    this.#child = undefined;
     this.#failAll(new StepSessionError(`StepCode session closed (${code}).`));
+    for (const held of this.#held.values()) this.#clearTimer(held.timer as never);
+    this.#held.clear();
     this.#announceExit();
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise<void>(resolve => {
-      let settled = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        this.#clearTimer(grace as never);
-        resolve();
-      };
-      const grace = this.#setTimer(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* already gone */
-        }
-        finish();
-      }, this.#killGraceMs);
+    this.#closePromise = child ? this.#terminate(child) : Promise.resolve();
+    return this.#closePromise;
+  }
+
+  async #terminate(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    let cancelWait = (): void => {};
+    const exited = new Promise<void>(resolve => {
+      const finish = (): void => { cancelWait(); resolve(); };
       child.once("close", finish);
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        finish();
-      }
+      cancelWait = () => child.removeListener("close", finish);
     });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failCleanup!: (error: unknown) => void;
+    const cleanupFailed = new Promise<never>((_, reject) => { failCleanup = reject; });
+    const gone = (): boolean => {
+      if (child.pid === undefined) return child.exitCode !== null || child.signalCode !== null;
+      try { process.kill(child.pid, 0); return false; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; throw error; }
+    };
+    const signal = (kind: NodeJS.Signals): void => {
+      try {
+        if (this.#platform !== "win32" && child.pid !== undefined) process.kill(-child.pid, kind);
+        else child.kill(kind);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    };
+    try {
+      if (this.#platform === "win32" && child.pid !== undefined) {
+        (this.#deps.killWindowsProcessTree ?? killWindowsProcessTree)(child.pid);
+        // Bun on Windows can retain null exit/signal fields after taskkill has reaped the tree.
+        // Verify with the OS before releasing the process and its stdio handles.
+        if (gone()) {
+          child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+          this.#child = undefined;
+          return;
+        }
+      } else {
+        signal("SIGTERM");
+        timer = this.#setTimer(() => {
+          try { signal("SIGKILL"); } catch (error) { failCleanup(error); }
+        }, this.#killGraceMs);
+      }
+      await Promise.race([exited, cleanupFailed, new Promise<void>((resolve, reject) => {
+        const deadline = this.#setTimer(() => {
+          try {
+            if (gone()) resolve();
+            else reject(new StepSessionError("StepCode process cleanup could not be confirmed.", "step_cli_cleanup_failed"));
+          } catch (error) { reject(error); }
+        }, this.#killGraceMs + 2_000);
+        void exited.then(() => this.#clearTimer(deadline as never));
+      })]);
+      // A POSIX parent can exit on SIGTERM while a descendant ignores it. The owned group still
+      // needs SIGKILL before the parent-close receipt releases cleanup.
+      if (this.#platform !== "win32" && child.pid !== undefined) signal("SIGKILL");
+      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref?.();
+      this.#child = undefined;
+    } finally {
+      if (timer !== undefined) this.#clearTimer(timer as never);
+      cancelWait();
+    }
   }
 }
 

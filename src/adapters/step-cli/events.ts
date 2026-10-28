@@ -24,8 +24,8 @@ import type { StepFrame } from "./stdio-frames";
 /**
  * A reverse request the CLI is waiting on this peer to answer.
  *
- * `permission.request` is allowed immediately because the approval already happened upstream of this
- * adapter. A `sdk_tool.invoke` is deliberately NOT answered here: its result only exists once the
+ * `permission.request` is allowed only for the owning query's declared catalog. A
+ * `sdk_tool.invoke` is deliberately NOT answered here: its result only exists once the
  * client has executed the tool and sent its next request, and answering it is how that result reaches
  * the model inside the query the model is already running.
  */
@@ -37,6 +37,8 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
   const payload = asRecord(frame.payload);
   const expired = payload.__expired === true;
   const turn = currentTurn(session);
+  const ownsQuery = turn?.queryId !== undefined && payload.queryId === turn.queryId
+    && currentQuery(session) === turn.queryId;
 
   if (expired) {
     // The hold elapsed, so the client can never answer this call. Refuse it so StepCode stops waiting
@@ -53,11 +55,13 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
   // waiting out its own 60s/120s window with nothing to show for it, and the client has no way to
   // learn that the call was silently dropped.
   if (frame.method === "permission.request") {
-    session.allowPermission(frame);
+    const toolName = typeof payload.toolName === "string" ? payload.toolName : "";
+    if (ownsQuery && turn && resolveStepToolName(toolName, turn.emittedNames)) session.allowPermission(frame);
+    else session.denyPermission(frame, "No active query owns this declared tool permission.");
     return;
   }
 
-  if (frame.method === "sdk_tool.invoke" && !turn) {
+  if (frame.method === "sdk_tool.invoke" && (!turn || !ownsQuery)) {
     session.refuseToolCall(
       frame,
       "OpenCodex is not expecting a tool call for this conversation right now, so it was not executed.",
@@ -95,7 +99,7 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
       typeof payload.toolUseId === "string" && payload.toolUseId.length > 0
         ? payload.toolUseId
         : `call_${frame.id}`;
-    turn.pool.rememberHeldTool(turn.ref, { frameId: frame.id, callId });
+    turn.pool.rememberHeldTool(turn.ref, { frameId: frame.id, callId, queryId: turn.queryId!, catalogKey: turn.catalogKey });
     turn.emit({ type: "tool_call_start", id: callId, name: resolved });
     turn.emit({ type: "tool_call_delta", arguments: JSON.stringify(asRecord(payload.input)) });
     turn.emit({ type: "tool_call_end" });
@@ -145,6 +149,7 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
   const turn = currentTurn(session);
   if (!turn) return;
   const payload = asRecord(frame.payload);
+  if (!turn.queryId || payload.queryId !== turn.queryId || currentQuery(session) !== turn.queryId) return;
   const message = asRecord(payload.message ?? payload);
   const type = typeof message.type === "string" ? message.type : undefined;
 
@@ -182,7 +187,7 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
     const queryId = currentQuery(session);
     if (queryId) {
       forgetQuery(session);
-      void session.endInput(queryId);
+      void session.endInput(queryId).catch(() => session.close());
     }
     return;
   }
