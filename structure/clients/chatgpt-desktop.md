@@ -115,14 +115,18 @@ Canonicalization or verification failure refuses execution. This covers environm
 commands and catalog, prompt, login, refresh and remote-workspace consumers. The
 `src/cli/codex-launcher.ts` handoff validates the selected shim backing on routed,
 passthrough and help/version fast paths, preserving the validated invocation's argv,
-environment and Windows interpreter options. Generated app-server launchers use the
+environment and Windows interpreter options. This CLI handoff additionally verifies every
+enclosing `.app` at the canonical executable location, independent of its name or mutable
+bundle identifier. Nested apps use the outer bundle root so its signature is checked too;
+a lexical app member that cannot be canonicalized refuses. Generated app-server launchers use the
 hidden validator in `src/cli/internal-command.ts` on each execution; this command skips
 root shim auto-repair, its stdout is a single path, and newline-bearing input or
-canonical output is refused. Ordinary CLI and
-third-party app paths retain their existing policy. Conventional automatic discovery remains
+canonical output is refused. Ordinary non-bundle CLI paths retain their existing policy;
+third-party app paths retain their policy outside the stricter CLI handoff. Conventional automatic discovery remains
 limited to the two ChatGPT installation roots. Regression coverage is in
 `tests/codex-integration/exec-known-app-bundles.test.ts`,
 `tests/codex-integration/exec-launcher-boundary.test.ts`,
+`tests/codex-integration/exec-cli-renamed-app-bundle.test.ts`,
 `tests/codex-integration/exec-renamed-app-bundle.test.ts` and
 `tests/clients/desktop-app-server-exec-boundary.test.ts`. Portable injected-verifier and
 shell tests do not establish native macOS signature or real Desktop respawn acceptance.

@@ -275,7 +275,7 @@ export async function spawnCodex(args: readonly string[], env: CodexLaunchEnv, d
   let launch: CodexLaunchCommand, inv: Awaited<ReturnType<typeof validatedCodexExecInvocationAsync>>;
   try {
     launch = resolveCodexLaunchCommand(env, deps);
-    inv = await validatedCodexExecInvocationAsync(launch.command, args, { ...deps.execBoundary, env: launch.env as NodeJS.ProcessEnv });
+    inv = await validatedCodexExecInvocationAsync(launch.command, args, { ...deps.execBoundary, verifyAnyAppBundle: true, env: launch.env as NodeJS.ProcessEnv });
   } catch (error) {
     console.error(error instanceof CodexNotFoundError ? CODEX_INSTALL_HINT : `❌ Cannot launch codex: ${error instanceof Error ? error.message : "executable verification failed"}`);
     return 1;

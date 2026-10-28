@@ -20,8 +20,9 @@ import {
  * known-Codex-bundle classifier, and — when the lexical or canonical path sits
  * inside a ChatGPT.app or Codex.app bundle at any location — checked by the shared
  * signature/ownership policy before the same canonical target is returned for
- * execution. Anything else, including binaries inside third-party app bundles,
- * is passed through to the shared launcher unchanged.
+ * execution. CLI handoffs additionally classify any enclosing canonical .app,
+ * independent of bundle name or identifier. Other callers retain the known-app
+ * policy; non-bundle executables pass through to the shared launcher unchanged.
  *
  * The check is one-shot per invocation and deliberately not memoized:
  * directory-service group membership, signature state, and directory-entry
@@ -53,6 +54,8 @@ export interface CodexExecBoundaryDeps {
   executable?: (path: string) => boolean;
   /** Canonicalizer; returns null when the path cannot be resolved. */
   realpath?: (path: string) => string | null;
+  /** CLI handoffs verify any enclosing app, without trusting mutable bundle identity metadata. */
+  verifyAnyAppBundle?: boolean;
   /** Discovered Desktop bundle identity, retained by its generated launcher across respawns. */
   expectedBundleRoot?: string;
   macBundleTrustReason?: (bundleRoot: string, binary: string) => string | null;
@@ -115,7 +118,7 @@ function resolveDarwinExecPath(command: string, deps: CodexExecBoundaryDeps): { 
 
 /**
  * Canonical (bundleRoot, binary) pair when the resolved path classifies into a
- * known Codex desktop bundle, else null. The pair is always consistent:
+ * known Codex desktop bundle (or any enclosing app for CLI handoffs), else null. The pair is always consistent:
  * both halves are canonicalized together so a symlinked HOME or a PATH alias
  * cannot split the containment check, and a bundle member that cannot be
  * canonicalized refuses rather than escaping the known-bundle classification.
@@ -125,9 +128,12 @@ function darwinBundleTarget(resolved: string, deps: CodexExecBoundaryDeps): { bu
   if (deps.expectedBundleRoot !== undefined && !posix.isAbsolute(deps.expectedBundleRoot)) {
     throw new CodexExecTrustError("the recorded app bundle must be an absolute path");
   }
-  const bundle = deps.expectedBundleRoot ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
-  if (!bundle) return null;
   const binary = realpath(resolved);
+  // Use the outer canonical app for nested layouts, protecting its signature too.
+  // A lexical app whose target cannot be canonicalized still enters the refusal path.
+  const enclosing = deps.verifyAnyAppBundle ? /^(.*?\/[^/]*\.app)(?:\/|$)/i.exec(binary ?? resolved)?.[1] : undefined;
+  const bundle = deps.expectedBundleRoot ?? enclosing ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
+  if (!bundle) return null;
   if (binary === null) throw new CodexExecTrustError("cannot canonicalize the app-bundle exec target");
   const canonicalBundle = realpath(bundle);
   if (canonicalBundle === null) throw new CodexExecTrustError("cannot canonicalize the app bundle");
