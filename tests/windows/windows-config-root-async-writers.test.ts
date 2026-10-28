@@ -7,6 +7,7 @@ import { handleEffortCommand } from "../../src/cli/effort";
 import { handleModels } from "../../src/cli/models";
 import { handleProviderCommand } from "../../src/cli/provider";
 import { handleAdvisorRoutes } from "../../src/server/management/advisor-routes";
+import * as advisorActivation from "../../src/lib/advisor-activation";
 import type { OcxConfig } from "../../src/types";
 import * as paths from "../../src/config/paths";
 import { resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests,
@@ -88,15 +89,18 @@ function holdParent() {
     release() { held = false; released.resolve(); } };
 }
 const operations = ["set", "unset", "import", "effort", "model-add", "model-remove", "provider-add", "provider-remove", "provider-default", "advisor"] as const;
+function requestAdvisor() {
+  const url = new URL("http://localhost/api/advisor/settings");
+  advisorConfig = fixture() as OcxConfig;
+  return handleAdvisorRoutes({ url, req: new Request(url, { method: "PUT", body: JSON.stringify({ enabled: true }) }),
+    config: advisorConfig, deps: {}, version: "test", trustedLoopbackIngress: false, guiSessionIssuance: null,
+    convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+    syncClaudeAgentDefsBestEffort: async () => {},
+  });
+}
 function run(operation: typeof operations[number]) {
   if (operation === "advisor") {
-    const url = new URL("http://localhost/api/advisor/settings");
-    advisorConfig = fixture() as OcxConfig;
-    return handleAdvisorRoutes({ url, req: new Request(url, { method: "PUT", body: JSON.stringify({ enabled: true }) }),
-      config: advisorConfig, deps: {}, version: "test", trustedLoopbackIngress: false, guiSessionIssuance: null,
-      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
-      syncClaudeAgentDefsBestEffort: async () => {},
-    }).then(async response => {
+    return requestAdvisor().then(async response => {
       if (response?.status === 500) { expect(await response.json()).toEqual({ error: { code: "write_failed", message: "The configuration could not be saved." } }); return 1; }
       expect(response?.status).toBe(200); return 0;
     });
@@ -174,4 +178,15 @@ test.each(["changed", "removed"])("custom-model removal refuses a %s confirmed r
     expect(readFileSync(join(root, "config.json"), "utf8")).toBe(bytes);
     expect(existsSync(join(root, "config-mutation.sqlite"))).toBe(false);
   } finally { parent.release(); await work; }
+});
+
+test("Advisor response snapshots the admitted phase before queued live edits", async () => {
+  const hook = spyOn(advisorActivation, "activateAdvisor").mockImplementation(config => {
+    queueMicrotask(() => { config.advisor!.enabled = false; });
+  });
+  restores.push(() => hook.mockRestore());
+  const response = await requestAdvisor();
+  expect(response?.status).toBe(200);
+  expect((await response!.json()).settings.enabled).toBe(true);
+  expect(advisorConfig?.advisor?.enabled).toBe(false);
 });

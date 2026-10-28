@@ -188,7 +188,7 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
     ?? (await import("../../config")).saveConfigPreservingClaudeCode;
   let published = false;
   try {
-    await withConfigDirHardeningSettled(getConfigDir(), () => {
+    return await withConfigDirHardeningSettled(getConfigDir(), () => {
       const disk = ctx.deps.saveConfigPreservingClaudeCode ? undefined : readConfigDiagnostics();
       if (disk?.source === "fallback") throw new Error("config_unavailable");
       const candidate = disk?.source === "file" ? disk.config : config;
@@ -205,6 +205,7 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
       if (candidate.advisor === undefined) delete config.advisor;
       else config.advisor = candidate.advisor;
       activateAdvisor(config);
+      return jsonResponse(advisorInfo(config), 200, req, config);
     });
   } catch (error) {
     if (published) throw error;
@@ -212,5 +213,4 @@ async function putAdvisorSettings(ctx: ManagementContext): Promise<Response> {
       ? jsonResponse({ error: { code: "config_busy", message: "Another process is saving the configuration. Try again in a moment." } }, 409, req, config)
       : jsonResponse({ error: { code: "write_failed", message: "The configuration could not be saved." } }, 500, req, config);
   }
-  return jsonResponse(advisorInfo(config), 200, req, config);
 }
