@@ -23,7 +23,10 @@ for (const listener of ["unauthenticatedLoopbackListener", "hub.managementIngres
       const auxiliaryPort = occupied.port!;
       // Also hold the public endpoint: auxiliary failure must win before even a
       // pinned start attempts public-port reclamation. Nobody can steal this port.
-      const publicListener = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("public canary") });
+      const publicListener = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request =>
+        // Prove this listener is foreign so recovery can reach the auxiliary preflight.
+        new URL(request.url).pathname === "/healthz"
+          ? Response.json({ service: "public-canary" }) : new Response("public canary") });
       const publicPort = publicListener.port;
       writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
         port: publicPort, hostname: "127.0.0.1", providers: {}, defaultProvider: "openai",

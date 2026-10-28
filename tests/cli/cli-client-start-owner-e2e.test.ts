@@ -8,6 +8,37 @@ import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
+test("the refused startup fixture proves absence across both loopback families", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-refused-start-probe-"));
+  const child = Bun.spawn([
+    process.execPath, "--preload", repoPath("tests/fixtures/refused-local-probe-preload.ts"), "-e", `
+      import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from ${JSON.stringify(repoPath("src/server/proxy-liveness.ts"))};
+      console.log(JSON.stringify(await observeProxyLiveness({ ...START_OWNERSHIP_LIVENESS,
+        readPidFn: () => null, readRuntimeFn: () => null,
+        configFn: () => ({ port: 42101, hostname: "127.0.0.1" }),
+        loopbackAvailabilityFn: () => "available", sleepFn: async () => {},
+      })));
+    `,
+  ], {
+    cwd: root,
+    env: { HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex") },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const deadline = setTimeout(() => child.kill(), watchdogMs(10_000));
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(code, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ kind: "absent", live: null });
+    expect(stderr.match(/\[refused-probe\] ECONNREFUSED/g)).toHaveLength(6);
+  } finally {
+    clearTimeout(deadline);
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+    removeTreeWithRetry(root);
+  }
+}, Math.max(30_000, watchdogMs(10_000) + 5_000));
+
 // The real handleStart checks ownership, then awaits its configured-port /healthz
 // probe. Commit a desktop claim while answering that probe: the lease-held recheck
 // must refuse before the connected-client branch. The client runtime's own fence
