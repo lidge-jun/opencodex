@@ -5,6 +5,10 @@ import { allocateCodexCliUpdateGateOwner, createWorkerCommitWindow, codexCliUpda
 import { startWindowsCliChild } from "../../src/codex/windows-cli-child";
 import { setWindowsOwnerAclAsyncRunnerForTests } from "../../src/lib/windows-owner-acl";
 import type { openWindowsCliApplyAuthority } from "../../src/codex/cli-update-job-store-windows";
+import type { WindowsApplyAcquisition, WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
+import { ptr } from "bun:ffi";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { win32 } from "node:path";
 
 declare const self: Worker;
 if (Bun.isMainThread === false) {
@@ -13,8 +17,9 @@ if (Bun.isMainThread === false) {
   self.onmessage = async event => {
     if (ran) return;
     ran = true;
-    const { requestId, planId, inspectionDeps, target, gate, fence, aclReleaseFailure } = event.data;
-    let anchor: { owner?: { authority: Awaited<ReturnType<typeof openWindowsCliApplyAuthority>> } } | undefined;
+    const { requestId, planId, inspectionDeps, target, gate, fence, aclReleaseFailure, replaceLock } = event.data;
+    let anchor: { acquisition?: WindowsApplyAcquisition; owner?: { authority: Awaited<ReturnType<typeof openWindowsCliApplyAuthority>> } } | undefined;
+    let replacementCreated = false;
     const nativeSettlements: { terminal: boolean; cleanupComplete: boolean }[] = [];
     const abort = new AbortController();
     const view = new Int32Array(gate), word = new Int32Array(fence);
@@ -35,11 +40,26 @@ if (Bun.isMainThread === false) {
         },
         startWindowsChild: invocation => {
           const installing = invocation.policy === "installer";
-          if (installing && aclReleaseFailure) {
+          if (installing && (aclReleaseFailure || replaceLock)) {
             const authority = anchor!.owner!.authority, release = authority.release.bind(authority);
             authority.release = async () => {
-              setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
-              try { return await release(); } finally { setWindowsOwnerAclAsyncRunnerForTests(null); }
+              const ctx = anchor!.acquisition!.resources as { kernel: Parameters<WindowsApplyAuthorityPins["release"]>[1] };
+              const close = ctx.kernel.symbols.CloseHandle;
+              if (replaceLock) ctx.kernel.symbols.CloseHandle = handle => {
+                const buffer = Buffer.alloc(32768 * 2);
+                const length = ctx.kernel.symbols.GetFinalPathNameByHandleW(handle, ptr(buffer), 32768, 0);
+                const isLock = buffer.toString("utf16le", 0, length * 2) === win32.toNamespacedPath(authority.lock);
+                const result = close(handle);
+                if (isLock && result) {
+                  mkdirSync(authority.lock);
+                  writeFileSync(win32.join(authority.lock, "owner.json"), requestId);
+                  replacementCreated = true;
+                }
+                return result;
+              };
+              if (aclReleaseFailure) setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
+              try { return await release(); }
+              finally { ctx.kernel.symbols.CloseHandle = close; setWindowsOwnerAclAsyncRunnerForTests(null); }
             };
           }
           if (installing && (Atomics.load(view, 0) !== owner || Atomics.load(word, 0) !== 2)) throw new Error("native start outside commit");
@@ -54,7 +74,7 @@ if (Bun.isMainThread === false) {
           return child;
         },
       });
-      self.postMessage({ type: "result", requestId, result, cleanupConfirmed: nativeSettlements.length > 0
+      self.postMessage({ type: "result", requestId, result, cleanupConfirmed: (!replaceLock || replacementCreated) && nativeSettlements.length > 0
         && nativeSettlements.every(item => item.terminal && item.cleanupComplete) });
     } catch {
       self.postMessage({ type: "fixture-error", requestId });

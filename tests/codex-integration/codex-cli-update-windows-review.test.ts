@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { toArrayBuffer } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 import * as fs from "node:fs";
 import { join, win32 } from "node:path";
 import * as acl from "../../src/lib/windows-owner-acl";
@@ -106,7 +106,7 @@ native("ACL-only release failure deletes only its owned lock and permits a later
   } finally { expect(await next.release()).toBe(true); }
 }, 60000);
 
-native("an unreadable lock namespace never proves apply authority disposal", async () => {
+native("original held deletion proves disposal even when the lock pathname cannot be observed", async () => {
   const f = await authorityFixture(), guard = await f.acquire();
   const realStat = fs.lstatSync;
   const stat = spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
@@ -116,11 +116,89 @@ native("an unreadable lock namespace never proves apply authority disposal", asy
   acl.setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
   try {
     expect(await guard.release()).toBe(false);
-    expect(guard.resourcesReleased).toBe(false);
+    expect(guard.resourcesReleased).toBe(true);
   } finally { stat.mockRestore(); acl.setWindowsOwnerAclAsyncRunnerForTests(null); }
   // This fixture created no child/staging, and restores the observation before teardown.
   expect(f.owners[0]!.releaseIfClean()).toBe(true);
   expect(fs.existsSync(guard.lock)).toBe(false);
+}, 60000);
+
+native("a replacement lock after original handle close cannot retain the old authority", async () => {
+  const f = await authorityFixture(), guard = await f.acquire();
+  const ctx = f.owners[0]!.resources as { kernel: Parameters<WindowsApplyAuthorityPins["release"]>[1] };
+  const close = ctx.kernel.symbols.CloseHandle;
+  let replaced = false;
+  ctx.kernel.symbols.CloseHandle = handle => {
+    const buffer = Buffer.alloc(32768 * 2);
+    const length = ctx.kernel.symbols.GetFinalPathNameByHandleW(handle, ptr(buffer), 32768, 0);
+    const isLock = buffer.toString("utf16le", 0, length * 2) === win32.toNamespacedPath(guard.lock);
+    const result = close(handle);
+    if (isLock && result) {
+      fs.mkdirSync(guard.lock);
+      fs.writeFileSync(join(guard.lock, "owner.json"), "replacement-owner");
+      replaced = true;
+    }
+    return result;
+  };
+  try { expect(await guard.release()).toBe(true); }
+  finally { ctx.kernel.symbols.CloseHandle = close; }
+  expect(replaced).toBe(true);
+  expect(guard.resourcesReleased).toBe(true);
+  expect(fs.readFileSync(join(guard.lock, "owner.json"), "utf8")).toBe("replacement-owner");
+  expect(await guard.release()).toBe(false);
+  expect(fs.readFileSync(join(guard.lock, "owner.json"), "utf8")).toBe("replacement-owner");
+}, 60000);
+
+native.each([1, 2])("failed deletion of held object %s never proves disposal", async refused => {
+  const f = await authorityFixture(), guard = await f.acquire();
+  const ctx = f.owners[0]!.resources as { kernel: Parameters<WindowsApplyAuthorityPins["release"]>[1] };
+  const dispose = ctx.kernel.symbols.SetFileInformationByHandle;
+  let deletes = 0;
+  ctx.kernel.symbols.SetFileInformationByHandle = (...args) => {
+    if (args[1] === 4 && ++deletes === refused) return 0;
+    return dispose(...args);
+  };
+  try {
+    expect(await guard.release()).toBe(false);
+    expect(guard.resourcesReleased).toBe(false);
+  } finally { ctx.kernel.symbols.SetFileInformationByHandle = dispose; }
+  expect(f.owners[0]!.releaseIfClean()).toBe(true);
+  expect(fs.existsSync(guard.lock)).toBe(true);
+  await expect(f.acquire()).rejects.toThrow("job_store_busy");
+}, 60000);
+
+native("a failed native close retains its exact pin and execution token", async () => {
+  const f = await authorityFixture(), guard = await f.acquire();
+  const ctx = f.owners[0]!.resources as { kernel: Parameters<WindowsApplyAuthorityPins["release"]>[1]; pins: WindowsApplyAuthorityPins };
+  const close = ctx.kernel.symbols.CloseHandle;
+  let failed: bigint | undefined, releases = 0, attempts = 0;
+  ctx.kernel.symbols.CloseHandle = handle => {
+    failed ??= handle;
+    if (handle === failed) { attempts++; return 0; }
+    return close(handle);
+  };
+  try {
+    expect(await guard.release()).toBe(false);
+    expect(guard.resourcesReleased).toBe(false);
+    expect(attempts).toBe(1);
+    expect(f.owners[0]!.releaseIfClean({ release() { releases++; } })).toBe(false);
+    expect(releases).toBe(0);
+  } finally {
+    ctx.kernel.symbols.CloseHandle = close;
+    // Restore the injected fault and explicitly dispose only this fixture's pin.
+    if (failed !== undefined) expect(ctx.pins.release(failed, ctx.kernel)).toBe(true);
+  }
+  expect(f.owners[0]!.releaseIfClean()).toBe(true);
+}, 60000);
+
+native("remaining staging prevents disposal after lock deletion is refused", async () => {
+  const f = await authorityFixture(), guard = await f.acquire();
+  const staging = await guard.createStaging();
+  expect(await guard.release()).toBe(false);
+  expect(guard.resourcesReleased).toBe(false);
+  expect(fs.existsSync(staging)).toBe(true);
+  expect(f.owners[0]!.releaseIfClean()).toBe(true);
+  await expect(f.acquire()).rejects.toThrow("job_store_busy");
 }, 60000);
 
 for (const when of ["before ACL", "during ACL"] as const) native(`identity failure ${when} preserves lock and closes pins`, async () => {

@@ -65,6 +65,39 @@ native.each([false, true])("a fresh Worker closes after offline Windows apply, A
   }
 }, WINDOWS_APPLY_BUDGET_MS);
 
+native("a replacement lock survives while the original offline apply Worker closes", async () => {
+  let root: string | undefined, closed = false, errored = false, worker: Worker | undefined;
+  const requestId = crypto.randomUUID(), messages: WorkerFixtureReply[] = [];
+  try {
+    const f = await fixture(undefined, created => { root = created; liveFixtureRoots.add(created); });
+    const id = await approved(f);
+    worker = new Worker(new URL("../helpers/windows-apply-worker.ts", import.meta.url),
+      { type: "module", preload: windowsTempAncestryPreload(f.root) });
+    const joined = new Promise<void>((resolve, reject) => {
+      worker!.addEventListener("message", event => { messages.push(event.data); });
+      worker!.addEventListener("error", () => { errored = true; reject(new Error("replacement fixture Worker failed")); }, { once: true });
+      worker!.addEventListener("close", () => { closed = true; resolve(); }, { once: true });
+    });
+    const replied = new Promise<WorkerFixtureReply>(resolve => {
+      worker!.addEventListener("message", event => {
+        if (["result", "fixture-error"].includes(event.data?.type)) resolve(event.data);
+      });
+    });
+    const gate = new SharedArrayBuffer(8), fence = createCodexCliUpdateFence();
+    worker.postMessage({ requestId, planId: id, inspectionDeps: f.deps.inspectionDeps, target: f.target, gate, fence, replaceLock: true });
+    const reply = await Promise.race([replied, joined.then(() => { throw new Error("Worker closed without fixture result"); })]);
+    expect(reply.result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false, cleanupErrors: [] });
+    await joined;
+    expect(fixtureCleanupProven(messages, requestId, closed, errored)).toBe(true);
+    expect(messages.filter(m => m.type === "native-start")).toHaveLength(1);
+    expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
+    expect(readFileSync(join(f.prefix, ".ocx-codex-cli-apply.lock", "owner.json"), "utf8")).toBe(requestId);
+  } finally {
+    if (root && fixtureCleanupProven(messages, requestId, closed, errored)) liveFixtureRoots.delete(root);
+    if (!closed) worker?.unref();
+  }
+}, WINDOWS_APPLY_BUDGET_MS);
+
 native("Windows cancellation won inside final synchronous scan cannot create an installer", async () => {
   const f = await fixture(undefined, root => liveFixtureRoots.add(root)), id = await approved(f);
   const fence = createCodexCliUpdateFence(), gate = new SharedArrayBuffer(8);

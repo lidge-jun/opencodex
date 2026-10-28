@@ -340,7 +340,7 @@ can remain resident until separately authorized recovery. A crash still loses in
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
 Authority disposal is proved only after identity/token-fenced lock removal, absent staging and
 an empty pin set. Its `resourcesReleased` evidence is separate from release's ACL diagnostic.
-Only `ENOENT` proves namespace absence; an unreadable lock namespace remains unproved.
+Disposal follows the original held objects' deletion, even if the pathname is unreadable or replaced.
 Apply preserves that diagnostic in cleanup errors, but releases the execution token once staging,
 toolchain and authority disposal are all proved, including during terminal recovery.
 A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips
@@ -469,6 +469,9 @@ documented residual it always was.
 
 On Windows, `src/codex/cli-update-job-store-windows.ts` maps the same ledger contract onto NTFS handle semantics and the public admit/read/finish API in `src/codex/cli-update-job.ts` dispatches to it asynchronously. Each ancestor from the volume root is opened relative to its already-held parent — never a re-parsed path — and refused on any reparse attribute, then evaluated under the "trusted-ancestry" ACL policy (owner is the serving token or SYSTEM/Administrators/TrustedInstaller; untrusted grantees may hold read and, on admin-owned ancestors only, broad create-only rights). The config-root parent and a pre-existing config root are verified under the "write-private" policy and are never rehardened; only a directory the call itself creates is icacls-hardened and held to the strict "private" rule. File identity is the volume serial plus 128-bit file ID with single link and no pending delete, the dev:ino analog. Ledger writes go through a private hardened temp that is byte/ACL/identity-verified, renamed while its handle is held, re-read through the published name, and flushed at the directory. The admission mutex is a mkdir lock plus an owner record released only while both held pins still show this call identity and content, so a leftover lock blocks later admission exactly like POSIX. ACL snapshots are taken per phase through the shared bounded PowerShell read in `src/lib/windows-owner-acl.ts` (async variant), not per path. Pins bind each object to its verified state for the operation and the private DACL confines writers, but this is not a proof against concurrent mutation by the serving account or an elevated process, which sit inside the trust boundary as on POSIX. The backend is x64-only; cross-account (other-SID) and ARM64 behavior are unverified.
 
+Apply-authority disposal requires successful identity/token-fenced delete-on-close of both original
+lock objects, zero remaining pins and no staging. A replacement at the pathname neither proves nor
+prevents this owner's disposal; failed deletion or close retains its Worker execution token.
 Apply-authority release checks held identity before and after its ACL read. An ACL-only failure
 still attempts deletion through the original token-fenced pins and reports a failed release verdict.
 That verdict alone does not retain the Worker: proved resource disposal permits closure and a later apply.
