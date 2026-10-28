@@ -1,5 +1,5 @@
 import { projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
-import { configuredUltraFastSlugs } from "./configured-tiers";
+import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "./configured-tiers";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
@@ -37,10 +37,10 @@ import {
   readCatalogBackup,
   readCodexCatalogPath,
   readCodexCatalogPathForHome,
-  readNativeBaseline,
   nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
+import { readNativeBaseline } from "./native-priority";
 import { ocxRoutedNamespaceCounts, routedRemovalBackedByConfigFile, unconfiguredRoutedRemoval } from "./routed-removal";
 import { ConfigMutationLockError } from "../../config/mutation-lock";
 import {
@@ -511,6 +511,7 @@ function writeRetainedCatalogSync({
   catalog.models = mergeCatalogEntriesFromObservedState({
     ultraFastTier: ultraFastTierEnabled(config),
     configuredUltraFastSlugs: configuredUltraFastSlugs(orderedGoModels),
+    retainedFlexPolicyBySlug: retainedFlexPolicyBySlug(config.providers ?? {}, catalogModelsForMerge, orderedGoModels),
     modelPickerOrder,
     accountSelectors,
     catalogModels: catalogModelsForMerge,

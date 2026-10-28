@@ -2,6 +2,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
+import type { ShadowCallSourceOption } from "./shadow-call-source";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -166,6 +167,23 @@ export interface ShadowCallData {
   model: string;
   /** Source models the runtime actually intercepts. Older runtimes omit it. */
   sourceModels?: string[];
+  /** Runtime-owned source inventory; older runtimes omit it. */
+  sourceModelOptions?: ShadowCallSourceOption[];
+}
+
+/**
+ * Message for a rejected shadow-call save.
+ *
+ * The endpoint returns HTTP 400 for several distinct validation failures, so the status alone
+ * cannot tell the operator what to change. The stable `code` decides the message; an older
+ * runtime or a proxy error page without one falls back to the neutral save failure instead of
+ * claiming the replacement target is wrong. A failed fetch stays a network error and never
+ * reaches this mapping.
+ */
+export function shadowCallSaveErrorKey(code: unknown): TKey {
+  if (code === "shadow_call_target_invalid") return "models.shadowCallTargetInvalid";
+  if (code === "shadow_call_source_invalid") return "models.shadowCallSourceInvalid";
+  return "models.shadowCallSaveFailed";
 }
 
 /** The global auto-review (approval reviewer) override the Models settings panel writes. */

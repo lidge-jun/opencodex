@@ -25,6 +25,11 @@ opencodex 会把持久化配置存放在 `$OPENCODEX_HOME/config.json`，通常�
 `config.json.invalid-<timestamp>`，在控制台警告，并以默认值启动。文件缺失时也会使用新安装默认值：
 一个 `openai` forward provider。
 
+本地 `ocx config set`、`unset`、`import`、离线 `ocx effort`、自定义模型的 add/remove
+以及 provider 的 add/remove/set-default 操作，会拒绝修改已有的无效或不可读的 `config.json`，
+并保留原始字节。请运行 `ocx config validate` 并修复文件后再重试。已有配置时，
+import 同样要求目标文件可读且有效。
+
 ## 优先级与默认值
 
 `config.json` 中的有效值会覆盖内置默认值。缺失的可选字段使用各 domain 页面文档中说明的默认值。

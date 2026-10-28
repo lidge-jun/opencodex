@@ -36,6 +36,12 @@ temporairement indisponible, ce qui n’est pas le cas.
 Cliquez sur le nom d’une couche pour afficher le texte qu’elle envoie. La boîte de dialogue le lit
 depuis `codex debug prompt-input` : il s’agit donc du contenu réel, et non d’une description.
 
+Chaque appel de lecture dispose d’un délai fixe de 15 secondes, qui inclut la lecture des
+métadonnées et l’attente d’une sonde partagée. L’expiration est vérifiée après la fin de la
+lecture synchrone des métadonnées ; si le délai est épuisé, aucune nouvelle sonde ne démarre.
+À l’expiration, la boîte de dialogue indique que le prompt n’a pas pu être lu, mais les
+instructions de base lues localement sont tout de même renvoyées.
+
 Il arrive qu’il n’y ait rien à afficher. La boîte de dialogue précise alors la raison :
 
 - **Le fichier existe, mais il est vide.** Votre fichier `~/.codex/AGENTS.md` ne contient aucun

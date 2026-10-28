@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { create } from "@bufbuild/protobuf";
@@ -150,6 +152,123 @@ describe("server listener shutdown", () => {
     expect(drainSettled).toBe(true);
     expect(secondReleaseSettled).toBe(true);
     expect(releases).toBe(1);
+  });
+});
+
+
+describe("routing cleanup before listener release", () => {
+  test("runs synchronous restoration after active-turn drain while a real loopback port remains held", async () => {
+    const events: string[] = [];
+    let routing = "local";
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false,
+      fetch: () => new Response(routing) });
+    const port = server.port!;
+    let replacement: ReturnType<typeof Bun.serve> | undefined;
+    const turn = new AbortController();
+    const lease = tryAdmitTurn();
+    setServerStartupLifecycleReleaseForTests(async () => { events.push("startup-release"); });
+    let draining: Promise<boolean> | undefined;
+    try {
+      expect(lease).not.toBeNull();
+      registerTurn(turn, lease!);
+      expect(getActiveTurnCount()).toBe(1);
+      expect(await (await fetch(server.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("local");
+      draining = drainAndShutdown(server, 0, (): undefined => {
+        expect(turn.signal.aborted).toBe(true);
+        expect(getActiveTurnCount()).toBe(0);
+        events.push("restore-start");
+        expect(() => {
+          replacement = Bun.serve({ hostname: "127.0.0.1", port, reusePort: false,
+            fetch: () => new Response("unexpected replacement") });
+        }).toThrow();
+        routing = "native";
+        events.push("restore-finished");
+        return undefined;
+      });
+      expect(await draining).toBe(true);
+      expect(events).toEqual(["restore-start", "restore-finished", "startup-release"]);
+      replacement = Bun.serve({ hostname: "127.0.0.1", port, reusePort: false,
+        fetch: () => new Response(routing) });
+      expect(await (await fetch(replacement.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("native");
+    } finally {
+      if (lease) {
+        unregisterTurn(turn);
+        lease.release();
+      }
+      await draining?.catch(() => {});
+      await server.stop(true);
+      await replacement?.stop(true);
+    }
+  });
+
+  test("a synchronous restoration throw still releases a real listener and startup ownership", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false,
+      fetch: () => new Response("local") });
+    const port = server.port!;
+    let replacement: ReturnType<typeof Bun.serve> | undefined;
+    const failure = new Error("restore failed");
+    let released = 0;
+    setServerStartupLifecycleReleaseForTests(async () => { released += 1; });
+    try {
+      await expect(drainAndShutdown(server, 0, () => {
+        throw failure;
+      })).rejects.toBe(failure);
+      expect(released).toBe(1);
+      replacement = Bun.serve({ hostname: "127.0.0.1", port, reusePort: false,
+        fetch: () => new Response("replacement") });
+      expect(await (await fetch(replacement.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("replacement");
+    } finally {
+      await server.stop(true);
+      await replacement?.stop(true);
+    }
+  });
+
+  test.each([true, false])("the actual SIGTERM handler restores before real listener stop (restore success: %s)", async restoreSucceeded => {
+    const events: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false,
+      fetch: () => new Response("local") });
+    const port = server.port!;
+    let replacement: ReturnType<typeof Bun.serve> | undefined;
+    const realStop = server.stop.bind(server);
+    server.stop = (force?: boolean) => { events.push("listener-stop"); return realStop(force); };
+    setServerStartupLifecycleReleaseForTests(async () => { events.push("startup-release"); });
+    let exit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { exit = resolve; });
+    let cleaned = false;
+    // Execute the real signal handler, not a replacement orchestration or only syncCleanup.
+    // Host restoration is a fixture; drainAndShutdown and Bun's listen/stop are real.
+    const source = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
+    const from = source.indexOf("  let shuttingDown = false;");
+    const to = source.indexOf('\n  process.on("SIGINT", shutdown);', from);
+    try {
+      expect(from).toBeGreaterThanOrEqual(0);
+      expect(to).toBeGreaterThan(from);
+      const code = new Bun.Transpiler({ loader: "ts" }).transformSync(
+        "function createShutdown() {\n" + source.slice(from, to) + "\nreturn shutdown;\n}",
+      );
+      const bindings = {
+        server, config: { shutdownTimeoutMs: 0 }, drainAndShutdown,
+        syncCleanup: () => {
+          if (!cleaned) { cleaned = true; events.push("native-restore", "grok-strip"); }
+          return restoreSucceeded;
+        },
+        noteExplicitShutdownRequested() {}, handledSignalExitCode: () => 0,
+        process: { exit }, console: { log() {} },
+      };
+      const shutdown = new Function(...Object.keys(bindings), code + "\nreturn createShutdown();")(
+        ...Object.values(bindings),
+      ) as (signal?: NodeJS.Signals) => void;
+      expect(await (await fetch(server.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("local");
+      shutdown("SIGTERM");
+      expect(await exited).toBe(restoreSucceeded ? 0 : 1);
+      expect(events).toEqual(["native-restore", "grok-strip", "listener-stop", "startup-release"]);
+      replacement = Bun.serve({ hostname: "127.0.0.1", port, reusePort: false,
+        fetch: () => new Response("replacement") });
+      expect(await (await fetch(replacement.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("replacement");
+    } finally {
+      await realStop(true);
+      await replacement?.stop(true);
+    }
   });
 });
 

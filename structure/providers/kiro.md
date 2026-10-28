@@ -141,7 +141,16 @@ budget until emitted, discarded, or cancelled; replay collectors are released af
 retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
 progress from an answer and therefore still require validation. Normal private completion
 and real tool calls need no completion retry.
-Coverage: `tests/providers/kiro/kiro-single-final.test.ts` and
+
+A turn can carry a real tool call and the private completion call together, in either order.
+The turn then continues through the real tools: the parser drops the completion call, ends the
+turn with `endTurn: false`, and logs one `[kiro] dropped the private final-answer call` line. The
+answer is held until the stream ends and is never relayed, so the drop is invisible to the client;
+only the model's ordinary prose and reasoning, released as commentary with the tool call, precede
+the tool. A second completion call, a completion call while `disabled`, and a malformed completion
+stay protocol errors.
+Coverage: `tests/providers/kiro/kiro-single-final.test.ts`,
+`tests/providers/kiro/kiro-completion-with-real-tools.test.ts` and
 `tests/server/server-kiro-completion-e2e.test.ts`.
 
 `src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.

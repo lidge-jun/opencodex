@@ -1,4 +1,5 @@
-import { mkdtempSync, lstatSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
+import { ownedArtifactUnlink } from "./mutation-guard.mjs";
+import { mkdtempSync, lstatSync, writeFileSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +27,7 @@ export function withPnpmCommandCwd(args, run) {
       }
       // Never recursively remove pnpm-created or replacement contents.
       for (const name of files) {
-        try { unlinkSync(join(cwd, name)); }
+        try { ownedArtifactUnlink(join(cwd, name)); }
         catch (error) { if (error?.code !== "ENOENT") throw error; }
       }
       rmdirSync(cwd);

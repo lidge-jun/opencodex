@@ -42,7 +42,7 @@ import type { RequestLogContext } from "../request-log";
 import { markLocalRequestLogRefusal } from "../request-log";
 import { CODEX_POOL_REFRESH_INCOMPLETE_LOG_REASON } from "../../codex/pool-refresh-backoff";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
-import { forceRefreshMainAccountToken } from "../../codex/main-account";
+import { forceRefreshMainAccountToken, mainAccountTokenQuotaWriter } from "../../codex/main-account";
 import { rebindPoolCreditPolicy } from "../../codex/pool-credit-policy";
 import { safeCallerSessionId } from "../caller-session-identity";
 import { copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
@@ -578,6 +578,7 @@ export async function refreshNativeMainForwardAuth(args: {
       ...authCtx,
       accessToken: refreshed.accessToken,
       chatgptAccountId: refreshed.chatgptAccountId,
+      mainQuotaWriter: mainAccountTokenQuotaWriter(refreshed) ?? authCtx.mainQuotaWriter,
     };
     const provider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(route.provider),

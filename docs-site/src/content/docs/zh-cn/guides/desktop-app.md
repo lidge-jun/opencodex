@@ -46,6 +46,10 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 在 macOS 上，关闭仪表盘后，应用会继续在菜单栏中运行。从 Dock 或 Finder 再次打开 OpenCodex 即可恢复仪表盘，无需重启代理。
 
+当 Codex 启动找不到 proxy 时，内置 CLI 会等待经过独立验证的 Desktop 恢复——即使 Desktop 没有记录在案的所有权声明也不例外。匹配到的 Desktop 已停止其 proxy，或其恢复无法验证时，会报错；但在不支持运行镜像验证的平台上，若有记录在案的所有权声明且应用仍在运行，则保留现有的有界等待。仅凭进程名或定位文件不会阻止普通的 CLI 启动。在 macOS 上，如果 shim 发现 OpenCodex 已退出且记录的所有权与有效的 **Start at Login** 注册一致，就会打开它。自动重新打开时，会选择该注册记录中的应用 bundle 路径，并检查其声明的主可执行文件是否与已注册的 Desktop 可执行文件一致。注册缺失、过期或不一致时，请手动打开 OpenCodex；具有相同 bundle 标识符的其他副本不会作为回退被选中。如果 shim 显示“activation not confirmed”，请在 shell 启动文件中的其他 PATH 设置之后添加 `. ~/.opencodex/codex-shell-env.sh`。
+
+恢复验证覆盖 macOS/Linux 上匹配的内置 CLI 以及受保护的系统级 Debian 安装。早期由 npm 创建的 shim 可能固定了单独的 Bun/CLI 安装，从而绕过 Desktop 的终端命令交接。该入口无法验证 macOS 或 Windows 的 Desktop（包括官方签名副本），也无法验证任意单用户 Linux 副本。请在 Desktop 的 Startup 页面重新创建 shim，或直接调用其内置 CLI。Windows 尚无法建立该恢复证明所需的运行镜像身份；被识别出的运行中同类进程不会获得恢复信任，在没有记录在案的 Desktop 声明时会报错，而不是启动 CLI proxy——即使其磁盘签名有效。存在记录声明且应用正在运行时，CLI 会保留对 Desktop proxy 的现有有界等待。
+
 ## 在托盘中查看用量
 
 在 macOS 和 Windows 上，点击托盘图标即可打开紧凑的用量窗口。托盘中的 **Show usage** 也能打开它，包括在不转发点击事件的 Linux 桌面上。在 Linux 上，仪表盘会在启动时打开，即使桌面环境没有显示托盘图标也是如此。

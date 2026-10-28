@@ -32,4 +32,4 @@ The hosted tool loops in `src/web-search/loop.ts`, `src/web-search/run-turn-loop
 `src/images/loop.ts` reconstruct progress events as signed thinking parts. Search's early
 commentary path retains these events for the next iteration.
 Intercepted search and image iterations emit their validated signed progress before fulfilling
-the hosted calls, retaining the same blocks for replay and avoiding duplicate live updates.
+the hosted calls, retaining the same blocks for replay and avoiding duplicate live updates. Unfinished calls never become executable search/media/advisor continuations; search history rejects an explicitly incomplete tool end.

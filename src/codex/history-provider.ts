@@ -1368,7 +1368,7 @@ export function syncCodexHistoryProvider(
   provider: CodexHistoryProvider,
   stateDbPath = resolveCodexStateDbPath(),
   backupPath = resolveExistingHistoryBackupPath(stateDbPath),
-  opts: { skipWhenProvablyNoop?: boolean } = {},
+  opts: { skipWhenProvablyNoop?: boolean; withWriteGuard?: <T>(write: () => T) => T } = {},
 ): CodexHistorySyncResult {
   // Opt-in steady-state gate (Design B loopback callers only): default semantics of
   // this exported API are unchanged — legacy stop/restore paths never pass the flag.
@@ -1377,7 +1377,10 @@ export function syncCodexHistoryProvider(
     return { rows: 0, files: 0 };
   }
   try {
-    const retried = withHistoryRetryResult(() => syncCodexHistoryProviderUnsafe(provider, stateDbPath, backupPath));
+    // The guard encloses the entire synchronous attempt: DB CAS/commit, every rollout
+    // append and manifest consumption/finalization. No ownership publication can interleave.
+    const write = () => syncCodexHistoryProviderUnsafe(provider, stateDbPath, backupPath);
+    const retried = withHistoryRetryResult(() => opts.withWriteGuard ? opts.withWriteGuard(write) : write());
     return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
   } catch (error) {
     if (error instanceof CodexHistoryIntegrityError) {

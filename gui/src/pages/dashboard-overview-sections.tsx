@@ -31,7 +31,8 @@ import {
   VISION_TIMEOUT_MS_MAX,
   VISION_TIMEOUT_MS_MIN,
 } from "./dashboard-shared";
-import { shadowSourceModelBadge } from "./shadow-call-source";
+import { shadowBackgroundModelBadge } from "./shadow-call-source";
+import { ShadowCallSourceToggles } from "./shadow-call-source-toggles";
 import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -444,8 +445,9 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     toggleCodexClientCompaction,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     sidecarCodexApply,
-    shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
+    shadowCall, shadowCallSaving, shadowCallError, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
+  const shadowMemoryLabel = t("shadowCall.memoryLabel");
   const visionEnabled = sidecar?.vision?.enabled !== false;
   const visionModel = visionEnabled ? (sidecar?.vision?.model ?? "gpt-5.6-luna") : "";
   const visionBackend = sidecar?.vision.backend ?? visionModels.find(option => option.value === sidecar?.vision.model)?.backend;
@@ -742,7 +744,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             >
               <IconInfo width={13} height={13} aria-hidden="true" />
             </button>
-            <code className="muted text-caption">{`⚠ ${shadowSourceModelBadge(shadowCall?.sourceModels)}`}</code>
+            <code className="muted text-caption">{`⚠ ${shadowBackgroundModelBadge(shadowCall?.sourceModels, shadowMemoryLabel)}`}</code>
           </div>
           <div className="setting-controls dash-shadow-controls">
             <button
@@ -765,6 +767,19 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             />
           </div>
         </div>
+        <ShadowCallSourceToggles
+          className="dash-shadow-sources"
+          options={shadowCall?.sourceModelOptions}
+          sourceModels={shadowCall?.sourceModels}
+          disabled={!shadowCall?.enabled}
+          saving={shadowCallSaving}
+          onChange={sourceModels => void saveShadowCall({ sourceModels })}
+        />
+        {shadowCallError && (
+          <div className="notice notice-err" role="alert" style={{ marginTop: 8 }}>
+            <IconAlert /><span>{shadowCallError}</span>
+          </div>
+        )}
       </div>
     </>
   );

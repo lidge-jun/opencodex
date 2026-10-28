@@ -1,3 +1,4 @@
+import { isDecisionsEndpoint, jevDecisionEndpointUrl } from "../../src/combos/jev-decision-contract";
 import { describe, expect, test } from "bun:test";
 import { parseJevDecision, resolveJevDecision, type JevCandidate } from "../../src/combos/jev";
 import {
@@ -492,6 +493,38 @@ describe("bounded JEV service exchange", () => {
       expect(sent.map(request => request.url)).toEqual([expected, expected]);
       expect(direct).toEqual({ value: answer });
       expect(route.gate).toBe("apply");
+    });
+
+    test("rewrites ai-gateway.vercel.sh endpoint to /decisions and sends Decisions questions body", async () => {
+      expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1/systemone")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+      expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+      expect(jevDecisionEndpointUrl("https://my-ai-gateway.vercel.sh/v1/systemone")).toBe("https://my-ai-gateway.vercel.sh/v1/systemone");
+      expect(isDecisionsEndpoint("https://ai-gateway.vercel.sh/v1/decisions")).toBeTrue();
+      expect(isDecisionsEndpoint("https://custom.vercel.sh/v1/decisions")).toBeFalse();
+
+      const { sent, direct, route } = await sendTo("https://ai-gateway.vercel.sh/v1/systemone");
+      expect(sent.map(r => r.url)).toEqual([
+        "https://ai-gateway.vercel.sh/v1/decisions",
+        "https://ai-gateway.vercel.sh/v1/decisions",
+      ]);
+      expect(direct).toEqual({ value: answer });
+      expect(route.gate).toBe("apply");
+
+      const parsedRouteBody = JSON.parse(sent[1].body);
+      expect(parsedRouteBody.model).toBe("tev1:4b");
+      expect(parsedRouteBody.input).toContain("Task: Choose a target.");
+      expect(Array.isArray(parsedRouteBody.questions)).toBeTrue();
+      expect(parsedRouteBody.questions).toHaveLength(1);
+      const q = parsedRouteBody.questions[0];
+      expect(q.name).toBe("route");
+      expect(q.type).toBe("choice");
+      expect(Array.isArray(q.choices)).toBeTrue();
+      expect(q.choices.length).toBeGreaterThan(0);
+      for (const choice of q.choices) {
+        expect(typeof choice.value).toBe("string");
+        expect(typeof choice.description).toBe("string");
+        expect(choice.description.length).toBeGreaterThan(0);
+      }
     });
 
     test("the request body does not depend on the endpoint path", async () => {

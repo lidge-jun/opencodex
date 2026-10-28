@@ -20,6 +20,18 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+For native `grep` directory searches, `src/adapters/cursor/native-exec-fs.ts` compiles the optional
+filter once with `Bun.Glob`. A pattern without `/` matches each basename at every depth; a pattern
+with `/` matches the path relative to the selected search root, using `/` on every platform;
+an optional leading `./` keeps that root-relative scope.
+This supports `**/*.ts`, brace alternatives and character classes; Bun 1.4.4 also supplies extglobs
+and brace ranges. Empty filters keep the unfiltered search. The existing directory walk skips
+`node_modules`, `.git` and symlink entries, collects at most 500 matching files, reads only files
+at most 1,000,000 bytes, and returns at most 200 files with text matches. Glob matching never
+expands or changes the search root. Explicit single-file searches retain their existing behavior.
+`tests/providers/cursor/cursor-native-grep-globs.test.ts` exercises the dispatch gate, file selection,
+all three output modes, traversal exclusions and runtime-specific syntax.
+
 Foreground `shellArgs` and `shellStreamArgs` are unavailable on every platform, including with
 `nativeLocalExec: "on"`. `src/adapters/cursor/native-foreground-shell.ts` rejects them before spawn
 until a kernel-backed descendant owner exists; process-group disappearance is not cleanup proof.
@@ -271,7 +283,7 @@ Canonical Spark Lite metadata follows the final serialized model and surviving n
 
 Shared raw-reasoning events retain content-channel presentation; provider-authored thinking keeps its existing summary path. See [bridge contract](chat-compat.md).
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations.
 
 ## Textual pseudo tool-call quarantine
 

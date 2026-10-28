@@ -38,6 +38,7 @@ import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable
 import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
 import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
 import { collectAdvisorRepairEvidence, type AdvisorRepairEvidence } from "./evidence";
+import type { AdmissionModelScope } from "../server/admission-model-scope";
 
 /**
  * Process-local task ledger. Bounded (entries + per-state TTL) in src/advisor/state.ts; one
@@ -53,6 +54,7 @@ export interface AdvisorRuntimeDeps {
   /** Routed worker identity for logs and the advisor payload, e.g. "deepseek-chat (provider deepseek)". */
   workerIdentity: string;
   workerModelId: string;
+  admissionScope?: AdmissionModelScope;
   abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   baseUrlOverride?: string;
@@ -216,6 +218,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         current.timeoutMs,
         deps.abortSignal,
         deps.baseUrlOverride,
+      deps.admissionScope,
       );
     } catch (error) {
       activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });

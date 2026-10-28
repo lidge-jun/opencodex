@@ -15,6 +15,24 @@ import { mapReasoningEffort } from "../../src/reasoning-effort";
 import { nativeEffortClamp } from "../../src/codex/catalog";
 import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { prepareEffortNormalization } from "../../src/server/effort-policy";
+import { normalizeThinkingOptions } from "../../src/clients/reasoning-controls";
+
+test("a toggle-only client's choice survives strength policy and is restored on fallback", () => {
+  const provider = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", modelCapabilities: {
+    fixed: { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true },
+  } };
+  const parsed = makeParsed("none");
+  prepareEffortNormalization(parsed, { providerName: "fixture", modelId: "fixed" });
+  normalizeThinkingOptions(provider, "fixed", parsed.options);
+  expect(parsed.options.thinkingEnabled).toBe(false);
+  expect(parsed.options.reasoning).toBeUndefined();
+  applyEffortCap(parsed, new Headers(), makeConfig({ effortCap: "low" }), []);
+  expect(parsed.options.thinkingEnabled).toBe(false);
+  prepareEffortNormalization(parsed, { providerName: "fixture", modelId: "adjustable" });
+  expect(parsed.options.thinkingEnabled).toBeUndefined();
+  expect(parsed.options.reasoning).toBe("none");
+});
 
 const savedHome = process.env.OPENCODEX_HOME;
 const savedCodexHome = process.env.CODEX_HOME;

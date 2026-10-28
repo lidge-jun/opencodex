@@ -455,10 +455,21 @@ Combo's `decisionProvider`:
 - Self-hosted services receive each target/effort option as a plain description string (for
   example `Target openai/gpt-5.6-sol (provider openai, model gpt-5.6-sol) with low reasoning
   effort.`), because Ollama accepts only string or `null` option descriptions. TypeSafe keeps
-  receiving the structured option objects.
-- OpenCodex offers 2–26 options to a System One-compatible row. Each target contributes one option
-  per offered reasoning effort; use per-target `reasoningEfforts` to trim them. Fewer than 2 or
-  more than 26 options fail open without a request.
+  receiving the structured option objects. When targeting Vercel AI Gateway (`ai-gateway.vercel.sh`),
+  route options include both `value` and detailed `description` fields. Other self-hosted endpoints,
+  including a custom `/decisions` path, keep the System One request format.
+- OpenCodex offers 2–26 options to a System One-compatible row (`SELF_HOSTED_MIN_OPTIONS = 2`, `SELF_HOSTED_MAX_OPTIONS = 26`).
+  Each target contributes one option per offered reasoning effort; use per-target `reasoningEfforts` to trim them.
+  Fewer than 2 or more than 26 options fail open without a request. For Vercel AI Gateway, whose
+  [OpenAI-compatible Decisions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-decisions)
+  supports 1..255 choices, the upper bound expands to 255 options (`DECISIONS_MAX_OPTIONS = 255`); OpenCodex
+  enforces the 2-choice minimum as local routing policy to select among candidate targets.
+- Vercel AI Gateway endpoints (`https://ai-gateway.vercel.sh/v1`) automatically normalize to `/decisions`.
+  OpenCodex projects structured conversation context into a formatted plain-text `input` string
+  (`Task:`, `Signals:`, `Recent Assistant:`, `Recent Tool Call:`, and `Tool Output:`). Route answers are accepted
+  from object (`answers.route`) or choice-array formats, resolving from either `choice` or `value`. Probability
+  distributions are accepted as key-value maps or probability records; duplicate choice keys or invalid distributions
+  strictly fail open to the first eligible target.
 - A cold model load can take tens of seconds, and an aborted decision request makes Ollama abandon the
   load. Pre-warm the model and keep it resident (`OLLAMA_KEEP_ALIVE=-1`, or `keep_alive`), and raise
   `decisionTimeoutMs` (1000–120000 ms, default 4000) when the service is slower than four seconds.
@@ -674,8 +685,16 @@ the combo returns the last real upstream failure without sending to that target.
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
 429s with upstream code `1302` or `1305`, 10 minutes for a spent account usage window, and 60
 seconds otherwise. A usage window is recognised by upstream code (`usage_limit_exceeded`,
-`usage_limit_reached`, `1308`) or by the prose `usage limit reached`, independent of HTTP status —
-the ChatGPT Codex backend reports a spent window as a 502 rather than the documented 429. Credential and
+`usage_limit_reached`, `1308`) or by quota exhaustion phrasing (such as `usage limit reached`,
+`token-plan ... quota has been exhausted`, or `weekly usage quota exceeded`)
+outside 400 and 422 responses, independent of HTTP status — the ChatGPT Codex backend reports a spent
+window as a 502 rather than the documented 429. A 400 or 422 response needs a structured code: a
+validation error that merely quotes quota wording (e.g. `quota exhausted`) does not hop. Codes
+inferred from that prose by the proxy's formatter do not count as upstream structured evidence.
+Devin's explicit weekly/monthly/daily or usage-window exhaustion becomes 429 and uses the
+10-minute target hold; per-minute/per-hour and MCP configuration `failed_precondition` trailers stay
+400 and stop. Raw Devin trailer text is redacted. A spent
+window cools only that target, so other accounts of the same provider stay eligible. Credential and
 billing failures that already black out the whole provider (`invalid_api_key`, `insufficient_quota`,
 `payment_required`, and the other provider-scoped codes) take the same 10-minute hold. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
@@ -1029,3 +1048,38 @@ validation message.
 
 The error was terminal rather than target-specific. Fix invalid input, reduce an oversized context,
 handle a policy refusal, or correct the rejected request origin. Combos do not hop for those cases.
+
+## Retry all-cooled targets (opt-in)
+
+Combo cooldown recovery is opt-in and disabled by default. To allow one new
+failover pass when every otherwise eligible target has a saved combo cooldown:
+
+```sh
+ocx combo set review --cooldown-reprobe on --cooldown-reprobe-interval 300000
+ocx combo set review --cooldown-reprobe off
+```
+
+The corresponding per-combo configuration is:
+
+```json
+{ "cooldownReprobe": { "enabled": true, "intervalMs": 300000 } }
+```
+
+The default interval is five minutes; accepted values are integer milliseconds
+from 1000 to 86400000. Setting the interval alone does not enable recovery.
+Recovery is demand-driven: the first eligible request can reserve a pass immediately,
+and later passes are separated by at least the configured interval. There is no timer
+or background traffic. Each target can be attempted once in the request's existing
+failover budget; failures record fresh cooldowns. Account quota checks, disabled
+providers, request compatibility, metered-spend permissions and cancellation remain
+enforced. Explicit provider Retry-After values may therefore be retried early only
+when the operator enables this option. Preview/list operations never clear cooldowns.
+The interval is tracked per combo in memory and resets on proxy restart or combo
+selection-state reset. Existing cooldown-wait behavior is unchanged when disabled.
+
+A recovery pass belongs only to the request that reserved it; other requests still
+observe the saved cooldowns. That reservation follows the request through cooldown
+waits and JEV selection. A target that becomes usable again during a wait can still
+be retried if its cooldown has not changed. A newer cooldown cancels that target's
+reservation. Success clears only the unchanged cooldown of the target that answered;
+untried targets and newer failures keep their cooldowns.

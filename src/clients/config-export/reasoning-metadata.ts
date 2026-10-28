@@ -1,16 +1,55 @@
 import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { knownReasoningSupport, type OpencodeCatalogModel } from "./contracts";
 
-/** Unknown and explicitly empty ladders have different client-side meanings. */
-export function exportReasoningEfforts(model: OpencodeCatalogModel): string[] | undefined {
-  return model.reasoningEfforts === undefined ? undefined : canonicalizeReasoningEfforts(model.reasoningEfforts);
+type ReasoningMetadata = Pick<OpencodeCatalogModel, "reasoningEfforts" | "defaultReasoningEffort"
+  | "supportsReasoning" | "supportsThinkingToggle" | "supportsReasoningEffort" | "defaultThinkingEnabled">;
+
+/** Shared row projection; an effective projection owns the default even when it omits it. */
+export function resolveExportReasoningAxes(effective: ReasoningMetadata | undefined, row: ReasoningMetadata) {
+  const supportsThinkingToggle = effective?.supportsThinkingToggle ?? row.supportsThinkingToggle;
+  const supportsReasoningEffort = effective?.supportsReasoningEffort ?? row.supportsReasoningEffort;
+  const defaultThinkingEnabled = effective?.defaultThinkingEnabled ?? row.defaultThinkingEnabled;
+  const declaredEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
+  const effortDisabled = supportsReasoningEffort === false
+    || (effective?.supportsReasoning ?? row.supportsReasoning) === false;
+  return {
+    supportsThinkingToggle,
+    supportsReasoningEffort,
+    defaultThinkingEnabled,
+    reasoningEfforts: declaredEfforts === undefined ? undefined : effortDisabled ? [] : [...declaredEfforts],
+    // Falling back through an existing projection would revive a synthetic picker default.
+    // Older rows without a projection retain their own declared default.
+    defaultReasoningEffort: effortDisabled ? undefined : effective !== undefined
+      ? effective.defaultReasoningEffort : row.defaultReasoningEffort,
+  };
 }
 
-/** Carry an authoritative default, never invent one or revive a cleared ladder. */
-export function exportDefaultReasoningEffort(model: OpencodeCatalogModel): string | undefined {
+/** Effort-enum client compatibility only; never write these choices back into model facts. */
+export function exportReasoningEfforts(model: ReasoningMetadata): string[] | undefined {
+  if (model.supportsReasoning === false) return [];
+  const efforts = model.reasoningEfforts === undefined ? undefined : canonicalizeReasoningEfforts(model.reasoningEfforts);
+  if (model.supportsReasoningEffort === false) {
+    return model.supportsThinkingToggle === true ? ["none", "high"] : [];
+  }
+  if (model.supportsThinkingToggle === true) {
+    const strengths = efforts?.filter(effort => effort !== "none") ?? [];
+    return strengths.length ? ["none", ...strengths] : ["none", "high"];
+  }
+  return model.supportsThinkingToggle === false ? efforts?.filter(effort => effort !== "none") : efforts;
+}
+
+/** Encode the declared effort/default-thinking choice without inventing a strength. */
+export function exportDefaultReasoningEffort(model: ReasoningMetadata): string | undefined {
+  const efforts = exportReasoningEfforts(model);
+  if (model.supportsThinkingToggle === true && model.supportsReasoning !== false) {
+    if (model.defaultThinkingEnabled === false) return "none";
+    const toggleOnly = model.supportsReasoningEffort === false
+      || !model.reasoningEfforts?.some(effort => isDeclaredReasoningEffort(effort) && effort !== "none");
+    if (toggleOnly) return model.defaultThinkingEnabled === true ? "high" : undefined;
+    if (model.defaultThinkingEnabled === true && model.defaultReasoningEffort === "none") return undefined;
+  }
   const effort = model.defaultReasoningEffort;
   if (typeof effort !== "string" || !isDeclaredReasoningEffort(effort)) return undefined;
-  const efforts = exportReasoningEfforts(model);
   return efforts === undefined || efforts.includes(effort) ? effort : undefined;
 }
 
@@ -34,9 +73,17 @@ export function legacyReasoningMetadata(model: OpencodeCatalogModel): {
   const suppressed: Record<string, LegacyEffortVariant> = Object.fromEntries(
     ["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(id => [id, { disabled: true }]),
   );
-  const variants = efforts?.length
+  let variants = efforts?.length
     ? Object.fromEntries(efforts.map(effort => [effort, { reasoningEffort: effort }]))
-    : reasoning === true ? suppressed : undefined;
+    : reasoning === true || model.supportsReasoning === false || model.supportsReasoningEffort === false ? suppressed : undefined;
+  // Constrained controls replace generated choices; a negative toggle by itself does not
+  // declare the still-unknown effort axis unsupported.
+  if (model.supportsThinkingToggle === true || model.supportsReasoningEffort !== undefined
+    || model.supportsReasoning === false || (model.supportsThinkingToggle === false && efforts !== undefined)) {
+    variants = { ...suppressed, ultra: { disabled: true }, ...variants };
+  } else if (model.supportsThinkingToggle === false) {
+    variants = { none: { disabled: true }, ...variants };
+  }
   return {
     ...(typeof reasoning === "boolean" ? { reasoning } : {}),
     ...(defaultEffort !== undefined ? { options: { reasoningEffort: defaultEffort } } : {}),

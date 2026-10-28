@@ -410,7 +410,7 @@ export function encodeAnthropicMessageSse(
   return encodeAdapterEventStream(
     events,
     sink => createAnthropicMessageWriter(sink, options.model, options.inputTokenFloor),
-    { ...options, keepaliveMs: MESSAGES_KEEPALIVE_MS },
+    { ...options, get localUpstream() { return options.localUpstream; }, keepaliveMs: MESSAGES_KEEPALIVE_MS },
   );
 }
 

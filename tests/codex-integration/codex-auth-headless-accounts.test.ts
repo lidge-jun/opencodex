@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flushConfigDirHardening } from "../../src/config/paths";
 import { getCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
@@ -19,6 +20,7 @@ import { clearAccountQuota } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let root: string;
@@ -96,16 +98,23 @@ beforeEach(() => {
   resetRuntimeState();
 });
 
-afterEach(() => {
+afterEach(async () => {
   defaultHomeSpy?.mockRestore();
   defaultHomeSpy = undefined;
   globalThis.fetch = originalFetch;
   resetRuntimeState();
-  if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOcxHome;
-  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = previousCodexHome;
-  removeTreeWithRetry(root);
+  await drainAndRemoveFixtureRoots({
+    roots: [{ path: root }],
+    restoreEnvironment: () => {
+      if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOcxHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    },
+  }, {
+    // Tests can replace OPENCODEX_HOME; await the original fixture's exact flight key.
+    settleConfigFlights: () => flushConfigDirHardening(join(root, "ocx")),
+  });
 });
 
 describe("account listing without a native Codex home", () => {

@@ -8,6 +8,7 @@ import { assertNoDesktopSupervision, desktopServiceCommandRefusal } from "../../
 import { desktopStartupOwnership, diagnoseDesktopStartup, diagnoseWindowsDesktopStartup } from "../../src/service/desktop-startup";
 import {
   createSupervisionLatch, inspectDesktopSupervision, windowsPowerShellPath, windowsProcessPair,
+  windowsSystemDirectoryFromSharedObjects,
   type DesktopSupervisionDeps, type WindowsProcessRow,
 } from "../../src/service/desktop-supervision.mjs";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
@@ -166,30 +167,40 @@ test("one inspection shares a 6 s budget: slow successful reads pass, an exhaust
   expect(exhausted.state.reads).toBe(1);
 });
 
-test("the default reader runs one fixed PowerShell under the system root with a numeric filter", () => {
-  const calls: { command: string; args: string[]; timeout?: number }[] = [];
+test("the default reader uses a trusted system directory, disables autoloading and sanitizes its environment", () => {
+  const calls: { command: string; args: string[]; timeout?: number; env?: NodeJS.ProcessEnv }[] = [];
   const output = JSON.stringify({
     child: { pid: "100", parent: "200", exe: PROXY, session: "1", created: "638950000000000002" },
     parent: { pid: "200", parent: "4", exe: APP, session: "1", created: "638950000000000001" },
   });
-  const run = (command: string, args: string[], timeout?: number) => { calls.push({ command, args, timeout }); return output; };
-  expect(windowsProcessPair(100, run, { env: { SystemRoot: "D:\\Win" }, timeoutMs: 1_234 })).toEqual({
+  const run = (command: string, args: string[], timeout?: number, env?: NodeJS.ProcessEnv) => {
+    calls.push({ command, args, timeout, env }); return output;
+  };
+  expect(windowsProcessPair(100, run, { resolveSystemDirectory: () => "D:\\Win\\System32", timeoutMs: 1_234 })).toEqual({
     child: { pid: 100, parent: 200, exe: PROXY, session: 1, created: "638950000000000002" },
     parent: { pid: 200, parent: 4, exe: APP, session: 1, created: "638950000000000001" },
   });
   expect(calls[0]!.command).toBe("D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   expect(calls[0]!.args.slice(0, 4)).toEqual(["-NoProfile", "-NoLogo", "-NonInteractive", "-Command"]);
   expect(calls[0]!.args[4]).toContain("-Filter 'ProcessId=100'");
+  expect(calls[0]!.args[4]).toContain("$PSModuleAutoLoadingPreference='None'");
+  // Utility must load before CimCmdlets: CimCmdlets' own import calls Set-Alias and autoload is off.
+  expect(calls[0]!.args[4]!.indexOf("Microsoft.PowerShell.Utility.psd1"))
+    .toBeLessThan(calls[0]!.args[4]!.indexOf("CimCmdlets.psd1"));
+  expect(calls[0]!.args[4]).toContain("CimCmdlets\\Get-CimInstance");
+  expect(calls[0]!.env).toEqual({
+    SystemRoot: "D:\\Win", WINDIR: "D:\\Win", PATH: "D:\\Win\\System32", PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  });
   expect(calls[0]!.timeout).toBe(1_234);
-  for (const env of [{}, { SystemRoot: "Windows" }, { SystemRoot: "\\\\server\\share" }]) {
-    expect(windowsPowerShellPath(env)).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-  }
+  expect(windowsPowerShellPath(() => "C:\\Windows\\System32"))
+    .toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   for (const pid of [0, -1, 1.5, Number.NaN]) expect(() => windowsProcessPair(pid, run)).toThrow("invalid pid");
   expect(calls).toHaveLength(1);
 });
 
 test("through the default reader, a Desktop image with malformed evidence keeps desktopSeen; unreadable output does not", () => {
-  const base = { platform: "win32" as const, readPid: () => 100, readRuntimePortPid: () => 100 };
+  const base = { platform: "win32" as const, readPid: () => 100, readRuntimePortPid: () => 100,
+    resolveWindowsSystemDirectory: () => "C:\\Windows\\System32" };
   const malformed = JSON.stringify({
     child: { pid: "100", parent: "200", exe: PROXY, session: "1", created: "638950000000000002" },
     parent: { pid: "200", parent: "4", exe: APP, session: "1", created: "not-ticks" },
@@ -288,5 +299,83 @@ test("the ownership-only Windows projection runs no process probe", () => {
   const f = startupFixture(OWNED);
   expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, running: false, viable: false });
   expect(f.state.reads).toBe(0);
+});
+
+test("the Node sharedObjects resolver rejects duplicates, malformed, truncated and disagreeing enumerations", () => {
+  const dir = "C:\\Windows\\System32";
+  const good = ["C:\\Windows\\System32\\KERNEL32.DLL", "c:\\windows\\system32\\ntdll.dll", "C:\\ocx\\node.exe"];
+  // A consistent same-parent enumeration (mixed case, mixed separators) resolves.
+  expect(windowsSystemDirectoryFromSharedObjects(good).toLowerCase()).toBe(dir.toLowerCase());
+  expect(windowsSystemDirectoryFromSharedObjects(["C:/Windows/System32/kernel32.dll", "C:\\Windows\\System32\\ntdll.dll"]).toLowerCase())
+    .toBe(dir.toLowerCase());
+  // Environment tampering cannot steer this resolver — it never reads process.env.
+  const saved = process.env.SystemRoot;
+  try {
+    process.env.SystemRoot = "D:\\Evil";
+    expect(windowsSystemDirectoryFromSharedObjects(good).toLowerCase()).toBe(dir.toLowerCase());
+  } finally {
+    if (saved === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = saved;
+  }
+  // An unavailable report is the bounded unknown residual, not a success.
+  for (const loaded of [undefined, null, 42, "C:\\Windows\\System32"]) {
+    expect(() => windowsSystemDirectoryFromSharedObjects(loaded)).toThrow("trusted Windows resolver unavailable");
+  }
+  // Same-directory duplicate namesakes — contradictions are rejected.
+  expect(() => windowsSystemDirectoryFromSharedObjects([...good, "C:\\Windows\\System32\\kernel32.dll"]))
+    .toThrow("trusted Windows resolver unavailable");
+  expect(() => windowsSystemDirectoryFromSharedObjects([...good, "D:\\x\\kernel32.dll"]))
+    .toThrow("trusted Windows resolver unavailable");
+  // Malformed namesakes (bare name, UNC, rooted, drive-relative) must not hide behind the format filter.
+  for (const namesake of ["kernel32.dll", "\\\\evil\\share\\kernel32.dll", "\\System32\\kernel32.dll", "C:kernel32.dll"]) {
+    expect(() => windowsSystemDirectoryFromSharedObjects([...good, namesake])).toThrow("trusted Windows resolver unavailable");
+  }
+  // A namesake at or over the enumeration buffer limit may be truncated — reject rather than trust.
+  expect(() => windowsSystemDirectoryFromSharedObjects([...good, "D:\\" + "x".repeat(300) + "\\kernel32.dll"]))
+    .toThrow("trusted Windows resolver unavailable");
+  // kernel32 and ntdll must share one parent directory.
+  expect(() => windowsSystemDirectoryFromSharedObjects(["C:\\Windows\\System32\\kernel32.dll", "D:\\Other\\ntdll.dll"]))
+    .toThrow("trusted Windows resolver unavailable");
+  // An incomplete enumeration (missing ntdll) cannot prove a directory.
+  expect(() => windowsSystemDirectoryFromSharedObjects(["C:\\Windows\\System32\\kernel32.dll"]))
+    .toThrow("trusted Windows resolver unavailable");
+});
+
+test("the Node sharedObjects resolver drives the real probe path and fails closed when it rejects", () => {
+  const output = JSON.stringify({
+    child: { pid: "100", parent: "200", exe: PROXY, session: "1", created: "638950000000000002" },
+    parent: { pid: "200", parent: "4", exe: APP, session: "1", created: "638950000000000001" },
+  });
+  const calls: { command: string; args: string[]; timeout?: number; env?: NodeJS.ProcessEnv }[] = [];
+  const run = (command: string, args: string[], timeout?: number, env?: NodeJS.ProcessEnv) => {
+    calls.push({ command, args, timeout, env }); return output;
+  };
+  // Positive: a consistent Node enumeration supplies the system directory for the real
+  // windowsProcessPair path — PowerShell runs at the derived location, not from env or PATH.
+  const loaded = ["C:\\Windows\\System32\\kernel32.dll", "c:\\windows\\system32\\ntdll.dll", "C:\\Program Files\\nodejs\\node.exe"];
+  const deps = {
+    platform: "win32" as const, readPid: () => 100, readRuntimePortPid: () => 100,
+    resolveWindowsSystemDirectory: () => windowsSystemDirectoryFromSharedObjects(loaded), run,
+  } satisfies DesktopSupervisionDeps;
+  expect(inspectDesktopSupervision(deps)).toEqual({ kind: "desktop", runtimePid: 100, supervisorPid: 200, app: APP, proxy: PROXY });
+  expect(calls.length).toBe(2); // two agreeing snapshots, one bounded probe each
+  for (const call of calls) {
+    expect(call.command).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(call.env?.PATH).toBe("C:\\Windows\\System32");
+  }
+  // Negative: a rejecting enumeration never reaches PowerShell — the result is the
+  // bounded probe-failed unknown, never proven absence, and plain unknown stays nonblocking.
+  const refused = ["kernel32.dll"]; // malformed namesake — no drive-qualified path
+  const spy: typeof run = (command, args, timeout, env) => { calls.push({ command, args, timeout, env }); return output; };
+  const before = calls.length;
+  const evidence = inspectDesktopSupervision({ ...deps,
+    resolveWindowsSystemDirectory: () => windowsSystemDirectoryFromSharedObjects(refused), run: spy });
+  expect(evidence).toEqual({ kind: "unknown", reason: "probe-failed", desktopSeen: false });
+  expect(calls).toHaveLength(before);
+  expect(createSupervisionLatch().observe(evidence)).toBe(false);
+  expect(planUpdateRuntimeHandling({ ownership: null, serviceInstalled: false, supervision: evidence }).mayReplacePackage).toBe(true);
+  // A throwing resolver fails identically at the pair level: execute is never invoked.
+  expect(() => windowsProcessPair(100, spy, { resolveSystemDirectory: () => { throw new Error("trusted Windows resolver unavailable"); } }))
+    .toThrow("trusted Windows resolver unavailable");
+  expect(calls).toHaveLength(before);
 });
 

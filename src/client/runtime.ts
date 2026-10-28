@@ -6,6 +6,8 @@ import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
+import { observeLocalCredentials } from "../local-credentials/runtime-observation";
+import { verifiedHomeConnection } from "./link-connection";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -230,7 +232,7 @@ export async function bindClientListener(
     preferred: number;
     explicitPort: boolean;
     configuredPort: number;
-  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel" | "linkReadiness" | "restart">,
+  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel" | "linkReadiness" | "linkConnectionGeneration" | "restart">,
   io: ClientRuntimeIo = {},
 ): Promise<{ server: Server<unknown>; port: number }> {
   const { linkMode } = request;
@@ -271,6 +273,7 @@ export async function bindClientListener(
         ...(request.linkKeySource ? { linkKeySource: request.linkKeySource } : {}),
         ...(request.linkTunnel ? { linkTunnel: request.linkTunnel } : {}),
         ...(request.linkReadiness ? { linkReadiness: request.linkReadiness } : {}),
+        ...(request.linkConnectionGeneration ? { linkConnectionGeneration: request.linkConnectionGeneration } : {}),
         ...(request.restart ? { restart: request.restart } : {}),
       });
       return { server, port: server.port ?? port };
@@ -312,6 +315,8 @@ export async function startClientRuntime(
     && !isChildInitiatedLink(state.value.link.linkId);
   // One secret for the life of this process: a rollback republishes the same identity.
   const attestationSecret = createLocalAttestationSecret();
+  // The local-credential observer lives exactly while this process serves (status attestation).
+  let credentialObservation: { stop(): void } | null = null;
 
   // Bind, start a fresh tunnel supervisor and publish. Runs once at start and again when a failed
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
@@ -346,6 +351,8 @@ export async function startClientRuntime(
       ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
       ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
       ...(linkReadiness ? { linkReadiness } : {}),
+      ...(supervisor ? { linkConnectionGeneration: () => supervisor.connectionGeneration() }
+        : homeInitiated && link ? { linkConnectionGeneration: () => verifiedHomeConnection(link.linkId) } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs });
     const publish = (): void => {
       activeServer = server;
@@ -353,6 +360,7 @@ export async function startClientRuntime(
       servedPort = boundPort;
       activeSupervisor = supervisor;
       supervisor?.start();
+      credentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
       writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
       if (linkMode && state.value.link && linkKey) {
@@ -385,6 +393,8 @@ export async function startClientRuntime(
 
   // Stop everything this process serves, giving in-flight requests up to `drainMs`.
   const stopServing = async (drainMs: number): Promise<void> => {
+    credentialObservation?.stop();
+    credentialObservation = null;
     activeReporter?.stop();
     activeReporter = null;
     try {
@@ -447,6 +457,8 @@ export async function startClientRuntime(
     if (shuttingDown) return;
     shuttingDown = true;
     void (async () => {
+      credentialObservation?.stop();
+      credentialObservation = null;
       activeReporter?.stop();
       activeReporter = null;
       try {

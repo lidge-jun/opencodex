@@ -115,9 +115,10 @@ test("every mark's provenance is recorded in the README", () => {
  * key was renamed or an entry dropped in a merge, looks identical to a client
  * that never had one. This is the difference.
  */
-test("only Gentle Shell uses the deliberate monogram fallback", () => {
+// The two WorkBuddy editions also take the monogram until a mark is wired for each (#7665).
+test("only Gentle Shell and the WorkBuddy editions use the deliberate monogram fallback", () => {
   const monogram = CLIENTS.filter(clientId => CLIENT_MARKS[clientId] === undefined);
-  expect(monogram).toEqual(["gentle-shell"]);
+  expect(monogram).toEqual(["workbuddy", "workbuddy-ai", "gentle-shell"]);
 });
 
 /*

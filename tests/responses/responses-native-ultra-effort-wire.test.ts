@@ -13,6 +13,10 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { parseRequest } from "../../src/responses/parser";
+import { routeModel } from "../../src/router";
+import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
+import { applyCompactionRoutingOverride } from "../../src/server/responses/compaction-routing";
 
 /**
  * #7590: the catalog offers `ultra` on native rows as a client-facing choice, but the ChatGPT
@@ -21,7 +25,7 @@ import { SERVER_BUDGET_MS } from "../helpers/test-budget";
  */
 
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("native ultra effort wire test");
-const MODELS = ["gpt-6-astra", "gpt-6.1-sol"];
+const MODELS = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra"];
 
 describe("native ultra effort reaches the ChatGPT backend as max", () => {
   let testDir = "";
@@ -77,6 +81,7 @@ describe("native ultra effort reaches the ChatGPT backend as max", () => {
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
           codexAccountMode: "direct",
+          noReasoningModels: ["gpt-6.1-sol"],
         },
       },
     } as OcxConfig);
@@ -123,7 +128,7 @@ describe("native ultra effort reaches the ChatGPT backend as max", () => {
     });
     expect(control.status).toBe(200);
     await control.text();
-    expect(efforts).toEqual(["max", "max", "max"]);
+    expect(efforts).toEqual([...MODELS.map(() => "max"), "max"]);
   }, SERVER_BUDGET_MS);
 
   test("/v1/chat/completions folds reasoning_effort ultra to max", async () => {
@@ -137,4 +142,50 @@ describe("native ultra effort reaches the ChatGPT backend as max", () => {
     await response.text();
     expect(efforts).toEqual(["max"]);
   }, SERVER_BUDGET_MS);
+
+  test("saved noReasoningModels cannot bypass the native none-to-low wire clamp", async () => {
+    const response = await post("/v1/responses", {
+      model: "gpt-6.1-sol", stream: false, input: "hi", reasoning: { effort: "none" },
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(efforts).toEqual(["low"]);
+  }, SERVER_BUDGET_MS);
+});
+
+describe("native capability normalization keeps parsed and raw effort aligned", () => {
+  test.each(["direct", "compaction-switch", "failover"])("%s retains the native clamp with saved exclusions", async path => {
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "openai",
+      providers: {
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex", noReasoningModels: ["gpt-6.1-sol"] },
+        gateway: { adapter: "openai-responses", authMode: "key", baseUrl: "https://example.test/v1", reasoningEfforts: [],
+          modelCapabilities: { model: { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false } } },
+      },
+      compactionRouting: { model: "gpt-6.1-sol", reasoningEffort: "none" },
+    };
+    const body: Record<string, unknown> = {
+      model: path === "direct" ? "gpt-6.1-sol" : "gateway/model",
+      input: [{ role: "user", content: "hi" }, ...(path === "compaction-switch" ? [{ type: "compaction_trigger" }] : [])],
+      reasoning: { effort: "none", summary: "auto" },
+    };
+    const req = new Request("http://localhost/v1/responses", { headers: {
+      "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction", compaction: { trigger: "manual" } }),
+    } });
+    if (path === "compaction-switch") expect(applyCompactionRoutingOverride(body, req.headers, config)).not.toBeNull();
+    const parsed = parseRequest(body);
+    const normalize = async (model: string) => {
+      const route = routeModel(config, model);
+      await applyFinalRouteRequestNormalization({ parsed, route, config, req, inboundWire: "responses", logCtx: { model, provider: route.providerName } });
+    };
+    if (path === "failover") {
+      await normalize("gateway/model");
+      expect(parsed.options.reasoning).toBeUndefined();
+      expect(parsed.options.thinkingEnabled).toBe(false);
+      expect((parsed._rawBody as { reasoning: unknown }).reasoning).toEqual({ summary: "auto" });
+    }
+    await normalize("gpt-6.1-sol");
+    expect(parsed.options.reasoning).toBe("low");
+    expect((parsed._rawBody as { reasoning: unknown }).reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
 });

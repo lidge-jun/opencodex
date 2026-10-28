@@ -731,6 +731,7 @@ const FORCE_REFRESH_PROVIDERS = new Set([
   "github-copilot",
   "kiro",
   "google-antigravity",
+  "cursor",
   "orcarouter-oauth",
   "devin",
   "dsh-account",

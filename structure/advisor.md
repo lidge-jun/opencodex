@@ -19,6 +19,7 @@ The server composition root registers it synchronously at startup; a successful 
 updates activation, including enable after startup and disable/reset. The runtime is loaded only
 when an active factory is used, so its process-local ledger is not constructed by an inactive
 install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings or runtime.
+Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
 boundary from router, lifecycle, Responses core and management API, including direct dynamic imports.
@@ -45,7 +46,7 @@ multi-call pairing, overlap and lifecycle release.
 - Translated (non-passthrough, non-run-turn) fetch path: full support — synthetic tool injection,
   guard interception of `advisor` tool calls, advice reinjection as a paired
   assistant-toolCall/toolResult message pair, and worker re-dispatch through the same
-  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Consultations are
+  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Explicitly unfinished tool ends cannot trigger consultation or continuation. Consultations are
   bounded at three per request including automatic calls, with at most four Advisor-owned worker continuations. The tool
   is removed when consultations are exhausted. A repeated call gets one final paired limit result;
   a further call ends with typed 502 `advisor_continuation_limit`, without another worker send.
@@ -84,7 +85,11 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials.
+provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
+immutable provider/model admission scope over the loopback hop as capability-authenticated
+metadata and remains authoritative for every final
+physical Advisor destination, including alias, policy, combo, and retry resolution; the local
+transport credential cannot widen it.
 
 ## Context and safety boundaries
 

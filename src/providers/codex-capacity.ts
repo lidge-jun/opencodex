@@ -124,7 +124,8 @@ function isCalibratedPlan(plan: unknown): boolean {
   return !!normalized && Object.hasOwn(CODEX_CONFIGURED_CAPACITY_WEIGHTS, normalized);
 }
 
-function configuredWeight(plan: unknown): number {
+/** The configured capacity weight of a Codex plan; the default weight when uncalibrated. */
+export function codexCapacityWeight(plan: unknown): number {
   const normalized = codexPlanKey(plan);
   return normalized && Object.hasOwn(CODEX_CONFIGURED_CAPACITY_WEIGHTS, normalized)
     ? CODEX_CONFIGURED_CAPACITY_WEIGHTS[normalized as keyof typeof CODEX_CONFIGURED_CAPACITY_WEIGHTS]
@@ -226,7 +227,7 @@ export function aggregateCodexPoolCapacity(
   let staleQuotaAccounts = 0;
 
   for (const account of accounts) {
-    const weight = configuredWeight(account.plan);
+    const weight = codexCapacityWeight(account.plan);
     // Still reported, so the operator can see the estimate is conservative for this seat —
     // but no longer a reason to drop the account from the aggregate (#3155).
     if (!isCalibratedPlan(account.plan)) unknownPlanAccounts += 1;

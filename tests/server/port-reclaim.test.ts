@@ -29,8 +29,14 @@ async function reclaimWithMockClock(options: ReclaimListenPortOptions): Promise<
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     return await reclaimListenPort(10100, "127.0.0.1", {
-      ...options, timeoutMs: 50, intervalMs: 10, scanIntervalMs: 10,
-      sleepMs: async () => { now += 10; },
+      ...options,
+      timeoutMs: options.timeoutMs ?? 50,
+      intervalMs: options.intervalMs ?? 10,
+      scanIntervalMs: options.scanIntervalMs ?? 10,
+      sleepMs: async ms => {
+        now += ms;
+        await options.sleepMs?.(ms);
+      },
     });
   } finally {
     clock.mockRestore();
@@ -880,16 +886,17 @@ describe("reclaimListenPort", () => {
 
   test("killAllOcxOnPort kills ocx listeners absent from the allowlist snapshot", async () => {
     const killed: number[] = [];
-    let holder = 9001;
+    const holderPid = process.pid === 9001 ? 9002 : 9001;
+    let holder = holderPid;
     let available = false;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
+    await expect(reclaimWithMockClock({
       timeoutMs: 200,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
       killOcxHolders: true,
       killAllOcxOnPort: true,
-      onlyKillPids: [100], // pre-update PID — respawned child is 9001
+      onlyKillPids: [100], // pre-update PID — the respawned holder is deliberately not self
       isAvailableFn: async () => available,
       listListenPidsFn: () => (holder > 0 ? [holder] : []),
       isAliveFn: pid => pid === holder,
@@ -902,7 +909,7 @@ describe("reclaimListenPort", () => {
         if (holder === 0) available = true;
       },
     })).resolves.toBe(true);
-    expect(killed).toEqual([9001]);
+    expect(killed).toEqual([holderPid]);
   });
 
   test("foreign non-ocx claimant survives reclaim without allowlist or ocx identity", async () => {
@@ -1019,5 +1026,73 @@ describe("reclaimListenPort", () => {
       },
     })).resolves.toBe(true);
     expect(killed).toEqual([4242, 4242]);
+  });
+
+  test("denied authority during the availability await blocks kill and TCP-row drop", async () => {
+    let authorized = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      // The gate flips while isAvailableFn is in flight — the interleaving a
+      // service-home change has against the update job's real reclaimer.
+      isAvailableFn: async () => {
+        authorized = false;
+        return false;
+      },
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => true,
+      verifyOcxFn: pid => pid,
+      killFn: pid => {
+        killed.push(pid);
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test("a mid-wait authority denial vetoes the TCP-row drop after an authorized kill", async () => {
+    let authorized = true;
+    let alive = true;
+    const killed: number[] = [];
+    const dropped: number[] = [];
+    await expect(reclaimListenPort(10100, "127.0.0.1", {
+      timeoutMs: 80,
+      intervalMs: 20,
+      scanIntervalMs: 20,
+      dropTcpRows: true,
+      killOcxHolders: true,
+      onlyKillPids: [4242],
+      isAvailableFn: async () => false,
+      listListenPidsFn: () => [4242],
+      isAliveFn: () => alive,
+      verifyOcxFn: pid => pid,
+      // Authority flips while the authorized kill is in flight — the very next
+      // destructive step (the TCP-row drop) must already be denied.
+      killFn: pid => {
+        killed.push(pid);
+        alive = false;
+        authorized = false;
+      },
+      dropTcpFn: port => {
+        dropped.push(port);
+        return { dropped: 1, skippedIpv6: 0, accessDenied: 0 };
+      },
+      mayMutateFn: () => authorized,
+      sleepMs: async () => {},
+    })).resolves.toBe(false);
+    expect(killed).toEqual([4242]);
+    expect(dropped).toEqual([]);
   });
 });

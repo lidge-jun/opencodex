@@ -38,6 +38,12 @@ Gönderdiği metni görmek için katman adına tıklayın. İletişim kutusu bun
 `codex debug prompt-input` üzerinden okur; dolayısıyla bir açıklama değil,
 gerçekte gönderilen metindir.
 
+Her okuma çağrısının, meta verileri okuma ve ortak incelemeyi bekleme süresini de içeren,
+sabit 15 saniyelik bir süresi vardır. Sürenin dolup dolmadığı eşzamanlı meta veri okuması
+tamamlandıktan sonra denetlenir; süre tükenmişse yeni bir inceleme başlatılmaz.
+Süre dolarsa iletişim kutusu istemin okunamadığını bildirir, ancak yerel olarak okunan
+temel talimatlar yine de döndürülür.
+
 Bazen gösterilecek bir şey olmaz ve iletişim kutusu hangi nedenin geçerli
 olduğunu belirtir:
 

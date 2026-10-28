@@ -341,7 +341,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 105 yerleşik önayar ile birlikte gelir: 84 anahtar tabanlı, 17
+opencodex 106 yerleşik önayar ile birlikte gelir: 85 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -434,7 +434,7 @@ Yeniden oynatma açık `store: false`, eksiksiz girdi ve yalnızca istemcide ça
 
 Standart `opencode-zen` sağlayıcısının API anahtarıyla kimlik doğrulanan resmi `https://opencode.ai/zen/v1` ve `https://opencode.ai/inference/v1` yollarında Gemini, varsayılan `googleMode: ai-studio` modunda Google'ın yerel API'sini otomatik kullanır. Zen model kimlikleri, `-tiered` eki olmayan Flash kimlikleri dahil korunur. Claude, `googleMode` değerinden bağımsız olarak Anthropic Messages kullanır. Kaydedilmiş yapılandırmalar yüklenirken yalnızca bu yerel modellerin uygun eski Chat/Responses geçersiz kılmaları ve uygun, yalnızca Responses'a özgü `image_generation` barındırılan araç tercihleri yok sayılır. Özel sağlayıcılar, anahtar kimlik doğrulaması kullanmayan yollar ve diğer tercihler değişmez.
 
-**`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve dosya değiştirilmez. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/).
+**`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve yükleme sırasında dosya değiştirilmez. Bir sonraki yapılandırma kaydı bu girdileri ve referansları config.json dosyasından kaldırır. Kayıttan önce özgün dosya aynı dizinde `config.json.pre-opencode-free-removal.bak` adıyla otomatik olarak korunur; bu ad kullanılıyorsa benzersiz bir kardeş dosya adı kullanılır. Baytları aynı olan bağımsız bir kopya, yalnızca erişimin sahibine özel olduğu doğrulanabiliyorsa yeniden kullanılır; aksi halde yanına yeni ve korumalı bir kopya yazılır. Mevcut dosyaların üzerine yazılmaz. İlk yüklemeler çakışırsa birden fazla aynı ve korumalı kopya kalabilir ve uyarıda kurtarma kopyasının yolu gösterilir. Geri yüklemek için, örneğin eski sürüme döndükten sonra, bu kopyayı config.json dosyasının üzerine kopyalayın. Kopyalama başarısız olursa uyarı config.json dosyasını hemen kopyalamanızı ister. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/). Pasif okumalar yalnızca bellekte devre dışı bırakır; kopya oluşturmaz veya uyarı vermez.
 
 Geçerli Claude Desktop atamaları ve varsayılanları korunur. Kaynak model izin listesi boşalan kurallar devre dışı bırakılır; enjeksiyon modeli kaldırılırsa yerel alt ajan eşitlemesi de kapatılır. Sonraki yapılandırma kayıtları budanan referansları geri getirmez ve geçerli eşzamanlı düzenlemeleri korur.
 
@@ -665,6 +665,9 @@ tohumlanmıştır:
 | Codex girişi (Pool veya Direct) | `gpt-5.6-*` | 922.000 |
 | OpenAI (API anahtarı) | `openai-apikey/gpt-5.6-*` artı `*-pro` | 922.000 (922.000 maksimum girdi) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922.000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1.000.000 |
 
 Yerel GPT-5.6 girdileri sabitlenmiş yukarı akış akıl yürütme merdivenlerini
@@ -688,7 +691,7 @@ anahtar/abonelik belirteci ağ geçidi olarak kalır. **Cloudflare AI Gateway**,
 URL'ye doldurulan hesap + ağ geçidi kimliklerinize ihtiyaç duyar.
 
 Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
 Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat
