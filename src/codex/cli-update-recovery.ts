@@ -209,6 +209,8 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
         if (!publishChild || armed?.phase !== "armed" || armed.pgid !== null
           || armed.parentPid !== record.parentPid || !armed.windows?.jobName
           || armed.windows.creationTime !== null || armed.windows.jobName !== record.windows?.jobName
+          || record.pgid === null || record.pgid > 0xffffffff || !record.windows?.creationTime
+          || BigInt(record.windows.creationTime) > 0xffffffffffffffffn
           || !processGone(record.parentPid) || !childGone(record, token => readRecord(token, ".proof"))) return true;
         publishChild(record); // Existing protected flush/ACL/rename path; any failure fences.
         reconciled.set(token, record); continue;

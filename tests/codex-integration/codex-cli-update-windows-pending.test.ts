@@ -67,7 +67,8 @@ windows("restart publishes a complete pending child only after terminal native p
 }, 30000);
 const negatives = ["token", "job", "parent", "parent-alive", "armed-child", "armed-identity", "missing-child-pid",
   "missing-child-time", "proof-missing", "proof-malformed", "proof-armed", "proof-token", "proof-job", "proof-parent",
-  "proof-pid", "pending-malformed", "pending-armed", "native-unknown", "native-throws", "parent-denied"] as const;
+  "proof-pid", "pending-malformed", "pending-armed", "native-unknown", "native-throws", "parent-denied",
+  "overflow-child-pid", "overflow-child-time"] as const;
 windows.each(negatives)("pending child stays fenced without matching authority: %s", scenario => {
   const { armed, child, proof } = records();
   if (scenario === "token") child.token = other;
@@ -78,6 +79,8 @@ windows.each(negatives)("pending child stays fenced without matching authority: 
   if (scenario === "armed-identity") armed.windows.creationTime = "1";
   if (scenario === "missing-child-pid") child.pgid = null;
   if (scenario === "missing-child-time") child.windows.creationTime = null;
+  if (scenario === "overflow-child-pid") child.pgid = 0x100000000;
+  if (scenario === "overflow-child-time") child.windows.creationTime = "18446744073709551616";
   if (scenario === "proof-armed") proof.phase = "armed";
   if (scenario === "proof-token") proof.token = other;
   if (scenario === "proof-job") proof.windows.jobName = `Global\\ocx-cli-${other}`;
