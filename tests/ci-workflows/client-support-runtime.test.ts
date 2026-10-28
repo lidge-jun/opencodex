@@ -120,6 +120,9 @@ describe("client support runtime results", () => {
       [{ evidence: "https://[::1]/a" }, URL_BREAKS],
       [{ evidence: "https://service.local/a" }, PUBLIC_HOST],
       [{ evidence: "https://ci.internal/run" }, PUBLIC_HOST],
+      [{ evidence: "https://localhost./x" }, PUBLIC_HOST],
+      [{ evidence: "https://service.local./x" }, PUBLIC_HOST],
+      [{ evidence: "https://ci.internal./x" }, PUBLIC_HOST],
     ];
     for (const [overrides, message] of cases) {
       expect(problems(fileWith([{ ...result(), ...overrides }]))).toEqual([message]);

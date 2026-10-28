@@ -59,7 +59,8 @@ function evidenceProblem(value: string): string | undefined {
   if (url.protocol !== "https:") return "must use https";
   if (url.username || url.password) return "must not carry credentials";
   if (!SAFE_URL.test(value)) return "may only use letters, digits and URL punctuation that is safe in a Markdown link";
-  const host = url.hostname.toLowerCase();
+  // A trailing root dot ("localhost.") names the same host; drop it before the checks below.
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
   const ipLiteral = /^[0-9.]+$/.test(host) || host.startsWith("[");
   if (ipLiteral || !host.includes(".") || host === "localhost" || LOCAL_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
     return "must name a public host (not an IP address or a local or internal name)";
