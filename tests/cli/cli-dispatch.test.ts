@@ -51,7 +51,8 @@ test.each(["models", "provider"])("%s dispatch retains normal handler exit codes
     }
     expect(handler).toHaveBeenCalledTimes(6);
     expect(handler).toHaveBeenLastCalledWith(["list"]);
-  } finally { handler.mockRestore(); process.exitCode = previousExit; }
+    // Bun keeps the last code when exitCode is set to undefined, so restore an explicit 0.
+  } finally { handler.mockRestore(); process.exitCode = previousExit ?? 0; }
 });
 
 describe("CLI dispatch command coverage", () => {
