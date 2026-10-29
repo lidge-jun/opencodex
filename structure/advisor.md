@@ -102,6 +102,12 @@ separate sidecar capability header authenticates inheritance without suppressing
 Chat intersects that registration with the host snapshot captured at authentication; missing or
 expired registrations presented with a valid capability are refused. Completion, failure and abort
 release the entry. Ordinary client headers cannot grant inherited policy authority.
+A loopback listener (a loopback bind or the secondary loopback listener) admits the self-fetch before
+reading any token, so that snapshot carries no key limits. After the capability and registration
+are validated, Chat therefore also resolves the `x-opencodex-api-key` the self-fetch presents and
+intersects that key's scope, paid-combo consent and fallback device identity; a presented credential
+the data plane does not recognize is refused. Other loopback callers keep plain loopback admission.
+`tests/advisor/advisor-caller-policy-host-key.test.ts` drives both loopback ingress shapes.
 
 The host keeps its admission identity and adds the captured caller constraints. Shared scope,
 metered-consent and fallback guards require the intersection of caller and host policy for every

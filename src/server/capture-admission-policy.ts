@@ -1,6 +1,7 @@
 import type { OcxConfig } from "../types";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import type { DataPlaneAdmission } from "./auth-cors";
+import { resolveDataPlaneAdmissionSecret } from "./auth-cors";
 import { admissionMayUseMeteredComboTargets, intersectAdmissionModelScopes, resolveAdmissionModelScope } from "./admission-model-scope";
 import { fallbackDeviceIds } from "../routing/fallback-policy";
 
@@ -49,4 +50,23 @@ export function inheritAdmissionPolicy(
   callerPolicy: CapturedAdmissionPolicy,
 ): DataPlaneAdmission {
   return Object.freeze({ ...(admission ?? { kind: "loopback", source: "loopback" }), callerPolicy }) as DataPlaneAdmission;
+}
+
+/**
+ * Host policy of the data-plane credential an internal self-fetch presents (#7894).
+ *
+ * A loopback listener admits the self-fetch before it reads any token, so the listener snapshot
+ * says "loopback" and carries none of the selected key's model scope, paid-combo consent or
+ * device fallback identity. Call only after the internal capability and policy registration have
+ * been validated. Returns undefined when no credential is presented, and null when the data plane
+ * does not recognize it, which the caller must refuse rather than treat as unrestricted.
+ */
+export function captureSelfFetchCredentialPolicy(
+  req: Request,
+  config: Pick<OcxConfig, "apiKeys" | "hostname" | "fallback">,
+): CapturedAdmissionPolicy | null | undefined {
+  const presented = req.headers.get("x-opencodex-api-key")?.trim();
+  if (!presented) return undefined;
+  const admission = resolveDataPlaneAdmissionSecret(presented, config, "dedicated");
+  return admission ? captureAdmissionPolicy(config, admission) : null;
 }

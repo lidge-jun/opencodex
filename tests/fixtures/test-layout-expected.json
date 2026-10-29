@@ -8,6 +8,7 @@
     "advisor-caller-policy-http.test.ts": "advisor",
     "advisor-caller-policy-jev.test.ts": "advisor",
     "advisor-caller-policy-routing.test.ts": "advisor",
+    "advisor-caller-policy-host-key.test.ts": "advisor",
     "windows-config-root-async-writers.test.ts": "windows",
     "windows-atomic-write-acl-rearm.test.ts": "windows",
     "t3code-client.test.ts": "clients",
