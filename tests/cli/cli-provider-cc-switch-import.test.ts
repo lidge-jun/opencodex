@@ -76,6 +76,11 @@ describe("ocx provider import-cc-switch CLI", () => {
     expect(output.join("\n")).toContain("Keyless provider entries saved");
 
     output.length = 0;
+    expect(await cmdProviderCcSwitchImport(["--source", "cc-switch.db", "--apply"], makeDeps(calls, 0, 0))).toBe(0);
+    expect(output.join("\n")).toContain("No eligible non-conflicting providers were imported");
+    expect(output.join("\n")).not.toContain("Keyless provider entries saved");
+
+    output.length = 0;
     expect(await cmdProviderCcSwitchImport(["--restore", "--json"], makeDeps(calls))).toBe(0);
     expect(JSON.parse(output[0]!)).toMatchObject({ mode: "restore", restored: 1 });
 

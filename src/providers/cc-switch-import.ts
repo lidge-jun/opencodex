@@ -635,12 +635,8 @@ WITH RECURSIVE
       END AS safe_line
     FROM lines
   ),
-  safe_toml AS (
-    SELECT rid, group_concat(safe_line, char(10)) AS codex_toml_lines
-    FROM (SELECT rid, safe_line FROM projected_lines WHERE safe_line IS NOT NULL ORDER BY idx ASC)
-    GROUP BY rid
-  )
 SELECT
+  b.rid AS rid,
   b.id AS id,
   b.app_type AS appType,
   b.name AS name,
@@ -650,17 +646,18 @@ SELECT
   b.generic_base_url AS genericBaseUrl,
   b.generic_model AS genericModel,
   b.generic_wire_api AS genericWireApi,
-  s.codex_toml_lines AS codexTomlLines
+  p.idx AS lineIdx,
+  p.safe_line AS safeLine
 FROM base b
-LEFT JOIN safe_toml s ON b.rid = s.rid
-ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC
+LEFT JOIN projected_lines p ON b.rid = p.rid AND p.safe_line IS NOT NULL
+ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC, b.rid ASC, p.idx ASC
 `;
 
 export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
   let db: Database | undefined;
   try {
     db = new Database(sourcePath, { readonly: true, create: false });
-    return db.query(SQLITE_SAFE_QUERY).all(
+    const rawRows = db.query(SQLITE_SAFE_QUERY).all(
       "$.env.ANTHROPIC_BASE_URL",
       "$.env.ANTHROPIC_MODEL",
       "$.env.ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -674,7 +671,41 @@ export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
       "$.env.GEMINI_MODEL",
       "$.wire_api",
       "$.config",
-    ) as RawExtractedRow[];
+    ) as Array<Omit<RawExtractedRow, "codexTomlLines"> & { rid: number; lineIdx: number | null; safeLine: string | null }>;
+    const byRid = new Map<number, { row: RawExtractedRow; lines: Array<{ idx: number; text: string }> }>();
+    for (const item of rawRows) {
+      let group = byRid.get(item.rid);
+      if (!group) {
+        group = {
+          row: {
+            id: item.id,
+            appType: item.appType,
+            name: item.name,
+            settingsType: item.settingsType,
+            claudeBaseUrl: item.claudeBaseUrl,
+            claudeModel: item.claudeModel,
+            genericBaseUrl: item.genericBaseUrl,
+            genericModel: item.genericModel,
+            genericWireApi: item.genericWireApi,
+            codexTomlLines: null,
+          },
+          lines: [],
+        };
+        byRid.set(item.rid, group);
+      }
+      if (item.lineIdx !== null && item.safeLine !== null) {
+        group.lines.push({ idx: item.lineIdx, text: item.safeLine });
+      }
+    }
+    const result: RawExtractedRow[] = [];
+    for (const group of byRid.values()) {
+      if (group.lines.length > 0) {
+        group.lines.sort((a, b) => a.idx - b.idx);
+        group.row.codexTomlLines = group.lines.map(l => l.text).join("\n");
+      }
+      result.push(group.row);
+    }
+    return result;
   } catch {
     throw new CcSwitchImportError("CC-Switch SQLite source could not be read or has an unsupported schema.");
   } finally {
