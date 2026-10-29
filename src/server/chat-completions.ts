@@ -26,7 +26,7 @@ import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "..
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
 import {
-  captureAdmissionPolicy, captureSelfFetchCredentialPolicy, inheritAdmissionPolicy, intersectAdmissionPolicies,
+  captureAdmissionPolicy, captureSelfFetchCredentialPolicy, inheritAdmissionPolicy, intersectAdmissionPolicies, selfFetchHostPolicy,
 } from "./capture-admission-policy";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -184,7 +184,7 @@ async function handleChatCompletionsWithBudget(
   // The listener snapshot was captured at authentication; internal hops add the policy of the
   // credential they selected (which loopback admission never read) and their frozen registration.
   const listenerPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
-  const hostPolicy = selfFetchPolicy ? intersectAdmissionPolicies(listenerPolicy, selfFetchPolicy) : listenerPolicy;
+  const hostPolicy = selfFetchPolicy ? selfFetchHostPolicy(listenerPolicy, selfFetchPolicy, logIds?.admission) : listenerPolicy;
   const advisorAdmissionPolicy = callerPolicy ? intersectAdmissionPolicies(hostPolicy, callerPolicy) : hostPolicy;
   const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, advisorAdmissionPolicy) : logIds?.admission;
   const inheritedAdmissionScope = callerPolicy ? advisorAdmissionPolicy.modelScope : undefined;

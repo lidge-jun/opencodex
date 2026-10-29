@@ -18,7 +18,7 @@
  * unavailable context or with nothing, depending on the trigger.
  */
 import type { OcxConfig } from "../types";
-import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
+import { localInferenceDestination, selfFetchAdmissionToken, type LocalInferenceDestination } from "../lib/local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -70,12 +70,18 @@ export interface AdvisorConsultationResult {
 export function advisorDestinationOrigin(
   config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
 ): string {
+  return advisorDestination(config).origin;
+}
+
+function advisorDestination(
+  config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
+): LocalInferenceDestination {
   // Same port resolution rule as the vision sidecar: config.port can be 0 (ephemeral bind, tests)
   // or stale after a live port override, so prefer the recorded actual bind port when present.
   const port = config.port && config.port > 0
     ? config.port
     : Number(configuredPort()) || 10_100;
-  return localInferenceDestination(config, port).origin;
+  return localInferenceDestination(config, port);
 }
 
 function extractContent(payload: unknown): string | undefined {
@@ -135,9 +141,9 @@ export async function consultAdvisor(
     [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
   };
   // Admission ladder identical to the vision sidecar: env token || service token file || first
-  // configured API key, sent as `x-opencodex-api-key` — never Authorization. Loopback binds that
-  // require no token simply omit it.
-  const admission = localAdmissionToken(config);
+  // configured API key, sent as `x-opencodex-api-key` — never Authorization. A destination that
+  // requires no admission gets only a credential this data plane recognizes (#7894).
+  const admission = selfFetchAdmissionToken(config, advisorDestination(config));
   if (admission) headers["x-opencodex-api-key"] = admission;
   // Keep the bounded scope envelope for transport validation; the process-local policy
   // registration below owns the complete snapshot. The receiver also enforces host limits.

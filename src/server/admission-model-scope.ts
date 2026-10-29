@@ -101,6 +101,9 @@ export function admissionMayUseMeteredComboTargets(
     const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
     return entry?.allowMeteredComboTargets === true;
   }
+  // A loopback-admitted internal hop's captured policy already holds this branch's decision for
+  // its listener, or the consent of the validated key it presented (#7894); it was checked above.
+  if (admission?.kind === "loopback" && caller) return true;
   // Linked ingress always carries keyed admission, even when the primary bind is loopback.
   // A secondary loopback listener on a public proxy does not qualify either.
   return (!admission || admission.kind === "loopback")

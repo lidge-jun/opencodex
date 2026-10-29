@@ -70,3 +70,22 @@ export function captureSelfFetchCredentialPolicy(
   const admission = resolveDataPlaneAdmissionSecret(presented, config, "dedicated");
   return admission ? captureAdmissionPolicy(config, admission) : null;
 }
+
+/**
+ * Host policy of an internal self-fetch whose presented credential was validated (#7894).
+ *
+ * Scope and fallback limits of the listener snapshot and the key both apply. Paid-combo consent
+ * is the key's own when a loopback listener admitted the hop: that snapshot holds only the
+ * loopback default, which a public proxy always refuses, so a consenting key would otherwise be
+ * weaker over Advisor than on a direct request. The loopback snapshot still demands the combo's
+ * own opt-in, and the caller's consent is intersected afterwards.
+ */
+export function selfFetchHostPolicy(
+  listener: CapturedAdmissionPolicy,
+  presented: CapturedAdmissionPolicy,
+  listenerAdmission: DataPlaneAdmission | undefined,
+): CapturedAdmissionPolicy {
+  const merged = intersectAdmissionPolicies(listener, presented);
+  if (listenerAdmission && listenerAdmission.kind !== "loopback") return merged;
+  return immutableAdmissionPolicy({ ...merged, allowMeteredComboTargets: presented.allowMeteredComboTargets });
+}

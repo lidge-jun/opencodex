@@ -108,6 +108,13 @@ are validated, Chat therefore also resolves the `x-opencodex-api-key` the self-f
 intersects that key's scope, paid-combo consent and fallback device identity; a presented credential
 the data plane does not recognize is refused. Other loopback callers keep plain loopback admission.
 `tests/advisor/advisor-caller-policy-host-key.test.ts` drives both loopback ingress shapes.
+Senders pick that credential with `selfFetchAdmissionToken` (`src/lib/local-destinations.ts`): the
+unchanged ladder where the destination requires admission, otherwise only the first ladder credential
+this data plane recognizes, so a hub client key a loopback bind left out of its admission credentials
+is not sent. When a loopback listener admitted the hop, `selfFetchHostPolicy` takes paid-combo
+consent from the validated key instead of the loopback default a public bind always refuses; the
+combo's own opt-in and the caller's consent still bind, and the hop keeps loopback transport identity.
+`tests/advisor/advisor-caller-policy-self-fetch.test.ts` covers both on the real listener.
 
 The host keeps its admission identity and adds the captured caller constraints. Shared scope,
 metered-consent and fallback guards require the intersection of caller and host policy for every

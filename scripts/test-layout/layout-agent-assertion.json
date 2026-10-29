@@ -9,6 +9,7 @@
   "advisor-caller-policy-jev.test.ts": "advisor",
   "advisor-caller-policy-routing.test.ts": "advisor",
   "advisor-caller-policy-host-key.test.ts": "advisor",
+  "advisor-caller-policy-self-fetch.test.ts": "advisor",
   "windows-native-principal.test.ts": "windows",
   "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "agent-assertion-auth.test.ts": "server",
