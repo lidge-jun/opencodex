@@ -1114,7 +1114,8 @@ export async function appendKiroAccountFromDeviceLogin(
   return await mutateStore(store => {
     const set = store.kiro;
     const id = distinctAccountId(safe, set?.accounts ?? []);
-    const warning = safe.kiro?.profileArn && set?.accounts.some(a => a.credential.kiro?.profileArn === safe.kiro?.profileArn)
+    const warning = safe.kiro?.profileArn && set?.accounts.some(a => a.credential.kiro?.profileArn === safe.kiro?.profileArn
+      && (!safe.email || !a.credential.email || a.credential.email.toLowerCase() === safe.email.toLowerCase()))
       ? "duplicate_profile_arn" as const : undefined;
     const account: ProviderAccount = { id, credential: safe, addedAt: Date.now(), loginId: randomUUID(), loginOrigin: "kiro-device" };
     if (set) set.accounts.push(account);

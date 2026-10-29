@@ -170,7 +170,10 @@ for (const scenario of ["success", "redirect", "oversize", "invalid UTF-8", "sta
       return Response.json({ models: [] });
     } });
     try {
-      const child = Bun.spawn(windowsChildHttpArgv(server.port!, "v1/catalog", 250), {
+      // Only the stalled body exercises the deadline; elsewhere a cold PowerShell request on a
+      // hosted runner must not race 250ms (production uses LINK_RELAY_VERIFY_MS = 15s).
+      const deadlineMs = scenario === "stalled body" ? 250 : 10_000;
+      const child = Bun.spawn(windowsChildHttpArgv(server.port!, "v1/catalog", deadlineMs), {
         env: { ...process.env, HTTP_PROXY: proxy.url.toString(), HTTPS_PROXY: proxy.url.toString(), ALL_PROXY: proxy.url.toString(), NO_PROXY: "" },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });

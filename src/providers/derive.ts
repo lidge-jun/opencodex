@@ -61,6 +61,7 @@ export interface DerivedKeyLoginProvider {
   escapeBuiltinToolNames?: boolean;
   openaiChatEofTolerance?: boolean;
   foldDeveloperRoleToSystem?: boolean;
+  singleLeadingSystemMessage?: boolean;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   project?: string;
   location?: string;
@@ -287,6 +288,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
     ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
     ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
+    ...(entry.singleLeadingSystemMessage !== undefined ? { singleLeadingSystemMessage: entry.singleLeadingSystemMessage } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.chatCompletionsPath !== undefined ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
@@ -367,6 +369,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
       ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
       ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
+      ...(entry.singleLeadingSystemMessage !== undefined ? { singleLeadingSystemMessage: entry.singleLeadingSystemMessage } : {}),
       ...(entry.googleMode ? { googleMode: entry.googleMode } : {}),
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.location ? { location: entry.location } : {}),
@@ -614,6 +617,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (prov.foldDeveloperRoleToSystem === undefined && seed.foldDeveloperRoleToSystem !== undefined) {
     prov.foldDeveloperRoleToSystem = seed.foldDeveloperRoleToSystem;
+  }
+  if (prov.singleLeadingSystemMessage === undefined && seed.singleLeadingSystemMessage !== undefined) {
+    prov.singleLeadingSystemMessage = seed.singleLeadingSystemMessage;
   }
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.
