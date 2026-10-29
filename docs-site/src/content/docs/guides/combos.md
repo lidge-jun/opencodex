@@ -24,7 +24,7 @@ Mark a pay-per-use combo target with `"metered": true` when it follows subscript
 
 Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
 
-For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with one exception: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
 
 ## 60-second quickstart
 
@@ -672,7 +672,8 @@ provider, see [Fallback off](/guides/fallback-off/).
 | HTTP 401, 403, 404, 408, 429, or any 5xx | Cool the target and hop to the next eligible target. |
 | HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
-| Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or other invalid request | Stop and return the error; another target would not make the request valid. |
+| Confirmed context-window overflow before output, including HTTP 400 | Try the next untried eligible target without cooling this target; another model may have a larger window. Exhaustion returns the first confirmed HTTP 400 context-length error; a context refusal sent with another status still advances but is not retained. |
+| Client cancellation (499), `origin_rejected`, cyber-policy refusal, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Exact HTTP 400 saying a model is not supported when using Codex with a ChatGPT account | Try the next declared target before output commitment. The message must be the whole refusal in `detail`, `error.message`, or bare text; competing `detail` and `error` envelopes stay terminal. This does not quarantine the account or cool every model on the provider. |
 | Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, model-scoped image input, or input media the route cannot read (`unsupported_input_modality`) | Hop before output commitment without cooling; see request-local target compatibility below. |
 | First tool call of a Responses turn run by an in-process adapter (`runTurn`) that the current request did not declare, before any output or replay-unsafe side effect | Cool the target and hop with the same tool catalog. After visible output or a replay-unsafe side effect the refusal is final. Chat Completions and Anthropic Messages requests are unchanged. |
@@ -762,13 +763,19 @@ cooldown expires; request-local compatibility rejections do not cool the target.
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
 request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,
 and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
-across multiple failover hops. The default is `0`, which fails closed immediately with HTTP 503 when
+across multiple failover hops. Before any target is attempted, the default `0` fails closed immediately with HTTP 503 when
 every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-After` header equal
 to the earliest remaining cooldown, rounded up to whole seconds with a minimum of 1. Waits are not jittered, so
 synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
 `client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
 cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
 used by native account routing.
+
+After a confirmed HTTP 400 context refusal, exhaustion returns the first such refusal as
+`context_length_exceeded`, including when the remaining targets cannot replay reasoning or lack
+metered-spend consent, or the send budget is exhausted. It takes precedence over later retryable
+errors, including quota errors. Cancellation, later fatal refusals and explicit fallback-policy
+refusals still stop immediately; no unconsented metered target is sent the request.
 
 :::note
 Failover is intentionally bounded. It helps with target-specific availability, authentication,
@@ -1044,9 +1051,13 @@ HTTP 400. A slashed alias whose first segment is a configured Codex account name
 as HTTP 409; choose a different alias namespace. The CLI and dashboard display the server's exact
 validation message.
 
+### Context-window refusals
+
+Combo recovery reuses the bounded context-overflow detector used by Responses recovery. It reads the innermost provider message, including `context_length_exceeded`, `prompt is too long`, `input is too long for requested model`, and `Please reduce the length of the messages or completion`. The last three count only when the provider message starts with them (Anthropic's with its token counts), so a validation error that quotes one as a parameter value, or an SDK error string that wraps one, does not qualify. A code beside an unrelated message, malformed JSON, a parameter validation error, or a generic instruction to shorten a parameter does not qualify either. Already-committed output is never replayed. Fallback policy, spend consent and send budgets still apply; each physical attempt retains its own usage. When eligible targets or the send budget run out, the first confirmed HTTP 400 context refusal takes precedence over later retryable errors, including quota errors. A later fatal refusal still stops immediately.
+
 ### Why did failover stop after the first error?
 
-The error was terminal rather than target-specific. Fix invalid input, reduce an oversized context,
+The error was terminal rather than target-specific. Fix invalid input,
 handle a policy refusal, or correct the rejected request origin. Combos do not hop for those cases.
 
 ## Retry all-cooled targets (opt-in)
