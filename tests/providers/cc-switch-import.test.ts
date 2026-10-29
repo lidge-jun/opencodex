@@ -11,6 +11,7 @@ import {
 } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { saveCredential } from "../../src/oauth/store";
 import {
   CC_SWITCH_IMPORT_JOURNAL_FILENAME,
   CcSwitchImportError,
@@ -267,7 +268,7 @@ describe("CC-Switch keyless provider import", () => {
         id: "prov-a",
         app_type: "claude",
         name: "Prov A",
-        settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://a.example.com" } }),
+        settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://a.example.com", ANTHROPIC_MODEL: "token" } }),
       },
       {
         id: "prov-b",
@@ -281,20 +282,32 @@ describe("CC-Switch keyless provider import", () => {
         name: "Prov C",
         settings_config: JSON.stringify({ baseUrl: "https://c.example.com/v1" }),
       },
+      {
+        id: "kimi",
+        app_type: "openai",
+        name: "Kimi",
+        settings_config: JSON.stringify({ baseUrl: "https://api.moonshot.ai/v1" }),
+      },
     ]);
 
     await runCcSwitchProviderImport({ mode: "apply", sourcePath: dbPath });
+    expect(loadConfig().providers["prov-a"]?.defaultModel).toBe("token");
 
     // Repeated apply while journal is active must be refused.
     await expect(runCcSwitchProviderImport({ mode: "apply", sourcePath: dbPath })).rejects.toThrow(
       /active CC-Switch import journal already exists/,
     );
 
-    // User edits prov-b (adds a model) and references prov-c in fallback.providers.
+    // User edits prov-b (adds a model), references prov-c in fallback.providers, and logs into kimi via OAuth store.
     const edited = loadConfig();
     edited.providers["prov-b"]!.defaultModel = "user-added-model";
     edited.fallback = { providers: { "prov-c": { provider: false } } };
     saveConfig(edited);
+    await saveCredential("kimi", {
+      access: "oauth-access-fixture",
+      refresh: "oauth-refresh-fixture",
+      expires: Date.now() + 3600_000,
+    });
 
     const restored1 = await runCcSwitchProviderImport({ mode: "restore" });
     expect(restored1).toEqual({
@@ -302,14 +315,15 @@ describe("CC-Switch keyless provider import", () => {
       restored: 1,
       restoredNames: ["prov-a"],
       alreadyAbsent: 0,
-      retainedEdited: 2,
-      retainedNames: ["prov-b", "prov-c"],
+      retainedEdited: 3,
+      retainedNames: ["kimi", "prov-b", "prov-c"],
     });
 
     const after1 = loadConfig();
     expect(after1.providers["prov-a"]).toBeUndefined();
     expect(after1.providers["prov-b"]?.defaultModel).toBe("user-added-model");
     expect(after1.providers["prov-c"]).toBeDefined();
+    expect(after1.providers["kimi"]).toBeDefined();
     // Journal remains for the retained entries.
     expect(existsSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME))).toBe(true);
   });

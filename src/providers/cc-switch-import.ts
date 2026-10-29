@@ -31,7 +31,7 @@ import { providerBaseUrlConfigError } from "../config/provider-validation";
 import { assertPlainLocalPath } from "../codex/orca-auth-source";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { providerDestinationConfigError } from "../lib/destination-policy";
-import { SENSITIVE_KEY_PATTERN } from "../lib/redact";
+import { listAccounts } from "../oauth/store";
 import { rewriteProviderReferences } from "./provider-id-rewrite";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { serviceStatePaths } from "../service/state";
@@ -138,7 +138,7 @@ function hasControlChars(value: string): boolean {
 }
 
 function looksLikeSecretValue(value: string, isUrl = false): boolean {
-  if (hasControlChars(value) || TOKEN_LIKE_VALUE.test(value) || SENSITIVE_KEY_PATTERN.test(value)) return true;
+  if (hasControlChars(value) || TOKEN_LIKE_VALUE.test(value)) return true;
   if (isUrl) {
     try {
       const parsed = new URL(value);
@@ -1336,6 +1336,7 @@ function assertStopped(): void {
 export function isProviderReferencedInConfig(config: OcxConfig, name: string): boolean {
   if (config.defaultProvider === name) return true;
   if (Object.keys(config.providers ?? {}).length <= 1) return true;
+  if (listAccounts(name).length > 0) return true;
   const prefix = `${name}/`;
   const rewriteProbe = rewriteProviderReferences(structuredClone(config), name, "__cc_switch_probe__");
   if (rewriteProbe.changed > 0 || rewriteProbe.collisions.length > 0) return true;
