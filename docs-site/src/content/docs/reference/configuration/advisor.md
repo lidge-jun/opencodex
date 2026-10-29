@@ -120,8 +120,9 @@ The configured Advisor provider may differ from the worker provider.
 
 Consultations obey both the caller's captured API-key model scope, paid-combo consent and device
 fallback limits, and the host limits of Advisor's own admission key: `OPENCODEX_API_AUTH_TOKEN` or the
-service token file when set, otherwise the first configured API key. Put a key that can reach the
-Advisor model first, or every consultation is unavailable. These rules also apply to combo choices, nested
+service token file when set, otherwise the first configured API key. Only in that last case does key
+order matter: put a key that can reach the Advisor model first, or every consultation is unavailable.
+When an environment or service token is set, that token controls the consultation instead. These rules also apply to combo choices, nested
 decision models and retries. A consultation that cannot satisfy them returns an unavailable
 notice to the worker.
 
