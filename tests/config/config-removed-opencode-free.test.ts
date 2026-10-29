@@ -440,6 +440,7 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
   const home = createTempHome("ocx-recovery-overlap-");
   const ready = home.path("publisher-ready");
   const release = home.path("publisher-release");
+  const exhausted = home.path("recheck-budget-spent");
   const backup = `${getConfigPath()}.pre-opencode-free-removal.bak`;
   const module = pathToFileURL(repoPath("src/config.ts")).href;
   const bytes = Buffer.from(JSON.stringify({ ...getDefaultConfig(), providers: { "opencode-free": {} } }));
@@ -455,7 +456,15 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
           if (Date.now() >= until) throw new Error('publisher release timed out');
           Bun.sleepSync(5);
         }
-        Bun.sleepSync(${delay});
+        // The long case publishes only once the overlapping load has spent its whole recheck budget.
+        // A fixed sleep raced the rechecks on loaded runners (dev batch 40824593871, macOS).
+        if (${delay} === 500) {
+          const spent = Date.now() + 20000;
+          while (!real.existsSync(${JSON.stringify(exhausted)})) {
+            if (Date.now() >= spent) throw new Error("recheck budget never spent");
+            Bun.sleepSync(5);
+          }
+        } else Bun.sleepSync(${delay});
       }
     }})); const { loadConfig } = await import(${JSON.stringify(module)});
     if (loadConfig().providers['opencode-free']) throw new Error('retired provider retained');`;
@@ -472,6 +481,7 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
       Bun.sleepSync = ms => {
         if (ms !== 10 || ++retries > 9) throw new Error('unbounded recovery recheck');
         if (retries === 1) fs.writeFileSync(${JSON.stringify(release)}, 'release');
+        if (retries === 9) fs.writeFileSync(${JSON.stringify(exhausted)}, 'spent');
         sleep(ms);
       }; const { loadConfig } = await import(${JSON.stringify(module)});
       if (loadConfig().providers['opencode-free']) throw new Error('retired provider retained');
