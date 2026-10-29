@@ -21,6 +21,7 @@ import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract
 import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
 import { requestLogDto } from "../../src/server/management/shared";
 import { requestLogEntryFromPersistedUsage } from "../../src/server/request-log";
+import { failureSummary } from "../../gui/src/pages/logs-failure-summary";
 
 /**
  * The durable ledger, the Prometheus exporter and the dashboard have to answer "how did this
@@ -117,8 +118,11 @@ describe("send totals agree across surfaces", () => {
     expect(normalized.attemptNormalizationDropped).toBe(true);
     expect(requestLogEntryFromPersistedUsage(normalized).attemptNormalizationDropped).toBe(true);
     expect(requestLogDto(normalized).attemptNormalizationDropped).toBe(true);
+    expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(normalized)), null, key => key).retries).toBeUndefined();
     expect(normalizeUsageEntryForTest(normalized).attemptNormalizationDropped).toBe(true);
     expect(normalizeUsageEntryForTest({ ...entry, attempts: [attempt] }).attemptNormalizationDropped).toBeUndefined();
+    const valid = normalizeUsageEntryForTest({ ...entry, attempts: [attempt] });
+    expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(valid)), null, key => key).retries).toBe(2);
   });
 
   test.each(["future-fault", "constructor"])("unknown persisted cause %s is dropped", cause => {
