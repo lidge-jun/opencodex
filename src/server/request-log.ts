@@ -629,7 +629,8 @@ export function addRequestLog(entry: RequestLogEntry) {
     && entry.claudeCompatibility === undefined
     && entry.jevDecision === undefined
     ? entry
-    : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
+    : { ...entry, ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
+      ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
   if (!servedModel && retained !== entry) {
     delete retained.servedModel;
