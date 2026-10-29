@@ -52,6 +52,7 @@ The wire surfaces a client actually talks to.
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
 | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) | Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization. |
 | [`transports/response-citations.md`](transports/response-citations.md) | OpenAI-operated outbound citation repair and generated JSON/SSE annotation titles. |
+| [`transports/max-output-completion.md`](transports/max-output-completion.md) | Default-off translated Responses text-only token-limit completion and exclusions. |
 | [`transports/responses.md`](transports/responses.md) | The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership. |
 | [`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) | Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls. |
 | [`transports/responses-citations.md`](transports/responses-citations.md) | Destination-gated citation repair for ordinary Responses and every native compact send. |
@@ -220,7 +221,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/response-citations.md`](transports/response-citations.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
-| `src/bridge/sse.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/bridge/max-output-completion.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/bridge/response-json.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
+| `src/bridge/sse.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/chat/reasoning-details.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
@@ -297,6 +300,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
@@ -377,7 +381,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
@@ -388,6 +392,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/passthrough-dispatch.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/request-prepare.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/run-turn-execution.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/server/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
@@ -417,7 +422,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/types/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/types/admission-policy.ts` | [`advisor.md`](advisor.md) |
-| `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md) |
+| `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/update/guarded-port-reclaim.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |

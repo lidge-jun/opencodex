@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ffi from "bun:ffi";
@@ -23,9 +22,12 @@ type RecordBody = { version: number; token: string; parentPid: number; phase: st
   windows: { jobName: string; creationTime: string | null } };
 beforeAll(() => {
   if (!native) return;
-  const child = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8", windowsHide: true });
-  expect(child.status).toBe(0); deadPid = Number(child.stdout.trim());
-  expect(() => process.kill(deadPid, 0)).toThrow();
+  // A PID that must stay dead for the whole file. The PID of an exited child is not: hosted Windows
+  // reuses PIDs quickly, and a reused parent PID made recovery fence before the publication step
+  // these cases inject into (dev batch 40824593871). Windows PIDs are multiples of 4 and are never
+  // allocated this high, so the value stays dead while remaining a valid in-range record PID.
+  deadPid = 0x7ffffffc;
+  expect(() => process.kill(deadPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
 });
 beforeEach(async () => {
   if (!native) return;

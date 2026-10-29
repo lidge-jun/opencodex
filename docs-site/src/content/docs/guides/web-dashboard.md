@@ -519,3 +519,23 @@ test for the same provider returns 409. Completed diagnostics and applicability
 results return 200, including a structured error when inference fails. Destination
 policy and provider egress settings apply; redirects, retries and failover are disabled.
 For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).
+
+**Test all models** runs the same completion test for every configured, listed and
+default model of the provider, one request at a time, after a single confirmation that
+states the maximum number of requests; some models can be skipped before sending. The
+single-model **Test model** control and **Test all models** share one guard per provider, so
+each stays disabled while the other is confirming or running. **Stop** cancels the in-flight request and sends no
+more. Each model is reported as passed, failed (the upstream answered with an error or
+timed out) or not tested. The latter covers management API refusals such as a concurrent
+test, admission refusals before sending (missing or changed credentials or a refused
+destination), and upstream HTTP 401/403/429 authentication, access or quota refusals
+returned in a structured result with HTTP 200. None of these categories becomes a disable target. An unsupported
+effective adapter marks only that model as not tested and continues, because one provider
+can use different wires for different models. Provider-wide applicability refusals, such as
+OAuth authentication or unsupported transport settings, stop the run. When any model failed, **Disable failed models** asks a second
+confirmation and then removes only those models from the model catalog and picker through the
+same visibility setting as the **Models** page, where they can be re-enabled. Like any hidden
+model, they stay callable by exact id. Models are never disabled
+without that confirmation. Leaving the page or changing the provider connection withdraws
+pending disable consent and aborts its request. A new batch waits until disable consent or
+the visibility write has settled, so an older response cannot hide the newer batch's action.
