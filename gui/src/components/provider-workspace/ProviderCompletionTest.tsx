@@ -1,5 +1,5 @@
 /** An explicitly consented, bounded completion probe; it never runs during discovery. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { confirmAction } from "../../action-dialogs";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useI18n, useT } from "../../i18n/shared";
@@ -32,6 +32,24 @@ export type ProbeGate = {
 };
 type ProbeOwner = "single" | "bulk";
 
+function createProbeGates(onChange: (owner: ProbeOwner | null) => void): Record<ProbeOwner, ProbeGate> {
+  let holder: ProbeOwner | null = null;
+  const gateFor = (owner: ProbeOwner): ProbeGate => ({
+    claim() {
+      if (holder !== null && holder !== owner) return false;
+      holder = owner;
+      onChange(owner);
+      return true;
+    },
+    release() {
+      if (holder !== owner) return;
+      holder = null;
+      onChange(null);
+    },
+  });
+  return { single: gateFor("single"), bulk: gateFor("bulk") };
+}
+
 type Props = {
   apiBase: string;
   provider: string;
@@ -49,23 +67,8 @@ export default function ProviderCompletionTest({ apiBase, provider, models, onSt
   }
   const selectedModel = models.includes(model) ? model : "";
   const [active, setActive] = useState<ProbeOwner | null>(null);
-  const holder = useRef<ProbeOwner | null>(null);
-  const gates = useMemo(() => {
-    const gateFor = (owner: ProbeOwner): ProbeGate => ({
-      claim() {
-        if (holder.current !== null && holder.current !== owner) return false;
-        holder.current = owner;
-        setActive(owner);
-        return true;
-      },
-      release() {
-        if (holder.current !== owner) return;
-        holder.current = null;
-        setActive(null);
-      },
-    });
-    return { single: gateFor("single"), bulk: gateFor("bulk") };
-  }, []);
+  // Created once per mount; the holder lives in the closure, so render never reads it.
+  const [gates] = useState(() => createProbeGates(setActive));
   return (
     <section className="pws-completion-test" aria-label={t("pws.completion.title")}>
       <h4 className="pws-section-title">{t("pws.completion.title")}</h4>
