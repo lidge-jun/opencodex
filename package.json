@@ -55,6 +55,8 @@
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "favicons": "bun scripts/brand-favicons.ts",
     "favicons:check": "bun scripts/brand-favicons.ts --check",
+    "docs:clients": "bun scripts/generate-client-support-matrix.ts",
+    "docs:clients:check": "bun scripts/generate-client-support-matrix.ts --check",
     "skill:surface": "bun scripts/generate-ocx-skill-surface.ts",
     "skill:surface:check": "bun scripts/generate-ocx-skill-surface.ts --check",
     "structure:index": "bun scripts/structure-ssot.ts --fix",
