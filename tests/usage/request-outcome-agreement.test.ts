@@ -20,6 +20,7 @@ import {
 import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract";
 import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
 import { requestLogDto } from "../../src/server/management/shared";
+import { requestLogEntryFromPersistedUsage } from "../../src/server/request-log";
 
 /**
  * The durable ledger, the Prometheus exporter and the dashboard have to answer "how did this
@@ -114,6 +115,7 @@ describe("send totals agree across surfaces", () => {
     const normalized = normalizeUsageEntryForTest(entry);
     expect(normalized.attempts).toHaveLength(1);
     expect(normalized.attemptNormalizationDropped).toBe(true);
+    expect(requestLogEntryFromPersistedUsage(normalized).attemptNormalizationDropped).toBe(true);
     expect(requestLogDto(normalized).attemptNormalizationDropped).toBe(true);
     expect(normalizeUsageEntryForTest(normalized).attemptNormalizationDropped).toBe(true);
     expect(normalizeUsageEntryForTest({ ...entry, attempts: [attempt] }).attemptNormalizationDropped).toBeUndefined();

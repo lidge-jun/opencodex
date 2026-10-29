@@ -357,6 +357,8 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** True when malformed attempts were dropped while reading the persisted row. */
+  attemptNormalizationDropped?: boolean;
   /**
    * Upstream spend for the whole logical request: sends aggregated across attempts and combo
    * children, split into settled and unresolved, with the budget state and move reasons that
@@ -513,6 +515,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
