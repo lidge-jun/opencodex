@@ -65,7 +65,7 @@ ocx models live --provider ark --json
 
 ### 无密钥导入 CC-Switch 提供商
 
-`ocx provider import-cc-switch` 仅从受信任的本地 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 文件按严格的长度、字符集与分段策略只读提取提供商 ID、应用类型、base URL、协议适配器与默认模型。自由文本名称、TOML 注释与凭据字段在解码前即被丢弃，临时字节缓冲区在 `finally` 中清零。由于后续添加的密钥会发送到导入的 `baseUrl`，请仅从受信任的源文件导入并核对 `--apply` 输出的目标 URL。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`；应用后先启动代理（`ocx start`），再通过管道标准输入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）添加密钥。`--restore` 会以只读字节方式检查 `auth.json`，仅移除未修改且未被路由或 OAuth 账户引用的导入条目。
+`ocx provider import-cc-switch` 会在内存中只读打开本地 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`；若有未检查点的 WAL 更改请先关闭 CC-Switch）或 JSON 文件（不写入临时快照文件），仅提取符合结构化长度、字符集与分段白名单的提供商 ID、应用类型、base URL、协议适配器与默认模型。自由文本名称、TOML 注释与凭据字段在解码前即被丢弃，临时字节缓冲区在 `finally` 中清零；但结构规则无法区分符合普通标识符或 URL 语法的字符串，且后续添加的密钥会发送到导入的 `baseUrl`，因此请仅从受信任的源文件导入并核对 `--apply` 输出的目标 URL。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`；应用后先启动代理（`ocx start`），再通过管道标准输入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）添加密钥。`--restore` 会以只读字节方式检查 `auth.json`（不可读或格式损坏时安全保留），仅移除未修改且未被路由或 OAuth 账户引用的导入条目。
 
 ## 认证
 

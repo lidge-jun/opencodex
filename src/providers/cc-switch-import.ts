@@ -49,6 +49,7 @@ import {
   CcSwitchImportError,
   MAX_JSON_BYTES,
   SECRET_REFUSED_SENTINEL,
+  equalsAsciiBytes,
   isAllowedMetadataBytes,
   looksLikeSecretValue,
   parseCodexTomlBytes,
@@ -57,6 +58,9 @@ import {
   resolveCodexProjection,
   scanCcSwitchJsonBytes,
   setCcSwitchSourceOpenHookForTests,
+  unescapeJsonStringBytesBounded,
+  validateJsonPrimitiveBytes,
+  validateUtf8AndJsonStringBounds,
   type CcSwitchInvalidReason,
   type CodexTomlProjection,
   type MetadataFieldKind,
@@ -393,8 +397,9 @@ function assertStopped(): void {
  * Read-only byte-level inspection of ~/.opencodex/auth.json to determine whether `name` has stored
  * OAuth accounts (or whether auth.json is unreadable/malformed) without decoding any OAuth tokens.
  */
-function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
+export function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
   const authPath = getAuthStorePath();
+  const nameBytes = Buffer.from(name, "utf8");
   let fd: number | undefined;
   let buf: Buffer | undefined;
   try {
@@ -423,38 +428,48 @@ function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
       }
     }
     const bytes = buf!;
-    const decoder = new TextDecoder("utf-8", { fatal: true });
     let pos = 0;
     if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) pos = 3;
     const skipWs = () => {
       while (pos < bytes.length && (bytes[pos] === 0x20 || bytes[pos] === 0x09 || bytes[pos] === 0x0a || bytes[pos] === 0x0d)) pos++;
     };
     const scanStr = (): { start: number; end: number; hasEsc: boolean } => {
-      if (bytes[pos] !== 0x22) throw new Error("malformed");
-      pos++;
-      const start = pos;
-      let hasEsc = false;
-      while (pos < bytes.length) {
-        const b = bytes[pos]!;
-        if (b < 0x20) throw new Error("malformed");
-        if (b === 0x5c) { hasEsc = true; pos += 2; if (pos > bytes.length) throw new Error("malformed"); continue; }
-        if (b === 0x22) { const end = pos; pos++; return { start, end, hasEsc }; }
-        pos++;
-      }
-      throw new Error("malformed");
+      const res = validateUtf8AndJsonStringBounds(bytes, pos);
+      if (!res) throw new Error("malformed");
+      pos = res.nextPos;
+      return { start: res.start, end: res.end, hasEsc: res.hasEscapes };
     };
-    const decodeKey = (): string => {
-      const b = scanStr();
-      if (b.end - b.start > 128) throw new Error("malformed");
-      const s = decoder.decode(bytes.subarray(b.start, b.end));
-      return b.hasEsc ? (JSON.parse(`"${s}"`) as string) : s;
+    const keyEqualsBytes = (b: { start: number; end: number; hasEsc: boolean }, target: Uint8Array): boolean => {
+      if (!b.hasEsc) {
+        const raw = bytes.subarray(b.start, b.end);
+        if (raw.length !== target.length) return false;
+        for (let i = 0; i < raw.length; i++) if (raw[i] !== target[i]) return false;
+        return true;
+      }
+      const unesc = unescapeJsonStringBytesBounded(bytes, { start: b.start, end: b.end, hasEscapes: true }, 128);
+      if (!unesc) throw new Error("malformed");
+      try {
+        if (unesc.length !== target.length) return false;
+        for (let i = 0; i < unesc.length; i++) if (unesc[i] !== target[i]) return false;
+        return true;
+      } finally {
+        unesc.fill(0);
+      }
+    };
+    const keyEqualsAscii = (b: { start: number; end: number; hasEsc: boolean }, target: string): boolean => {
+      if (!b.hasEsc) return equalsAsciiBytes(bytes.subarray(b.start, b.end), target);
+      const unesc = unescapeJsonStringBytesBounded(bytes, { start: b.start, end: b.end, hasEscapes: true }, 128);
+      if (!unesc) throw new Error("malformed");
+      try {
+        return equalsAsciiBytes(unesc, target);
+      } finally {
+        unesc.fill(0);
+      }
     };
     const skipPrim = () => {
       const s = pos;
       while (pos < bytes.length && ![0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x7d, 0x5d].includes(bytes[pos]!)) pos++;
-      if (pos === s) throw new Error("malformed");
-      const t = decoder.decode(bytes.subarray(s, pos));
-      if (t !== "true" && t !== "false" && t !== "null" && !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(t)) {
+      if (!validateJsonPrimitiveBytes(bytes, s, pos)) {
         throw new Error("malformed");
       }
     };
@@ -496,11 +511,11 @@ function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
     } else {
       for (;;) {
         skipWs();
-        const provKey = decodeKey();
+        const provKeyBounds = scanStr();
         skipWs();
         if (bytes[pos] !== 0x3a) return true;
         pos++; skipWs();
-        if (provKey !== name) {
+        if (!keyEqualsBytes(provKeyBounds, nameBytes)) {
           skipVal();
         } else {
           // Inspect the provider entry without decoding any token strings.
@@ -511,11 +526,11 @@ function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
             let sawAccountsArray = false;
             for (;;) {
               skipWs();
-              const fieldKey = decodeKey();
+              const fieldKeyBounds = scanStr();
               skipWs();
               if (bytes[pos] !== 0x3a) return true;
               pos++; skipWs();
-              if (fieldKey === "accounts") {
+              if (keyEqualsAscii(fieldKeyBounds, "accounts")) {
                 if (bytes[pos] !== 0x5b) return true;
                 sawAccountsArray = true;
                 pos++; skipWs();
@@ -530,7 +545,7 @@ function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
                     return true;
                   }
                 }
-              } else if (fieldKey === "activeAccountId" || fieldKey === "selectionRevision") {
+              } else if (keyEqualsAscii(fieldKeyBounds, "activeAccountId") || keyEqualsAscii(fieldKeyBounds, "selectionRevision")) {
                 skipVal(1);
               } else {
                 // Legacy single-credential shape or unknown field -> retain provider.
@@ -557,6 +572,7 @@ function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
   } catch {
     return true;
   } finally {
+    nameBytes.fill(0);
     buf?.fill(0);
   }
 }

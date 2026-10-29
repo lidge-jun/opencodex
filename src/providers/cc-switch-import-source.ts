@@ -2,25 +2,18 @@
  * Byte-level and SQLite scalar source readers for keyless CC-Switch provider import.
  *
  * Enforces pre-decode metadata validation, comment-free TOML value extraction,
- * descriptor-verified non-blocking opens, and private SQLite snapshot copies.
+ * descriptor-verified non-blocking opens, and in-memory read-only SQLite deserialization.
  */
 import { Database } from "bun:sqlite";
 import {
-  chmodSync,
   closeSync,
   constants,
   fstatSync,
   lstatSync,
-  mkdtempSync,
   openSync,
   readSync,
-  rmdirSync,
-  truncateSync,
-  unlinkSync,
-  writeSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { assertPlainLocalPath } from "../codex/orca-auth-source";
 
 export class CcSwitchImportError extends Error {
@@ -93,6 +86,246 @@ function toLowerByte(b: number): number {
   return isUpperByte(b) ? b + 32 : b;
 }
 
+export function equalsAsciiBytes(slice: Uint8Array, ascii: string): boolean {
+  if (slice.length !== ascii.length) return false;
+  for (let i = 0; i < ascii.length; i++) {
+    if (slice[i] !== ascii.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+export function parseHex4Bytes(bytes: Uint8Array, offset: number): number {
+  if (offset + 4 > bytes.length) return -1;
+  let out = 0;
+  for (let i = 0; i < 4; i++) {
+    const b = bytes[offset + i]!;
+    let v: number;
+    if (b >= 0x30 && b <= 0x39) v = b - 0x30;
+    else if (b >= 0x41 && b <= 0x46) v = b - 0x41 + 10;
+    else if (b >= 0x61 && b <= 0x66) v = b - 0x61 + 10;
+    else return -1;
+    out = (out << 4) | v;
+  }
+  return out;
+}
+
+function encodeCodePointUtf8(cp: number, target: Uint8Array, offset: number): number {
+  if (cp <= 0x7f) {
+    target[offset] = cp;
+    return 1;
+  }
+  if (cp <= 0x7ff) {
+    target[offset] = 0xc0 | (cp >> 6);
+    target[offset + 1] = 0x80 | (cp & 0x3f);
+    return 2;
+  }
+  if (cp <= 0xffff) {
+    target[offset] = 0xe0 | (cp >> 12);
+    target[offset + 1] = 0x80 | ((cp >> 6) & 0x3f);
+    target[offset + 2] = 0x80 | (cp & 0x3f);
+    return 3;
+  }
+  target[offset] = 0xf0 | (cp >> 18);
+  target[offset + 1] = 0x80 | ((cp >> 12) & 0x3f);
+  target[offset + 2] = 0x80 | ((cp >> 6) & 0x3f);
+  target[offset + 3] = 0x80 | (cp & 0x3f);
+  return 4;
+}
+
+/**
+ * Strict RFC 8259 + UTF-8 byte-level JSON string validator.
+ * Validates escapes (including paired UTF-16 surrogates) and multi-byte UTF-8 sequences
+ * without decoding string contents into JavaScript strings.
+ */
+export function validateUtf8AndJsonStringBounds(
+  bytes: Uint8Array,
+  quotePos: number,
+): { start: number; end: number; hasEscapes: boolean; nextPos: number } | null {
+  if (quotePos >= bytes.length || bytes[quotePos] !== 0x22) return null;
+  let pos = quotePos + 1;
+  const start = pos;
+  let hasEscapes = false;
+  while (pos < bytes.length) {
+    const b = bytes[pos]!;
+    if (b < 0x20) return null;
+    if (b === 0x22) {
+      return { start, end: pos, hasEscapes, nextPos: pos + 1 };
+    }
+    if (b === 0x5c) {
+      hasEscapes = true;
+      pos++;
+      if (pos >= bytes.length) return null;
+      const esc = bytes[pos]!;
+      pos++;
+      if (
+        esc === 0x22 || esc === 0x5c || esc === 0x2f
+        || esc === 0x62 || esc === 0x66 || esc === 0x6e || esc === 0x72 || esc === 0x74
+      ) {
+        continue;
+      }
+      if (esc === 0x75) {
+        const cu = parseHex4Bytes(bytes, pos);
+        if (cu < 0) return null;
+        pos += 4;
+        if (cu >= 0xdc00 && cu <= 0xdfff) return null;
+        if (cu >= 0xd800 && cu <= 0xdbff) {
+          if (pos + 6 > bytes.length || bytes[pos] !== 0x5c || bytes[pos + 1] !== 0x75) return null;
+          const low = parseHex4Bytes(bytes, pos + 2);
+          if (low < 0xdc00 || low > 0xdfff) return null;
+          pos += 6;
+        }
+        continue;
+      }
+      return null;
+    }
+    if (b < 0x80) {
+      pos++;
+      continue;
+    }
+    if (b >= 0xc2 && b <= 0xdf) {
+      if (pos + 1 >= bytes.length) return null;
+      const c1 = bytes[pos + 1]!;
+      if ((c1 & 0xc0) !== 0x80) return null;
+      pos += 2;
+      continue;
+    }
+    if (b >= 0xe0 && b <= 0xef) {
+      if (pos + 2 >= bytes.length) return null;
+      const c1 = bytes[pos + 1]!;
+      const c2 = bytes[pos + 2]!;
+      if ((c1 & 0xc0) !== 0x80 || (c2 & 0xc0) !== 0x80) return null;
+      if (b === 0xe0 && c1 < 0xa0) return null;
+      if (b === 0xed && c1 >= 0xa0) return null;
+      pos += 3;
+      continue;
+    }
+    if (b >= 0xf0 && b <= 0xf4) {
+      if (pos + 3 >= bytes.length) return null;
+      const c1 = bytes[pos + 1]!;
+      const c2 = bytes[pos + 2]!;
+      const c3 = bytes[pos + 3]!;
+      if ((c1 & 0xc0) !== 0x80 || (c2 & 0xc0) !== 0x80 || (c3 & 0xc0) !== 0x80) return null;
+      if (b === 0xf0 && c1 < 0x90) return null;
+      if (b === 0xf4 && c1 > 0x8f) return null;
+      pos += 4;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+export function validateJsonPrimitiveBytes(bytes: Uint8Array, start: number, end: number): boolean {
+  const slice = bytes.subarray(start, end);
+  if (slice.length === 0) return false;
+  if (equalsAsciiBytes(slice, "true") || equalsAsciiBytes(slice, "false") || equalsAsciiBytes(slice, "null")) {
+    return true;
+  }
+  let i = 0;
+  if (slice[i] === 0x2d) {
+    i++;
+    if (i >= slice.length) return false;
+  }
+  if (slice[i] === 0x30) {
+    i++;
+  } else if (slice[i]! >= 0x31 && slice[i]! <= 0x39) {
+    while (i < slice.length && isDigitByte(slice[i]!)) i++;
+  } else {
+    return false;
+  }
+  if (i < slice.length && slice[i] === 0x2e) {
+    i++;
+    if (i >= slice.length || !isDigitByte(slice[i]!)) return false;
+    while (i < slice.length && isDigitByte(slice[i]!)) i++;
+  }
+  if (i < slice.length && (slice[i] === 0x65 || slice[i] === 0x45)) {
+    i++;
+    if (i < slice.length && (slice[i] === 0x2b || slice[i] === 0x2d)) i++;
+    if (i >= slice.length || !isDigitByte(slice[i]!)) return false;
+    while (i < slice.length && isDigitByte(slice[i]!)) i++;
+  }
+  return i === slice.length;
+}
+
+export function unescapeJsonStringBytesBounded(
+  bytes: Uint8Array,
+  bounds: { start: number; end: number; hasEscapes: boolean },
+  maxBytes: number,
+): Uint8Array | null {
+  const rawLen = bounds.end - bounds.start;
+  if (rawLen > maxBytes * 6) return null;
+  const out = new Uint8Array(Math.max(rawLen, 4));
+  let r = bounds.start;
+  let w = 0;
+  while (r < bounds.end) {
+    const b = bytes[r]!;
+    if (b !== 0x5c) {
+      out[w++] = b;
+      r++;
+      continue;
+    }
+    r++;
+    const esc = bytes[r]!;
+    r++;
+    if (esc === 0x22 || esc === 0x5c || esc === 0x2f) out[w++] = esc;
+    else if (esc === 0x62) out[w++] = 0x08;
+    else if (esc === 0x66) out[w++] = 0x0c;
+    else if (esc === 0x6e) out[w++] = 0x0a;
+    else if (esc === 0x72) out[w++] = 0x0d;
+    else if (esc === 0x74) out[w++] = 0x09;
+    else if (esc === 0x75) {
+      let cp = parseHex4Bytes(bytes, r);
+      if (cp < 0) { out.fill(0); return null; }
+      r += 4;
+      if (cp >= 0xd800 && cp <= 0xdbff) {
+        const low = parseHex4Bytes(bytes, r + 2);
+        if (low < 0xdc00 || low > 0xdfff) { out.fill(0); return null; }
+        r += 6;
+        cp = ((cp - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+      } else if (cp >= 0xdc00 && cp <= 0xdfff) {
+        out.fill(0);
+        return null;
+      }
+      w += encodeCodePointUtf8(cp, out, w);
+    } else {
+      out.fill(0);
+      return null;
+    }
+  }
+  if (w > maxBytes) {
+    out.fill(0);
+    return null;
+  }
+  const result = new Uint8Array(w);
+  result.set(out.subarray(0, w));
+  out.fill(0);
+  return result;
+}
+
+function matchKnownJsonKeyBytes<T extends string>(
+  bytes: Uint8Array,
+  bounds: { start: number; end: number; hasEscapes: boolean },
+  allowed: readonly T[],
+): T | null {
+  if (!bounds.hasEscapes) {
+    const raw = bytes.subarray(bounds.start, bounds.end);
+    for (const candidate of allowed) {
+      if (equalsAsciiBytes(raw, candidate)) return candidate;
+    }
+    return null;
+  }
+  const unescaped = unescapeJsonStringBytesBounded(bytes, bounds, 48);
+  if (!unescaped) return null;
+  try {
+    for (const candidate of allowed) {
+      if (equalsAsciiBytes(unescaped, candidate)) return candidate;
+    }
+    return null;
+  } finally {
+    unescaped.fill(0);
+  }
+}
+
 const FORBIDDEN_SUBSTRINGS_LOWER = [
   "sk-", "rk-", "pk-", "ak-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-",
   "aiza", "eyj", "bearer", "secret", "apikey", "api_key", "passwd", "password", "private_key",
@@ -146,10 +379,15 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
 
   if (kind === "app") {
     if (len > 16) return false;
+    let hasLower = false;
+    let hasUpper = false;
     for (let i = 0; i < len; i++) {
       const b = slice[i]!;
       if (!isAlphaByte(b) && b !== 0x2d && b !== 0x5f) return false;
+      if (isLowerByte(b)) hasLower = true;
+      if (isUpperByte(b)) hasUpper = true;
     }
+    if (len >= 10 && hasLower && hasUpper) return false;
     return true;
   }
 
@@ -298,85 +536,10 @@ export interface CodexTomlProjection {
   providers: Map<string, { baseUrl?: string; wireApi?: string }>;
 }
 
-function parseTomlQuotedString(line: string, startIndex: number): { value: string; restIndex: number } | null {
-  const quote = line[startIndex];
-  if (quote !== '"' && quote !== "'") return null;
-  if (line.slice(startIndex, startIndex + 3) === quote.repeat(3)) return null;
-  let out = "";
-  let i = startIndex + 1;
-  while (i < line.length) {
-    const ch = line[i]!;
-    if (quote === '"' && ch === "\\") {
-      i++;
-      if (i >= line.length) return null;
-      const esc = line[i]!;
-      if (esc === '"' || esc === "\\" || esc === "/") out += esc;
-      else if (esc === "n") out += "\n";
-      else if (esc === "r") out += "\r";
-      else if (esc === "t") out += "\t";
-      else if (esc === "b") out += "\b";
-      else if (esc === "f") out += "\f";
-      else if (esc === "u" && /^[0-9A-Fa-f]{4}$/.test(line.slice(i + 1, i + 5))) {
-        out += String.fromCharCode(parseInt(line.slice(i + 1, i + 5), 16));
-        i += 4;
-      } else return null;
-      i++;
-      continue;
-    }
-    if (ch === quote) return { value: out, restIndex: i + 1 };
-    if (hasControlChars(ch)) return null;
-    out += ch;
-    i++;
-  }
-  return null;
-}
+const ALLOWED_TOML_KEYS = ["model", "model_provider", "base_url", "openai_base_url", "wire_api"] as const;
+type AllowedTomlKey = (typeof ALLOWED_TOML_KEYS)[number];
 
-function hasOnlyTomlCommentOrSpace(line: string, fromIndex: number): boolean {
-  const rest = line.slice(fromIndex).trimStart();
-  return rest === "" || rest.startsWith("#");
-}
-
-function parseTableHeader(trimmed: string): { kind: "root_other" } | { kind: "model_provider"; id: string } | null {
-  if (!trimmed.startsWith("[") || trimmed.startsWith("[[")) return null;
-  let i = 1;
-  const segments: string[] = [];
-  while (i < trimmed.length) {
-    while (i < trimmed.length && (trimmed[i] === " " || trimmed[i] === "\t")) i++;
-    if (i >= trimmed.length) return null;
-    let seg = "";
-    if (trimmed[i] === '"' || trimmed[i] === "'") {
-      const parsed = parseTomlQuotedString(trimmed, i);
-      if (!parsed) return null;
-      seg = parsed.value;
-      i = parsed.restIndex;
-    } else {
-      const m = /^[A-Za-z0-9_-]+/.exec(trimmed.slice(i));
-      if (!m) return null;
-      seg = m[0];
-      i += seg.length;
-    }
-    if (!seg) return null;
-    segments.push(seg);
-    while (i < trimmed.length && (trimmed[i] === " " || trimmed[i] === "\t")) i++;
-    if (trimmed[i] === ".") {
-      i++;
-      continue;
-    }
-    if (trimmed[i] === "]") {
-      if (!hasOnlyTomlCommentOrSpace(trimmed, i + 1)) return null;
-      if (segments.length === 2 && segments[0] === "model_providers") {
-        return { kind: "model_provider", id: segments[1]! };
-      }
-      return { kind: "root_other" };
-    }
-    return null;
-  }
-  return null;
-}
-
-const ALLOWED_TOML_KEYS = new Set(["model", "model_provider", "base_url", "openai_base_url", "wire_api"]);
-
-function tomlKeyMetadataKind(key: string): MetadataFieldKind {
+function tomlKeyMetadataKind(key: AllowedTomlKey): MetadataFieldKind {
   if (key === "model") return "model";
   if (key === "model_provider") return "id";
   if (key === "wire_api") return "wire";
@@ -390,8 +553,6 @@ function tomlKeyMetadataKind(key: string): MetadataFieldKind {
 function unescapeTomlStringBytes(
   raw: Uint8Array,
   quoteByte: number,
-  decoder: TextDecoder,
-  encoder: TextEncoder,
 ): Uint8Array | null {
   const out = new Uint8Array(raw.length);
   let r = 0;
@@ -412,16 +573,10 @@ function unescapeTomlStringBytes(
         out.fill(0);
         return null; // Control escapes are never valid in provider IDs, models, wire APIs, or URLs.
       } else if (esc === 0x75) {
-        if (r + 4 > raw.length) { out.fill(0); return null; }
-        let hex = "";
-        try { hex = decoder.decode(raw.subarray(r, r + 4)); } catch { out.fill(0); return null; }
-        if (!/^[0-9A-Fa-f]{4}$/.test(hex)) { out.fill(0); return null; }
-        r += 4;
-        const cp = parseInt(hex, 16);
+        const cp = parseHex4Bytes(raw, r);
         if (cp <= 0x20 || cp >= 0x7f) { out.fill(0); return null; }
-        const enc = encoder.encode(String.fromCodePoint(cp));
-        out.set(enc, w);
-        w += enc.length;
+        r += 4;
+        w += encodeCodePointUtf8(cp, out, w);
       } else {
         out.fill(0);
         return null;
@@ -460,12 +615,115 @@ function findQuotedEndInBytes(slice: Uint8Array, quoteStart: number): number {
   return -1;
 }
 
+function parseTomlHeaderBytes(
+  innerRaw: Uint8Array,
+  decoder: TextDecoder,
+): { kind: "other" } | { kind: "model_provider"; id: string } | { kind: "error"; reason: CcSwitchInvalidReason } {
+  let s = 0;
+  let e = innerRaw.length;
+  while (s < e && (innerRaw[s] === 0x20 || innerRaw[s] === 0x09)) s++;
+  while (e > s && (innerRaw[e - 1] === 0x20 || innerRaw[e - 1] === 0x09)) e--;
+  const inner = innerRaw.subarray(s, e);
+  if (inner.length === 0) return { kind: "error", reason: "malformed_entry" };
+  if (equalsAsciiBytes(inner, "__MULTILINE_REFUSED__") || equalsAsciiBytes(inner, "__MALFORMED_LINE__")) {
+    return { kind: "error", reason: "malformed_entry" };
+  }
+  if (equalsAsciiBytes(inner, SECRET_REFUSED_SENTINEL)) {
+    return { kind: "error", reason: "secret_in_nonsecret_field" };
+  }
+
+  const segments: Uint8Array[] = [];
+  const owned: Uint8Array[] = [];
+  try {
+    let i = 0;
+    while (i < inner.length) {
+      while (i < inner.length && (inner[i] === 0x20 || inner[i] === 0x09)) i++;
+      if (i >= inner.length) return { kind: "error", reason: "malformed_entry" };
+      const b0 = inner[i]!;
+      if (b0 === 0x22 || b0 === 0x27) {
+        const qEnd = findQuotedEndInBytes(inner, i);
+        if (qEnd < 0) return { kind: "error", reason: "malformed_entry" };
+        const unesc = unescapeTomlStringBytes(inner.subarray(i + 1, qEnd), b0);
+        if (!unesc || unesc.length === 0) return { kind: "error", reason: "malformed_entry" };
+        owned.push(unesc);
+        segments.push(unesc);
+        i = qEnd + 1;
+      } else {
+        const segStart = i;
+        while (i < inner.length) {
+          const b = inner[i]!;
+          if (isAlphaByte(b) || isDigitByte(b) || b === 0x5f || b === 0x2d) i++;
+          else break;
+        }
+        if (i === segStart) return { kind: "error", reason: "malformed_entry" };
+        segments.push(inner.subarray(segStart, i));
+      }
+      while (i < inner.length && (inner[i] === 0x20 || inner[i] === 0x09)) i++;
+      if (i === inner.length) break;
+      if (inner[i] === 0x2e) {
+        i++;
+        if (i >= inner.length) return { kind: "error", reason: "malformed_entry" };
+        continue;
+      }
+      return { kind: "error", reason: "malformed_entry" };
+    }
+
+    if (segments.length === 2 && equalsAsciiBytes(segments[0]!, "model_providers")) {
+      const idSlice = segments[1]!;
+      const sanitized = new Uint8Array(idSlice.length);
+      for (let k = 0; k < idSlice.length; k++) {
+        const b = idSlice[k]!;
+        sanitized[k] = b === 0x22 || b === 0x5c ? 0x5f : b;
+      }
+      let allowed = false;
+      try {
+        allowed = isAllowedMetadataBytes(sanitized, "id");
+      } finally {
+        sanitized.fill(0);
+      }
+      if (!allowed) return { kind: "error", reason: "secret_in_nonsecret_field" };
+      const id = decoder.decode(idSlice);
+      return { kind: "model_provider", id };
+    }
+    return { kind: "other" };
+  } catch {
+    return { kind: "error", reason: "malformed_entry" };
+  } finally {
+    for (const buf of owned) buf.fill(0);
+  }
+}
+
+function classifyTomlKeyBytes(keySlice: Uint8Array): AllowedTomlKey | "other_key" | null {
+  const b0 = keySlice[0]!;
+  if (b0 === 0x22 || b0 === 0x27) {
+    const qEnd = findQuotedEndInBytes(keySlice, 0);
+    if (qEnd !== keySlice.length - 1) return null;
+    const unesc = unescapeTomlStringBytes(keySlice.subarray(1, qEnd), b0);
+    if (!unesc || unesc.length === 0) return null;
+    try {
+      for (const allowed of ALLOWED_TOML_KEYS) {
+        if (equalsAsciiBytes(unesc, allowed)) return allowed;
+      }
+      return "other_key";
+    } finally {
+      unesc.fill(0);
+    }
+  }
+  for (let i = 0; i < keySlice.length; i++) {
+    const b = keySlice[i]!;
+    if (!isAlphaByte(b) && !isDigitByte(b) && b !== 0x5f && b !== 0x2d) return null;
+  }
+  for (const allowed of ALLOWED_TOML_KEYS) {
+    if (equalsAsciiBytes(keySlice, allowed)) return allowed;
+  }
+  return "other_key";
+}
+
 export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
   if (bytes.length > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
   const projection: CodexTomlProjection = { providers: new Map() };
   let currentSection: { kind: "root" } | { kind: "model_provider"; id: string } | { kind: "other" } = { kind: "root" };
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const encoder = new TextEncoder();
   let lineStart = 0;
 
   for (let idx = 0; idx <= bytes.length; idx++) {
@@ -479,7 +737,7 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     while (p < slice.length && (slice[p] === 0x20 || slice[p] === 0x09)) p++;
     if (p >= slice.length || slice[p] === 0x23) continue;
     if (slice[p] === 0x5b) {
-      // Scan table header in raw bytes so trailing '# comment' after ']' is never decoded into JS!
+      // Scan and classify table headers in raw bytes so neither trailing comments nor unvalidated/unrelated headers are decoded.
       if (p + 1 < slice.length && slice[p + 1] === 0x5b) return { ok: false, reason: "malformed_entry" };
       let closeB = -1;
       let inQ = 0;
@@ -494,23 +752,9 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
       if (closeB < 0 || !hasOnlyCommentOrSpaceBytes(slice, closeB + 1)) {
         return { ok: false, reason: "malformed_entry" };
       }
-      let headerLine: string;
-      try { headerLine = decoder.decode(slice.subarray(p, closeB + 1)); } catch { return { ok: false, reason: "malformed_entry" }; }
-      if (headerLine === "[__MULTILINE_REFUSED__]" || headerLine === "[__MALFORMED_LINE__]") {
-        return { ok: false, reason: "malformed_entry" };
-      }
-      if (headerLine === "[__SECRET_REFUSED__]") {
-        return { ok: false, reason: "secret_in_nonsecret_field" };
-      }
-      const header = parseTableHeader(headerLine);
-      if (!header) return { ok: false, reason: "malformed_entry" };
-      if (header.kind === "model_provider") {
-        const idBytes = encoder.encode(header.id.replace(/["\\]/g, "_"));
-        const allowed = isAllowedMetadataBytes(idBytes, "id");
-        idBytes.fill(0);
-        if (!allowed) return { ok: false, reason: "secret_in_nonsecret_field" };
-      }
-      currentSection = header.kind === "model_provider" ? header : { kind: "other" };
+      const header = parseTomlHeaderBytes(slice.subarray(p + 1, closeB), decoder);
+      if (header.kind === "error") return { ok: false, reason: header.reason };
+      currentSection = header;
       continue;
     }
 
@@ -529,18 +773,10 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     let kEnd = eq;
     while (kStart < kEnd && (slice[kStart] === 0x20 || slice[kStart] === 0x09)) kStart++;
     while (kEnd > kStart && (slice[kEnd - 1] === 0x20 || slice[kEnd - 1] === 0x09)) kEnd--;
-    if (kEnd - kStart <= 0 || kEnd - kStart > 48) return { ok: false, reason: "malformed_entry" };
+    if (kEnd - kStart <= 0 || kEnd - kStart > 128) return { ok: false, reason: "malformed_entry" };
 
-    let keyRaw: string;
-    try { keyRaw = decoder.decode(slice.subarray(kStart, kEnd)); } catch { return { ok: false, reason: "malformed_entry" }; }
-    let key = keyRaw;
-    if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-      const kp = parseTomlQuotedString(key, 0);
-      if (!kp || kp.restIndex !== key.length) return { ok: false, reason: "malformed_entry" };
-      key = kp.value;
-    } else if (!/^[A-Za-z0-9_-]+$/.test(key)) {
-      return { ok: false, reason: "malformed_entry" };
-    }
+    const classifiedKey = classifyTomlKeyBytes(slice.subarray(kStart, kEnd));
+    if (classifiedKey === null) return { ok: false, reason: "malformed_entry" };
 
     let vStart = eq + 1;
     while (vStart < slice.length && (slice[vStart] === 0x20 || slice[vStart] === 0x09)) vStart++;
@@ -554,8 +790,11 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     }
 
     const relevant =
-      (currentSection.kind === "root" && ALLOWED_TOML_KEYS.has(key))
-      || (currentSection.kind === "model_provider" && (key === "base_url" || key === "wire_api"));
+      classifiedKey !== "other_key"
+      && (
+        currentSection.kind === "root"
+        || (currentSection.kind === "model_provider" && (classifiedKey === "base_url" || classifiedKey === "wire_api"))
+      );
     if (!relevant) {
       let q = 0;
       let depth = 0;
@@ -580,7 +819,8 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     if (vEnd < 0 || !hasOnlyCommentOrSpaceBytes(slice, vEnd + 1)) {
       return { ok: false, reason: "malformed_entry" };
     }
-    const unescaped = unescapeTomlStringBytes(slice.subarray(vStart + 1, vEnd), slice[vStart]!, decoder, encoder);
+    const key: AllowedTomlKey = classifiedKey as AllowedTomlKey;
+    const unescaped = unescapeTomlStringBytes(slice.subarray(vStart + 1, vEnd), slice[vStart]!);
     if (!unescaped || unescaped.length === 0) return { ok: false, reason: "malformed_entry" };
     let value: string;
     try {
@@ -656,85 +896,26 @@ function sqlLineExpr(col: string): string {
   return `trim(replace(substr(${col}, 1, instr(${col}, char(10)) - 1), char(13), ''))`;
 }
 
-function sqlDigitCount(expr: string): string {
-  let out = expr;
-  for (let d = 0; d <= 9; d++) out = `replace(${out}, '${d}', '')`;
-  return `(length(${expr}) - length(${out}))`;
-}
-
-function sqlHasSecretSubstring(expr: string): string {
-  return `(
-    lower(${expr}) GLOB '*sk-*'
-    OR lower(${expr}) GLOB '*rk-*'
-    OR lower(${expr}) GLOB '*pk-*'
-    OR lower(${expr}) GLOB '*ak-*'
-    OR lower(${expr}) GLOB '*ghp_*'
-    OR lower(${expr}) GLOB '*gho_*'
-    OR lower(${expr}) GLOB '*github_pat_*'
-    OR lower(${expr}) GLOB '*xox[baprs]-*'
-    OR lower(${expr}) GLOB '*aiza*'
-    OR lower(${expr}) GLOB '*eyj*'
-    OR lower(${expr}) GLOB '*bearer*'
-    OR lower(${expr}) GLOB '*secret*'
-    OR lower(${expr}) GLOB '*apikey*'
-    OR lower(${expr}) GLOB '*api_key*'
-    OR lower(${expr}) GLOB '*passwd*'
-    OR lower(${expr}) GLOB '*password*'
-    OR lower(${expr}) GLOB '*private_key*'
-    OR lower(${expr}) GLOB '*access_token*'
-    OR lower(${expr}) GLOB '*refresh_token*'
-    OR lower(${expr}) GLOB '*auth_token*'
-    OR lower(${expr}) GLOB '*[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*'
-  )`;
-}
-
-function sqlSafeScalar(expr: string, kind: "id" | "model" | "url" | "wire"): string {
+function sqlSafeScalar(expr: string, kind: MetadataFieldKind): string {
+  if (kind === "app") {
+    return `CASE
+      WHEN ${expr} IS NULL OR trim(${expr}) = '' THEN ''
+      WHEN ocx_is_safe_meta(CAST(trim(${expr}) AS BLOB), 'app') = 1 THEN trim(${expr})
+      ELSE '${SECRET_REFUSED_SENTINEL}'
+    END`;
+  }
   if (kind === "wire") {
     return `CASE
       WHEN ${expr} IS NULL THEN NULL
-      WHEN lower(${expr}) IN ('responses', 'openai-responses', 'chat', 'chat_completions', 'openai-completions', 'openai-chat')
+      WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), 'wire') = 1
+        AND lower(${expr}) IN ('responses', 'openai-responses', 'chat', 'chat_completions', 'openai-completions', 'openai-chat')
       THEN lower(${expr})
       ELSE '${SECRET_REFUSED_SENTINEL}'
     END`;
   }
-  if (kind === "id") {
-    return `CASE
-      WHEN ${expr} IS NULL THEN NULL
-      WHEN length(${expr}) BETWEEN 1 AND 48
-        AND ${expr} NOT GLOB '*[^A-Za-z0-9._-]*'
-        AND (length(${expr}) < 16 OR instr(${expr}, '-') > 0 OR instr(${expr}, '.') > 0 OR instr(${expr}, '_') > 0)
-        AND ${expr} NOT GLOB '*[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]*'
-        AND ${sqlDigitCount(expr)} <= 5
-        AND NOT ${sqlHasSecretSubstring(expr)}
-      THEN ${expr}
-      ELSE '${SECRET_REFUSED_SENTINEL}'
-    END`;
-  }
-  if (kind === "model") {
-    return `CASE
-      WHEN ${expr} IS NULL THEN NULL
-      WHEN length(${expr}) BETWEEN 1 AND 80
-        AND ${expr} NOT GLOB '*[^A-Za-z0-9._:/-]*'
-        AND (length(${expr}) < 16 OR instr(${expr}, '-') > 0 OR instr(${expr}, '.') > 0 OR instr(${expr}, '_') > 0 OR instr(${expr}, '/') > 0 OR instr(${expr}, ':') > 0)
-        AND ${expr} NOT GLOB '*[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]*'
-        AND ${sqlDigitCount(expr)} <= 8
-        AND NOT ${sqlHasSecretSubstring(expr)}
-      THEN ${expr}
-      ELSE '${SECRET_REFUSED_SENTINEL}'
-    END`;
-  }
-  // kind === "url"
-  const afterScheme = `(CASE WHEN lower(substr(${expr}, 1, 8)) = 'https://' THEN substr(${expr}, 9) ELSE substr(${expr}, 8) END)`;
-  const urlPath = `(CASE WHEN instr(${afterScheme}, '/') > 0 THEN substr(${afterScheme}, instr(${afterScheme}, '/')) ELSE '' END)`;
   return `CASE
     WHEN ${expr} IS NULL THEN NULL
-    WHEN length(${expr}) BETWEEN 8 AND 256
-      AND (lower(substr(${expr}, 1, 7)) = 'http://' OR lower(substr(${expr}, 1, 8)) = 'https://')
-      AND replace(replace(${expr}, '[', ''), ']', '') NOT GLOB '*[^A-Za-z0-9._:/~%-]*'
-      AND length(${urlPath}) <= 48
-      AND ${urlPath} NOT GLOB '*[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]*'
-      AND ${sqlDigitCount(urlPath)} <= 2
-      AND NOT ${sqlHasSecretSubstring(expr)}
+    WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), '${kind}') = 1
     THEN ${expr}
     ELSE '${SECRET_REFUSED_SENTINEL}'
   END`;
@@ -822,7 +1003,7 @@ WITH RECURSIVE
     SELECT
       rid,
       ${sqlSafeScalar("raw_id", "id")} AS id,
-      app_type,
+      ${sqlSafeScalar("app_type", "app")} AS app_type,
       sort_ord,
       settings_type,
       ${sqlSafeScalar("raw_claude_url", "url")} AS claude_base_url,
@@ -954,25 +1135,52 @@ WITH RECURSIVE
   )
 SELECT
   b.rid AS rid,
-  b.id AS id,
-  b.app_type AS appType,
+  CAST(b.id AS BLOB) AS idBlob,
+  CAST(b.app_type AS BLOB) AS appTypeBlob,
   b.settings_type AS settingsType,
-  b.claude_base_url AS claudeBaseUrl,
-  b.claude_model AS claudeModel,
-  b.generic_base_url AS genericBaseUrl,
-  b.generic_model AS genericModel,
-  b.generic_wire_api AS genericWireApi,
+  CAST(b.claude_base_url AS BLOB) AS claudeBaseUrlBlob,
+  CAST(b.claude_model AS BLOB) AS claudeModelBlob,
+  CAST(b.generic_base_url AS BLOB) AS genericBaseUrlBlob,
+  CAST(b.generic_model AS BLOB) AS genericModelBlob,
+  CAST(b.generic_wire_api AS BLOB) AS genericWireApiBlob,
   p.idx AS lineIdx,
-  p.safe_line AS safeLine
+  CAST(p.safe_line AS BLOB) AS safeLineBlob
 FROM base b
 LEFT JOIN projected_lines p ON b.rid = p.rid AND p.safe_line IS NOT NULL
 ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC, b.rid ASC, p.idx ASC
 `;
 
-export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
-  let db: Database | undefined;
+function decodeSafeBlob(blob: Uint8Array | null, kind: MetadataFieldKind, decoder: TextDecoder): string | null {
+  if (blob === null) return null;
   try {
-    db = new Database(sourcePath, { readonly: true, create: false });
+    if (kind === "app" && blob.length === 0) return "";
+    if (equalsAsciiBytes(blob, SECRET_REFUSED_SENTINEL)) return SECRET_REFUSED_SENTINEL;
+    if (!isAllowedMetadataBytes(blob, kind)) return SECRET_REFUSED_SENTINEL;
+    return decoder.decode(blob);
+  } finally {
+    blob.fill(0);
+  }
+}
+
+function readSqliteRowsFromBytes(sqliteBytes: Uint8Array): RawExtractedRow[] {
+  let db: Database | undefined;
+  const blobsToZero: Uint8Array[] = [];
+  try {
+    // Normalize SQLite WAL read/write format version bytes (offsets 18..19) on the private
+    // in-memory buffer so sqlite3_deserialize opens checkpointed WAL databases without touching disk.
+    if (sqliteBytes.length >= 20) {
+      if (sqliteBytes[18] === 2) sqliteBytes[18] = 1;
+      if (sqliteBytes[19] === 2) sqliteBytes[19] = 1;
+    }
+    db = Database.deserialize(sqliteBytes, { readonly: true });
+    db.function("ocx_is_safe_meta", (val: unknown, kind: unknown) => {
+      if (!(val instanceof Uint8Array) || typeof kind !== "string") return 0;
+      try {
+        return isAllowedMetadataBytes(val, kind as MetadataFieldKind) ? 1 : 0;
+      } finally {
+        val.fill(0);
+      }
+    });
     const rawRows = db.query(SQLITE_SAFE_QUERY).all(
       "$.env.ANTHROPIC_BASE_URL",
       "$.env.ANTHROPIC_MODEL",
@@ -987,36 +1195,78 @@ export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
       "$.env.GEMINI_MODEL",
       "$.wire_api",
       "$.config",
-    ) as Array<Omit<RawExtractedRow, "codexTomlLines"> & { rid: number; lineIdx: number | null; safeLine: string | null }>;
-    const byRid = new Map<number, { row: RawExtractedRow; lines: Array<{ idx: number; text: string }> }>();
+    ) as Array<{
+      rid: number;
+      idBlob: Uint8Array | null;
+      appTypeBlob: Uint8Array | null;
+      settingsType: string | null;
+      claudeBaseUrlBlob: Uint8Array | null;
+      claudeModelBlob: Uint8Array | null;
+      genericBaseUrlBlob: Uint8Array | null;
+      genericModelBlob: Uint8Array | null;
+      genericWireApiBlob: Uint8Array | null;
+      lineIdx: number | null;
+      safeLineBlob: Uint8Array | null;
+    }>;
+    for (const item of rawRows) {
+      if (item.idBlob) blobsToZero.push(item.idBlob);
+      if (item.appTypeBlob) blobsToZero.push(item.appTypeBlob);
+      if (item.claudeBaseUrlBlob) blobsToZero.push(item.claudeBaseUrlBlob);
+      if (item.claudeModelBlob) blobsToZero.push(item.claudeModelBlob);
+      if (item.genericBaseUrlBlob) blobsToZero.push(item.genericBaseUrlBlob);
+      if (item.genericModelBlob) blobsToZero.push(item.genericModelBlob);
+      if (item.genericWireApiBlob) blobsToZero.push(item.genericWireApiBlob);
+      if (item.safeLineBlob) blobsToZero.push(item.safeLineBlob);
+    }
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const byRid = new Map<number, { row: RawExtractedRow; lines: Array<{ idx: number; bytes: Uint8Array }> }>();
     for (const item of rawRows) {
       let group = byRid.get(item.rid);
       if (!group) {
         group = {
           row: {
-            id: item.id,
-            appType: item.appType,
+            id: decodeSafeBlob(item.idBlob, "id", decoder) ?? "",
+            appType: decodeSafeBlob(item.appTypeBlob, "app", decoder) ?? "",
             settingsType: item.settingsType,
-            claudeBaseUrl: item.claudeBaseUrl,
-            claudeModel: item.claudeModel,
-            genericBaseUrl: item.genericBaseUrl,
-            genericModel: item.genericModel,
-            genericWireApi: item.genericWireApi,
+            claudeBaseUrl: decodeSafeBlob(item.claudeBaseUrlBlob, "url", decoder),
+            claudeModel: decodeSafeBlob(item.claudeModelBlob, "model", decoder),
+            genericBaseUrl: decodeSafeBlob(item.genericBaseUrlBlob, "url", decoder),
+            genericModel: decodeSafeBlob(item.genericModelBlob, "model", decoder),
+            genericWireApi: decodeSafeBlob(item.genericWireApiBlob, "wire", decoder),
             codexTomlLines: null,
           },
           lines: [],
         };
         byRid.set(item.rid, group);
       }
-      if (item.lineIdx !== null && item.safeLine !== null) {
-        group.lines.push({ idx: item.lineIdx, text: item.safeLine });
+      if (item.lineIdx !== null && item.safeLineBlob !== null) {
+        const copy = new Uint8Array(item.safeLineBlob.length);
+        copy.set(item.safeLineBlob);
+        blobsToZero.push(copy);
+        group.lines.push({ idx: item.lineIdx, bytes: copy });
       }
     }
     const result: RawExtractedRow[] = [];
     for (const group of byRid.values()) {
       if (group.lines.length > 0) {
         group.lines.sort((a, b) => a.idx - b.idx);
-        group.row.codexTomlLines = group.lines.map(l => l.text).join("\n");
+        let totalLen = 0;
+        for (let i = 0; i < group.lines.length; i++) {
+          totalLen += group.lines[i]!.bytes.length + (i > 0 ? 1 : 0);
+        }
+        const joined = new Uint8Array(totalLen);
+        let offset = 0;
+        for (let i = 0; i < group.lines.length; i++) {
+          if (i > 0) joined[offset++] = 0x0a;
+          const lineBytes = group.lines[i]!.bytes;
+          joined.set(lineBytes, offset);
+          offset += lineBytes.length;
+        }
+        try {
+          group.row.codexProjection = parseCodexTomlBytes(joined);
+        } finally {
+          joined.fill(0);
+        }
       }
       result.push(group.row);
     }
@@ -1024,8 +1274,13 @@ export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
   } catch {
     throw new CcSwitchImportError("CC-Switch SQLite source could not be read or has an unsupported schema.");
   } finally {
+    for (const b of blobsToZero) b.fill(0);
     try { db?.close(); } catch { /* ignore */ }
   }
+}
+
+export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
+  return readSourceRows(sourcePath, true);
 }
 
 /**
@@ -1043,7 +1298,6 @@ export function scanCcSwitchJsonBytes(bytes: Uint8Array): RawExtractedRow[] {
 
 function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const encoder = new TextEncoder();
   let pos = 0;
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
     pos = 3;
@@ -1058,46 +1312,12 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   }
 
   function scanStringBounds(): { start: number; end: number; hasEscapes: boolean } {
-    if (bytes[pos] !== 0x22) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    pos++;
-    const start = pos;
-    let hasEscapes = false;
-    while (pos < bytes.length) {
-      const b = bytes[pos]!;
-      if (b < 0x20) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      if (b === 0x5c) {
-        hasEscapes = true;
-        pos += 2;
-        if (pos > bytes.length) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-        continue;
-      }
-      if (b === 0x22) {
-        const end = pos;
-        pos++;
-        return { start, end, hasEscapes };
-      }
-      pos++;
-    }
-    throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
+    const res = validateUtf8AndJsonStringBounds(bytes, pos);
+    if (!res) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
+    pos = res.nextPos;
+    return { start: res.start, end: res.end, hasEscapes: res.hasEscapes };
   }
 
-  function decodeBoundedString(bounds: { start: number; end: number; hasEscapes: boolean }): string {
-    if (bounds.end - bounds.start > 64) {
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-    const raw = decoder.decode(bytes.subarray(bounds.start, bounds.end));
-    if (!bounds.hasEscapes) return raw;
-    try {
-      return JSON.parse(`"${raw}"`) as string;
-    } catch {
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-  }
-
-  /**
-   * Unescape a JSON string token into a transient Uint8Array, enforce the strict metadata byte
-   * policy BEFORE calling TextDecoder.decode, and zero the transient buffer in finally.
-   */
   function decodeMetadataStringFromBounds(bounds: { start: number; end: number }, kind: MetadataFieldKind): string {
     if (bounds.end - bounds.start > 512) return SECRET_REFUSED_SENTINEL;
     const out = new Uint8Array(bounds.end - bounds.start);
@@ -1119,15 +1339,10 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
         else if (esc === 0x6e || esc === 0x72 || esc === 0x74 || esc === 0x62 || esc === 0x66) {
           return SECRET_REFUSED_SENTINEL;
         } else if (esc === 0x75) {
-          if (readIdx + 4 > bounds.end) return SECRET_REFUSED_SENTINEL;
-          const hex = decoder.decode(bytes.subarray(readIdx, readIdx + 4));
-          if (!/^[0-9A-Fa-f]{4}$/.test(hex)) return SECRET_REFUSED_SENTINEL;
-          readIdx += 4;
-          const cp = parseInt(hex, 16);
+          const cp = parseHex4Bytes(bytes.subarray(0, bounds.end), readIdx);
           if (cp <= 0x20 || cp >= 0x7f) return SECRET_REFUSED_SENTINEL;
-          const encoded = encoder.encode(String.fromCodePoint(cp));
-          out.set(encoded, writeIdx);
-          writeIdx += encoded.length;
+          readIdx += 4;
+          writeIdx += encodeCodePointUtf8(cp, out, writeIdx);
         } else {
           return SECRET_REFUSED_SENTINEL;
         }
@@ -1143,7 +1358,6 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   function parseJsonEscapedTomlInPlace(bounds: { start: number; end: number }): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
     if (bounds.end - bounds.start > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
     const out = new Uint8Array(bounds.end - bounds.start);
-    const encodeInto = new TextEncoder();
     let readIdx = bounds.start;
     let writeIdx = 0;
     try {
@@ -1165,27 +1379,21 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
         else if (esc === 0x62) out[writeIdx++] = 0x08;
         else if (esc === 0x66) out[writeIdx++] = 0x0c;
         else if (esc === 0x75) {
-          if (readIdx + 4 > bounds.end) return { ok: false, reason: "malformed_entry" };
-          const hex = decoder.decode(bytes.subarray(readIdx, readIdx + 4));
-          if (!/^[0-9A-Fa-f]{4}$/.test(hex)) return { ok: false, reason: "malformed_entry" };
+          let codePoint = parseHex4Bytes(bytes.subarray(0, bounds.end), readIdx);
+          if (codePoint < 0) return { ok: false, reason: "malformed_entry" };
           readIdx += 4;
-          let codePoint = parseInt(hex, 16);
           if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
             if (readIdx + 6 > bounds.end || bytes[readIdx] !== 0x5c || bytes[readIdx + 1] !== 0x75) {
               return { ok: false, reason: "malformed_entry" };
             }
-            const lowHex = decoder.decode(bytes.subarray(readIdx + 2, readIdx + 6));
-            if (!/^[0-9A-Fa-f]{4}$/.test(lowHex)) return { ok: false, reason: "malformed_entry" };
-            const low = parseInt(lowHex, 16);
+            const low = parseHex4Bytes(bytes.subarray(0, bounds.end), readIdx + 2);
             if (low < 0xdc00 || low > 0xdfff) return { ok: false, reason: "malformed_entry" };
             readIdx += 6;
             codePoint = ((codePoint - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
           } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
             return { ok: false, reason: "malformed_entry" };
           }
-          const encoded = encodeInto.encode(String.fromCodePoint(codePoint));
-          out.set(encoded, writeIdx);
-          writeIdx += encoded.length;
+          writeIdx += encodeCodePointUtf8(codePoint, out, writeIdx);
         } else {
           return { ok: false, reason: "malformed_entry" };
         }
@@ -1203,9 +1411,7 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
       if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d || b === 0x2c || b === 0x7d || b === 0x5d) break;
       pos++;
     }
-    if (pos === start) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    const token = decoder.decode(bytes.subarray(start, pos));
-    if (token !== "true" && token !== "false" && token !== "null" && !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) {
+    if (!validateJsonPrimitiveBytes(bytes, start, pos)) {
       throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
     }
   }
@@ -1269,7 +1475,9 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
     if (bytes[pos] === 0x7d) { pos++; return; }
     for (;;) {
       skipWs();
-      const key = decodeBoundedString(scanStringBounds());
+      const key = matchKnownJsonKeyBytes(bytes, scanStringBounds(), [
+        "env", "baseUrl", "base_url", "model", "defaultModel", "wire_api", "config",
+      ]);
       skipWs();
       if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
       pos++;
@@ -1281,7 +1489,15 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
         else {
           for (;;) {
             skipWs();
-            const envKey = decodeBoundedString(scanStringBounds());
+            const envKey = matchKnownJsonKeyBytes(bytes, scanStringBounds(), [
+              "ANTHROPIC_BASE_URL",
+              "ANTHROPIC_MODEL",
+              "ANTHROPIC_DEFAULT_SONNET_MODEL",
+              "OPENAI_BASE_URL",
+              "GEMINI_BASE_URL",
+              "OPENAI_MODEL",
+              "GEMINI_MODEL",
+            ]);
             skipWs();
             if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
             pos++;
@@ -1352,7 +1568,9 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
     if (bytes[pos] === 0x7d) { pos++; return row; }
     for (;;) {
       skipWs();
-      const key = decodeBoundedString(scanStringBounds());
+      const key = matchKnownJsonKeyBytes(bytes, scanStringBounds(), [
+        "id", "app_type", "appType", "settings_config", "settingsConfig",
+      ]);
       skipWs();
       if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
       pos++;
@@ -1421,7 +1639,7 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
     if (bytes[pos] === 0x7d) { pos++; return out; }
     for (;;) {
       skipWs();
-      const k = decodeBoundedString(scanStringBounds());
+      const k = matchKnownJsonKeyBytes(bytes, scanStringBounds(), ["providers"]);
       skipWs();
       if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
       pos++;
@@ -1446,7 +1664,9 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   } else {
     for (;;) {
       skipWs();
-      const topKey = decodeBoundedString(scanStringBounds());
+      const topKey = matchKnownJsonKeyBytes(bytes, scanStringBounds(), [
+        "providers", "apps", "claude", "codex", "openai", "gemini", "opencode",
+      ]);
       skipWs();
       if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
       pos++;
@@ -1493,7 +1713,7 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   return rows;
 }
 
-export function readSourceRows(sourcePath: string): RawExtractedRow[] {
+export function readSourceRows(sourcePath: string, requireSqlite = false): RawExtractedRow[] {
   const resolved = resolve(sourcePath);
   let beforeStat: ReturnType<typeof lstatSync>;
   try {
@@ -1510,11 +1730,7 @@ export function readSourceRows(sourcePath: string): RawExtractedRow[] {
   let isSqlite = false;
   let size = 0;
   const header = Buffer.alloc(16);
-  const copyChunk = Buffer.alloc(64 * 1024);
-  let jsonBuf: Buffer | undefined;
-  let snapDir: string | undefined;
-  let snapPath: string | undefined;
-  let snapFd: number | undefined;
+  let rawBuf: Buffer | undefined;
   try {
     try {
       fd = openSync(
@@ -1525,7 +1741,13 @@ export function readSourceRows(sourcePath: string): RawExtractedRow[] {
       if (!opened.isFile()) {
         throw new CcSwitchImportError("CC-Switch source path must be a regular file.");
       }
-      if (opened.dev !== beforeStat.dev || opened.ino !== beforeStat.ino || opened.uid !== beforeStat.uid) {
+      if (
+        opened.dev !== beforeStat.dev
+        || opened.ino !== beforeStat.ino
+        || opened.uid !== beforeStat.uid
+        || opened.gid !== beforeStat.gid
+        || opened.mode !== beforeStat.mode
+      ) {
         throw new CcSwitchImportError("CC-Switch source file changed while opening.");
       }
       size = opened.size;
@@ -1535,47 +1757,22 @@ export function readSourceRows(sourcePath: string): RawExtractedRow[] {
         if (size === 0 || size > MAX_SQLITE_BYTES) {
           throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
         }
-        snapDir = mkdtempSync(join(tmpdir(), "ocx-cc-switch-snap-"));
-        try { chmodSync(snapDir, 0o700); } catch { /* ignore on Windows */ }
-        snapPath = join(snapDir, "source.db");
-        snapFd = openSync(
-          snapPath,
-          constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0),
-          0o600,
-        );
-        let offset = 0;
-        while (offset < size) {
-          const toRead = Math.min(copyChunk.length, size - offset);
-          const got = readSync(fd, copyChunk, 0, toRead, offset);
-          if (got <= 0) break;
-          let written = 0;
-          while (written < got) {
-            written += writeSync(snapFd, copyChunk, written, got - written);
-          }
-          offset += got;
-        }
-        const extra = readSync(fd, copyChunk, 0, 1, size);
-        if (offset !== size || extra !== 0) {
-          throw new CcSwitchImportError("CC-Switch SQLite source changed while reading.");
-        }
-        closeSync(snapFd);
-        snapFd = undefined;
-      } else if (/\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
+      } else if (requireSqlite || /\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
         throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
       } else {
         if (size === 0 || size > MAX_JSON_BYTES) {
           throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
         }
-        jsonBuf = Buffer.alloc(size + 1);
-        let offset = 0;
-        while (offset < jsonBuf.length) {
-          const got = readSync(fd, jsonBuf, offset, jsonBuf.length - offset, offset);
-          if (got <= 0) break;
-          offset += got;
-        }
-        if (offset !== size) {
-          throw new CcSwitchImportError("CC-Switch JSON source changed while reading.");
-        }
+      }
+      rawBuf = Buffer.alloc(size + 1);
+      let offset = 0;
+      while (offset < rawBuf.length) {
+        const got = readSync(fd, rawBuf, offset, rawBuf.length - offset, offset);
+        if (got <= 0) break;
+        offset += got;
+      }
+      if (offset !== size) {
+        throw new CcSwitchImportError("CC-Switch source file changed while reading.");
       }
       assertPlainLocalPath(resolved);
       const afterStat = lstatSync(resolved);
@@ -1583,8 +1780,16 @@ export function readSourceRows(sourcePath: string): RawExtractedRow[] {
       if (
         afterStat.dev !== opened.dev
         || afterStat.ino !== opened.ino
+        || afterStat.uid !== opened.uid
+        || afterStat.gid !== opened.gid
+        || afterStat.mode !== opened.mode
         || afterStat.size !== opened.size
         || afterStat.mtimeMs !== opened.mtimeMs
+        || afterFd.dev !== opened.dev
+        || afterFd.ino !== opened.ino
+        || afterFd.uid !== opened.uid
+        || afterFd.gid !== opened.gid
+        || afterFd.mode !== opened.mode
         || afterFd.size !== opened.size
         || afterFd.mtimeMs !== opened.mtimeMs
       ) {
@@ -1597,25 +1802,14 @@ export function readSourceRows(sourcePath: string): RawExtractedRow[] {
       if (fd !== undefined) {
         try { closeSync(fd); } catch { /* ignore */ }
       }
-      if (snapFd !== undefined) {
-        try { closeSync(snapFd); } catch { /* ignore */ }
-      }
     }
 
     if (isSqlite) {
-      return readSqliteRows(snapPath!);
+      return readSqliteRowsFromBytes(rawBuf!.subarray(0, size));
     }
-    return scanCcSwitchJsonBytes(jsonBuf!.subarray(0, size));
+    return scanCcSwitchJsonBytes(rawBuf!.subarray(0, size));
   } finally {
     header.fill(0);
-    copyChunk.fill(0);
-    jsonBuf?.fill(0);
-    if (snapPath !== undefined) {
-      try { truncateSync(snapPath, 0); } catch { /* ignore */ }
-      try { unlinkSync(snapPath); } catch { /* ignore */ }
-    }
-    if (snapDir !== undefined) {
-      try { rmdirSync(snapDir); } catch { /* ignore */ }
-    }
+    rawBuf?.fill(0);
   }
 }

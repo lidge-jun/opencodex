@@ -123,6 +123,9 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
         invalid: result.invalid,
         invalidReasons: result.invalidReasons,
         providers: result.providers,
+        ...(apply && result.imported > 0
+          ? { trustNotice: "Verify imported baseUrl endpoints come from a trusted CC-Switch source before adding credentials." }
+          : {}),
       }));
     } else {
       console.log(`CC-Switch (${result.mode}): ${result.discovered} discovered, ${result.eligible} eligible, ${result.imported} imported, ${result.conflicts} conflicts, ${result.invalid} invalid.`);

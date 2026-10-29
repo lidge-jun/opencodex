@@ -60,7 +60,7 @@ ocx models live --provider ark --json
 
 ### キーなしの CC-Switch プロバイダーインポート
 
-`ocx provider import-cc-switch` は信頼できるローカルの CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）または JSON ファイルから、厳格な長さ・文字種・セグメントポリシーのもとでプロバイダー ID、アプリ種別、ベース URL、アダプター、既定モデルのみを読み取り専用で抽出します。自由記述の名前、TOML コメント、資格情報フィールドはデコード前に除外され、一時バイトバッファは `finally` でゼロ消去されます。後から登録するキーはインポートされた `baseUrl` に送信されるため、信頼できるソースのみを使用し、`--apply` が表示する接続先 URL を確認してください。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、適用後にプロキシを起動（`ocx start`）してからパイプ標準入力（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）でキーを登録します。`--restore` は `auth.json` をバイト単位で読み取り専用検査し、未編集かつルーティングや OAuth アカウントから参照されていない項目のみを削除します。
+`ocx provider import-cc-switch` は信頼できるローカルの CC-Switch SQLite（`~/.cc-switch/cc-switch.db`、未チェックポイントの WAL がある場合は先に CC-Switch を終了）または JSON ファイルをメモリ上で読み取り専用展開（一時ファイルなし）し、構造的な長さ・文字種・セグメント許可リストを満たすプロバイダー ID、アプリ種別、ベース URL、アダプター、既定モデルのみを抽出します。自由記述の名前、TOML コメント、資格情報フィールドはデコード前に除外され、一時バイトバッファは `finally` でゼロ消去されますが、通常の識別子や URL 構文に一致する文字列は構造だけでは区別できないため、信頼できるソースのみを使用し、`--apply` が表示する接続先 URL を確認してからキーを登録してください。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、適用後にプロキシを起動（`ocx start`）してからパイプ標準入力（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）でキーを登録します。`--restore` は `auth.json` をバイト単位で読み取り専用検査（読み取り不能・不正形式時はフェイルクローズ）し、未編集かつルーティングや OAuth アカウントから参照されていない項目のみを削除します。
 
 ## 認証
 

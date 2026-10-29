@@ -15,6 +15,8 @@ import { getAuthStorePath, saveCredential } from "../../src/oauth/store";
 import {
   CC_SWITCH_IMPORT_JOURNAL_FILENAME,
   CcSwitchImportError,
+  SECRET_REFUSED_SENTINEL,
+  parseCodexTomlBytes,
   readSqliteRows,
   runCcSwitchProviderImport,
   scanCcSwitchJsonBytes,
@@ -32,10 +34,14 @@ let targetHome: string;
 let sourceDir: string;
 let originalHome: string | undefined;
 
-function createSqliteFixture(rows: Array<{ id: string; app_type: string; name: string; settings_config: string; sort_index?: number }>): string {
-  const dbPath = join(sourceDir, "cc-switch.db");
+function createSqliteFixture(
+  rows: Array<{ id: string; app_type: string; name: string; settings_config: string; sort_index?: number }>,
+  walMode = false,
+): string {
+  const dbPath = join(sourceDir, walMode ? "cc-switch-wal.db" : "cc-switch.db");
   const db = new Database(dbPath, { create: true });
   try {
+    if (walMode) db.run("PRAGMA journal_mode = WAL;");
     db.run(`
       CREATE TABLE providers (
         id TEXT NOT NULL,
@@ -56,9 +62,14 @@ function createSqliteFixture(rows: Array<{ id: string; app_type: string; name: s
       )
     `);
     const insert = db.prepare("INSERT INTO providers (id, app_type, name, settings_config, sort_index) VALUES (?1, ?2, ?3, ?4, ?5)");
-    for (const r of rows) {
-      insert.run(r.id, r.app_type, r.name, r.settings_config, r.sort_index ?? 0);
+    try {
+      for (const r of rows) {
+        insert.run(r.id, r.app_type, r.name, r.settings_config, r.sort_index ?? 0);
+      }
+    } finally {
+      insert.finalize();
     }
+    if (walMode) db.run("PRAGMA wal_checkpoint(PASSIVE);");
   } finally {
     db.close();
   }
@@ -128,6 +139,14 @@ describe("CC-Switch keyless provider import", () => {
         sort_index: 2,
       },
     ]);
+    const walDbPath = createSqliteFixture([
+      {
+        id: "wal-claude",
+        app_type: "claude",
+        name: `WalSecret ${CANARY_SECRET}`,
+        settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://wal.acme.example" } }),
+      },
+    ], true);
     const dbBytesBefore = readFileSync(dbPath);
     const decodedStrings: string[] = [];
     const origDecode = TextDecoder.prototype.decode;
@@ -138,16 +157,21 @@ describe("CC-Switch keyless provider import", () => {
     });
 
     let preview;
+    let walRows;
     try {
       const sqliteProjected = JSON.stringify(readSqliteRows(dbPath));
       expect(sqliteProjected).not.toContain(CANARY_SECRET);
       expect(sqliteProjected).not.toContain(PREFIXLESS_HEX_SECRET);
       expect(sqliteProjected).not.toContain(PREFIXLESS_MIXED_SECRET);
+      walRows = readSqliteRows(walDbPath);
 
       preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     } finally {
       decodeSpy.mockRestore();
     }
+    expect(walRows).toHaveLength(1);
+    expect(walRows[0]?.id).toBe("wal-claude");
+    expect(walRows[0]?.claudeBaseUrl).toBe("https://wal.acme.example");
     for (const s of decodedStrings) {
       expect(s).not.toContain(CANARY_SECRET);
       expect(s).not.toContain(PREFIXLESS_HEX_SECRET);
@@ -246,16 +270,19 @@ describe("CC-Switch keyless provider import", () => {
             "codex-json": {
               name: "Codex JSON",
               settingsConfig: {
+                [PREFIXLESS_HEX_SECRET]: CANARY_SECRET,
                 auth: { OPENAI_API_KEY: CANARY_SECRET },
                 config: [
                   `model = "gpt-5.6-sol" # comment_secret = "${CANARY_SECRET}" ${PREFIXLESS_HEX_SECRET}`,
                   `model_provider = "cjson" # ${PREFIXLESS_MIXED_SECRET}`,
                   `experimental_bearer_token = "${CANARY_SECRET}"`,
+                  `"${PREFIXLESS_HEX_SECRET}" = "ignored"`,
                   `[model_providers.cjson] # ${CANARY_SECRET}`,
                   `base_url = "https://codex.json.example/v1" # ${CANARY_SECRET} ${PREFIXLESS_HEX_SECRET}`,
                   'wire_api = "responses"',
                   `api_key = "${CANARY_SECRET}"`,
                   '[unrelated]',
+                  `[unrelated.${PREFIXLESS_HEX_SECRET}]`,
                   `base_url = "${CANARY_SECRET}"`,
                 ].join("\n"),
               },
@@ -274,11 +301,19 @@ describe("CC-Switch keyless provider import", () => {
       return res;
     });
     let scanned;
+    let secretHeaderResult;
     try {
       scanned = scanCcSwitchJsonBytes(rawBytes);
+      const secretHeaderBytes = Buffer.from(`[model_providers.${PREFIXLESS_HEX_SECRET}]\nbase_url = "https://x.example.com/v1"\n`, "utf8");
+      try {
+        secretHeaderResult = parseCodexTomlBytes(secretHeaderBytes);
+      } finally {
+        secretHeaderBytes.fill(0);
+      }
     } finally {
       decodeSpy.mockRestore();
     }
+    expect(secretHeaderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
     expect(rawBytes.every(b => b === 0)).toBe(true);
     expect(JSON.stringify(scanned)).not.toContain(CANARY_SECRET);
     expect(JSON.stringify(scanned)).not.toContain(PREFIXLESS_HEX_SECRET);
@@ -385,6 +420,39 @@ describe("CC-Switch keyless provider import", () => {
       retainedNames: ["kimi", "prov-b", "prov-c"],
     });
     expect(loadConfig().providers["prov-c"]).toBeDefined();
+
+    // Malformed escapes or unpaired UTF-16 surrogates in an unrelated provider's auth.json entry also fail closed
+    // without decoding any auth.json strings.
+    for (const badAuthJson of [
+      '{"other":{"accounts":[{"access":"bad\\xescape"}]}}',
+      '{"other":{"accounts":[{"access":"bad\\u123Ghex"}]}}',
+      '{"other":{"accounts":[{"access":"lone\\uD800surrogate"}]}}',
+    ]) {
+      writeFileSync(getAuthStorePath(), badAuthJson);
+      const authDecoded: string[] = [];
+      const origDecode = TextDecoder.prototype.decode;
+      const spy = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: unknown[]) {
+        const s = origDecode.apply(this, args as [BufferSource?, TextDecodeOptions?]);
+        authDecoded.push(s);
+        return s;
+      });
+      try {
+        const res = await runCcSwitchProviderImport({ mode: "restore" });
+        expect(res).toEqual({
+          mode: "restore",
+          restored: 0,
+          restoredNames: [],
+          alreadyAbsent: 0,
+          retainedEdited: 3,
+          retainedNames: ["kimi", "prov-b", "prov-c"],
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(authDecoded.join("|")).not.toContain("escape");
+      expect(authDecoded.join("|")).not.toContain("surrogate");
+      expect(loadConfig().providers["prov-c"]).toBeDefined();
+    }
   });
 
   test("rejects adversarial TOML multiline strings, non-scalar JSON paths, secret-like URLs, and private networks without opt-in", async () => {
@@ -464,21 +532,62 @@ describe("CC-Switch keyless provider import", () => {
           config: "#" + "x".repeat(70_000) + '\nbase_url = "https://huge.example.com/v1"\n',
         }),
       },
+      {
+        id: "AbcDefGhiJ1-prov",
+        app_type: "openai",
+        name: "MixedCaseDigitId",
+        settings_config: JSON.stringify({ baseUrl: "https://api.example.com/v1" }),
+      },
+      {
+        id: "mixed-url-path",
+        app_type: "openai",
+        name: "MixedUrlPath",
+        settings_config: JSON.stringify({ baseUrl: "https://api.example.com/AbCdEfGhIjKl" }),
+      },
+      {
+        id: "bad-app-kind",
+        app_type: PREFIXLESS_MIXED_SECRET,
+        name: "SecretAppType",
+        settings_config: JSON.stringify({ baseUrl: "https://api.example.com/v1" }),
+      },
     ]);
 
-    const projected = JSON.stringify(readSqliteRows(dbPath));
+    const decodedDuringSqlite: string[] = [];
+    const origDecode = TextDecoder.prototype.decode;
+    const decodeSpy = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: unknown[]) {
+      const s = origDecode.apply(this, args as [BufferSource?, TextDecodeOptions?]);
+      decodedDuringSqlite.push(s);
+      return s;
+    });
+    let rawSqliteRows;
+    try {
+      rawSqliteRows = readSqliteRows(dbPath);
+    } finally {
+      decodeSpy.mockRestore();
+    }
+    const projected = JSON.stringify(rawSqliteRows);
     expect(projected).not.toContain(PREFIXLESS_HEX_SECRET);
     expect(projected).not.toContain(PREFIXLESS_MIXED_SECRET);
+    expect(projected).not.toContain("AbcDefGhiJ1-prov");
+    expect(projected).not.toContain("AbCdEfGhIjKl");
+    expect(rawSqliteRows.find(r => r.id === "mixed-url-path")?.genericBaseUrl).toBe(SECRET_REFUSED_SENTINEL);
+    expect(rawSqliteRows.find(r => r.id === "bad-app-kind")?.appType).toBe(SECRET_REFUSED_SENTINEL);
+    for (const s of decodedDuringSqlite) {
+      expect(s).not.toContain(PREFIXLESS_HEX_SECRET);
+      expect(s).not.toContain(PREFIXLESS_MIXED_SECRET);
+      expect(s).not.toContain("AbcDefGhiJ1-prov");
+      expect(s).not.toContain("AbCdEfGhIjKl");
+    }
 
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(9);
+      expect(preview.invalid).toBe(12);
       expect(preview.invalidReasons).toEqual({
         malformed_entry: 3,
         missing_base_url: 1,
-        secret_in_nonsecret_field: 3,
+        secret_in_nonsecret_field: 6,
         private_network_refused: 1,
         ambiguous_codex_provider: 1,
       });
