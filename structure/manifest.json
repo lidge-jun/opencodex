@@ -147,7 +147,8 @@
         "src/codex/",
         "src/config.ts",
         "src/config/",
-        "src/types.ts"
+        "src/types.ts",
+        "src/types/config.ts"
       ]
     },
     {

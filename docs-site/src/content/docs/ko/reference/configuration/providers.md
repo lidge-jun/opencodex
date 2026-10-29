@@ -43,6 +43,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `providers` | `Record<string, OcxProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
 | `openaiProviderTierVersion?` | `2` | 마이그레이션으로 설정됨 | 옵션을 인식하는 단일 OpenAI 투영이 완료되었음을 표시합니다. |
 | `disabledModels?` | `string[]` | — | Codex catalog와 `/v1/models`에서는 숨기지만 직접 proxy 호출은 차단하지 않습니다. routed id는 목록에서 제거됩니다. account-qualified native id는 해당 selector row만 숨기고, bare native GPT id는 bare row와 그 model의 모든 account-selector row를 숨깁니다. Models 페이지에는 bare native 행과 routed 행만 표시됩니다. selector-qualified 행 하나만 숨기려면 이 설정 필드에 직접 추가하세요. |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 기본값은 `false`입니다. `config.json`에 `"omitDisabledNativeModels": true`를 설정하고 `ocx sync`를 실행하면 비활성화한 native 행을 catalog와 cache, Codex 형식의 HTTP 모델 목록에서 제외합니다. 제외 전 검증한 상속 템플릿을 보존하므로 routed 행의 메타데이터는 유지되며 직접 요청의 라우팅은 바뀌지 않습니다. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 활성 컨텍스트 상한입니다. 일반 윈도는 줄어들며, 장문 윈도를 지원하는 네이티브 모델은 해당 모델의 지원 상한까지만 확장할 수 있습니다. |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
 | `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
