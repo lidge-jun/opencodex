@@ -69,6 +69,7 @@ export interface AdvisorPlan {
     parsed: OcxParsedRequest,
     reason: "manual",
     question: string | undefined,
+    abortSignal?: AbortSignal,
   ): Promise<AdvisorConsultOutcome>;
   /**
    * Runtime-owned text for a failed or limited consultation. The guard never composes failure
@@ -77,6 +78,68 @@ export interface AdvisorPlan {
    */
   formatUnavailable(kind: "manual" | "limit", error: string): string;
 }
+
+export interface AdvisorSidecarCall {
+  id: string;
+  name: string;
+  question?: string;
+  providerMetadata?: import("../../types").OcxProviderOpaqueToolCallMetadata;
+}
+
+/**
+ * Shares continuation/consultation bounds between the normal guard and fetch sidecar loops.
+ * Each leg is reserved before any expert await, while repeated calls receive one bounded limit
+ * result instead of starting another consultation. The tool result preserves the worker call id.
+ */
+export function createAdvisorSidecarStep(plan: AdvisorPlan) {
+  let consultations = 0;
+  let continuations = 0;
+  let finalContinuationUsed = false;
+  return {
+    beginLeg(): Extract<AdapterEvent, { type: "error" }> | undefined {
+      const final = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
+      if (continuations >= MAX_ADVISOR_CONTINUATIONS_PER_REQUEST || finalContinuationUsed) {
+        return {
+          type: "error",
+          status: 502,
+          errorType: "advisor_continuation_limit",
+          message: "Advisor worker continuation limit reached; no further worker calls were sent.",
+        };
+      }
+      continuations += 1;
+      finalContinuationUsed ||= final;
+      return undefined;
+    },
+    async consultCall(parsed: OcxParsedRequest, call: AdvisorSidecarCall, abortSignal?: AbortSignal) {
+      let outcome: AdvisorConsultOutcome;
+      if (consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST) {
+        outcome = {
+          ok: false,
+          isError: true,
+          content: plan.formatUnavailable("limit", "consultation limit reached for this request"),
+        };
+      } else {
+        consultations += 1;
+        try {
+          outcome = await plan.consult(parsed, "manual", call.question, abortSignal);
+        } catch (error) {
+          if (isTranslatorBudgetExceededError(error)) throw error;
+          outcome = {
+            ok: false,
+            isError: true,
+            content: plan.formatUnavailable("manual", error instanceof Error ? error.message : String(error)),
+          };
+        }
+      }
+      return { outcome, message: advisorToolResult(call, outcome, Date.now()) };
+    },
+    exhausted(): boolean {
+      return consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
+    },
+  };
+}
+
+export type AdvisorSidecarStep = ReturnType<typeof createAdvisorSidecarStep>;
 
 interface HeldAdvisorCall {
   id: string;
@@ -90,10 +153,10 @@ interface HeldAdvisorCall {
 
 function parseAdvisorArgs(call: HeldAdvisorCall, retention: AdvisorRetention): { question?: string } {
   // Reserve both the joined input and parsed JSON before either is materialized.
-  return retention.copy(call.argumentBytes * 2 + 4, () => parseArgs(call.args.join("")));
+  return retention.copy(call.argumentBytes * 2 + 4, () => parseAdvisorQuestionArgs(call.args.join("")));
 }
 
-function parseArgs(argsBuf: string): { question?: string } {
+export function parseAdvisorQuestionArgs(argsBuf: string): { question?: string } {
   if (argsBuf.trim() === "") return {};
   try {
     const parsed: unknown = JSON.parse(argsBuf);
@@ -129,7 +192,7 @@ function assistantMessageFromLeg(
 }
 
 function advisorToolResult(
-  call: HeldAdvisorCall,
+  call: AdvisorSidecarCall,
   outcome: AdvisorConsultOutcome,
   timestamp: number,
 ): OcxToolResultMessage {
@@ -163,11 +226,8 @@ export function createAdvisorStreamGuard(options: AdvisorGuardOptions): AsyncGen
 }
 export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequest["_advisorGuard"]> {
   // Shared across invocations of this request's guard, including an empty-completion retry.
-  let consultations = 0;
-  let continuations = 0;
-  let finalContinuationUsed = false;
+  const sidecar = createAdvisorSidecarStep(plan);
   return async function* guardAdvisorStream(options: Omit<AdvisorGuardOptions, "plan">): AsyncGenerator<AdapterEvent> {
-    const maxConsultations = MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
     let parsed = options.parsed;
     let accumulatedUsage: OcxUsage | undefined;
     let source: AsyncIterable<AdapterEvent> = options.firstEvents;
@@ -275,61 +335,28 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
 
       // Consume this leg's done — the continuation replaces it.
       accumulatedUsage = retention.usage(accumulatedUsage, terminalEvent?.usage);
-      if (continuations >= MAX_ADVISOR_CONTINUATIONS_PER_REQUEST || finalContinuationUsed) {
-        yield {
-          type: "error",
-          status: 502,
-          errorType: "advisor_continuation_limit",
-          message: "Advisor worker continuation limit reached; no further worker calls were sent.",
-          ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
-        };
+      const continuationError = sidecar.beginLeg();
+      if (continuationError) {
+        yield accumulatedUsage ? { ...continuationError, usage: accumulatedUsage } : continuationError;
         return;
       }
-      // A repeated call after tool removal gets one last paired limit result, never a loop.
-      const isFinalContinuation = consultations >= maxConsultations;
-      // Reserve before any consultation await, so simultaneous guard entries share the bound.
-      continuations += 1;
-      finalContinuationUsed ||= isFinalContinuation;
       const timestamp = Date.now();
       const assistant = retention.history(retention.replayReservation(), () => assistantMessageFromLeg(legEvents, advisorCalls, timestamp, retention));
       const messages: OcxMessage[] = [...parsed.context.messages];
       if (assistant) messages.push(assistant);
 
       for (const call of advisorCalls) {
-        if (consultations >= maxConsultations) {
-          // Runtime-owned limit text: not advice, and never a genuine advice wrapper.
-          const outcome = {
-            ok: false,
-            isError: true,
-            content: plan.formatUnavailable("limit", "consultation limit reached for this request"),
-          };
-          messages.push(retention.history(jsonUtf8Bytes(outcome) + jsonUtf8Bytes(call.id) + 256, () => advisorToolResult(call, outcome, timestamp))!);
-          continue;
-        }
-        consultations += 1;
         // Later calls in the same leg must see what came before them: the rebuilt worker turn
         // and every earlier advisor result in this leg's accumulated messages.
         const consultParsed: OcxParsedRequest = {
           ...parsed,
           context: { ...parsed.context, messages },
         };
-        let outcome: AdvisorConsultOutcome;
-        try {
-          outcome = await plan.consult(consultParsed, "manual", call.question);
-        } catch (error) {
-          if (isTranslatorBudgetExceededError(error)) throw error;
-          // Runtime-owned failure text only: the implementation neutralizes untrusted exception
-          // text so it can never forge a genuine advice wrapper.
-          outcome = {
-            ok: false,
-            isError: true,
-            content: plan.formatUnavailable("manual", error instanceof Error ? error.message : String(error)),
-          };
-        }
-        messages.push(retention.history(jsonUtf8Bytes(outcome) + jsonUtf8Bytes(call.id) + 256, () => advisorToolResult(call, outcome, timestamp))!);
+        const consulted = await sidecar.consultCall(consultParsed, call);
+        messages.push(retention.history(jsonUtf8Bytes(consulted.outcome) + jsonUtf8Bytes(call.id) + 256, () => consulted.message)!);
       }
 
-      const exhausted = consultations >= maxConsultations;
+      const exhausted = sidecar.exhausted();
       const tools = exhausted
         ? parsed.context.tools?.filter(tool => !tool.advisor && tool.name !== ADVISOR_TOOL_NAME)
         : parsed.context.tools;

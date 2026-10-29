@@ -1,0 +1,19 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`default output matches the pre-option snapshot; explicit false is byte-identical 1`] = `"b978228381d45d8c962551c4d563babf0503d7095a70aface28a8b2f4c0267b8"`;
+
+exports[`upgraded gpt-6-astra after 1 convergence passes (unnamed) 1`] = `"631f9483fe0eb43f05e13aaf4bf5dbeb182c9a416a4c7535029aae7eeafa5444"`;
+
+exports[`upgraded gpt-6-astra after 2 convergence passes (unnamed) 1`] = `"83ee8352566d3966cc73eb838a2f9d8fd932ab8e7a4beb41407c97b6d754ab98"`;
+
+exports[`upgraded gpt-6-astra after 1 retained sync passes (unnamed) 1`] = `"631f9483fe0eb43f05e13aaf4bf5dbeb182c9a416a4c7535029aae7eeafa5444"`;
+
+exports[`upgraded gpt-6-astra after 2 retained sync passes (unnamed) 1`] = `"83ee8352566d3966cc73eb838a2f9d8fd932ab8e7a4beb41407c97b6d754ab98"`;
+
+exports[`upgraded gpt-6-luna after 1 convergence passes (unnamed) 1`] = `"4b7e6430befcb01070fee32c962d0478412a7000112deab41c9da2bed5ce758b"`;
+
+exports[`upgraded gpt-6-luna after 2 convergence passes (unnamed) 1`] = `"cad289facd9854199bb0247d1ed25f02c00bd782ef7e0842ebccb32706ae3003"`;
+
+exports[`upgraded gpt-6-luna after 1 retained sync passes (unnamed) 1`] = `"4b7e6430befcb01070fee32c962d0478412a7000112deab41c9da2bed5ce758b"`;
+
+exports[`upgraded gpt-6-luna after 2 retained sync passes (unnamed) 1`] = `"cad289facd9854199bb0247d1ed25f02c00bd782ef7e0842ebccb32706ae3003"`;

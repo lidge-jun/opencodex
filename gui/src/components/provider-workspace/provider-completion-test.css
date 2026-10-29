@@ -53,6 +53,14 @@
   padding: var(--space-1) var(--space-2) var(--space-1) 0;
   vertical-align: top;
 }
+.pws-completion-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-label);
+}
 @media (max-width: 640px) {
   .pws-completion-test {
     grid-template-columns: minmax(0, 1fr);
