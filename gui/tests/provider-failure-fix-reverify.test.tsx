@@ -343,6 +343,54 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     expect(host.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Model to test"]')?.textContent).toContain("model-a");
   });
 
+  test("OAuth roster settlement and Codex pool mutations with unchanged active ID still latch re-verification", async () => {
+    respondCompletion = async () => Response.json(failedResult("http_status", 401));
+    const mountWithPools = (
+      oauthAccounts: Array<{ id: string; active: boolean; expiresAt?: number }>,
+      codexAccounts: Array<{ id: string; email: string; isMain: boolean; paused: boolean; priority: number; hasCredential: boolean; quota: null }>,
+    ) => render(
+      <ProviderDetails
+        item={baseItem}
+        availableModels={["model-a"]}
+        hasLiveModels
+        selectedModels={["model-a"]}
+        modelRows={[{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }]}
+        modelRevision="r1"
+        modelRowsReady
+        onOpenModels={() => {}}
+        onDeselect={() => {}}
+        apiBase=""
+        accounts={oauthAccounts}
+        codexController={{
+          accounts: codexAccounts,
+          activeId: "main",
+        } as never}
+      />,
+    );
+
+    const baseCodex = [
+      { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+      { id: "pool-2", email: "p2@example.test", isMain: false, paused: false, priority: 1, hasCredential: true, quota: null },
+    ];
+    await mountWithPools([{ id: "acct-1", active: true, expiresAt: 1000 }], baseCodex);
+    await selectModel("model-a");
+    await runAndConfirm();
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
+
+    // OAuth reauth refreshes expiresAt (or adds a non-active account) while active ID stays "acct-1":
+    await mountWithPools([{ id: "acct-1", active: true, expiresAt: 2000 }], baseCodex);
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBe("true");
+
+    // Run again to failed, then pause a non-active Codex pool account while activeId stays "main":
+    await runAndConfirm();
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
+    await mountWithPools(
+      [{ id: "acct-1", active: true, expiresAt: 2000 }],
+      [baseCodex[0]!, { ...baseCodex[1]!, paused: true }],
+    );
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBe("true");
+  });
+
   test("K1 -> K2 -> K1 keeps re-verification latched until a new run, and off-tab model removal permanently clears state", async () => {
     respondCompletion = async () => Response.json(failedResult("http_status", 401));
     const renderDetails = (identity: string, available: string[]) => render(

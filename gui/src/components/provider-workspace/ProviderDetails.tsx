@@ -143,8 +143,27 @@ export default function ProviderDetails({
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
   const connectionIdentity = JSON.stringify([
     codexController?.activeId ?? "",
+    (codexController?.accounts ?? []).map(account => [
+      account.id,
+      account.isMain === true,
+      account.paused === true,
+      account.priority ?? 0,
+      account.hasCredential === true,
+    ]),
     accounts?.find(account => account.active)?.id ?? "",
+    (accounts ?? []).map(account => [
+      account.id,
+      account.active,
+      account.paused === true,
+      account.needsReauth === true,
+      account.expiresAt ?? null,
+    ]),
     keys?.find(entry => entry.active)?.id ?? "",
+    (keys ?? []).map(entry => [
+      entry.id,
+      entry.active,
+      entry.disabled === true,
+    ]),
     oauth?.loggedIn === undefined ? "" : String(oauth.loggedIn),
     oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
     oauthEmail ?? "",
@@ -168,6 +187,14 @@ export default function ProviderDetails({
     const bump = () => setMutationRevision(revision => revision + 1);
     return {
       ...authHandlers,
+      async onLogin(provider, addAccount) {
+        await authHandlers.onLogin(provider, addAccount);
+        bump();
+      },
+      async onReauth(provider, accountId) {
+        await authHandlers.onReauth(provider, accountId);
+        bump();
+      },
       async onAddApiKey(provider, key) {
         const ok = await authHandlers.onAddApiKey(provider, key);
         if (ok) bump();
