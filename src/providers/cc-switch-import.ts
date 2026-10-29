@@ -548,22 +548,30 @@ WITH RECURSIVE
       substr(raw_cfg, instr(raw_cfg, char(10)) + 1),
       1,
       CASE
-        WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+        WHEN substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
           CASE
-            WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
-              AND instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') > 18
-              AND (
-                (
-                  substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) IN ('"', '''')
-                  AND substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), -1, 1) = substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)
-                  AND instr(replace(replace(substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 2, length(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18))) - 2), '\\\\', ''), '\\"', ''), substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)) = 0
-                )
-                OR (
-                  substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) NOT IN ('"', '''')
-                  AND instr(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18), '.') = 0
-                )
-              )
-              THEN 'mp'
+            WHEN (
+    substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '['
+    AND substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 2) != '[['
+    AND instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') > 1
+    AND substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 1, 15) = 'model_providers'
+    AND substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 1, 1) = '.'
+    AND trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)) != ''
+    AND (
+      (
+        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) IN ('"', '''')
+        AND length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) >= 3
+        AND substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), -1, 1) = substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)
+        AND instr(replace(replace(substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 2, length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) - 2), '\\', ''), '\"', ''), substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)) = 0
+      )
+      OR (
+        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) NOT IN ('"', '''')
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), '.') = 0
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), ' ') = 0
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), char(9)) = 0
+      )
+    )
+  ) THEN 'mp'
             ELSE 'other'
           END
         ELSE 'root'
@@ -576,22 +584,30 @@ WITH RECURSIVE
       substr(rest, instr(rest, char(10)) + 1),
       idx + 1,
       CASE
-        WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+        WHEN substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
           CASE
-            WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
-              AND instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') > 18
-              AND (
-                (
-                  substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) IN ('"', '''')
-                  AND substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), -1, 1) = substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)
-                  AND instr(replace(replace(substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 2, length(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18))) - 2), '\\\\', ''), '\\"', ''), substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)) = 0
-                )
-                OR (
-                  substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) NOT IN ('"', '''')
-                  AND instr(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18), '.') = 0
-                )
-              )
-              THEN 'mp'
+            WHEN (
+    substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '['
+    AND substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 2) != '[['
+    AND instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') > 1
+    AND substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 1, 15) = 'model_providers'
+    AND substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 1, 1) = '.'
+    AND trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)) != ''
+    AND (
+      (
+        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) IN ('"', '''')
+        AND length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) >= 3
+        AND substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), -1, 1) = substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)
+        AND instr(replace(replace(substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 2, length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) - 2), '\\', ''), '\"', ''), substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)) = 0
+      )
+      OR (
+        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) NOT IN ('"', '''')
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), '.') = 0
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), ' ') = 0
+        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), char(9)) = 0
+      )
+    )
+  ) THEN 'mp'
             ELSE 'other'
           END
         ELSE sec

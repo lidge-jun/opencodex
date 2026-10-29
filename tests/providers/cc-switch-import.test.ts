@@ -91,7 +91,7 @@ describe("CC-Switch keyless provider import", () => {
       'model = "gpt-5.6-sol"',
       'model_provider = "acme\\"quoted"',
       `experimental_bearer_token = "${CANARY_SECRET}"`,
-      '[model_providers."acme\\"quoted"]',
+      '[ model_providers . "acme\\"quoted" ]',
       'base_url = "https://codex.acme.example/v1"',
       'wire_api = "responses"',
       `api_key = "${CANARY_SECRET}"`,

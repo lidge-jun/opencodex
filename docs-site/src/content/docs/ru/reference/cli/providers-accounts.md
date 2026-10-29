@@ -26,6 +26,7 @@ pool'ами и контролируют каталог моделей, кото�
 | `quota` | `--refresh`, `--json` | Прочитать отчёты по quota провайдеров. |
 | `presets` | `--json` | Показать provider preset'ы дашборда. |
 | `account-mode` | `pool`, `direct`, `--json` | Выбрать pooled или direct routing для аккаунтов Codex. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Предпросмотр, выборочное применение или откат провайдеров без ключей из базы SQLite (`cc-switch.db`) или JSON-файла CC-Switch. |
 
 По умолчанию `add`, `remove` и `set-default` меняют локальную конфигурацию. Для работающего прокси добавьте `--live`, а для удаления — также `--yes`. `--sync --json` тоже пытается синхронизировать после сохранения; при сбое сохранение остаётся, код выхода ненулевой и `needsSync: true`. Флаги `--live` и `--sync` несовместимы. Pacing и snapshot/apply описаны в [английской инструкции](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline).
 
@@ -60,6 +61,10 @@ ocx models live --provider ark --json
 
 Для всего секретного используйте `--api-key` или вход через OAuth.
 :::
+
+### Импорт провайдеров CC-Switch без ключей
+
+`ocx provider import-cc-switch` читает только несекретные метаданные провайдеров (ID, имена, базовые URL, адаптеры и модели по умолчанию) из файла SQLite (`~/.cc-switch/cc-switch.db`) или JSON CC-Switch, не читая и не записывая API-ключи. Предпросмотр по умолчанию (`--source <FILE>`) ничего не меняет; `--apply` и `--restore` требуют остановленного прокси (`ocx stop`). Используйте `--provider <id>` для выбора записей и `--allow-private-network` для локальных/частных адресов, после чего добавьте ключи через `ocx account add-key <provider>`. `--restore` удаляет только неизменённые и неиспользуемые в маршрутизации записи.
 
 ## Аутентификация
 

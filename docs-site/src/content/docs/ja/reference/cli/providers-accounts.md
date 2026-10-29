@@ -24,6 +24,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | `quota` | `--refresh`、`--json` |プロバイダー クォータ レポートを読み取ります。 |
 | `presets` | `--json` |ダッシュボードプロバイダーのプリセットを一覧表示します。 |
 | `account-mode` | `pool`、`direct`、`--json` |プールされた Codex アカウント ルーティングまたは直接の Codex アカウント ルーティングを選択します。 |
+| `import-cc-switch` | `--source <FILE>`、`--provider <id>`、`--apply`、`--restore`、`--allow-private-network`、`--json` | CC-Switch の SQLite（`cc-switch.db`）または JSON ファイルからキーなしのプロバイダー項目をプレビュー・選択適用・復元します。 |
 
 既定の `add`、`remove`、`set-default` はローカル設定を変更します。稼働中のプロキシを変更するには `--live`、ライブ削除にはさらに `--yes` が必要です。`--sync --json` も保存後に同期を試み、失敗時は保存を保持して非ゼロ終了と `needsSync: true` を返します。`--live` と `--sync` は併用できません。pacing と snapshot/apply の手順は[英語版](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)を参照してください。
 
@@ -56,6 +57,10 @@ ocx models live --provider ark --json
 
 秘密にあたる値は `--api-key` か OAuth ログインを使ってください。
 :::
+
+### キーなしの CC-Switch プロバイダーインポート
+
+`ocx provider import-cc-switch` は CC-Switch の SQLite（`~/.cc-switch/cc-switch.db`）または JSON ファイルから非機密メタデータ（ID、名前、ベース URL、アダプター、既定モデル）のみを読み取り専用で抽出し、API キーやトークンは読み書きしません。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、インポート後に `ocx account add-key <provider>` でキーを登録します。`--restore` は未編集かつルーティングから参照されていない項目のみを削除します。
 
 ## 認証
 

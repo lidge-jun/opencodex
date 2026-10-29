@@ -24,6 +24,7 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | `quota` | `--refresh`, `--json` | 讀取供應商配額報告。 |
 | `presets` | `--json` | 列出儀表板供應商預設。 |
 | `account-mode` | `pool`, `direct`, `--json` | 選擇池化或直接的 Codex 帳號路由。 |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | 從 CC-Switch SQLite（`cc-switch.db`）或舊版 JSON 檔案預覽、選擇性套用或還原無金鑰供應商項目。 |
 
 預設的 `add`、`remove` 與 `set-default` 修改本機設定。修改執行中的代理需加 `--live`，線上刪除還需 `--yes`。`--sync --json` 同樣會在儲存後嘗試同步；失敗時保留儲存結果，以非零狀態結束，並回傳 `needsSync: true`。`--live` 不能與 `--sync` 同用。pacing 與 snapshot/apply 操作請見[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
@@ -39,6 +40,10 @@ ocx models live --provider ark --json
 ```
 
 `--jsonl` 僅輸出已設定的供應商，每行一個 JSON 物件。每個物件的欄位與 `--json` 輸出中 `configured` 陣列的元素相同，不包含 `registryCount` 摘要。指令碼可以逐行處理這些物件。`--json` 與 `--jsonl` 不能同時使用。
+
+### 無金鑰匯入 CC-Switch 供應商
+
+`ocx provider import-cc-switch` 僅從 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 檔案唯讀擷取非機密中繼資料（ID、名稱、base URL、協定轉接器與預設模型），絕不讀取、解碼或寫入 API 金鑰。預設預覽（`--source <FILE>`）不寫入任何內容；`--apply` 與 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 選擇項目，對本機或私有網路位址加上 `--allow-private-network`，匯入後再用 `ocx account add-key <provider>` 新增金鑰。`--restore` 僅移除未修改且未被路由參照的匯入項目。
 
 ## 認證
 

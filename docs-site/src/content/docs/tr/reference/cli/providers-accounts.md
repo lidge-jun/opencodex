@@ -27,6 +27,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | `quota` | `--refresh`, `--json` | Sağlayıcı kota raporlarını okuyun. |
 | `presets` | `--json` | Kontrol paneli sağlayıcı önayarlarını listeleyin. |
 | `account-mode` | `pool`, `direct`, `--json` | Havuzlanmış veya doğrudan Codex hesap yönlendirmesini seçin. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | CC-Switch SQLite (`cc-switch.db`) veya JSON dosyasından anahtarsız sağlayıcı girdilerini önizleyin, seçerek uygulayın veya geri yükleyin. |
 
 Varsayılan `add`, `remove` ve `set-default` yerel yapılandırmayı değiştirir. Çalışan proxy için `--live`, canlı silme için ayrıca `--yes` kullanın. `--sync --json` da kayıttan sonra eşitlemeyi dener; başarısızlıkta kayıt korunur, sıfır olmayan çıkış kodu ve `needsSync: true` döner. `--live` ile `--sync` birlikte kullanılamaz. Pacing ve snapshot/apply için [İngilizce kılavuza](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) bakın.
 
@@ -62,6 +63,10 @@ saygı duymanız gereken bir sınırdır. Önemli olmasının iki nedeni:
 
 Gizli olan her şey için `--api-key` veya bir OAuth girişi kullanın.
 :::
+
+### Anahtarsız CC-Switch sağlayıcı içe aktarma
+
+`ocx provider import-cc-switch`, CC-Switch SQLite (`~/.cc-switch/cc-switch.db`) veya JSON dosyasından yalnızca gizli olmayan meta verileri (kimlikler, adlar, temel URL'ler, bağdaştırıcılar ve varsayılan modeller) salt okunur olarak çıkarır; API anahtarlarını asla okumaz veya yazmaz. Varsayılan önizleme (`--source <FILE>`) hiçbir şey yazmaz; `--apply` ve `--restore` proxy'nin durdurulmuş olmasını (`ocx stop`) gerektirir. Kayıt seçmek için `--provider <id>`, yerel/özel adresler için `--allow-private-network` kullanın ve ardından `ocx account add-key <provider>` ile anahtar ekleyin. `--restore` yalnızca düzenlenmemiş ve yönlendirmede başvurulmayan girdileri kaldırır.
 
 ## Kimlik Doğrulama
 

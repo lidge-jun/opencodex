@@ -24,6 +24,7 @@ description: 제공자 설정, 자격 증명, 할당량, 모델 카탈로그 명
 | `quota` | `--refresh`, `--json` | 제공자 할당량 보고서를 읽습니다. |
 | `presets` | `--json` | 대시보드 제공자 프리셋을 나열합니다. |
 | `account-mode` | `pool`, `direct`, `--json` | Codex 계정 라우팅을 풀 기반으로 할지 직접 연결로 할지 선택합니다. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | CC-Switch SQLite(`cc-switch.db`) 또는 레거시 JSON 파일에서 키 없는 프로바이더 항목을 미리보기·선택 적용·복원합니다. |
 
 기본 `add`, `remove`, `set-default`는 로컬 설정을 바꿉니다. 실행 중인 프록시를 바꾸려면 `--live`를 지정하세요. 실시간 삭제에는 `--yes`도 필요합니다. `--sync --json`도 저장 후 동기화를 실제로 시도하며, 실패하면 저장은 유지한 채 0이 아닌 코드와 `needsSync: true`를 반환합니다. `--live`와 `--sync`는 함께 쓸 수 없습니다. pacing·snapshot/apply 절차는 [영문 명령 안내](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)를 참고하세요.
 
@@ -56,6 +57,10 @@ ocx models live --provider ark --json
 
 비밀에 해당하는 값은 `--api-key`나 OAuth 로그인을 쓰세요.
 :::
+
+### 키 없는 CC-Switch 프로바이더 가져오기
+
+`ocx provider import-cc-switch`는 CC-Switch SQLite(`~/.cc-switch/cc-switch.db`)나 JSON 파일에서 비비밀 메타데이터(ID, 이름, 기본 URL, 프로토콜 어댑터, 기본 모델)만 읽기 전용으로 추출하며 API 키나 토큰은 읽거나 쓰지 않습니다. 기본 미리보기(`--source <FILE>`)는 아무것도 쓰지 않으며, `--apply`와 `--restore`는 프록시가 멈춘 상태(`ocx stop`)여야 합니다. `--provider <id>`로 대상을 고르고 로컬/사설 주소에는 `--allow-private-network`를 추가한 뒤, `ocx account add-key <provider>`로 키를 등록하세요. `--restore`는 수정되거나 라우팅에서 참조되지 않은 항목만 제거합니다.
 
 ## 인증
 

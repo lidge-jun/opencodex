@@ -25,6 +25,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | `quota` | `--refresh`, `--json` | Lire les rapports sur les quotas des fournisseurs. |
 | `presets` | `--json` | Répertoriez les préréglages du fournisseur de tableau de bord. |
 | `account-mode` | `pool`, `direct`, `--json` | Sélectionnez le routage de compte mutualisé ou direct Codex. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Prévisualiser, appliquer sélectivement ou restaurer des entrées de fournisseurs sans clé depuis une base SQLite (`cc-switch.db`) ou un fichier JSON CC-Switch. |
 
 Par défaut, `add`, `remove` et `set-default` modifient la configuration locale. Ajoutez `--live` pour modifier le proxy actif, et `--yes` pour une suppression en direct. `--sync --json` tente aussi la synchronisation après enregistrement ; en cas d’échec, la sauvegarde reste acquise, avec un code non nul et `needsSync: true`. `--live` et `--sync` sont incompatibles. Voir le [guide anglais](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) pour pacing et snapshot/apply.
 
@@ -59,6 +60,10 @@ la frontière est à vous de la respecter. Deux raisons pour lesquelles c'est im
 
 Utilisez `--api-key` ou un identifiant OAuth pour tout ce qui est secret.
 :::
+
+### Import de fournisseurs CC-Switch sans clé
+
+`ocx provider import-cc-switch` lit uniquement les métadonnées non secrètes (identifiants, noms, URL de base, dialectes et modèles par défaut) depuis un fichier SQLite (`~/.cc-switch/cc-switch.db`) ou JSON CC-Switch, sans lire ni écrire de clés API. L’aperçu (par défaut avec `--source <FILE>`) n’écrit rien. `--apply` et `--restore` exigent que le proxy soit arrêté (`ocx stop`) ; ajoutez `--provider <id>` pour filtrer, `--allow-private-network` pour autoriser une adresse locale/privée, puis configurez les clés via `ocx account add-key <provider>`. `--restore` ne supprime que les entrées importées non modifiées et non référencées.
 
 ## Authentification
 

@@ -32,6 +32,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 | `quota` | `--refresh`, `--json` | 读取提供方配额报告。 |
 | `presets` | `--json` | 列出仪表盘提供方预设。 |
 | `account-mode` | `pool`, `direct`, `--json` | 选择 Codex 账号的池化或直连路由。 |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | 从 CC-Switch SQLite（`cc-switch.db`）或旧版 JSON 文件预览、选择性应用或恢复无密钥提供商条目。 |
 
 默认的 `add`、`remove` 和 `set-default` 修改本地配置。修改运行中的代理需加 `--live`，在线删除还需 `--yes`。`--sync --json` 同样会在保存后尝试同步；失败时保留保存结果，以非零状态退出，并返回 `needsSync: true`。`--live` 不能与 `--sync` 同用。pacing 和 snapshot/apply 操作见[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
@@ -61,6 +62,10 @@ ocx models live --provider ark --json
 
 任何机密内容请使用 `--api-key` 或 OAuth 登录。
 :::
+
+### 无密钥导入 CC-Switch 提供商
+
+`ocx provider import-cc-switch` 仅从 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 文件只读提取非机密元数据（ID、名称、base URL、协议适配器与默认模型），绝不读取、解码或写入 API 密钥。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`，导入后再用 `ocx account add-key <provider>` 添加密钥。`--restore` 仅移除未修改且未被路由引用的导入条目。
 
 ## 认证
 
