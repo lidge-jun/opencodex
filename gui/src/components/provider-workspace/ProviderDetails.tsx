@@ -141,7 +141,7 @@ export default function ProviderDetails({
     : authSurface === "api-keys" ? keys?.find(entry => entry.active) : undefined;
   // Global counter from Providers — only honor it for the reveal target.
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
-  const usesCodexPool = isAccountProvider(item.name, item) || item.authMode === "forward";
+  const usesCodexPool = isAccountProvider(item.name, item);
   const connectionIdentity = JSON.stringify([
     usesCodexPool ? (codexController?.activeId ?? "") : "",
     usesCodexPool

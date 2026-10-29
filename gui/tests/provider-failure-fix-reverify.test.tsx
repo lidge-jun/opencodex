@@ -387,7 +387,26 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBeNull();
 
+    // A noncanonical custom forward provider does not use the Codex account pool and must also stay unaffected:
+    const customForwardItem: WorkspaceItem = {
+      ...baseItem,
+      name: "custom-forward",
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://custom-forward.example.test/v1",
+    };
+    await mountWithPools(customForwardItem, [], baseCodex);
+    await selectModel("model-a");
+    await runAndConfirm();
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
+    await mountWithPools(customForwardItem, [], [baseCodex[0]!, { ...baseCodex[1]!, paused: true }]);
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBeNull();
+
     // OAuth reauth refreshes expiresAt (or adds a non-active account) while active ID stays "acct-1":
+    await mountWithPools(baseItem, [{ id: "acct-1", active: true, expiresAt: 1000 }], baseCodex);
+    await selectModel("model-a");
+    await runAndConfirm();
     await mountWithPools(baseItem, [{ id: "acct-1", active: true, expiresAt: 2000 }], baseCodex);
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBe("true");
 
