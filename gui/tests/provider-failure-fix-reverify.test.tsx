@@ -23,7 +23,7 @@ let previous: Record<string, unknown>;
 let win: Window;
 let root: Root | undefined;
 let host: HTMLElement;
-let respondCompletion: () => Promise<Response>;
+let respondCompletion: (init?: RequestInit) => Promise<Response>;
 const originalFetch = globalThis.fetch;
 
 const baseItem: WorkspaceItem = {
@@ -85,9 +85,9 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.append(host);
   respondCompletion = async () => Response.json(completionOk);
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes("/api/providers/test-completion")) return respondCompletion();
+    if (url.includes("/api/providers/test-completion")) return respondCompletion(init);
     if (url.includes("/api/provider-presets")) return Response.json({ providers: [] });
     if (url.includes("/api/provider-request-pacing")) return Response.json({ enabled: false, queued: 0, nextSlotInMs: 0 });
     if (url.includes("/api/protocols")) return Response.json({ protocols: [] });
@@ -253,6 +253,21 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     expect(host.querySelector('[data-failure-recovery="auth"]')).not.toBeNull();
     expect(host.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Model to test"]')?.textContent).toContain("model-a");
 
+    // Saving a note-only patch on Overview does NOT clear the failure or trigger re-verification:
+    await act(async () => { host.querySelector<HTMLButtonElement>(".pws-notes-display")!.click(); });
+    const noteBox = host.querySelector<HTMLTextAreaElement>(".pws-notes-textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(noteBox, "operator note");
+      noteBox.dispatchEvent(new win.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      noteBox.dispatchEvent(new win.FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+      await Promise.resolve();
+    });
+    expect(savedPatches).toBe(1);
+    expect(host.querySelector('[data-failure-recovery="auth"]')).not.toBeNull();
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBeNull();
+
     // Now hop to Settings and save a change:
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); await new Promise(r => win.setTimeout(r, 15)); });
     const baseUrlInput = Array.from(host.querySelectorAll<HTMLInputElement>(".pws-detail-panel input"))
@@ -263,7 +278,7 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     });
     const saveBtn = host.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
     await act(async () => { saveBtn.click(); await Promise.resolve(); });
-    expect(savedPatches).toBe(1);
+    expect(savedPatches).toBe(2);
     await mountDetails();
 
     // Return to Overview: stale failure result is cleared, model-a is still selected, and re-verify is pending!
@@ -289,6 +304,7 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
 
   test("adding an API key through ProviderAuthPanel advances probe revision even when active key ID is unchanged", async () => {
     let addedKeys = 0;
+    let cancelledRemovals = 0;
     respondCompletion = async () => Response.json(failedResult("http_status", 401));
     await render(
       <ProviderDetails
@@ -312,7 +328,7 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
           onRemoveAccount: () => {},
           onAddApiKey: async () => { addedKeys++; return true; },
           onSwitchApiKey: () => {},
-          onRemoveApiKey: () => {},
+          onRemoveApiKey: async () => { cancelledRemovals++; },
           onEditAlias: () => {},
         }}
       />,
@@ -322,7 +338,17 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     await runAndConfirm();
     expect(host.querySelector('[data-failure-recovery="auth"]')).not.toBeNull();
 
-    // Click Update credentials -> switches to API Keys tab -> add a key (active key ID remains k1):
+    // Click Update credentials -> switches to API Keys tab. A cancelled remove (void return, keys unchanged) preserves the failure:
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-recovery-action="fix-auth"]')!.click(); });
+    const removeKeyBtn = host.querySelector<HTMLButtonElement>('.pwi-auth-acct-actions button[aria-label*="Remove"], .pwi-auth-acct button[title*="Remove"]')
+      ?? Array.from(host.querySelectorAll<HTMLButtonElement>(".pws-detail-panel li button")).at(-1)!;
+    await act(async () => { removeKeyBtn.click(); await Promise.resolve(); });
+    expect(cancelledRemovals).toBe(1);
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
+    expect(host.querySelector('[data-failure-recovery="auth"]')).not.toBeNull();
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBeNull();
+
+    // Now switch back to API Keys and add a confirmed key (onAddApiKey returns true while active key ID remains k1):
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-recovery-action="fix-auth"]')!.click(); });
     const addKeyToggle = Array.from(host.querySelectorAll<HTMLButtonElement>(".pws-detail-panel button"))
       .find(b => b.textContent?.includes("Add API key"))!;
@@ -470,7 +496,11 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
 
   test("leaving Overview during an in-flight probe aborts the request and clears testing status", async () => {
     let release!: (res: Response) => void;
-    respondCompletion = () => new Promise<Response>(resolve => { release = resolve; });
+    let capturedSignal: AbortSignal | null | undefined;
+    respondCompletion = (init?: RequestInit) => {
+      capturedSignal = init?.signal;
+      return new Promise<Response>(resolve => { release = resolve; });
+    };
     await render(
       <ProviderDetails
         item={baseItem}
@@ -488,9 +518,11 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     await selectModel("model-a");
     await runAndConfirm();
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("testing");
+    expect(capturedSignal?.aborted).toBe(false);
 
     // Switch to Settings while the probe is in flight, then resolve the old request and return to Overview:
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
+    expect(capturedSignal?.aborted).toBe(true);
     await act(async () => { release(Response.json(completionOk)); });
     await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("untested");

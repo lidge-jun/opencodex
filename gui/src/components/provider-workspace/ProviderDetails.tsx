@@ -179,7 +179,8 @@ export default function ProviderDetails({
     () => onUpdateProvider
       ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
           const result = await onUpdateProvider(name, patch);
-          if (result.ok) setMutationRevision(revision => revision + 1);
+          const affectsConnection = Object.keys(patch).some(key => key !== "note" && key !== "setDefault");
+          if (result.ok && affectsConnection) setMutationRevision(revision => revision + 1);
           return result;
         }
       : undefined,
@@ -188,44 +189,16 @@ export default function ProviderDetails({
   const wrappedAuthHandlers = useMemo<ProviderAuthHandlers | undefined>(() => {
     if (!authHandlers) return undefined;
     const bump = () => setMutationRevision(revision => revision + 1);
+    // Void-returning handlers (such as removeApiKey or login launchers) resolve normally when
+    // confirmation is cancelled or a dialog opens; confirmed roster changes already flow through
+    // accounts/keys/oauth in connectionIdentity above. Only explicit boolean/outcome receipts
+    // bump mutationRevision directly.
     return {
       ...authHandlers,
-      async onLogin(provider, addAccount) {
-        await authHandlers.onLogin(provider, addAccount);
-        bump();
-      },
-      async onReauth(provider, accountId) {
-        await authHandlers.onReauth(provider, accountId);
-        bump();
-      },
       async onAddApiKey(provider, key) {
         const ok = await authHandlers.onAddApiKey(provider, key);
         if (ok) bump();
         return ok;
-      },
-      async onSwitchApiKey(provider, entry) {
-        await authHandlers.onSwitchApiKey(provider, entry);
-        bump();
-      },
-      async onRemoveApiKey(provider, entry) {
-        await authHandlers.onRemoveApiKey(provider, entry);
-        bump();
-      },
-      async onSwitchAccount(provider, account) {
-        await authHandlers.onSwitchAccount(provider, account);
-        bump();
-      },
-      async onPauseAccount(provider, account, paused) {
-        await authHandlers.onPauseAccount(provider, account, paused);
-        bump();
-      },
-      async onRemoveAccount(provider, account) {
-        await authHandlers.onRemoveAccount(provider, account);
-        bump();
-      },
-      async onLogout(provider) {
-        await authHandlers.onLogout(provider);
-        bump();
       },
       ...(authHandlers.onNativeLoginSettled
         ? {
