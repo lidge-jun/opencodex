@@ -102,7 +102,8 @@ export default function ProviderOverview({
   }, [connectionProbeKey]);
 
   const testConnection = useCallback(async () => {
-    if (!apiBase) return;
+    // "" is the same-origin dashboard, a real server; only an omitted base has nothing to probe.
+    if (apiBase === undefined) return;
     connectionAbortRef.current?.controller.abort();
     const controller = new AbortController();
     connectionAbortRef.current = { key: connectionProbeKey, controller };
@@ -176,7 +177,7 @@ export default function ProviderOverview({
             <dd>{item.defaultModel ?? <span className="muted">—</span>}</dd>
           </div>
         </dl>
-        {apiBase && (
+        {apiBase !== undefined && (
           <div className="row" style={{ marginTop: 12, alignItems: "center" }}>
             <button
               type="button"
@@ -197,7 +198,7 @@ export default function ProviderOverview({
             )}
           </div>
         )}
-        {apiBase && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
+        {apiBase !== undefined && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
           models={[...new Set([...(item.models ?? []), ...availableModels, ...(item.defaultModel ? [item.defaultModel] : [])])]} />}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>

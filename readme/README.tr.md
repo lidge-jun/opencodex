@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop ve Grok Build için evrensel sağlayıcı proxy'si" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build ve diğerleri için tek bir yerel ağ geçidi" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop ve Grok Build için evrensel sağlayıcı proxy'si</b><br>
-İki komut, ve hepsi işaret ettiğiniz LLM ile çalışır.</p>
+<h3 align="center">AI kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçidi.</h3>
+<p align="center"><b>Seçtiğiniz modelleri Codex, Claude Code, Claude Desktop ve Grok Build ile kullanın;<br>OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code ve diğerlerini yönetilen yapılandırmalarla bağlayın.</b><br>
+<a href="https://opencodex.me/tr/reference/client-support/">Desteklenen tüm araçları görün →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X üzerinde @claudeebum hesabını takip et"></a>
@@ -80,12 +80,7 @@ Sol oturumu yürütüyor ve bir Kimi K3 alt ajanını çağırıyor.
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/tr/"><b>Tüm dokümantasyon →</b></a>
 </p>
 
-opencodex, Codex'in Responses API'sini sağlayıcınızın konuştuğu protokole çeviren hafif bir yerel
-proxy'dir — akış, araç çağrıları, akıl yürütme belirteçleri ve görseller, iki yönde de. Claude, Gemini,
-Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ya da başka herhangi bir LLM'i Codex, Claude Code, Claude
-Desktop ve Grok Build ile kullanın. Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da
-yönetebilir: hesapları ekleyin, kotalarını kontrol panelinden tazeleyin ve yeni oturumlar en az
-kullanılan sağlıklı hesaba kendiliğinden gitsin; mevcut dizilerse onları başlatan hesaba bağlı kalsın.
+opencodex, kodlama araçlarınızla model sağlayıcılarınız arasında çalışan hafif bir yerel ağ geçididir. Responses, Chat Completions ve Anthropic Messages API isteklerini kabul edip sağlayıcınızın protokolüne çevirir; istemci, model ve sağlayıcı desteklediğinde akış, araç çağrıları, akıl yürütme ve görselleri aktarır. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ve diğer sağlayıcıları Codex, Claude Code, Claude Desktop, Grok Build ve [istemci desteği sayfasındaki](https://opencodex.me/tr/reference/client-support/) araçlarla kullanın. Codex kimlik doğrulaması için bir **ChatGPT hesap havuzunu** da yönetebilir: hesap ekleyip kotalarını panelde yenileyin; yeni oturumlar kullanımı en düşük sağlıklı hesaba otomatik yönlendirilirken mevcut diziler başladıkları hesaba bağlı kalır.
 
 ## Hızlı başlangıç
 
@@ -101,6 +96,21 @@ Arka planda çalıştırmak için `ocx service` kullanın.
 **http://localhost:10100** adresini açın ve her şeyi web kontrol panelinden yapılandırın: sağlayıcı
 ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
 yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
+
+### Aracınızı bağlayın
+
+Zaten kullandığınız aracı bağlayın:
+
+| Araç | Bağlantı yöntemi |
+|---|---|
+| Codex | Panelin **Connect** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
+| Claude Code | `claude` CLI kuruluysa `ocx claude` çalıştırın. Gerekirse proxy’yi başlatır ve Claude Code’u onun üzerinden açar. |
+| Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. Geçişten sonra Claude Desktop’tan tamamen çıkıp yeniden açın. |
+| Grok Build | Yerel bir dinleyicide Grok entegrasyonu etkinse ve `~/.grok` mevcutsa, `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. Sağlayıcı ekledikten sonra listeyi yenilemek için proxy’yi yeniden başlatın (veya Codex otomatik başlatma etkinse `ocx ensure` çalıştırın). |
+| Yönetilen entegrasyonu olan araçlar | Panelin **Connect** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
+| Diğer tüm araçlar | Özel OpenAI uyumlu temel URL’yi `http://localhost:10100/v1` veya Anthropic temel URL’sini `http://localhost:10100` olarak ayarlayın. |
+
+[İstemci desteği sayfası](https://opencodex.me/tr/reference/client-support/), her aracın bağlantı yolunu ve kullandığı protokolü listeler.
 
 <details>
 <summary><b>Masaüstü uygulaması (beta)</b></summary>

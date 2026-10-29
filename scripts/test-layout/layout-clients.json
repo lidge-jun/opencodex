@@ -10,6 +10,7 @@
   "cli-export-model-names.test.ts": "cli",
   "management-export-model-names.test.ts": "server",
   "claude-native-fast-1m-ingress.test.ts": "claude-integration",
+  "messages-native-clean-eof.test.ts": "claude-integration",
   "stop-restoration-preflight.test.ts": "service",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
   "claude-config-root-writer-barrier.test.ts": "claude-integration",
