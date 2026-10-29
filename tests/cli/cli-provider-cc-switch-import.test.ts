@@ -81,8 +81,15 @@ describe("ocx provider import-cc-switch CLI", () => {
     expect(output.join("\n")).toContain("Keyless provider entries saved");
 
     output.length = 0;
+    const jsonStdout: string[] = [];
+    const jsonStderr: string[] = [];
+    logSpy.mockImplementation(val => { output.push(String(val)); jsonStdout.push(String(val)); });
+    errorSpy.mockImplementation(val => { output.push(String(val)); jsonStderr.push(String(val)); });
     expect(await cmdProviderCcSwitchImport(["--source", "cc-switch.db", "--apply", "--json"], makeDeps(calls))).toBe(0);
-    expect(JSON.parse(output[0]!)).toMatchObject({ mode: "apply", imported: 1, trustNotice: expect.stringContaining("trusted CC-Switch source") });
+    expect(jsonStderr.join("\n")).toContain("id=acme (source=acme, claude -> anthropic) model=claude-sonnet-4-6 url=https://api.acme.example");
+    expect(JSON.parse(jsonStdout[0]!)).toMatchObject({ mode: "apply", imported: 1, trustNotice: expect.stringContaining("trusted CC-Switch source") });
+    logSpy.mockImplementation(val => { output.push(String(val)); });
+    errorSpy.mockImplementation(val => { output.push(String(val)); });
 
     output.length = 0;
     expect(await cmdProviderCcSwitchImport(["--source", "cc-switch.db", "--apply"], makeDeps(calls, 0, 0))).toBe(0);

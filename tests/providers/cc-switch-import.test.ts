@@ -848,18 +848,47 @@ describe("CC-Switch keyless provider import", () => {
       expect(JSON.stringify(jsonPreview)).not.toContain(WORD_CANARY);
 
       // Direct --apply without prior preview must print imported id, model, and URL BEFORE writing config.json!
+      let callbackSawNoJournalOrConfig = false;
+      const callbackPrinted = await runCcSwitchProviderImport({
+        mode: "apply",
+        sourcePath: sqlPath,
+        onBeforeApplyWrite: providers => {
+          expect(existsSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME))).toBe(false);
+          expect(loadConfig().providers["dashscope-compat"]).toBeUndefined();
+          expect(providers).toEqual([{
+            name: "dashscope-compat",
+            sourceId: "dashscope-compat",
+            appType: "openai",
+            adapter: "openai-chat",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            defaultModel: "qwen3-coder-plus",
+          }]);
+          callbackSawNoJournalOrConfig = true;
+        },
+      });
+      expect(callbackSawNoJournalOrConfig).toBe(true);
+      expect(callbackPrinted.mode).toBe("apply");
+      await runCcSwitchProviderImport({ mode: "restore" });
+
+      // Also verify CLI --apply --json prints pre-write summary to stderr BEFORE writing config.json, while keeping stdout pure JSON!
+      const stdoutOnly: string[] = [];
+      const stderrOnly: string[] = [];
+      logSpy.mockImplementation(v => { cliLines.push(String(v)); stdoutOnly.push(String(v)); });
+      errSpy.mockImplementation(v => { cliLines.push(String(v)); stderrOnly.push(String(v)); });
       setPersistedConfigMutationBeforeCommitForTests(() => {
         const currentOnDisk = loadConfig();
         expect(currentOnDisk.providers["dashscope-compat"]).toBeUndefined();
-        const printedSoFar = cliLines.join("\n");
+        expect(stdoutOnly).toHaveLength(0);
+        const printedSoFar = stderrOnly.join("\n");
         expect(printedSoFar).toContain("id=dashscope-compat");
         expect(printedSoFar).toContain("model=qwen3-coder-plus");
         expect(printedSoFar).toContain("url=https://dashscope.aliyuncs.com/compatible-mode/v1");
         printedBeforeDiskCommit = true;
       });
-      const exitCode = await cmdProviderCcSwitchImport(["--source", sqlPath, "--apply"]);
+      const exitCode = await cmdProviderCcSwitchImport(["--source", sqlPath, "--apply", "--json"]);
       expect(exitCode).toBe(0);
       expect(printedBeforeDiskCommit).toBe(true);
+      expect(JSON.parse(stdoutOnly[0]!)).toMatchObject({ mode: "apply", imported: 1, invalidReasons: { invalid_base_url: 6 } });
     } finally {
       logSpy.mockRestore();
       errSpy.mockRestore();
@@ -873,7 +902,6 @@ describe("CC-Switch keyless provider import", () => {
       expect(s).not.toContain(WORD_CANARY);
     }
     expect(cliLines.join("\n")).not.toContain(WORD_CANARY);
-    expect(cliLines.join("\n")).toContain("invalid_base_url=6");
     expect(readFileSync(getConfigPath(), "utf8")).not.toContain(WORD_CANARY);
     expect(readFileSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME), "utf8")).not.toContain(WORD_CANARY);
   });

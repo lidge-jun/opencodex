@@ -102,13 +102,14 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       sourcePath,
       selectedProviders,
       allowPrivateNetwork,
-      ...(apply && !wantsJson
+      ...(apply
         ? {
             onBeforeApplyWrite: providers => {
+              const emit = wantsJson ? console.error : console.log;
               printedBeforeWrite = true;
-              console.log("Importing keyless provider entries (never reads secret fields; verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
+              emit("Importing keyless provider entries (reads allowlisted non-secret metadata fields only; never reads secret fields — verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
               for (const p of providers) {
-                console.log(formatCandidateLine(p));
+                emit(formatCandidateLine(p));
               }
             },
           }
@@ -153,7 +154,7 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       console.log(`CC-Switch (${result.mode}): ${result.discovered} discovered, ${result.eligible} eligible, ${result.imported} imported, ${result.conflicts} conflicts, ${result.invalid} invalid.`);
       if (!printedBeforeWrite) {
         if (apply && result.imported > 0) {
-          console.log("Importing keyless provider entries (never reads secret fields; verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
+          console.log("Importing keyless provider entries (reads allowlisted non-secret metadata fields only; never reads secret fields — verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
         }
         for (const p of result.providers) {
           console.log(formatCandidateLine(p));
@@ -167,7 +168,7 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
         ? (result.imported > 0
           ? "Keyless provider entries saved. Only add credentials to endpoints you trust: start the proxy ('ocx start') and run 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo while stopped with 'ocx provider import-cc-switch --restore'."
           : "No eligible non-conflicting providers were imported; configuration and journal are unchanged.")
-        : "Preview only (reads non-secret metadata fields only; never reads secret fields). Verify IDs, models, and destination URLs from a trusted source and stop the proxy before repeating with --apply.");
+        : "Preview only (reads allowlisted non-secret metadata fields only; never reads secret fields). Verify IDs, models, and destination URLs from a trusted source and stop the proxy before repeating with --apply.");
     }
     return result.invalid > 0 && result.eligible === 0 ? 1 : 0;
   } catch (err) {
