@@ -154,6 +154,8 @@ timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
 
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution.
+
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
 `refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
