@@ -68,7 +68,12 @@ for (const raw of [
   ':'.repeat(MAX_CLIENT_SSE_FRAME_BYTES + 1),
 ]) {
   test(`native combo preflight commits opaque or capped bytes (${raw.length} bytes)`, async () => {
-    const response = new Response(raw + `event: error\ndata: ${refusal}\n\n`, {
+    // The frame-count cap is per upstream chunk. A Response string body may split itself;
+    // enqueue one explicit byte chunk so the cap, rather than Bun's chunking, is the oracle.
+    const bytes = new TextEncoder().encode(raw + `event: error\ndata: ${refusal}\n\n`);
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(bytes); controller.close(); },
+    }), {
       headers: { "content-type": "text/event-stream" },
     });
     const result = await preflightNativeMessagesResponse(response,
