@@ -238,6 +238,17 @@ describe("first-response progression states on ProviderOverview", () => {
     await render(<ProviderOverview item={baseItem} apiBase="" modelRows={[pendingRow]} modelRowsReady />);
     expect(stepState("models")).toBe("pending");
 
+    // A settled snapshot whose rows are no longer pending wins over a stale config-level pending flag.
+    await render(
+      <ProviderOverview
+        item={{ ...baseItem, initialModelSelection: { status: "pending" } }}
+        apiBase=""
+        modelRows={[enabledRow]}
+        modelRowsReady
+      />,
+    );
+    expect(stepState("models")).toBe("ready");
+
     await render(<ProviderOverview item={baseItem} apiBase="" modelRows={[disabledRow]} modelRowsReady />);
     expect(stepState("models")).toBe("all-off");
 
@@ -274,6 +285,13 @@ describe("first-response progression states on ProviderOverview", () => {
     await act(async () => { release(Response.json(completionOk)); });
     expect(stepState("probe")).toBe("ok");
     expect(stepText("probe")).toContain("model-a");
+
+    // Re-selecting the same model or canceling a re-run confirmation preserves the verified "ok" status.
+    await selectProbeModel("model-a");
+    expect(stepState("probe")).toBe("ok");
+    await act(async () => { runProbeButton().click(); });
+    await act(async () => { dismissActionDialog(document); });
+    expect(stepState("probe")).toBe("ok");
 
     // Removing model-a and re-adding it must not resurrect the old "ok" state.
     await render(<ProviderOverview item={{ ...baseItem, models: [], defaultModel: undefined }} apiBase="" availableModels={["model-b"]} />);

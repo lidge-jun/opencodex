@@ -42,6 +42,7 @@ export default function ProviderCompletionTest({ apiBase, provider, models, onSt
         <Select label={t("pws.completion.model")} value={selectedModel}
           options={[{ value: "", label: t("pws.completion.choose") }, ...models.map(value => ({ value, label: value }))]}
           onChange={next => {
+            if (next === selectedModel) return;
             setModel(next);
             onStatusChange?.({ status: "untested", model: next });
           }} />
@@ -73,8 +74,6 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
     const controller = new AbortController();
     flight.current = controller;
     setBusy(true);
-    setResult(null);
-    setError(null);
     const isCurrent = () => mounted.current && !controller.signal.aborted && flight.current === controller;
     try {
       const confirmed = await confirmAction({
@@ -84,10 +83,9 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
         locale,
       });
       if (!isCurrent()) return;
-      if (!confirmed) {
-        onStatusChange?.({ status: "untested", model });
-        return;
-      }
+      if (!confirmed) return;
+      setResult(null);
+      setError(null);
       onStatusChange?.({ status: "testing", model });
       // The dashboard's installed fetch wrapper supplies session and CSRF headers, as for the connection test.
       const response = await fetch(`${apiBase}/api/providers/test-completion?name=${encodeURIComponent(provider)}`, {

@@ -220,12 +220,17 @@ export default function ProviderOverview({
   const enabledRows = providerRows.filter(row =>
     modelVisible({ [item.name]: selectedModels ?? [] }, item.name, row.id, row.native === true, row.disabled),
   );
-  const isPending = item.initialModelSelection?.status === "pending"
-    || providerRows.some(row => row.initialSelectionPending === true);
+  const snapshotReady = modelRows !== undefined && modelRows !== null && modelRowsReady;
+  // Once the model snapshot has settled, its rows are authoritative for whether initial
+  // selection is still pending: /api/config is not re-read when discovery finishes without an
+  // open registration notice, so a stale item.initialModelSelection.status === "pending" must
+  // not override a ready snapshot whose rows have already cleared initialSelectionPending.
+  const isPending = snapshotReady
+    ? providerRows.some(row => row.initialSelectionPending === true)
+    : item.initialModelSelection?.status === "pending";
   const discoveryFailure = item.liveModels !== false && item.discovery?.status === "failed"
     ? item.discovery
     : undefined;
-  const snapshotReady = modelRows !== undefined && modelRows !== null && modelRowsReady;
   const modelsStepState = modelsLoading
     ? "loading"
     : modelsLoadFailed
