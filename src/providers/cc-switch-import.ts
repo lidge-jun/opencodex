@@ -551,6 +551,18 @@ WITH RECURSIVE
         WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
           CASE
             WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
+              AND instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') > 18
+              AND (
+                (
+                  substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) IN ('"', '''')
+                  AND substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), -1, 1) = substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)
+                  AND instr(substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 2, length(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18))) - 2), substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)) = 0
+                )
+                OR (
+                  substr(trim(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) NOT IN ('"', '''')
+                  AND instr(substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 18), '.') = 0
+                )
+              )
               THEN 'mp'
             ELSE 'other'
           END
@@ -567,6 +579,18 @@ WITH RECURSIVE
         WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
           CASE
             WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
+              AND instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') > 18
+              AND (
+                (
+                  substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) IN ('"', '''')
+                  AND substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), -1, 1) = substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)
+                  AND instr(substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 2, length(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18))) - 2), substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1)) = 0
+                )
+                OR (
+                  substr(trim(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18)), 1, 1) NOT IN ('"', '''')
+                  AND instr(substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 18, instr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 18), '.') = 0
+                )
+              )
               THEN 'mp'
             ELSE 'other'
           END
@@ -1062,52 +1086,52 @@ function readSourceRows(sourcePath: string): RawExtractedRow[] {
   let fd: number | undefined;
   let isSqlite = false;
   let size = 0;
+  const header = Buffer.alloc(16);
   let jsonBuf: Buffer | undefined;
   try {
-    fd = openSync(resolved, "r");
-    const st = statSync(resolved);
-    if (!st.isFile()) throw new CcSwitchImportError("CC-Switch source path must be a regular file.");
-    size = st.size;
-    const header = Buffer.alloc(16);
-    const n = readSync(fd, header, 0, 16, 0);
-    if (n === 16 && header.subarray(0, 15).toString("ascii") === SQLITE_MAGIC_PREFIX && header[15] === 0) {
-      isSqlite = true;
-    } else if (/\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
-      throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
-    } else {
-      if (size === 0 || size > MAX_JSON_BYTES) {
-        throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
+    try {
+      fd = openSync(resolved, "r");
+      const st = statSync(resolved);
+      if (!st.isFile()) throw new CcSwitchImportError("CC-Switch source path must be a regular file.");
+      size = st.size;
+      const n = readSync(fd, header, 0, 16, 0);
+      if (n === 16 && header.subarray(0, 15).toString("ascii") === SQLITE_MAGIC_PREFIX && header[15] === 0) {
+        isSqlite = true;
+      } else if (/\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
+        throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
+      } else {
+        if (size === 0 || size > MAX_JSON_BYTES) {
+          throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
+        }
+        jsonBuf = Buffer.allocUnsafe(size);
+        let offset = 0;
+        while (offset < size) {
+          const got = readSync(fd, jsonBuf, offset, size - offset, offset);
+          if (got <= 0) break;
+          offset += got;
+        }
+        if (offset !== size) {
+          throw new CcSwitchImportError("CC-Switch JSON source changed while reading.");
+        }
       }
-      jsonBuf = Buffer.allocUnsafe(size);
-      let offset = 0;
-      while (offset < size) {
-        const got = readSync(fd, jsonBuf, offset, size - offset, offset);
-        if (got <= 0) break;
-        offset += got;
-      }
-      if (offset !== size) {
-        jsonBuf.fill(0);
-        throw new CcSwitchImportError("CC-Switch JSON source changed while reading.");
+    } catch (error) {
+      if (error instanceof CcSwitchImportError) throw error;
+      throw new CcSwitchImportError("CC-Switch source file could not be opened.");
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch { /* ignore */ }
       }
     }
-  } catch (error) {
-    if (error instanceof CcSwitchImportError) throw error;
-    throw new CcSwitchImportError("CC-Switch source file could not be opened.");
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* ignore */ }
-    }
-  }
 
-  if (isSqlite) {
-    if (size === 0 || size > MAX_SQLITE_BYTES) {
-      throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
+    if (isSqlite) {
+      if (size === 0 || size > MAX_SQLITE_BYTES) {
+        throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
+      }
+      return readSqliteRows(resolved);
     }
-    return readSqliteRows(resolved);
-  }
-  try {
     return scanCcSwitchJsonBytes(jsonBuf!);
   } finally {
+    header.fill(0);
     jsonBuf?.fill(0);
   }
 }

@@ -118,7 +118,7 @@ describe("CC-Switch keyless provider import", () => {
         name: "Acme Codex",
         settings_config: JSON.stringify({
           auth: { OPENAI_API_KEY: CANARY_SECRET },
-          config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n`,
+          config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n[model_providers.acme.extra]\nbase_url = "${CANARY_SECRET}"\n[model_providers."acme".extra]\nwire_api = "${CANARY_SECRET}"\n`,
         }),
         sort_index: 2,
       },
