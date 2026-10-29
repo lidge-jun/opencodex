@@ -359,7 +359,7 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
-  /** True when malformed attempts were dropped while reading the persisted row. */
+  /** True when persistence normalization drops any attempt. */
   attemptNormalizationDropped?: boolean;
   /**
    * Upstream spend for the whole logical request: sends aggregated across attempts and combo
@@ -627,15 +627,13 @@ export function addRequestLog(entry: RequestLogEntry) {
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const attempts = normalizedAttempts(entry.attempts);
   const attemptsDropped = Array.isArray(entry.attempts) && attempts.length < entry.attempts.length;
-  const attemptsChanged = Array.isArray(entry.attempts) && !Bun.deepEquals(attempts, entry.attempts);
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
     && servedModel === entry.servedModel
     && entry.claudeCompatibility === undefined
     && entry.jevDecision === undefined
-    && !attemptsChanged
+    && !attemptsDropped
     ? entry
     : { ...entry, ...(entry.attemptNormalizationDropped === true || attemptsDropped ? { attemptNormalizationDropped: true } : {}),
-      ...(attemptsChanged ? { attempts } : {}),
       ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
   if (!servedModel && retained !== entry) {

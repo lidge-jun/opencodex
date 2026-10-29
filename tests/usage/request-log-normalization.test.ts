@@ -16,10 +16,15 @@ describe("request log metadata", () => {
     process.env.OPENCODEX_HOME = home;
     clearRequestLogsForTests();
     try {
-      const entry = log({ attempts: [{ ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
-        status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" }] });
+      const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
+        status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" as const,
+        liveOnlyMetadata: "retained" };
+      const attempts = [attempt];
+      const entry = log({ attempts });
       addRequestLog(entry);
       expect(getRequestLogEntries()[0]).toBe(entry);
+      expect(getRequestLogEntries()[0]!.attempts).toBe(attempts);
+      expect(getRequestLogEntries()[0]!.attempts![0]).toBe(attempt);
     } finally {
       clearRequestLogsForTests();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -58,28 +63,36 @@ describe("request log metadata", () => {
     }
   });
 
-  for (const mixed of [false, true]) test(`direct ingress normalizes ${mixed ? "mixed" : "single malformed"} attempts before live retention`, () => {
+  for (const mixed of [false, true]) test(`direct ingress marks ${mixed ? "mixed" : "single partial"} attempts without changing the live roster`, () => {
     const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
-      status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" } as const;
+      status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported",
+      liveOnlyMetadata: "retained" } as const;
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-lossy-normalization-log-"));
     process.env.OPENCODEX_HOME = home;
     clearRequestLogsForTests();
     resetUsageReadCacheForTests();
     try {
-      const malformed = { ...attempt, ordinal: 2, adapter: "" };
+      const partial = { ordinal: 2, provider: "openai", model: "model", durationMs: 100,
+        usageStatus: "unreported", liveOnlyMetadata: "partial" };
+      const attempts = mixed ? [attempt, partial] : [partial];
       addRequestLog(log({ requestId: "lossy-normalization", status: 500,
-        spend: { sends: 3, settled: 3, unresolved: 0 }, attempts: mixed ? [attempt, malformed] : [malformed] }));
+        spend: { sends: 3, settled: 3, unresolved: 0 }, attempts: attempts as unknown as typeof attempt[] }));
       const liveEntry = getRequestLogEntries()[0]!;
       const persisted = readUsageEntries()[0]!;
       const hydratedEntry = requestLogEntryFromPersistedUsage(persisted);
-      for (const row of [liveEntry, persisted, hydratedEntry]) {
-        expect(row.attempts).toEqual(mixed ? [attempt] : []);
+      expect(liveEntry.attempts).toBe(attempts);
+      attempts.forEach((item, index) => expect(liveEntry.attempts![index]).toBe(item));
+      expect(liveEntry.attempts).toEqual(attempts);
+      const { liveOnlyMetadata: _, ...persistedAttempt } = attempt;
+      for (const row of [persisted, hydratedEntry]) {
+        expect(row.attempts).toEqual(mixed ? [persistedAttempt] : []);
         expect(row.attemptNormalizationDropped).toBe(true);
       }
       const live = requestLogDto(liveEntry);
       const hydrated = requestLogDto(hydratedEntry);
-      expect(live.attempts).toEqual(hydrated.attempts);
+      expect(live.attempts).toHaveLength(attempts.length);
+      expect(hydrated.attempts).toHaveLength(mixed ? 1 : 0);
       for (const row of [live, hydrated]) {
         expect(row.attemptNormalizationDropped).toBe(true);
         expect(failureSummary(row, null, key => key).retries).toBeUndefined();
