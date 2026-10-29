@@ -206,6 +206,10 @@
         "src/codex/cli-update-apply.ts",
         "src/codex/cli-update-windows-apply.ts",
         "src/codex/cli-update-windows-observation.ts",
+        "src/codex/cli-windows-plan-provenance.ts",
+        "src/codex/windows-installation-files.ts",
+        "src/codex/windows-npm-execution.ts",
+        "src/lib/windows-owner-acl.ts",
         "src/codex/cli-update-job.ts",
         "src/codex/cli-update-job-execution.ts",
         "src/codex/cli-update-job-store-windows.ts",
@@ -737,6 +741,13 @@
       ]
     },
     {
+      "path": "providers/lm-studio-chat.md",
+      "tier": 4,
+      "title": "LM Studio Chat instructions",
+      "scope": "Preset-scoped single-leading-system normalization, configuration and editor policy.",
+      "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -954,6 +965,16 @@
       ]
     },
     {
+      "path": "clients/claude-desktop-model-visibility.md",
+      "tier": 5,
+      "title": "Claude Desktop Model Visibility",
+      "scope": "Per-client selection of the rows the Claude Desktop 3P model list carries.",
+      "documents": [
+        "src/claude/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/hermes.md",
       "tier": 5,
       "title": "Hermes Profiles",
@@ -970,6 +991,18 @@
       "title": "Qoder Client Integration",
       "scope": "Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules.",
       "documents": [
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
+      "path": "clients/client-support-matrix.md",
+      "tier": 5,
+      "title": "Client Support Matrix",
+      "scope": "Generated client support page: registry sources, curated protocol and test claims, drift checks.",
+      "documents": [
+        "scripts/",
+        "docs-site/",
         "src/clients/",
         "src/integrations/"
       ]

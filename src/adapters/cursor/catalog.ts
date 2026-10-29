@@ -473,9 +473,11 @@ export function parseCursorVariantId(rawId: string): ParsedCursorVariantId {
   }
   let thinking = false;
   let level: string | undefined;
-  const thinkingLevel = /^(.*)-thinking-([a-z-]+)$/.exec(stem);
-  if (thinkingLevel && CURSOR_CAPABILITIES[thinkingLevel[1]!] && (LEVEL_TOKENS as readonly string[]).includes(thinkingLevel[2]!)) {
-    return finishParse(thinkingLevel[1]!, true, fast, thinkingLevel[2]!);
+  const thinkingAt = stem.lastIndexOf("-thinking-");
+  const thinkingBase = thinkingAt < 0 ? "" : stem.slice(0, thinkingAt);
+  const thinkingLevel = thinkingAt < 0 ? "" : stem.slice(thinkingAt + "-thinking-".length);
+  if (/^[a-z-]+$/.test(thinkingLevel) && CURSOR_CAPABILITIES[thinkingBase] && (LEVEL_TOKENS as readonly string[]).includes(thinkingLevel)) {
+    return finishParse(thinkingBase, true, fast, thinkingLevel);
   }
   const levelThinking = stem.endsWith("-thinking") ? stripLevelSuffix(stem.slice(0, -"-thinking".length)) : undefined;
   if (levelThinking && CURSOR_CAPABILITIES[levelThinking.stem]) {

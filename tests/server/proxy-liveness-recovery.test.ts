@@ -65,7 +65,8 @@ test("a live owner wins over an earlier runtime timeout", async () => {
   const probeIo = { ...io, readRuntimeFn: () => ({ pid: 4242, port: 20200 }), fetchFn };
   const observation = await observeProxyLiveness(probeIo);
   expect(observation.kind).toBe("live");
-  expect(observation.live).toEqual(await findLiveProxy(probeIo));
+  expect(observation.live).toMatchObject((await findLiveProxy(probeIo))!);
+  expect(observation.live?.probeHostname).toBe("127.0.0.1");
   expect(observation.live?.role).toBe("client");
 });
 

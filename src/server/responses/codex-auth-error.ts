@@ -17,6 +17,7 @@ import {
   MainAuthJsonChangedDuringRefreshError,
 } from "../../codex/main-account";
 import { NativeProfileError } from "../../codex/native-profile-types";
+import { markCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 
 export interface CodexAuthContextErrorResponseOptions {
   accountSelector?: string;
@@ -78,7 +79,10 @@ export function mapCodexAuthContextErrorToResponse(
   options: CodexAuthContextErrorResponseOptions,
 ): Response | undefined {
   if (error instanceof CodexAccountCooldownError) {
-    return cooldownErrorResponse(error, options.now, options.accountSelector);
+    const response = cooldownErrorResponse(error, options.now, options.accountSelector);
+    // Exact class only (#7850): main hard-lock, credit, Reserve, recovery-withheld and future
+    // policy subclasses keep their own retry semantics, including in combo target cooldowns.
+    return error.constructor === CodexAccountCooldownError ? markCodexAccountCooldownResponse(response) : response;
   }
   if (error instanceof CodexMainProfileDrainingError) {
     return codexMainProfileDrainingResponse();
