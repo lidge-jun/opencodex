@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { M365_COPILOT_BASE_URL } from "../../providers/m365-copilot-models";
+import { M365_COPILOT_BASE_URL, M365_COPILOT_DISPLAY_PREFIX } from "../../providers/m365-copilot-models";
 import { normalizeM365WebSession } from "../../providers/m365-copilot-discovery";
 import { fetchM365ModelRoster } from "../../providers/m365-copilot-discovery-fetch";
 import { credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
@@ -39,7 +39,7 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
   try {
     const signal = AbortSignal.timeout(15_000);
     const items = await fetchM365ModelRoster(name, provider, { accessToken: auth.apiKey, m365: session }, signal, maySend);
-    const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: item.name as string, inputModalities: ["text", "image"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
+    const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: M365_COPILOT_DISPLAY_PREFIX + (item.name as string), inputModalities: ["text", "image"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
     if (!maySend()) return { models: [], state: "degraded" };
     setCached(name, models, Date.now(), undefined, identity);
     markProviderDiscoveryOk(name, models.length);

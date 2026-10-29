@@ -67,7 +67,7 @@ test("live refresh discovers a future selector and the existing new-model policy
   await fetchProviderModels("m365-copilot", provider, 60_000); expect(calls).toBe(1);
   const next = await fetchProviderModels("m365-copilot", provider, 0);
   expect(next.map(m => m.id)).toEqual(["Magic", "Future_Model_99"]);
-  expect(next[1]?.displayName).toBe("Future model"); expect(getProviderLiveModelCount("m365-copilot")).toBe(2);
+  expect(next[1]?.displayName).toBe("M365 Copilot Future model"); expect(getProviderLiveModelCount("m365-copilot")).toBe(2);
   expect(next[1]?.inputModalities).toEqual(["text", "image"]);
   const baseline = applyNewModelPolicy({ provider: "m365-copilot", discoveredIds: ["Magic"], policy: "off", now: "2026-10-27T00:00:00Z" }).nextBaseline;
   const policy = applyNewModelPolicy({ provider: "m365-copilot", discoveredIds: next.map(m => m.id), baseline, policy: "off", now: "2026-10-27T01:00:00Z" });

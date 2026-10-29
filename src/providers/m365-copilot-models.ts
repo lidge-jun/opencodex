@@ -1,5 +1,7 @@
 /** ChatHub selectors adapted from cramt/m365-copilot-proxy, MIT; see adapters/m365-copilot/LICENSE. */
 export const M365_COPILOT_BASE_URL = "https://substrate.office.com/m365Copilot";
+/** Display-only prefix: Microsoft's selector IDs stay the request identity. */
+export const M365_COPILOT_DISPLAY_PREFIX = "M365 Copilot ";
 import { M365_NATIVE_MODEL_ID } from "./m365-copilot-discovery";
 export const M365_COPILOT_MODEL_TONES: Readonly<Record<string, string>> = {
   "m365-copilot": "magic", auto: "magic", quick: "Gpt_5_5_Chat", "think-deeper": "Gpt_5_5_Reasoning",
