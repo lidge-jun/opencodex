@@ -256,7 +256,7 @@ describe("advisor admission-scope transport (end-to-end)", () => {
     expect(JSON.stringify(frames)).toContain("Following the advice");
   });
 
-  test("an unrestricted caller's consult is not narrowed by a restricted host key", async () => {
+  test("a restricted host key also narrows an unrestricted caller's consult", async () => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const expertCalls: string[] = [];
@@ -285,12 +285,12 @@ describe("advisor admission-scope transport (end-to-end)", () => {
     const frames = await collectSse(response.body!);
 
     // The consult carries an explicit empty scope — defined but unrestricted — so the
-    // receiver keeps the capability fence yet does not re-resolve the restricted host key.
+    // receiver intersects it with the host key rather than replacing host limits.
     expect(consults).toHaveLength(1);
     expect(decodeAdvisorAdmissionScope(consults[0]!.scopeHeader))
       .toEqual({ providers: [], models: [] });
-    expect(consults[0]!.status).toBe(200);
-    expect(expertCalls).toHaveLength(1);
+    expect(consults[0]!.status).toBe(403);
+    expect(expertCalls).toHaveLength(0);
     expect(workerBodies.length).toBeGreaterThanOrEqual(2);
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
   });

@@ -112,6 +112,12 @@ interface CarryCase {
 }
 
 const CASES: Record<ProviderCompatCarryField, CarryCase> = {
+  singleLeadingSystemMessage: {
+    seed: { singleLeadingSystemMessage: true },
+    probe: provider => nativeBody(provider, {
+      messages: [{ role: "user", content: "hi" }, { role: "developer", content: "be brief" }],
+    }).messages,
+  },
   preserveResponsesReasoningContent: {
     seed: { preserveResponsesReasoningContent: true },
     probe: provider => {

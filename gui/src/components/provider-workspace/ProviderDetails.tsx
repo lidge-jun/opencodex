@@ -6,13 +6,14 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
-import { isFreeProvider } from "../../provider-workspace/catalog";
+import { isAccountProvider, isFreeProvider } from "../../provider-workspace/catalog";
 import { isLocalProvider } from "../../provider-workspace/kind";
 import { providerAuthSurface } from "../../provider-workspace/auth";
 import { ProviderIcon } from "./ProviderRail";
 import { Switch } from "../../ui";
 import { IconChevron, IconTrash } from "../../icons";
 import ProviderOverview from "./ProviderOverview";
+import { useProviderProbeState } from "./use-provider-probe-state";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
@@ -39,6 +40,7 @@ export default function ProviderDetails({
   modelRevision,
   modelRowsReady,
   onOpenModels,
+  onOpenConnect,
   onCreateJevAuto,
   modelsLoading,
   modelsLoadFailed,
@@ -81,6 +83,7 @@ export default function ProviderDetails({
   modelRevision: string;
   modelRowsReady: boolean;
   onOpenModels: () => void;
+  onOpenConnect?: () => void;
   onCreateJevAuto?: () => void;
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
@@ -125,6 +128,7 @@ export default function ProviderDetails({
   // authSurface exists; seeding with the prop would treat it as already seen.
   const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
   const [seenSettingsFocusToken, setSeenSettingsFocusToken] = useState(0);
+  const [mutationRevision, setMutationRevision] = useState(0);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
   }, []);
@@ -137,14 +141,75 @@ export default function ProviderDetails({
     : authSurface === "api-keys" ? keys?.find(entry => entry.active) : undefined;
   // Global counter from Providers — only honor it for the reveal target.
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
+  const usesCodexPool = isAccountProvider(item.name, item);
   const connectionIdentity = JSON.stringify([
-    codexController?.activeId ?? "",
+    usesCodexPool ? (codexController?.activeId ?? "") : "",
+    usesCodexPool
+      ? (codexController?.accounts ?? []).map(account => [
+          account.id,
+          account.isMain === true,
+          account.paused === true,
+          account.priority ?? 0,
+          account.hasCredential === true,
+        ])
+      : [],
     accounts?.find(account => account.active)?.id ?? "",
+    (accounts ?? []).map(account => [
+      account.id,
+      account.active,
+      account.paused === true,
+      account.needsReauth === true,
+      account.expiresAt ?? null,
+    ]),
     keys?.find(entry => entry.active)?.id ?? "",
+    (keys ?? []).map(entry => [
+      entry.id,
+      entry.active,
+      entry.disabled === true,
+    ]),
     oauth?.loggedIn === undefined ? "" : String(oauth.loggedIn),
     oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
     oauthEmail ?? "",
   ]);
+  const probeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels, mutationRevision);
+  if (tab !== "overview" && probeController.completionProbe?.status === "testing") {
+    probeController.clearIfTesting();
+  }
+  const handleUpdateProvider = useMemo(
+    () => onUpdateProvider
+      ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
+          const result = await onUpdateProvider(name, patch);
+          const affectsConnection = Object.keys(patch).some(key => key !== "note" && key !== "setDefault");
+          if (result.ok && affectsConnection) setMutationRevision(revision => revision + 1);
+          return result;
+        }
+      : undefined,
+    [onUpdateProvider],
+  );
+  const wrappedAuthHandlers = useMemo<ProviderAuthHandlers | undefined>(() => {
+    if (!authHandlers) return undefined;
+    const bump = () => setMutationRevision(revision => revision + 1);
+    // Void-returning handlers (such as removeApiKey or login launchers) resolve normally when
+    // confirmation is cancelled or a dialog opens; confirmed roster changes already flow through
+    // accounts/keys/oauth in connectionIdentity above. Only explicit boolean/outcome receipts
+    // bump mutationRevision directly.
+    return {
+      ...authHandlers,
+      async onAddApiKey(provider, key) {
+        const ok = await authHandlers.onAddApiKey(provider, key);
+        if (ok) bump();
+        return ok;
+      },
+      ...(authHandlers.onNativeLoginSettled
+        ? {
+            async onNativeLoginSettled(provider, outcome) {
+              await authHandlers.onNativeLoginSettled?.(provider, outcome);
+              if (outcome === "added") bump();
+            },
+          }
+        : {}),
+    };
+  }, [authHandlers]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
@@ -209,6 +274,7 @@ export default function ProviderDetails({
 
   const activeTabId = `pws-tab-${tab}`;
   const activePanelId = `pws-panel-${tab}`;
+  const displayName = formatProviderDisplayName(item.name, t);
 
   return (
     <div className="pws-detail">
@@ -222,7 +288,8 @@ export default function ProviderDetails({
         <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-detail-icon" />
         <div className="pws-detail-title-wrap">
           <h2 className="pws-detail-title">
-            {formatProviderDisplayName(item.name, t)}
+            {displayName}
+            {displayName !== item.name && <code className="pws-detail-id">{item.name}</code>}
             {local && <span className="pwi-rail-badge pwi-rail-badge--local">{t("modal.badge.local")}</span>}
             {!local && free && <span className="pwi-rail-badge pwi-rail-badge--free">{t("modal.badge.free")}</span>}
           </h2>
@@ -288,7 +355,18 @@ export default function ProviderDetails({
             preset={preset}
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
+            probeController={probeController}
             availableModels={availableModels}
+            selectedModels={selectedModels}
+            modelRows={modelRows}
+            modelRowsReady={modelRowsReady}
+            modelsLoading={modelsLoading}
+            modelsLoadFailed={modelsLoadFailed}
+            onRetryModels={onRetryModels}
+            onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
+            onOpenModelsTab={() => switchTab("models")}
+            onOpenModels={onOpenModels}
+            onOpenConnect={onOpenConnect}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             currentQuotaReading={currentQuotaReading}
@@ -298,7 +376,7 @@ export default function ProviderDetails({
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}
             onCreateJevAuto={onCreateJevAuto}
-            onUpdateProvider={onUpdateProvider}
+            onUpdateProvider={handleUpdateProvider}
             reauthBusy={busyProvider === item.name}
             onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(item.name) : undefined}
             onReauthenticate={
@@ -363,8 +441,8 @@ export default function ProviderDetails({
             pausingAccountId={pausingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
-            authHandlers={authHandlers}
-            onUpdateProvider={onUpdateProvider}
+            authHandlers={wrappedAuthHandlers}
+            onUpdateProvider={handleUpdateProvider}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
             codexController={codexController}
           />
@@ -375,7 +453,7 @@ export default function ProviderDetails({
             item={item}
             apiBase={apiBase}
             availableModels={availableModels}
-            onUpdateProvider={onUpdateProvider}
+            onUpdateProvider={handleUpdateProvider}
             onDirtyChange={setSettingsDirty}
             onRegisterSave={registerSettingsSave}
           />

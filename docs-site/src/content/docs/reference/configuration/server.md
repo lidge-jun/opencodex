@@ -8,8 +8,18 @@ runs helper features around provider requests.
 
 ## Server fields
 
+`completeOnMaxOutputTokens` is an optional boolean, default `false`. Set it to `true` to
+report a token-limited translated Responses text answer as `completed` rather than `incomplete`.
+The answer remains truncated: OpenCodex preserves its exact text, including unfinished Markdown.
+Only nonempty plain-text output qualifies. Tool calls and hosted operations (even if completed),
+reasoning, `text.format` with `json_schema` or `json_object`, compaction, explicitly unfinished
+turns, errors and missing terminal events remain excluded. Context-window exhaustion and
+`pause_turn` remain incomplete. Chat Completions, Anthropic Messages and native Responses
+passthrough, including native WebSocket output, retain their existing stop behavior.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
 | `port` | `number` | `10100` | Proxy listen port. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a data-admission token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token` — nothing has to be exported by hand. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
@@ -676,6 +686,7 @@ These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx clau
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time upgrade marker. Do not set manually. |
 | `claudeCode.classifierModel?` | `string` | unset | Explicit target for Claude Code Auto Mode classifier turns, as a qualified `provider/model` (for example `RelayA/claude-opus-5`). Auto Mode sends bare safety checks such as `claude-opus-5` with no provider, so without this they fall through to `defaultProvider` — which may not speak Anthropic at all. Nothing is inferred automatically: only a target you declare here is used. |
 | `claudeCode.classifierFallbacks?` | `string[]` | unset | Ordered classifier targets used when `classifierModel` is not set. Same qualified `provider/model` form; the first usable entry wins. An explicit `modelMap` entry for the classifier model still outranks both. |
+| `claudeCode.desktopModelVisibility?` | `{ mode: "include" \| "exclude"; routes: string[] }` | unset | Which `provider/model` routes the Claude Desktop gateway list carries. `include` lists only `routes` (new models stay hidden); `exclude` lists all but `routes` (new models appear). Unset lists every available model. If the selection leaves no available models, the writer falls back to every available model, including normally hidden routes; update the selection to narrow it again. Affects only Claude Desktop's static and hybrid lists; set it from **Connect → Claude Desktop**. |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort written to generated `~/.claude/agents/ocx-*.md`; separate from Codex guidance and proxy caps. Restart through `ocx claude` to regenerate. |
 
 The compatibility policy applies to Claude Code, Desktop and other clients using translated
@@ -1201,3 +1212,5 @@ Locality is a timeout policy, not network-access authorization. Classification u
 Disabling the header clock preserves client cancellation and any enclosing overall deadline. An explicitly positive `stallTimeoutSec` still bounds local body silence; unset local stall/header clocks provide no automatic bound before headers. Native Chat/Messages local JSON reads use the local stall budget; public JSON reads retain their previous `max(connectTimeoutMs ?? 200000, 5000)` budget. Compact body reads retain their 300-second default even locally. Image/search sidecar budgets are unchanged.
 
 Optional `opencodeClientExport` controls the generated OpenCode provider's `headerTimeoutMs`, `chunkTimeoutMs`, and `timeoutMs` (positive milliseconds or `false` to disable). Unset values preserve OpenCode defaults; malformed fields are omitted. These provider-wide settings are emitted into V1 options and V2 settings. See [slow local models](/guides/opencode/#slow-local-models-prefill-timeouts).
+
+Optional, config-file-only `omoClientExport.api` selects the dialect of the managed Pi-based omo provider block: `openai-completions` (default) or `openai-responses`. Other values are ignored. Only omo reads it. After adding, changing or removing this key, restart the proxy (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh **Connect → omo** in the dashboard. Refresh uses the running proxy's config; it does not reload the file. See [integrations](/guides/integrations/).

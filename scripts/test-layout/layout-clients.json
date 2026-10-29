@@ -1,4 +1,6 @@
 {
+  "omo-responses-loop.test.ts": "clients",
+  "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",
@@ -10,6 +12,7 @@
   "cli-export-model-names.test.ts": "cli",
   "management-export-model-names.test.ts": "server",
   "claude-native-fast-1m-ingress.test.ts": "claude-integration",
+  "messages-native-clean-eof.test.ts": "claude-integration",
   "stop-restoration-preflight.test.ts": "service",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
   "claude-config-root-writer-barrier.test.ts": "claude-integration",

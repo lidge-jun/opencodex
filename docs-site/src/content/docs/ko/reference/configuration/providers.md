@@ -43,6 +43,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `providers` | `Record<string, OcxProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
 | `openaiProviderTierVersion?` | `2` | 마이그레이션으로 설정됨 | 옵션을 인식하는 단일 OpenAI 투영이 완료되었음을 표시합니다. |
 | `disabledModels?` | `string[]` | — | Codex catalog와 `/v1/models`에서는 숨기지만 직접 proxy 호출은 차단하지 않습니다. routed id는 목록에서 제거됩니다. account-qualified native id는 해당 selector row만 숨기고, bare native GPT id는 bare row와 그 model의 모든 account-selector row를 숨깁니다. Models 페이지에는 bare native 행과 routed 행만 표시됩니다. selector-qualified 행 하나만 숨기려면 이 설정 필드에 직접 추가하세요. |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 기본값은 `false`입니다. `config.json`에 `"omitDisabledNativeModels": true`를 설정하고 `ocx sync`를 실행하면 비활성화한 native 행을 catalog와 cache, Codex 형식의 HTTP 모델 목록에서 제외합니다. 제외 전 검증한 상속 템플릿을 보존하므로 routed 행의 메타데이터는 유지되며 직접 요청의 라우팅은 바뀌지 않습니다. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 활성 컨텍스트 상한입니다. 일반 윈도는 줄어들며, 장문 윈도를 지원하는 네이티브 모델은 해당 모델의 지원 상한까지만 확장할 수 있습니다. |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
 | `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
@@ -153,7 +154,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. 기본 `xai` 프리셋은 xAI 문서가 이 값을 거부한다고 밝힌 추론 모델(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)을 여기에 넣습니다. 추론이 없는 모델은 호출자가 보낸 penalty를 그대로 받습니다. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 엔드포인트가 `response_format`을 거부하는 정확한 모델 ID입니다. 요청 모델이 항목과 정확히 일치할 때만 필드를 생략하며, 그 외 `openai-chat` 모델에서는 structured-output 변환을 유지합니다. |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
-| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. 어느 경우에도 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |
+| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. `singleLeadingSystemMessage`가 활성화되지 않은 경우 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |
 | `parallelToolCalls?` | `boolean` | 병렬 도구 호출을 켜거나 끕니다. OpenAI Chat은 기본으로 켜져 있고, 비-chat 어댑터는 명시적으로 `true`일 때만 이를 노출합니다. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
 | `responsesSnapshotRepair?` | `boolean` | 기본값이 꺼진 클라이언트용 복구입니다. SSE와 JSON의 Responses 수명 주기에서 누락된 status, output, 도구 메타데이터를 채우며 raw 검사와 영속화는 변경하지 않습니다. |
@@ -179,23 +180,26 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 로컬 실행 정책입니다. 기본값은 `off`입니다. `codex-sandbox`는 현재 `off`처럼 실패를 닫습니다. |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 공급자 등록·교체(`POST /api/providers`)는 `responsesPath`와 `chatCompletionsPath`를 검증한 뒤 메모리와 파일의 설정을 변경합니다. `PATCH /api/providers?name=<provider>`는 요청 본문을 저장된 공급자에 병합합니다. `disabled` 외의 필드를 변경하는 업데이트(`requestPacing`만 변경하는 업데이트 제외)는 저장 전에 병합된 공급자의 경로를 같은 방식으로 검증하며, 유지된 경로가 유효하지 않으면 `400`을 반환하고 설정을 변경하지 않습니다. 설정 파일을 읽을 때도 같은 경로 규칙을 적용합니다.
 
 API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/ko/reference/configuration/server/#claude-code-claudecode)에서 설정합니다.
 
 ### 프로바이더 저장이 유지하는 것
 
-기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 여덟 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| 저장 | 여덟 가지 설정 | 저장된 `apiKeyPool` |
+| 저장 | 열 가지 설정 | 저장된 `apiKeyPool` |
 | --- | --- | --- |
 | 같은 목적지, 필드 생략 | 저장된 값 유지(명시적인 `[]`나 `false` 포함) | 유지 |
 | 새 목적지, 필드 생략 | 유지하지 않음. 새 목적지의 레지스트리 기본값이 적용될 수 있음 | 유지하지 않음 |
 | 요청에 필드를 보냄 | 요청의 값 | 요청의 값 |
 
-목적지는 어댑터, 기본 URL(스킴과 호스트는 대소문자를 구분하지 않고, 끝의 슬래시는 무시), 그리고 요청이 지정한 경우 인증 모드입니다. 프로바이더를 다른 목적지로 옮기면 이전 업스트림을 설명하는 여덟 가지 설정과, 그 업스트림용으로 발급된 키 풀을 가져가지 않습니다. 저장은 이전 행의 나머지를 새 행에 병합하지 않습니다.
+목적지는 어댑터, 기본 URL(스킴과 호스트는 대소문자를 구분하지 않고, 끝의 슬래시는 무시), 그리고 요청이 지정한 경우 인증 모드입니다. 프로바이더를 다른 목적지로 옮기면 이전 업스트림을 설명하는 열 가지 설정과, 그 업스트림용으로 발급된 키 풀을 가져가지 않습니다. 저장은 이전 행의 나머지를 새 행에 병합하지 않습니다.
 
-`PATCH /api/providers?name=<provider>`는 지정한 필드만 바꾸고, 목적지와 상관없이 나머지 저장 필드는 모두 유지합니다. 여덟 가지 설정을 모두 받고, `null`로 지웁니다. 두 추론 목록에서 빈 배열은 삭제되지 않고 명시적인 옵트아웃으로 저장됩니다.
+`PATCH /api/providers?name=<provider>`는 지정한 필드만 바꾸고, 목적지와 상관없이 나머지 저장 필드는 모두 유지합니다. 열 가지 설정을 모두 받고, `null`로 지웁니다. 두 추론 목록에서 빈 배열은 삭제되지 않고 명시적인 옵트아웃으로 저장됩니다.
 
 ## 공급자 진단용 외부 요청 안전성
 

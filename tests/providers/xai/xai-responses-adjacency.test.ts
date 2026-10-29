@@ -37,6 +37,47 @@ function buildBody(provider: OcxProviderConfig, rawBody: Record<string, unknown>
   return JSON.parse(String(built.body)) as Record<string, unknown>;
 }
 
+describe("xAI Responses include compatibility", () => {
+  test("drops the include entry xAI rejects instead of ignoring", () => {
+    const body = buildBody(xaiOauthResponses(), {
+      include: ["output.encrypted_content", "reasoning.encrypted_content"],
+      input: [],
+    });
+
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  test("drops an include that only carried the unsupported entry", () => {
+    const body = buildBody(xaiOauthResponses(), {
+      include: ["output.encrypted_content"],
+      input: [],
+    });
+
+    expect(body).not.toHaveProperty("include");
+  });
+
+  test("strips the rejected include entry for the US regional endpoint", () => {
+    const provider = xaiOauthResponses({ baseUrl: "https://us.api.x.ai/v1", authMode: "api-key" });
+    const body = buildBody(provider, {
+      include: ["output.encrypted_content", "reasoning.encrypted_content"], input: [],
+    });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(buildBody(provider, { include: ["output.encrypted_content"], input: [] }))
+      .not.toHaveProperty("include");
+  });
+
+  test("leaves another Responses destination's include untouched", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "api-key",
+    };
+    const body = buildBody(provider, { include: ["output.encrypted_content"], input: [] });
+
+    expect(body.include).toEqual(["output.encrypted_content"]);
+  });
+});
+
 describe("xAI Responses tool-result adjacency", () => {
   test("the xAI registry entry seeds adjacency and pairing without marking the provider stateless", () => {
     const entry = getProviderRegistryEntry("xai")!;

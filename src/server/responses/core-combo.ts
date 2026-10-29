@@ -1,6 +1,7 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
-import { comboCooldownRetryAfterSeconds, type CodexAccountModelRefusal } from "../../combos/failover";
+import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
   isCodexReasoningEffort,
@@ -868,10 +869,15 @@ export async function executeComboResponses(
   // "OpenAI account pool has no usable account credential" while every Claude account was spent.
   let quotaFailure: Response | undefined;
   let quotaFailedChildLog: RequestLogContext | undefined;
+  let contextFailure: { response: Response; childLog: RequestLogContext } | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (): Response => {
+    if (contextFailure) {
+      adoptFailedChildLog(contextFailure.childLog);
+      return contextFailure.response;
+    }
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
@@ -1067,6 +1073,19 @@ export async function executeComboResponses(
       finishRequestAttempt(attempt, 499, Date.now() - started, childLog.usage);
       attemptRetained = true;
     };
+    // The row is written from `logCtx`, which copies `childLog` only when the child commits. A
+    // bridge child binds its usage later, at the terminal frame, so the binding is forwarded here
+    // after that point. Left on `childLog`, the row would re-read the bridged wire instead of the
+    // adapter's usage, and that wire has no providerCredits and a context-derived input count.
+    // A binding that arrives before the commit waits for it, and a child that never commits
+    // forwards nothing: both flags belong to this target only.
+    let childCommitted = false;
+    let childUsageBound = false;
+    const forwardChildUsage = (): void => {
+      if (!childCommitted || !childUsageBound) return;
+      logCtx.usageFromBridge = true;
+      if (childLog.usage) logCtx.usage = childLog.usage;
+    };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
     let consumedChildFailure: ConsumedComboFailure | undefined;
@@ -1147,6 +1166,10 @@ export async function executeComboResponses(
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
+        onBridgeUsageBound: () => {
+          childUsageBound = true;
+          forwardChildUsage();
+        },
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
@@ -1246,6 +1269,8 @@ export async function executeComboResponses(
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.(terminalRecorder);
       callbackGate.commit();
+      childCommitted = true;
+      forwardChildUsage();
       return response;
     }
 
@@ -1382,6 +1407,12 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    // Retain a confirmed target context refusal when later retryable failures exhaust the ladder.
+    // Hard stops above still return their own verdict, and every attempt keeps its own usage.
+    if (!contextFailure && failure.response.status === 400 && isDefiniteContextOverflow(400, failure.classificationText)) {
+      contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
+        failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
+    }
     // A bare status made a revoked credential read as a provider outage. Log only the parsed
     // code and message, never the raw envelope, as one redacted, bounded line.
     const failureReason = sanitizeLogMetadataString(
@@ -1415,9 +1446,10 @@ export async function executeComboResponses(
     const poolLocalRefusal = isAnthropicPoolLocalRefusal(
       config, pick.target.provider, failure.response.status, failedAccount, failureNow,
     );
+    const codexLocalRefusal = isCodexAccountCooldownResponse(failure.response);
     const nextPick = advanceComboAfterFailure(config, pick, {
-      retryAfter: poolLocalRefusal ? undefined : failure.retryAfter,
-      resetAt: failure.resetAt,
+      retryAfter: poolLocalRefusal || codexLocalRefusal ? undefined : failure.retryAfter,
+      resetAt: codexLocalRefusal ? undefined : failure.resetAt,
       cooldownMs: combo.cooldownMs,
       now: failureNow,
       cooldownScope: failureCooldownScope,
@@ -1479,6 +1511,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
+        if (contextFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }
@@ -1505,7 +1538,7 @@ export async function executeComboResponses(
   }
   const failure = exhaustedFailure();
   if (
-    lastFailure?.status === 413
+    failure === lastFailure && lastFailure?.status === 413
     && lastFailureClassifiesOverflow
   ) {
     if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";

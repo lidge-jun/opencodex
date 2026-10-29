@@ -109,6 +109,7 @@ function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefine
     totalTokens,
     ...(cacheRead !== undefined ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
     ...(cacheWrite !== undefined ? { cacheCreationInputTokens: cacheWrite } : {}),
+    upstreamReported: true,
   };
 }
 

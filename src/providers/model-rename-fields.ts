@@ -128,6 +128,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   terminalContinuationGuard: "none",
   openaiChatEofTolerance: "none",
   foldDeveloperRoleToSystem: "none",
+  singleLeadingSystemMessage: "none",
   promptCacheKey: "none",
   chatServiceTier: "none",
   responsesItemIdRepair: "none",

@@ -25,6 +25,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 | `quota` | `--refresh`, `--json` | Lire les rapports sur les quotas des fournisseurs. |
 | `presets` | `--json` | Répertoriez les préréglages du fournisseur de tableau de bord. |
 | `account-mode` | `pool`, `direct`, `--json` | Sélectionnez le routage de compte mutualisé ou direct Codex. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Prévisualiser, appliquer sélectivement ou restaurer des entrées de fournisseurs sans clé depuis une base SQLite (`cc-switch.db`) ou un fichier JSON CC-Switch. |
 
 Par défaut, `add`, `remove` et `set-default` modifient la configuration locale. Ajoutez `--live` pour modifier le proxy actif, et `--yes` pour une suppression en direct. `--sync --json` tente aussi la synchronisation après enregistrement ; en cas d’échec, la sauvegarde reste acquise, avec un code non nul et `needsSync: true`. `--live` et `--sync` sont incompatibles. Voir le [guide anglais](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) pour pacing et snapshot/apply.
 
@@ -59,6 +60,27 @@ la frontière est à vous de la respecter. Deux raisons pour lesquelles c'est im
 
 Utilisez `--api-key` ou un identifiant OAuth pour tout ce qui est secret.
 :::
+
+### Import de fournisseurs CC-Switch sans clé
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Démarrez le proxy dans un autre terminal (ou exécutez ocx ensure), puis ajoutez les clés :
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Chemin d’annulation distinct (arrêtez d’abord le proxy ; supprime uniquement les entrées sans clé non modifiées) :
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` projette des valeurs **uniquement** depuis une liste blanche explicite de champs de métadonnées non secrets (identifiants de fournisseur, types d’application, URL de base, dialectes et modèles par défaut) à partir d’une base SQLite ou d’un fichier JSON CC-Switch ordinaire. Les octets de la source et de la configuration intégrée sont lus de manière transitoire pour analyser l’entrée, tandis que les champs secrets, noms libres et commentaires TOML sont ignorés au niveau des octets, ne sont jamais décodés en chaînes, écrits ni journalisés, et les tampons d’octets transitoires sont remis à zéro dans `finally`. Les règles strictes de chemin d’URL (`http(s)://host[:port]` sans chemin ou avec 1 à 4 segments d’API en minuscules `[a-z0-9._-]` tels que `/v1`, `/api/v1` ou `/compatible-mode/v1`) et les contrôles syntaxiques d’identifiant/modèle servent de défense en profondeur sans faire écho aux valeurs rejetées. Les fichiers sources sont ouverts une seule fois avec vérification de descripteur `O_NOFOLLOW | O_NONBLOCK` et désérialisés en lecture seule en mémoire pour SQLite sans fichier temporaire ; les fichiers SQLite ayant plusieurs liens physiques (`nlink > 1`) sont refusés afin d’empêcher le contournement des contrôles de fichiers annexes, et si un fichier voisin `-wal` ou `-journal` est non vide, l’import refuse et demande de fermer CC-Switch (ou de consolider la base) avant de réessayer. N’importez que depuis une source locale CC-Switch de confiance et vérifiez chaque ID, modèle et `baseUrl` affichés avant d’ajouter des identifiants :
+
+- **Aperçu (par défaut) :** exige `--source <FILE>`, n’écrit rien et indique les entrées découvertes, éligibles, en conflit et invalides.
+- **Application (`--apply`) :** exige `--source <FILE>` et un proxy arrêté (`ocx stop`), et est refusée sur un Remote Link Child. Répétez `--provider <id>` pour n’importer que certaines entrées, ou passez `--allow-private-network` pour autoriser les URL de bouclage ou de réseau privé. Même sans aperçu préalable, `--apply` affiche chaque ID de fournisseur, modèle par défaut et URL de destination avant d’écrire les entrées sans clé et le journal d’annulation `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` (`stdout` en mode texte, `stderr` en mode `--json`) ; un second `--apply` est refusé tant qu’un journal actif existe. Vérifiez les entrées affichées, démarrez le proxy (`ocx start` dans un autre terminal ou `ocx ensure`), puis ajoutez les clés avec `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (entrée standard redirigée) ou `ocx login <provider>`.
+- **Restauration (`--restore`) :** chemin d’annulation distinct (et non la suite de l’ajout d’identifiants) qui exige un proxy arrêté (`ocx stop`), est refusé sur un Remote Link Child et n’accepte ni `--source`, ni `--provider`, ni `--allow-private-network`. Il inspecte `auth.json` en lecture seule au niveau des octets (échec fermé s’il est illisible ou mal formé) et ne supprime du journal actif que les fournisseurs qui correspondent encore à leur état importé sans clé et qui ne sont ni sélectionnés comme `defaultProvider` ni référencés par le routage, les combos, la politique de repli (fallback policy), les comptes OAuth ou les clés API.
 
 ## Authentification
 

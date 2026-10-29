@@ -154,6 +154,8 @@ timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
 
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution.
+
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
 `refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
@@ -487,7 +489,7 @@ Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and L
 shows **No changes** or **Unsaved changes**, with **Revert** to discard edits and **Save** to commit
 them. Both switches apply immediately; **Save** never changes them. When interception is stopped, the page shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. The former Code, Settings, and Account sub-tabs are gone; everything the read-only Settings view showed except the intercept port number is on this page.
 
-**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker and model families. One status row shows whether Claude Desktop runs the profile and whether it is saved, with **Save** and **Save & apply** beside it.
+**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
 
@@ -519,3 +521,23 @@ test for the same provider returns 409. Completed diagnostics and applicability
 results return 200, including a structured error when inference fails. Destination
 policy and provider egress settings apply; redirects, retries and failover are disabled.
 For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).
+
+**Test all models** runs the same completion test for every configured, listed and
+default model of the provider, one request at a time, after a single confirmation that
+states the maximum number of requests; some models can be skipped before sending. The
+single-model **Test model** control and **Test all models** share one guard per provider, so
+each stays disabled while the other is confirming or running. **Stop** cancels the in-flight request and sends no
+more. Each model is reported as passed, failed (the upstream answered with an error or
+timed out) or not tested. The latter covers management API refusals such as a concurrent
+test, admission refusals before sending (missing or changed credentials or a refused
+destination), and upstream HTTP 401/403/429 authentication, access or quota refusals
+returned in a structured result with HTTP 200. None of these categories becomes a disable target. An unsupported
+effective adapter marks only that model as not tested and continues, because one provider
+can use different wires for different models. Provider-wide applicability refusals, such as
+OAuth authentication or unsupported transport settings, stop the run. When any model failed, **Disable failed models** asks a second
+confirmation and then removes only those models from the model catalog and picker through the
+same visibility setting as the **Models** page, where they can be re-enabled. Like any hidden
+model, they stay callable by exact id. Models are never disabled
+without that confirmation. Leaving the page or changing the provider connection withdraws
+pending disable consent and aborts its request. A new batch waits until disable consent or
+the visibility write has settled, so an older response cannot hide the newer batch's action.

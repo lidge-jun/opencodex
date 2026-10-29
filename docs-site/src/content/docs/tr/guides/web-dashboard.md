@@ -94,6 +94,8 @@ Kullanım, panel, sağlayıcı çalışma alanı, sağlayıcı kataloğu ve API 
 
 ### İstek günlüklerini filtreleme
 
+İstek ayrıntıları, genel proxy hatası metni yerine kaydedilmiş upstream hata nedenini öncelikli gösterir. Fiziksel gönderim sayısı geçerliyse her zaman gösterilir; eksik veya geçersiz muhasebe bilgisi sıfır yerine **Unavailable** olarak görüntülenir. **Retries**, yalnızca muhasebesi tamamen kesinleşmiş ve tutarlı tek bir deneme kaydı bulunduğunda ilk gönderimden sonraki ek gönderim sayısını gösterir. Birden fazla deneme, çözümlenmemiş veya tutarsız muhasebe ve kayıplı attempt normalizasyonu, uydurma yeniden deneme sayısı yerine retries alanını gizler. Bilinmeyen kalıcı nedenler, ham atıf olmadan durum tabanlı başlığa döner.
+
 Filtreler yüklü günlükte yüzey, yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
 
 Son 15 dakika, saat ve gün pencereleri Logs sekmesinde otomatik yenileme kapalıyken de 30 saniyede bir güncellenir. Hız, tam istek süresindeki saniyelik çıktı jetonudur: 15 altı, 15 dahil 50 altı, en az 50; hız filtresi açıkken ölçülemeyenler dışlanır. Başarı 2xx, hata 4xx/5xx anlamındadır.

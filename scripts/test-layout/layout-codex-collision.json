@@ -1,4 +1,6 @@
 {
+  "messaging-remote-port-reservation.test.ts": "codex-integration",
+  "messaging-remote-forward-failure.test.ts": "codex-integration",
   "codex-cli-windows-child.test.ts": "codex-integration",
   "codex-cli-update-windows-apply-install.test.ts": "codex-integration",
   "codex-cli-update-windows-apply-outcomes.test.ts": "codex-integration",

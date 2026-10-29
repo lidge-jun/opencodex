@@ -13,6 +13,27 @@ import { stripOpenAiOnlyWebSearchFields } from "./web-search";
  * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
  * or nested tool data. Copy on write so a later Google route can still replay its signature.
  */
+/** Responses `include` entries xAI rejects with a 400 rather than ignoring (#7878). */
+const XAI_UNSUPPORTED_RESPONSES_INCLUDE = new Set(["output.encrypted_content"]);
+
+/**
+ * Drop `include` entries xAI's Responses API refuses (`Argument not supported:
+ * "output.encrypted_content" in "include" field`). Codex Desktop always asks for the
+ * OpenAI reasoning blob, so without this every xai/grok-4.7 turn sent through the
+ * Responses path fails, while the same model works on the openai-chat adapter.
+ * Copy on write; other destinations and other include entries are untouched.
+ */
+export function stripXaiUnsupportedInclude(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.include)) return body;
+  const include = body.include.filter(item => !XAI_UNSUPPORTED_RESPONSES_INCLUDE.has(String(item)));
+  if (include.length === body.include.length) return body;
+  if (include.length === 0) {
+    const { include: _dropped, ...rest } = body;
+    return rest;
+  }
+  return { ...body, include };
+}
+
 export function stripProviderInputItemMetadata(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   let input: unknown[] | undefined;

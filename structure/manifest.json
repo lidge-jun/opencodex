@@ -147,7 +147,8 @@
         "src/codex/",
         "src/config.ts",
         "src/config/",
-        "src/types.ts"
+        "src/types.ts",
+        "src/types/config.ts"
       ]
     },
     {
@@ -301,6 +302,8 @@
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
+        "src/server/capture-admission-policy.ts",
+        "src/types/admission-policy.ts",
         "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"
       ]
@@ -353,6 +356,21 @@
       "title": "Response Citation Projection",
       "scope": "OpenAI-operated outbound citation repair and generated JSON/SSE annotation titles.",
       "documents": ["src/adapters/openai-responses/", "src/bridge/"]
+    },
+    {
+      "path": "transports/max-output-completion.md",
+      "tier": 3,
+      "title": "Opt-in Responses Text Completion",
+      "scope": "Default-off translated Responses text-only token-limit completion and exclusions.",
+      "documents": [
+        "src/bridge/max-output-completion.ts",
+          "src/bridge/sse.ts",
+          "src/bridge/response-json.ts",
+        "src/config/schema/config-schema.ts",
+        "src/types/config.ts",
+        "src/server/responses/adapter-delivery.ts",
+        "src/server/responses/run-turn-execution.ts"
+      ]
     },
     {
       "path": "transports/responses.md",
@@ -741,6 +759,13 @@
       ]
     },
     {
+      "path": "providers/lm-studio-chat.md",
+      "tier": 4,
+      "title": "LM Studio Chat instructions",
+      "scope": "Preset-scoped single-leading-system normalization, configuration and editor policy.",
+      "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -808,6 +833,9 @@
       "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
       "documents": [
         "src/cli/",
+        "src/providers/cc-switch-import-bytes.ts",
+        "src/providers/cc-switch-import-source.ts",
+        "src/providers/cc-switch-import.ts",
         "scripts/generate-ocx-skill-surface.ts",
         "skills/ocx/"
       ]
@@ -907,6 +935,13 @@
       "documents": ["src/clients/config-export.ts", "src/clients/config-export/", "src/integrations/", "src/cli/", "src/server/management/"]
     },
     {
+      "path": "clients/omo-export-dialect.md",
+      "tier": 5,
+      "title": "omo Client Export Dialect",
+      "scope": "Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle.",
+      "documents": ["src/clients/config-export.ts", "src/types/config.ts", "src/config/schema/leaf-validators.ts", "src/config/schema/config-schema.ts"]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",
@@ -955,6 +990,16 @@
       "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
       "documents": [
         "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/claude-desktop-model-visibility.md",
+      "tier": 5,
+      "title": "Claude Desktop Model Visibility",
+      "scope": "Per-client selection of the rows the Claude Desktop 3P model list carries.",
+      "documents": [
+        "src/claude/",
+        "src/server/"
       ]
     },
     {

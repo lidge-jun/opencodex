@@ -203,12 +203,7 @@ when the shared xAI normalizer can preserve its meaning; an unsafe function is o
 letting one incompatible declaration reject the entire request before inference. This is scoped to
 `cli-chat-proxy.grok.com`: public `api.x.ai` keeps native root unions, as do unrelated Responses
 gateways. Both top-level `tools` and Responses Lite `additional_tools` pass through this policy.
-Codex Desktop packages client tools inside an `additional_tools` input item; strict gateways
-rejecting non-ResponseItem input types—including official xAI endpoints (`api.x.ai`,
-`cli-chat-proxy.grok.com`), OpenCode Go, and custom providers opting in with
-`promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper
-from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair;
-Historical/live tags survive replacements, synthesized outputs and bridge restoration; transformed-input consumers read each tag, never a recalculated prefix.
+Codex Desktop packages client tools inside an `additional_tools` input item; strict gateways rejecting non-ResponseItem input types—including official xAI endpoints (`api.x.ai`, `cli-chat-proxy.grok.com`), OpenCode Go, and custom providers opting in with `promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair; historical/live tags survive replacements, synthesized outputs and bridge restoration; transformed-input consumers read each tag, never a recalculated prefix.
 Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets. Only current-turn `tool_search_output` discoveries join a live wrapper, top-level tools or the top-level fallback; source provenance is checked before merging declarations. Historical discoveries remain replay context and grant no current hosted-tool authority. `tests/providers/xai/xai-loaded-tool-provenance.test.ts` covers these paths and stored two-turn continuations.
 
 Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening it:
@@ -575,6 +570,7 @@ reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 
 
 ## Adapter-to-Responses bridge
 
+Opt-in translated Responses text-only token-limit completion follows [the text completion policy](max-output-completion.md).
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body

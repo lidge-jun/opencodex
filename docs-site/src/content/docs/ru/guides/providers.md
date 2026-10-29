@@ -177,7 +177,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 несколько входов. Страница Providers показывает эти аккаунты в выпадающем списке, позволяет
 добавить ещё один и переключает активный аккаунт, не выполняя выход из остальных. При обычном входе
 учётные данные Kimi без идентификатора заменяют активный слот; явное действие **Добавить аккаунт**
-сохраняет прежний слот и активирует отдельный новый. Аккаунты Kiro сохраняются по ARN профиля.
+сохраняет прежний слот и активирует отдельный новый. Аккаунты Kiro различаются по ARN профиля и адресу электронной почты вошедшего пользователя, если он доступен; пользователи одного профиля организации могут хранить отдельные учётные данные.
 `chatgpt` всегда занимает один слот, поскольку у пула аккаунтов Codex отдельный реестр. Токены остаются в `~/.opencodex/auth.json`;
 `/api/oauth/accounts` возвращает только маскированные метаданные.
 
@@ -195,6 +195,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 Inline JSON и лишние позиционные аргументы отклоняются. Храните экспортированные файлы приватно и удаляйте их или защищайте после импорта.
 
 ### Импорт учётных данных Kiro
+
+В панели выберите **AWS IAM Identity Center**, укажите URL портала доступа AWS и регион SSO организации. Подтвердите код устройства в браузере и выберите профиль Kiro для сохранения, если их несколько. CLI и SSH не требуются. Инструкции CLI ниже относятся к варианту **Kiro CLI**.
 
 Для входа Kiro требуется Kiro CLI: в Unix установите его командой `curl -fsSL https://cli.kiro.dev/install | bash`, в Windows PowerShell — `irm 'https://cli.kiro.dev/install.ps1' | iex`, затем сначала выполните `kiro-cli login`. Если сессии `kiro-cli` нет, `ocx login kiro` использует вставленный токен доступа или переменную окружения `KIRO_ACCESS_TOKEN`.
 
@@ -270,7 +272,7 @@ opencodex поставляется с 106 встроенными пресета�
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. Модель API `moonshot` по умолчанию — `kimi-k3.1-pro`; сохранённые варианты `kimi-k2.5` для официальных адресов API переносятся на неё. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
