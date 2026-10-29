@@ -346,15 +346,16 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
   test("OAuth roster settlement and Codex pool mutations with unchanged active ID still latch re-verification", async () => {
     respondCompletion = async () => Response.json(failedResult("http_status", 401));
     const mountWithPools = (
+      providerItem: WorkspaceItem,
       oauthAccounts: Array<{ id: string; active: boolean; expiresAt?: number }>,
       codexAccounts: Array<{ id: string; email: string; isMain: boolean; paused: boolean; priority: number; hasCredential: boolean; quota: null }>,
     ) => render(
       <ProviderDetails
-        item={baseItem}
+        item={providerItem}
         availableModels={["model-a"]}
         hasLiveModels
         selectedModels={["model-a"]}
-        modelRows={[{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }]}
+        modelRows={[{ provider: providerItem.name, id: "model-a", namespaced: `${providerItem.name}/model-a`, disabled: false }]}
         modelRevision="r1"
         modelRowsReady
         onOpenModels={() => {}}
@@ -372,20 +373,39 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
       { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
       { id: "pool-2", email: "p2@example.test", isMain: false, paused: false, priority: 1, hasCredential: true, quota: null },
     ];
-    await mountWithPools([{ id: "acct-1", active: true, expiresAt: 1000 }], baseCodex);
+    await mountWithPools(baseItem, [{ id: "acct-1", active: true, expiresAt: 1000 }], baseCodex);
     await selectModel("model-a");
     await runAndConfirm();
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
 
+    // Codex pool changes must NOT invalidate or latch re-verification for an unrelated non-forward provider:
+    await mountWithPools(
+      baseItem,
+      [{ id: "acct-1", active: true, expiresAt: 1000 }],
+      [baseCodex[0]!, { ...baseCodex[1]!, paused: true }],
+    );
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
+    expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBeNull();
+
     // OAuth reauth refreshes expiresAt (or adds a non-active account) while active ID stays "acct-1":
-    await mountWithPools([{ id: "acct-1", active: true, expiresAt: 2000 }], baseCodex);
+    await mountWithPools(baseItem, [{ id: "acct-1", active: true, expiresAt: 2000 }], baseCodex);
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBe("true");
 
-    // Run again to failed, then pause a non-active Codex pool account while activeId stays "main":
+    // On the forward/account provider itself, pausing a non-active Codex pool account while activeId stays "main" DOES latch re-verification:
+    const forwardItem: WorkspaceItem = {
+      ...baseItem,
+      name: "openai",
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    await mountWithPools(forwardItem, [], baseCodex);
+    await selectModel("model-a");
     await runAndConfirm();
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-step-state")).toBe("failed");
     await mountWithPools(
-      [{ id: "acct-1", active: true, expiresAt: 2000 }],
+      forwardItem,
+      [],
       [baseCodex[0]!, { ...baseCodex[1]!, paused: true }],
     );
     expect(host.querySelector('[data-first-response-step="probe"]')?.getAttribute("data-reverify-pending")).toBe("true");

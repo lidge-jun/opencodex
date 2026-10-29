@@ -6,7 +6,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatProviderDisplayName } from "../../provider-icons";
-import { isFreeProvider } from "../../provider-workspace/catalog";
+import { isAccountProvider, isFreeProvider } from "../../provider-workspace/catalog";
 import { isLocalProvider } from "../../provider-workspace/kind";
 import { providerAuthSurface } from "../../provider-workspace/auth";
 import { ProviderIcon } from "./ProviderRail";
@@ -141,15 +141,18 @@ export default function ProviderDetails({
     : authSurface === "api-keys" ? keys?.find(entry => entry.active) : undefined;
   // Global counter from Providers — only honor it for the reveal target.
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
+  const usesCodexPool = isAccountProvider(item.name, item) || item.authMode === "forward";
   const connectionIdentity = JSON.stringify([
-    codexController?.activeId ?? "",
-    (codexController?.accounts ?? []).map(account => [
-      account.id,
-      account.isMain === true,
-      account.paused === true,
-      account.priority ?? 0,
-      account.hasCredential === true,
-    ]),
+    usesCodexPool ? (codexController?.activeId ?? "") : "",
+    usesCodexPool
+      ? (codexController?.accounts ?? []).map(account => [
+          account.id,
+          account.isMain === true,
+          account.paused === true,
+          account.priority ?? 0,
+          account.hasCredential === true,
+        ])
+      : [],
     accounts?.find(account => account.active)?.id ?? "",
     (accounts ?? []).map(account => [
       account.id,
