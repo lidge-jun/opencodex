@@ -1,9 +1,9 @@
 /**
  * Byte-level and SQLite scalar source readers for keyless CC-Switch provider import.
  *
- * Security guarantee is structural: extracts values ONLY from an explicit allowlist of
- * non-secret metadata fields and never reads secret-named fields, free-text names, or TOML
- * comments. Applies narrow URL/identifier syntax checks as defense in depth, opens sources
+ * Projects values ONLY from an explicit allowlist of non-secret metadata fields; source bytes
+ * are read transiently while secret-named fields, free-text names, and TOML comments are skipped
+ * at the byte level without string decoding and transient buffers are zeroed in finally. Opens
  * with O_NOFOLLOW | O_NONBLOCK descriptor verification, refuses active -wal sidecars, and
  * deserializes SQLite read-only in memory.
  */

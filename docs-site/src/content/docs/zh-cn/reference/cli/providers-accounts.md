@@ -78,7 +78,11 @@ ocx stop
 ocx provider import-cc-switch --restore
 ```
 
-`ocx provider import-cc-switch` 仅读取显式白名单中的非机密元数据字段（提供商 ID、应用类型、base URL、协议适配器与默认模型），绝不读取密钥/凭据字段、自由文本名称或 TOML 注释。本地 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 文件在内存中只读打开且不写入临时文件；若存在非空的 `-wal` 文件则会拒绝导入并提示先关闭 CC-Switch 再重试。窄化的小写 API 路径语法（`[a-z0-9._-]`，如 `/v1`、`/api/v1`、`/compatible-mode/v1`）与语法校验仅作为纵深防御（不回显被拒值），临时字节缓冲区在 `finally` 中清零。请仅从受信任的本地源文件导入，并在添加密钥前核对 `--apply` 在写入前输出的全部 ID、模型与目标 URL。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。请先停止代理（`ocx stop`）再运行 `--apply`（可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`）；应用后启动代理（`ocx start`），再通过管道标准输入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）添加密钥。作为独立的回滚路径，请先停止代理（`ocx stop`）再运行 `ocx provider import-cc-switch --restore`：它会以只读字节方式检查 `auth.json`（不可读或格式损坏时安全保留），仅移除未修改且未被路由或 OAuth 账户引用的导入条目。
+`ocx provider import-cc-switch` 仅从普通本地 CC-Switch SQLite 数据库或旧版 JSON 文件中投射显式白名单内的非机密元数据字段（提供商 ID、应用类型、base URL、协议适配器与默认模型）。为扫描输入会临时读取源文件与内嵌配置字节，但密钥/凭据字段、自由文本显示名称与 TOML 注释会在字节层跳过，绝不解码为字符串、写入磁盘或记录日志，且临时字节缓冲区会在 `finally` 中清零。窄化 base URL 路径规则（`http(s)://host[:port]` 配空路径或 1–4 个小写 `[a-z0-9._-]` API 路径段，如 `/v1`、`/api/v1` 或 `/compatible-mode/v1`）与标识符/模型语法校验仅作为纵深防御并拒绝不合规值（不回显原值）。源文件通过 `O_NOFOLLOW | O_NONBLOCK` 描述符校验单次打开，SQLite 在内存中只读反序列化且不写入临时文件；具有多个硬链接（`nlink > 1`）的 SQLite 文件会被拒绝以防通过别名路径绕过伴随文件检查，若同级 `-wal` 或 `-journal` 文件非空则会拒绝导入并提示先关闭 CC-Switch（或执行数据库 checkpoint）再重试。请仅从受信任的本地 CC-Switch 源文件导入，并在添加凭据前核对输出的每个 ID、模型与 `baseUrl`：
+
+- **预览（默认）：** 需要 `--source <FILE>`，不写入任何内容，报告发现、可用、冲突与无效条目数量。
+- **应用（`--apply`）：** 需要 `--source <FILE>` 且代理已停止（`ocx stop`），在 Remote Link Child 上会被拒绝。重复指定 `--provider <id>` 可仅导入所选条目，传入 `--allow-private-network` 可允许环回或私有网络 base URL。即使未事先预览，`--apply` 也会在写入无密钥提供商条目及回滚日志 `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` 之前输出每个导入提供商的 ID、默认模型与目标 URL（文本模式输出到 `stdout`，`--json` 模式输出到 `stderr`）；存在活动回滚日志时再次运行 `--apply` 会被拒绝。核对输出条目后启动代理（在另一终端运行 `ocx start` 或运行 `ocx ensure`），再通过 `printf '%s\n' "$API_KEY" | ocx account add-key <provider>`（管道标准输入）或 `ocx login <provider>` 添加凭据。
+- **恢复（`--restore`）：** 独立的回滚路径（而非添加凭据的后续步骤），要求代理已停止（`ocx stop`），在 Remote Link Child 上会被拒绝，且不接受 `--source`、`--provider` 或 `--allow-private-network`。它会以只读字节方式检查 `auth.json`（不可读或格式损坏时安全保留），仅从活动日志中移除仍保持导入时无密钥状态、未被选为 `defaultProvider`，且未被路由、组合（combos）、回退策略（fallback policy）、OAuth 账户或 API 密钥引用的提供商。
 
 ## 认证
 

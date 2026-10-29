@@ -2,9 +2,10 @@
  * Keyless CC-Switch provider configuration importer (preview, selective apply, and journaled restore).
  *
  * Security & privacy boundary:
- * - Structural non-secret extraction: reads values ONLY from an explicit allowlist of non-secret
- *   metadata fields (id, app_type, baseUrl, wire adapter, defaultModel) and never reads secret-named
- *   fields, free-text display names, or TOML comments.
+ * - Structural non-secret projection: projects values ONLY from an explicit allowlist of non-secret
+ *   metadata fields (id, app_type, baseUrl, wire adapter, defaultModel); source bytes are scanned
+ *   transiently while secret fields, free-text names, and TOML comments are skipped at the byte
+ *   level (never decoded into strings, written, or logged) and transient buffers are zeroed in finally.
  * - Enforces a narrow URL path grammar and identifier/model syntax checks as defense in depth.
  * - Source files are opened read-only with O_NOFOLLOW | O_NONBLOCK, descriptor-verified, and
  *   refused if an active SQLite -wal/-journal sidecar is non-empty.
