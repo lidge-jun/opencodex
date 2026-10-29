@@ -1,8 +1,11 @@
 /**
  * Byte-level and SQLite scalar source readers for keyless CC-Switch provider import.
  *
- * Enforces pre-decode metadata validation, comment-free TOML value extraction,
- * descriptor-verified non-blocking opens, and in-memory read-only SQLite deserialization.
+ * Security guarantee is structural: extracts values ONLY from an explicit allowlist of
+ * non-secret metadata fields and never reads secret-named fields, free-text names, or TOML
+ * comments. Applies narrow URL/identifier syntax checks as defense in depth, opens sources
+ * with O_NOFOLLOW | O_NONBLOCK descriptor verification, refuses active -wal sidecars, and
+ * deserializes SQLite read-only in memory.
  */
 import { Database } from "bun:sqlite";
 import {
@@ -30,14 +33,61 @@ export type CcSwitchInvalidReason =
   | "invalid_provider_name"
   | "unsupported_app_type"
   | "ambiguous_codex_provider"
-  | "secret_in_nonsecret_field"
+  | "disallowed_metadata"
   | "malformed_entry";
 
-export const SECRET_REFUSED_SENTINEL = "__SECRET_REFUSED__";
+export const METADATA_REFUSED_SENTINEL = "__METADATA_REFUSED__";
+export const URL_SYNTAX_REFUSED_SENTINEL = "__URL_REFUSED__";
 const MAX_SQLITE_BYTES = 32 * 1024 * 1024;
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_CODEX_TOML_BYTES = 64 * 1024;
-const SQLITE_MAGIC_PREFIX = "SQLite format 3";
+const SQLITE_MAGIC_BYTES = new Uint8Array([
+  0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66,
+  0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
+]);
+
+function hasSqliteMagicBytes(header: Uint8Array, bytesRead: number): boolean {
+  if (bytesRead < 16 || header.length < 16) return false;
+  for (let i = 0; i < 16; i++) {
+    if (header[i] !== SQLITE_MAGIC_BYTES[i]) return false;
+  }
+  return true;
+}
+
+function assertNoUncheckpointedSqliteWal(resolvedSqlitePath: string): void {
+  const walPath = `${resolvedSqlitePath}-wal`;
+  try {
+    const walStat = lstatSync(walPath);
+    if (!walStat.isFile() || walStat.size > 0) {
+      throw new CcSwitchImportError(
+        "CC-Switch SQLite source has uncheckpointed WAL changes (-wal is non-empty); close CC-Switch (or checkpoint the database) and retry.",
+      );
+    }
+  } catch (error) {
+    if (error instanceof CcSwitchImportError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new CcSwitchImportError(
+        "CC-Switch SQLite source has an unreadable WAL file (-wal); close CC-Switch (or checkpoint the database) and retry.",
+      );
+    }
+  }
+  const journalPath = `${resolvedSqlitePath}-journal`;
+  try {
+    const jStat = lstatSync(journalPath);
+    if (!jStat.isFile() || jStat.size > 0) {
+      throw new CcSwitchImportError(
+        "CC-Switch SQLite source has an active rollback journal (-journal); close CC-Switch and retry.",
+      );
+    }
+  } catch (error) {
+    if (error instanceof CcSwitchImportError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new CcSwitchImportError(
+        "CC-Switch SQLite source has an unreadable rollback journal (-journal); close CC-Switch and retry.",
+      );
+    }
+  }
+}
 
 let sourceOpenHookForTests: ((resolvedPath: string) => void) | null = null;
 export function setCcSwitchSourceOpenHookForTests(hook: ((resolvedPath: string) => void) | null): void {
@@ -363,10 +413,88 @@ function containsForbiddenBytes(slice: Uint8Array): boolean {
   return false;
 }
 
+const ALLOWED_API_TERMINAL_PATH_SEGMENTS = [
+  "api",
+  "openai",
+  "anthropic",
+  "codex",
+  "chat",
+  "responses",
+  "gateway",
+  "compat",
+  "models",
+  "inference",
+  "llm",
+  "proxy",
+] as const;
+
+function isApiVersionSegmentBytes(seg: Uint8Array): boolean {
+  // Matches v1..v9, v1.1, v1beta, v1beta1, etc.
+  if (seg.length < 2 || seg.length > 10 || seg[0] !== 0x76 || !(seg[1]! >= 0x31 && seg[1]! <= 0x39)) {
+    return false;
+  }
+  for (let i = 2; i < seg.length; i++) {
+    const b = seg[i]!;
+    if (!isLowerByte(b) && !isDigitByte(b) && b !== 0x2e) return false;
+  }
+  return seg[seg.length - 1] !== 0x2e;
+}
+
+function isAllowedTerminalUrlSegmentBytes(seg: Uint8Array): boolean {
+  if (isApiVersionSegmentBytes(seg)) return true;
+  for (const allowed of ALLOWED_API_TERMINAL_PATH_SEGMENTS) {
+    if (equalsAsciiBytes(seg, allowed)) return true;
+  }
+  return false;
+}
+
+function validateAuthorityBytes(auth: Uint8Array): boolean {
+  if (auth.length === 0 || auth.length > 190) return false;
+  let hostEnd = auth.length;
+  if (auth[0] === 0x5b) {
+    // Bracketed IPv6 literal: [hex:...] with optional :port
+    let closeIdx = -1;
+    let sawColon = false;
+    for (let i = 1; i < auth.length; i++) {
+      const b = auth[i]!;
+      if (b === 0x5d) { closeIdx = i; break; }
+      if (b === 0x3a) sawColon = true;
+      else if (!isHexByte(b) && b !== 0x2e) return false;
+    }
+    if (closeIdx < 3 || !sawColon) return false;
+    if (closeIdx === auth.length - 1) return true;
+    if (auth[closeIdx + 1] !== 0x3a) return false;
+    hostEnd = closeIdx + 1;
+  } else {
+    const colonIdx = auth.indexOf(0x3a);
+    if (colonIdx === 0) return false;
+    const host = colonIdx > 0 ? auth.subarray(0, colonIdx) : auth;
+    if (host.length === 0 || host.length > 180) return false;
+    if (host[0] === 0x2e || host[0] === 0x2d || host[host.length - 1] === 0x2d) return false;
+    for (let i = 0; i < host.length; i++) {
+      const b = host[i]!;
+      if (!isAlphaByte(b) && !isDigitByte(b) && b !== 0x2e && b !== 0x2d) return false;
+      if (b === 0x2e && i > 0 && host[i - 1] === 0x2e) return false;
+    }
+    if (colonIdx < 0) return true;
+    hostEnd = colonIdx;
+  }
+  // Validate :port (1..65535)
+  const portSlice = auth.subarray(hostEnd + 1);
+  if (portSlice.length === 0 || portSlice.length > 5) return false;
+  let port = 0;
+  for (let i = 0; i < portSlice.length; i++) {
+    const b = portSlice[i]!;
+    if (!isDigitByte(b)) return false;
+    port = port * 10 + (b - 0x30);
+  }
+  return port >= 1 && port <= 65535;
+}
+
 /**
- * Strict byte-level metadata policy enforced BEFORE decoding into a JavaScript string.
- * Rejects both prefixed and prefixless credentials (hex keys, high-entropy mixed tokens,
- * digit-heavy random segments, and credential-bearing URL path segments).
+ * Byte-level syntax & defense-in-depth validation enforced BEFORE decoding into a JavaScript string.
+ * Note: the primary security boundary is structural (secret-named fields are never read); this
+ * enforces narrow URL/identifier/model syntax as defense in depth.
  */
 export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKind): boolean {
   const len = slice.length;
@@ -414,47 +542,53 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
     let firstPathSlash = -1;
     for (let i = schemeEnd + 3; i < len; i++) {
       const b = slice[i]!;
-      // Reject @, ?, #, quotes, backslashes
-      if (b === 0x40 || b === 0x3f || b === 0x23 || b === 0x22 || b === 0x27 || b === 0x5c) return false;
-      if (!isAlphaByte(b) && !isDigitByte(b) && b !== 0x2e && b !== 0x2d && b !== 0x5f && b !== 0x3a && b !== 0x2f && b !== 0x7e && b !== 0x25 && b !== 0x5b && b !== 0x5d) {
-        return false;
-      }
+      // Reject @, ?, #, %, ~, quotes, backslashes
+      if (b === 0x40 || b === 0x3f || b === 0x23 || b === 0x25 || b === 0x7e || b === 0x22 || b === 0x27 || b === 0x5c) return false;
       if (b === 0x2f && firstPathSlash < 0) firstPathSlash = i;
     }
+    const authorityEnd = firstPathSlash >= 0 ? firstPathSlash : len;
+    if (!validateAuthorityBytes(slice.subarray(schemeEnd + 3, authorityEnd))) return false;
     if (firstPathSlash < 0) return true;
     const pathLen = len - firstPathSlash;
+    if (pathLen === 1) return true;
     if (pathLen > 48) return false;
 
+    const pathEnd = slice[len - 1] === 0x2f ? len - 1 : len;
+    if (pathEnd <= firstPathSlash + 1) return false; // Reject "//"
     let segStart = firstPathSlash + 1;
     let segCount = 0;
     let totalPathDigits = 0;
-    for (let i = firstPathSlash + 1; i <= len; i++) {
-      if (i < len && slice[i] !== 0x2f) continue;
+    let lastSeg: Uint8Array | null = null;
+    for (let i = firstPathSlash + 1; i <= pathEnd; i++) {
+      if (i < pathEnd && slice[i] !== 0x2f) continue;
       const segLen = i - segStart;
-      if (segLen > 0) {
-        segCount++;
-        if (segCount > 4 || segLen > 20) return false;
-        let segDigits = 0;
-        let segHex = true;
-        let hasLower = false;
-        let hasUpper = false;
-        for (let k = segStart; k < i; k++) {
-          const b = slice[k]!;
-          if (!isAlphaByte(b) && !isDigitByte(b) && b !== 0x2e && b !== 0x2d && b !== 0x5f) return false;
-          if (isDigitByte(b)) segDigits++;
-          if (!isHexByte(b)) segHex = false;
-          if (isLowerByte(b)) hasLower = true;
-          if (isUpperByte(b)) hasUpper = true;
-        }
-        totalPathDigits += segDigits;
-        if (segDigits >= 3) return false;
-        if (segHex && segLen >= 10) return false;
-        if (segLen >= 12 && hasLower && hasUpper) return false;
+      if (segLen <= 0 || segLen > 20) return false; // Reject empty interior segment "//"
+      segCount++;
+      if (segCount > 4) return false;
+      const seg = slice.subarray(segStart, i);
+      if (equalsAsciiBytes(seg, ".") || equalsAsciiBytes(seg, "..")) return false;
+      const firstB = seg[0]!;
+      const lastB = seg[segLen - 1]!;
+      if ((!isLowerByte(firstB) && !isDigitByte(firstB)) || (!isLowerByte(lastB) && !isDigitByte(lastB))) {
+        return false;
       }
+      let segDigits = 0;
+      let segHex = true;
+      for (let k = 0; k < segLen; k++) {
+        const b = seg[k]!;
+        // Strict lowercase [a-z0-9._-] path grammar only
+        if (!isLowerByte(b) && !isDigitByte(b) && b !== 0x2e && b !== 0x2d && b !== 0x5f) return false;
+        if (isDigitByte(b)) segDigits++;
+        if (!isHexByte(b)) segHex = false;
+      }
+      totalPathDigits += segDigits;
+      if (segDigits >= 3) return false;
+      if (segHex && segLen >= 8) return false;
+      lastSeg = seg;
       segStart = i + 1;
     }
     if (totalPathDigits > 2) return false;
-    return true;
+    return lastSeg !== null && isAllowedTerminalUrlSegmentBytes(lastSeg);
   }
 
   // kind === "id" or "model"
@@ -510,8 +644,8 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
   return true;
 }
 
-export function looksLikeSecretValue(value: string, kind: MetadataFieldKind): boolean {
-  if (value === SECRET_REFUSED_SENTINEL || hasControlChars(value)) return true;
+export function isDisallowedMetadataValue(value: string, kind: MetadataFieldKind): boolean {
+  if (value === METADATA_REFUSED_SENTINEL || value === URL_SYNTAX_REFUSED_SENTINEL || hasControlChars(value)) return true;
   const bytes = Buffer.from(value, "utf8");
   try {
     return !isAllowedMetadataBytes(bytes, kind);
@@ -628,8 +762,8 @@ function parseTomlHeaderBytes(
   if (equalsAsciiBytes(inner, "__MULTILINE_REFUSED__") || equalsAsciiBytes(inner, "__MALFORMED_LINE__")) {
     return { kind: "error", reason: "malformed_entry" };
   }
-  if (equalsAsciiBytes(inner, SECRET_REFUSED_SENTINEL)) {
-    return { kind: "error", reason: "secret_in_nonsecret_field" };
+  if (equalsAsciiBytes(inner, METADATA_REFUSED_SENTINEL)) {
+    return { kind: "error", reason: "disallowed_metadata" };
   }
 
   const segments: Uint8Array[] = [];
@@ -671,7 +805,7 @@ function parseTomlHeaderBytes(
     if (segments.length === 2 && equalsAsciiBytes(segments[0]!, "model_providers")) {
       const idSlice = segments[1]!;
       if (!isAllowedMetadataBytes(idSlice, "id")) {
-        return { kind: "error", reason: "secret_in_nonsecret_field" };
+        return { kind: "error", reason: "disallowed_metadata" };
       }
       const id = decoder.decode(idSlice);
       return { kind: "model_provider", id };
@@ -818,11 +952,19 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     if (!unescaped || unescaped.length === 0) return { ok: false, reason: "malformed_entry" };
     let value: string;
     try {
-      if (!isAllowedMetadataBytes(unescaped, tomlKeyMetadataKind(key))) {
-        return { ok: false, reason: "secret_in_nonsecret_field" };
+      const metaKind = tomlKeyMetadataKind(key);
+      if (metaKind === "url" && equalsAsciiBytes(unescaped, URL_SYNTAX_REFUSED_SENTINEL)) {
+        return { ok: false, reason: "invalid_base_url" };
+      }
+      if (equalsAsciiBytes(unescaped, METADATA_REFUSED_SENTINEL)) {
+        return { ok: false, reason: "disallowed_metadata" };
+      }
+      if (!isAllowedMetadataBytes(unescaped, metaKind)) {
+        return { ok: false, reason: metaKind === "url" ? "invalid_base_url" : "disallowed_metadata" };
       }
       value = decoder.decode(unescaped);
-      if (value === SECRET_REFUSED_SENTINEL) return { ok: false, reason: "secret_in_nonsecret_field" };
+      if (value === URL_SYNTAX_REFUSED_SENTINEL) return { ok: false, reason: "invalid_base_url" };
+      if (value === METADATA_REFUSED_SENTINEL) return { ok: false, reason: "disallowed_metadata" };
     } catch {
       return { ok: false, reason: "malformed_entry" };
     } finally {
@@ -878,18 +1020,19 @@ function sqlLineExpr(col: string): string {
 }
 
 function sqlSafeScalar(expr: string, kind: MetadataFieldKind): string {
+  const refused = kind === "url" ? URL_SYNTAX_REFUSED_SENTINEL : METADATA_REFUSED_SENTINEL;
   if (kind === "app") {
     return `CASE
       WHEN ${expr} IS NULL OR ${expr} = '' THEN ''
       WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), 'app') = 1 THEN ${expr}
-      ELSE '${SECRET_REFUSED_SENTINEL}'
+      ELSE '${METADATA_REFUSED_SENTINEL}'
     END`;
   }
   return `CASE
     WHEN ${expr} IS NULL THEN NULL
     WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), '${kind}') = 1
     THEN ${expr}
-    ELSE '${SECRET_REFUSED_SENTINEL}'
+    ELSE '${refused}'
   END`;
 }
 
@@ -1075,7 +1218,7 @@ WITH RECURSIVE
               CASE
                 WHEN ocx_is_safe_toml_token(CAST(hdr_seg AS BLOB), 'id', 1) = 1
                   THEN substr(line, 1, close_b)
-                ELSE '[${SECRET_REFUSED_SENTINEL}]'
+                ELSE '[${METADATA_REFUSED_SENTINEL}]'
               END
             WHEN close_b > 0 AND (ltrim(substr(line, close_b + 1)) = '' OR substr(ltrim(substr(line, close_b + 1)), 1, 1) = '#') THEN '[other]'
             ELSE '[__MALFORMED_LINE__]'
@@ -1088,22 +1231,22 @@ WITH RECURSIVE
             WHEN norm_key = 'model' THEN
               CASE
                 WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'model', 0) = 1 THEN 'model = ' || rhs_tok
-                ELSE 'model = "${SECRET_REFUSED_SENTINEL}"'
+                ELSE 'model = "${METADATA_REFUSED_SENTINEL}"'
               END
             WHEN norm_key IN ('base_url', 'openai_base_url') THEN
               CASE
                 WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'url', 0) = 1 THEN norm_key || ' = ' || rhs_tok
-                ELSE norm_key || ' = "${SECRET_REFUSED_SENTINEL}"'
+                ELSE norm_key || ' = "${URL_SYNTAX_REFUSED_SENTINEL}"'
               END
             WHEN norm_key = 'model_provider' THEN
               CASE
                 WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'id', 0) = 1 THEN 'model_provider = ' || rhs_tok
-                ELSE 'model_provider = "${SECRET_REFUSED_SENTINEL}"'
+                ELSE 'model_provider = "${METADATA_REFUSED_SENTINEL}"'
               END
             WHEN norm_key = 'wire_api' THEN
               CASE
                 WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'wire', 0) = 1 THEN 'wire_api = ' || rhs_tok
-                ELSE 'wire_api = "${SECRET_REFUSED_SENTINEL}"'
+                ELSE 'wire_api = "${METADATA_REFUSED_SENTINEL}"'
               END
             ELSE 'ignored_key = "omitted"'
           END
@@ -1130,10 +1273,12 @@ ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC, b.rid ASC, p.idx ASC
 
 function decodeSafeBlob(blob: Uint8Array | null, kind: MetadataFieldKind, decoder: TextDecoder): string | null {
   if (blob === null) return null;
+  const refused = kind === "url" ? URL_SYNTAX_REFUSED_SENTINEL : METADATA_REFUSED_SENTINEL;
   try {
     if (kind === "app" && blob.length === 0) return "";
-    if (equalsAsciiBytes(blob, SECRET_REFUSED_SENTINEL)) return SECRET_REFUSED_SENTINEL;
-    if (!isAllowedMetadataBytes(blob, kind)) return SECRET_REFUSED_SENTINEL;
+    if (equalsAsciiBytes(blob, METADATA_REFUSED_SENTINEL)) return METADATA_REFUSED_SENTINEL;
+    if (equalsAsciiBytes(blob, URL_SYNTAX_REFUSED_SENTINEL)) return URL_SYNTAX_REFUSED_SENTINEL;
+    if (!isAllowedMetadataBytes(blob, kind)) return refused;
     return decoder.decode(blob);
   } finally {
     blob.fill(0);
@@ -1315,7 +1460,8 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
   }
 
   function decodeMetadataStringFromBounds(bounds: { start: number; end: number }, kind: MetadataFieldKind): string {
-    if (bounds.end - bounds.start > 512) return SECRET_REFUSED_SENTINEL;
+    const refused = kind === "url" ? URL_SYNTAX_REFUSED_SENTINEL : METADATA_REFUSED_SENTINEL;
+    if (bounds.end - bounds.start > 512) return refused;
     const out = new Uint8Array(bounds.end - bounds.start);
     let readIdx = bounds.start;
     let writeIdx = 0;
@@ -1328,23 +1474,23 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
           continue;
         }
         readIdx++;
-        if (readIdx >= bounds.end) return SECRET_REFUSED_SENTINEL;
+        if (readIdx >= bounds.end) return refused;
         const esc = bytes[readIdx]!;
         readIdx++;
         if (esc === 0x22 || esc === 0x5c || esc === 0x2f) out[writeIdx++] = esc;
         else if (esc === 0x6e || esc === 0x72 || esc === 0x74 || esc === 0x62 || esc === 0x66) {
-          return SECRET_REFUSED_SENTINEL;
+          return refused;
         } else if (esc === 0x75) {
           const cp = parseHex4Bytes(bytes.subarray(0, bounds.end), readIdx);
-          if (cp <= 0x20 || cp >= 0x7f) return SECRET_REFUSED_SENTINEL;
+          if (cp <= 0x20 || cp >= 0x7f) return refused;
           readIdx += 4;
           writeIdx += encodeCodePointUtf8(cp, out, writeIdx);
         } else {
-          return SECRET_REFUSED_SENTINEL;
+          return refused;
         }
       }
       const view = out.subarray(0, writeIdx);
-      if (!isAllowedMetadataBytes(view, kind)) return SECRET_REFUSED_SENTINEL;
+      if (!isAllowedMetadataBytes(view, kind)) return refused;
       return decoder.decode(view);
     } finally {
       out.fill(0);
@@ -1748,11 +1894,12 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
       }
       size = opened.size;
       const n = readSync(fd, header, 0, 16, 0);
-      if (n === 16 && header.subarray(0, 15).toString("ascii") === SQLITE_MAGIC_PREFIX && header[15] === 0) {
+      if (hasSqliteMagicBytes(header, n)) {
         isSqlite = true;
         if (size === 0 || size > MAX_SQLITE_BYTES) {
           throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
         }
+        assertNoUncheckpointedSqliteWal(resolved);
       } else if (requireSqlite || /\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
         throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
       } else {
@@ -1769,6 +1916,9 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
       }
       if (offset !== size) {
         throw new CcSwitchImportError("CC-Switch source file changed while reading.");
+      }
+      if (isSqlite) {
+        assertNoUncheckpointedSqliteWal(resolved);
       }
       assertPlainLocalPath(resolved);
       const afterStat = lstatSync(resolved);

@@ -378,8 +378,8 @@ Drives no management route.
 | `--allow-private-network` | boolean | Permit loopback or private-network provider base URLs. |
 | `--json` | boolean | Emit the preview, apply, or restore report as JSON. |
 
-- Extracts only provider IDs, app types, base URLs, wire dialects and default models under a strict charset, length and segment policy; free-text names, TOML comments and credential fields are dropped before decoding, and temporary buffers are zeroed in finally.
-- Only import from a trusted local CC-Switch source and verify the printed destination URLs before adding credentials. Source files are opened read-only with O_NOFOLLOW|O_NONBLOCK and descriptor identity checks; restore inspects auth.json read-only at the byte level and retains any provider that was edited, given credentials, or referenced in routing.
+- Reads values only from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models) and never reads secret fields, free-text names, or TOML comments; narrow URL path grammar and identifier syntax checks act as defense in depth, and temporary buffers are zeroed in finally.
+- Only import from a trusted local CC-Switch source: apply prints every imported ID, model, and destination URL before writing, refuses active SQLite -wal sidecars until CC-Switch is closed, and opens sources read-only with O_NOFOLLOW|O_NONBLOCK descriptor checks; restore inspects auth.json read-only at the byte level and retains any provider that was edited, given credentials, or referenced in routing.
 
 ### `ocx models list`
 

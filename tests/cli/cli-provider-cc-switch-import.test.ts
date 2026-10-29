@@ -30,6 +30,17 @@ function makeDeps(calls: unknown[], invalid = 0, eligible = 1): CcSwitchImportCo
           retainedNames: [],
         };
       }
+      const providers = eligible > 0 ? [{
+        name: "acme",
+        sourceId: "acme",
+        appType: "claude",
+        adapter: "anthropic",
+        baseUrl: "https://api.acme.example",
+        defaultModel: "claude-sonnet-4-6",
+      }] : [];
+      if (options.mode === "apply" && providers.length > 0) {
+        options.onBeforeApplyWrite?.(providers);
+      }
       return {
         mode: options.mode,
         discovered: eligible + invalid,
@@ -39,13 +50,7 @@ function makeDeps(calls: unknown[], invalid = 0, eligible = 1): CcSwitchImportCo
         conflictNames: [],
         invalid,
         invalidReasons: invalid > 0 ? { malformed_entry: invalid } : {},
-        providers: eligible > 0 ? [{
-          name: "acme",
-          sourceId: "acme",
-          appType: "claude",
-          adapter: "anthropic",
-          baseUrl: "https://api.acme.example",
-        }] : [],
+        providers,
       };
     },
   };
@@ -72,6 +77,7 @@ describe("ocx provider import-cc-switch CLI", () => {
   test("dispatches --apply and --restore and rejects invalid flag combinations", async () => {
     const calls: unknown[] = [];
     expect(await cmdProviderCcSwitchImport(["--source", "cc-switch.db", "--apply"], makeDeps(calls))).toBe(0);
+    expect(output.join("\n")).toContain("id=acme (source=acme, claude -> anthropic) model=claude-sonnet-4-6 url=https://api.acme.example");
     expect(output.join("\n")).toContain("Keyless provider entries saved");
 
     output.length = 0;

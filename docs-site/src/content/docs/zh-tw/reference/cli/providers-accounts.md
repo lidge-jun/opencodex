@@ -43,7 +43,7 @@ ocx models live --provider ark --json
 
 ### 無金鑰匯入 CC-Switch 供應商
 
-`ocx provider import-cc-switch` 會在記憶體中唯讀開啟本機 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`；若有未檢查點的 WAL 變更請先關閉 CC-Switch）或 JSON 檔案（不寫入暫存快照檔），僅擷取符合結構化長度、字元集與分段白名單的供應商 ID、應用類型、base URL、協定轉接器與預設模型。自由文字名稱、TOML 註解與憑證欄位在解碼前即被捨棄，暫存位元組緩衝區在 `finally` 中清零；但結構規則無法區分符合一般識別碼或 URL 語法的字串，且後續新增的金鑰會傳送到匯入的 `baseUrl`，因此請僅從受信任的來源檔案匯入並核對 `--apply` 輸出的目標 URL。預設預覽（`--source <FILE>`）不寫入任何內容；`--apply` 與 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 選擇項目，對本機或私有網路位址加上 `--allow-private-network`；套用後先啟動代理（`ocx start`），再透過管線標準輸入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）新增金鑰。`--restore` 會以唯讀位元組方式檢查 `auth.json`（無法讀取或格式損毀時安全保留），僅移除未修改且未被路由或 OAuth 帳號參照的匯入項目。
+`ocx provider import-cc-switch` 僅讀取明確白名單中的非機密中繼資料欄位（供應商 ID、應用類型、base URL、協定轉接器與預設模型），絕不讀取金鑰／憑證欄位、自由文字名稱或 TOML 註解。本機 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 檔案在記憶體中唯讀開啟且不寫入暫存檔；若存在非空的 `-wal` 檔案則會拒絕匯入並提示先關閉 CC-Switch 再重試。窄化的小寫 API 路徑語法（`[a-z0-9._-]`，如 `/v1`、`/api/v1`、`/compatible-mode/v1`）與語法檢查僅作為縱深防禦（不回顯被拒值），暫存位元組緩衝區在 `finally` 中清零。請僅從受信任的本機來源檔案匯入，並在新增金鑰前核對 `--apply` 在寫入前輸出的全部 ID、模型與目標 URL。預設預覽（`--source <FILE>`）不寫入任何內容；`--apply` 與 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 選擇項目，對本機或私有網路位址加上 `--allow-private-network`；套用後先啟動代理（`ocx start`），再透過管線標準輸入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）新增金鑰。`--restore` 會以唯讀位元組方式檢查 `auth.json`（無法讀取或格式損毀時安全保留），僅移除未修改且未被路由或 OAuth 帳號參照的匯入項目。
 
 ## 認證
 

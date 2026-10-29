@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,19 +15,22 @@ import { getAuthStorePath, saveCredential } from "../../src/oauth/store";
 import {
   CC_SWITCH_IMPORT_JOURNAL_FILENAME,
   CcSwitchImportError,
-  SECRET_REFUSED_SENTINEL,
+  METADATA_REFUSED_SENTINEL,
+  URL_SYNTAX_REFUSED_SENTINEL,
   parseCodexTomlBytes,
   readSqliteRows,
   runCcSwitchProviderImport,
   scanCcSwitchJsonBytes,
   setCcSwitchSourceOpenHookForTests,
 } from "../../src/providers/cc-switch-import";
+import { cmdProviderCcSwitchImport } from "../../src/cli/provider-cc-switch-import";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Runtime-assembled canary so privacy:scan never sees a literal token prefix in the source file.
 const CANARY_SECRET = ["sk", "canary", "DO", "NOT", "READ", "9876543210abcdef"].join("-");
 const PREFIXLESS_HEX_SECRET = ["9f86d081", "884c7d65", "9a2feaa0", "c55ad015"].join("");
 const PREFIXLESS_MIXED_SECRET = "Ab3Def9Gh1Jk2Lm4Np6Qr8St0Uv";
+const WORD_CANARY = "violetotter";
 
 let scratch: string;
 let targetHome: string;
@@ -69,7 +72,7 @@ function createSqliteFixture(
     } finally {
       insert.finalize();
     }
-    if (walMode) db.run("PRAGMA wal_checkpoint(PASSIVE);");
+    if (walMode) db.run("PRAGMA wal_checkpoint(TRUNCATE);");
   } finally {
     db.close();
   }
@@ -321,9 +324,9 @@ describe("CC-Switch keyless provider import", () => {
     } finally {
       decodeSpy.mockRestore();
     }
-    expect(secretHeaderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
-    expect(escapedQuoteHeaderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
-    expect(escapedQuoteModelProviderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
+    expect(secretHeaderResult).toEqual({ ok: false, reason: "disallowed_metadata" });
+    expect(escapedQuoteHeaderResult).toEqual({ ok: false, reason: "disallowed_metadata" });
+    expect(escapedQuoteModelProviderResult).toEqual({ ok: false, reason: "disallowed_metadata" });
     expect(decodedStrings.join("|")).not.toContain('foo"bar');
     expect(rawBytes.every(b => b === 0)).toBe(true);
     expect(JSON.stringify(scanned)).not.toContain(CANARY_SECRET);
@@ -485,7 +488,7 @@ describe("CC-Switch keyless provider import", () => {
         }),
       },
       {
-        id: "secret-in-url",
+        id: "hex-path-url",
         app_type: "openai",
         name: "SecretUrl",
         settings_config: JSON.stringify({
@@ -590,8 +593,8 @@ describe("CC-Switch keyless provider import", () => {
     expect(projected).not.toContain("AbcDefGhiJ1-prov");
     expect(projected).not.toContain("AbCdEfGhIjKl");
     expect(projected).not.toContain('foo"bar');
-    expect(rawSqliteRows.find(r => r.id === "mixed-url-path")?.genericBaseUrl).toBe(SECRET_REFUSED_SENTINEL);
-    expect(rawSqliteRows.find(r => r.id === "bad-app-kind")?.appType).toBe(SECRET_REFUSED_SENTINEL);
+    expect(rawSqliteRows.find(r => r.id === "mixed-url-path")?.genericBaseUrl).toBe(URL_SYNTAX_REFUSED_SENTINEL);
+    expect(rawSqliteRows.find(r => r.id === "bad-app-kind")?.appType).toBe(METADATA_REFUSED_SENTINEL);
     for (const s of decodedDuringSqlite) {
       expect(s).not.toContain(PREFIXLESS_HEX_SECRET);
       expect(s).not.toContain(PREFIXLESS_MIXED_SECRET);
@@ -608,7 +611,8 @@ describe("CC-Switch keyless provider import", () => {
       expect(preview.invalidReasons).toEqual({
         malformed_entry: 3,
         missing_base_url: 1,
-        secret_in_nonsecret_field: 7,
+        invalid_base_url: 2,
+        disallowed_metadata: 5,
         private_network_refused: 1,
         ambiguous_codex_provider: 1,
       });
@@ -719,5 +723,224 @@ describe("CC-Switch keyless provider import", () => {
     await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath })).rejects.toThrow(
       /changed while opening/,
     );
+  });
+
+  test("F1/F2: word-shaped canary in secret fields or 16-byte header never materializes, URL path grammar rejects non-API paths, and --apply prints before writing", async () => {
+    const sqlPath = join(sourceDir, "word-canary.db");
+    const db = new Database(sqlPath, { create: true });
+    try {
+      db.run(`CREATE TABLE providers (
+        id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, settings_config TEXT NOT NULL,
+        website_url TEXT, notes TEXT, meta TEXT NOT NULL DEFAULT '{}', sort_index INTEGER, PRIMARY KEY (id, app_type)
+      )`);
+      db.prepare("INSERT INTO providers (id, app_type, name, settings_config, website_url, notes, meta, sort_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").run(
+        "dashscope-compat",
+        "openai",
+        WORD_CANARY,
+        JSON.stringify({
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          model: "qwen3-coder-plus",
+          apiKey: WORD_CANARY,
+          api_key: WORD_CANARY,
+          env: { OPENAI_API_KEY: WORD_CANARY },
+          auth: { bearer: WORD_CANARY },
+        }),
+        `https://${WORD_CANARY}.example.com`,
+        WORD_CANARY,
+        JSON.stringify({ token: WORD_CANARY }),
+        1,
+      );
+      for (const [idx, badUrl] of [
+        `https://api.example.com/${WORD_CANARY}`,
+        `https://api.example.com/v1/${WORD_CANARY}`,
+        "https://api.example.com/V1",
+        "https://api.example.com/a/b/c/d/v1",
+        "https://api.example.com/v1/%76ioletotter",
+        `https://api.example.com/v1?key=${WORD_CANARY}`,
+      ].entries()) {
+        db.prepare("INSERT INTO providers (id, app_type, name, settings_config, sort_index) VALUES (?1, ?2, ?3, ?4, ?5)").run(
+          `bad-url-${idx}`,
+          "openai",
+          WORD_CANARY,
+          JSON.stringify({ baseUrl: badUrl, apiKey: WORD_CANARY }),
+          idx + 2,
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    // Compact JSON placing WORD_CANARY inside bytes 0..15 of the file header AND in secret fields,
+    // plus an invalid .db file starting with WORD_CANARY in bytes 0..15.
+    const headerJsonPath = join(sourceDir, "header-canary.json");
+    const headerJsonString = JSON.stringify({
+      [WORD_CANARY]: WORD_CANARY,
+      providers: {
+        "ok-codex": {
+          name: WORD_CANARY,
+          app_type: "codex",
+          apiKey: WORD_CANARY,
+          settings_config: {
+            auth: { OPENAI_API_KEY: WORD_CANARY },
+            config: [
+              `model = "gpt-5.6-sol" # ${WORD_CANARY}`,
+              `api_key = "${WORD_CANARY}"`,
+              `[model_providers.ok]`,
+              `base_url = "https://api.openai.com/v1" # ${WORD_CANARY}`,
+              `[other]`,
+              `base_url = "https://api.example.com/${WORD_CANARY}"`,
+            ].join("\n"),
+          },
+        },
+        "bad-json-url": {
+          app_type: "openai",
+          settings_config: {
+            baseUrl: `https://api.example.com/v1/${WORD_CANARY}`,
+          },
+        },
+      },
+    });
+    expect(headerJsonString.slice(0, 15)).toContain(WORD_CANARY);
+    writeFileSync(headerJsonPath, headerJsonString);
+    const fakeDbPath = join(sourceDir, "fake-header.db");
+    writeFileSync(fakeDbPath, `${WORD_CANARY}0123456789abcdef`);
+
+    const observedStrings: string[] = [];
+    const origDecode = TextDecoder.prototype.decode;
+    const origBufToString = Buffer.prototype.toString;
+    const origFromCharCode = String.fromCharCode;
+    const origFromCodePoint = String.fromCodePoint;
+    const decodeSpy = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: unknown[]) {
+      const s = origDecode.apply(this, args as [BufferSource?, TextDecodeOptions?]);
+      observedStrings.push(s);
+      return s;
+    });
+    const bufStrSpy = spyOn(Buffer.prototype, "toString").mockImplementation(function (this: Buffer, ...args: unknown[]) {
+      const s = origBufToString.apply(this, args as [BufferEncoding?, number?, number?]);
+      observedStrings.push(s);
+      return s;
+    });
+    const charCodeSpy = spyOn(String, "fromCharCode").mockImplementation((...codes: number[]) => {
+      const s = origFromCharCode(...codes);
+      observedStrings.push(s);
+      return s;
+    });
+    const codePointSpy = spyOn(String, "fromCodePoint").mockImplementation((...codes: number[]) => {
+      const s = origFromCodePoint(...codes);
+      observedStrings.push(s);
+      return s;
+    });
+
+    const cliLines: string[] = [];
+    let printedBeforeDiskCommit = false;
+    const logSpy = spyOn(console, "log").mockImplementation(v => { cliLines.push(String(v)); });
+    const errSpy = spyOn(console, "error").mockImplementation(v => { cliLines.push(String(v)); });
+    try {
+      await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: fakeDbPath })).rejects.toThrow(/not a valid SQLite 3 file/);
+      const jsonPreview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: headerJsonPath });
+      expect(jsonPreview).toMatchObject({
+        mode: "preview",
+        discovered: 2,
+        eligible: 1,
+        invalid: 1,
+        invalidReasons: { invalid_base_url: 1 },
+      });
+      expect(JSON.stringify(jsonPreview)).not.toContain(WORD_CANARY);
+
+      // Direct --apply without prior preview must print imported id, model, and URL BEFORE writing config.json!
+      setPersistedConfigMutationBeforeCommitForTests(() => {
+        const currentOnDisk = loadConfig();
+        expect(currentOnDisk.providers["dashscope-compat"]).toBeUndefined();
+        const printedSoFar = cliLines.join("\n");
+        expect(printedSoFar).toContain("id=dashscope-compat");
+        expect(printedSoFar).toContain("model=qwen3-coder-plus");
+        expect(printedSoFar).toContain("url=https://dashscope.aliyuncs.com/compatible-mode/v1");
+        printedBeforeDiskCommit = true;
+      });
+      const exitCode = await cmdProviderCcSwitchImport(["--source", sqlPath, "--apply"]);
+      expect(exitCode).toBe(0);
+      expect(printedBeforeDiskCommit).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+      decodeSpy.mockRestore();
+      bufStrSpy.mockRestore();
+      charCodeSpy.mockRestore();
+      codePointSpy.mockRestore();
+    }
+
+    for (const s of observedStrings) {
+      expect(s).not.toContain(WORD_CANARY);
+    }
+    expect(cliLines.join("\n")).not.toContain(WORD_CANARY);
+    expect(cliLines.join("\n")).toContain("invalid_base_url=6");
+    expect(readFileSync(getConfigPath(), "utf8")).not.toContain(WORD_CANARY);
+    expect(readFileSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME), "utf8")).not.toContain(WORD_CANARY);
+  });
+
+  test("F3: refuses open WAL database holding uncheckpointed inserts and updates until checkpointed", async () => {
+    const walDbPath = join(sourceDir, "live-wal.db");
+    const writer = new Database(walDbPath, { create: true });
+    try {
+      writer.run("PRAGMA journal_mode = WAL;");
+      writer.run("CREATE TABLE providers (id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, settings_config TEXT NOT NULL, sort_index INTEGER, PRIMARY KEY (id, app_type))");
+      writer.prepare("INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)").run(
+        "existing-prov",
+        "openai",
+        "Existing",
+        JSON.stringify({ baseUrl: "https://old.acme.example/v1" }),
+        1,
+      );
+      writer.run("PRAGMA wal_checkpoint(TRUNCATE);");
+
+      // Disable auto-checkpoint so subsequent UPDATE and INSERT stay exclusively in live-wal.db-wal.
+      writer.run("PRAGMA wal_autocheckpoint = 0;");
+      writer.prepare("UPDATE providers SET settings_config = ?1 WHERE id = 'existing-prov'").run(
+        JSON.stringify({ baseUrl: "https://updated.acme.example/v1" }),
+      );
+      writer.prepare("INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)").run(
+        "uncheckpointed-prov",
+        "claude",
+        "Uncheckpointed",
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://claude-new.acme.example/v1" } }),
+        2,
+      );
+      expect(statSync(`${walDbPath}-wal`).size).toBeGreaterThan(0);
+
+      expect(() => readSqliteRows(walDbPath)).toThrow(/uncheckpointed WAL changes.*close CC-Switch/i);
+      await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: walDbPath })).rejects.toThrow(
+        /uncheckpointed WAL changes.*close CC-Switch/i,
+      );
+      await expect(runCcSwitchProviderImport({ mode: "apply", sourcePath: walDbPath })).rejects.toThrow(
+        /uncheckpointed WAL changes.*close CC-Switch/i,
+      );
+
+      // Checkpoint and close writer (simulating user closing CC-Switch); retry now succeeds with updated data.
+      writer.run("PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally {
+      writer.close();
+    }
+
+    const afterClose = await runCcSwitchProviderImport({ mode: "preview", sourcePath: walDbPath });
+    expect(afterClose.mode).toBe("preview");
+    if (afterClose.mode === "preview") {
+      expect(afterClose.eligible).toBe(2);
+      expect(afterClose.providers).toEqual([
+        {
+          name: "existing-prov",
+          sourceId: "existing-prov",
+          appType: "openai",
+          adapter: "openai-chat",
+          baseUrl: "https://updated.acme.example/v1",
+        },
+        {
+          name: "uncheckpointed-prov",
+          sourceId: "uncheckpointed-prov",
+          appType: "claude",
+          adapter: "anthropic",
+          baseUrl: "https://claude-new.acme.example/v1",
+        },
+      ]);
+    }
   });
 });

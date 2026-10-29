@@ -14,7 +14,17 @@ const SAFE_ERROR_CODES: Readonly<Record<string, string>> = {
   "No CC-Switch provider import journal found to restore.": "journal_missing",
   "Existing CC-Switch import journal is corrupt; inspect or restore before importing.": "journal_corrupt",
   "Existing CC-Switch import journal is unreadable; inspect or restore before importing.": "journal_unreadable",
+  "CC-Switch source does not contain one or more requested --provider IDs.": "provider_not_found",
+  "CC-Switch SQLite source has uncheckpointed WAL changes (-wal is non-empty); close CC-Switch (or checkpoint the database) and retry.": "sqlite_wal_active",
+  "CC-Switch SQLite source has an unreadable WAL file (-wal); close CC-Switch (or checkpoint the database) and retry.": "sqlite_wal_active",
+  "CC-Switch SQLite source has an active rollback journal (-journal); close CC-Switch and retry.": "sqlite_journal_active",
+  "CC-Switch SQLite source has an unreadable rollback journal (-journal); close CC-Switch and retry.": "sqlite_journal_active",
 };
+
+function formatCandidateLine(p: { name: string; sourceId: string; appType: string; adapter: string; baseUrl: string; defaultModel?: string }): string {
+  const modelText = terminalSafeText(p.defaultModel ?? "none");
+  return `  id=${terminalSafeText(p.name)} (source=${terminalSafeText(p.sourceId)}, ${terminalSafeText(p.appType)} -> ${terminalSafeText(p.adapter)}) model=${modelText} url=${terminalSafeText(p.baseUrl)}`;
+}
 
 /** Local-only keyless provider import from CC-Switch SQLite or JSON. */
 export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchImportCommandDeps = {}): Promise<number> {
@@ -86,11 +96,23 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
 
   try {
     const run = deps.runImport ?? (await import("../providers/cc-switch-import")).runCcSwitchProviderImport;
+    let printedBeforeWrite = false;
     const result = await run({
       mode,
       sourcePath,
       selectedProviders,
       allowPrivateNetwork,
+      ...(apply && !wantsJson
+        ? {
+            onBeforeApplyWrite: providers => {
+              printedBeforeWrite = true;
+              console.log("Importing keyless provider entries (never reads secret fields; verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
+              for (const p of providers) {
+                console.log(formatCandidateLine(p));
+              }
+            },
+          }
+        : {}),
     });
 
     if (result.mode === "restore") {
@@ -129,12 +151,13 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       }));
     } else {
       console.log(`CC-Switch (${result.mode}): ${result.discovered} discovered, ${result.eligible} eligible, ${result.imported} imported, ${result.conflicts} conflicts, ${result.invalid} invalid.`);
-      if (apply && result.imported > 0) {
-        console.log("Imported destination URLs (verify these endpoints from a trusted CC-Switch source before adding credentials):");
-      }
-      for (const p of result.providers) {
-        const modelText = p.defaultModel ? ` model=${terminalSafeText(p.defaultModel)}` : "";
-        console.log(`  ${terminalSafeText(p.name)} (${terminalSafeText(p.appType)} -> ${terminalSafeText(p.adapter)}) ${terminalSafeText(p.baseUrl)}${modelText}`);
+      if (!printedBeforeWrite) {
+        if (apply && result.imported > 0) {
+          console.log("Importing keyless provider entries (never reads secret fields; verify IDs, models, and URLs from a trusted CC-Switch source before adding credentials):");
+        }
+        for (const p of result.providers) {
+          console.log(formatCandidateLine(p));
+        }
       }
       if (result.invalid > 0) {
         const reasons = Object.entries(result.invalidReasons).map(([k, v]) => `${k}=${v}`).join(", ");
@@ -144,13 +167,13 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
         ? (result.imported > 0
           ? "Keyless provider entries saved. Only add credentials to endpoints you trust: start the proxy ('ocx start') and run 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo while stopped with 'ocx provider import-cc-switch --restore'."
           : "No eligible non-conflicting providers were imported; configuration and journal are unchanged.")
-        : "Preview only (strict metadata policy; no keys extracted or written). Verify destination URLs from a trusted source and stop the proxy before repeating with --apply.");
+        : "Preview only (reads non-secret metadata fields only; never reads secret fields). Verify IDs, models, and destination URLs from a trusted source and stop the proxy before repeating with --apply.");
     }
     return result.invalid > 0 && result.eligible === 0 ? 1 : 0;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "";
-    const code = SAFE_ERROR_CODES[msg] ?? (msg.startsWith("Requested provider ") ? "provider_not_found" : "cc_switch_import_failed");
-    const safeMsg = SAFE_ERROR_CODES[msg] || msg.startsWith("Requested provider ") || msg.startsWith("CC-Switch ")
+    const code = SAFE_ERROR_CODES[msg] ?? "cc_switch_import_failed";
+    const safeMsg = SAFE_ERROR_CODES[msg] || msg.startsWith("CC-Switch ")
       ? terminalSafeText(msg)
       : "CC-Switch provider import failed. Verify the source file, destination config, and stopped proxy.";
     if (wantsJson) console.log(JSON.stringify({ error: code, message: safeMsg }));

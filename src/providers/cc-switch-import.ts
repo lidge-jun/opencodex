@@ -2,11 +2,12 @@
  * Keyless CC-Switch provider configuration importer (preview, selective apply, and journaled restore).
  *
  * Security & privacy boundary:
- * - Reads only non-secret provider metadata (id, app_type, baseUrl, wire adapter, defaultModel)
- *   from an explicitly supplied CC-Switch SQLite database (v3.10+) or legacy JSON file.
- * - Drops free-text display names, TOML comments, and credential fields before decoding;
- *   never queries, decodes, retains, logs, or writes API keys, bearer tokens, or auth headers.
- * - Source files are opened read-only with O_NOFOLLOW | O_NONBLOCK and descriptor-verified.
+ * - Structural non-secret extraction: reads values ONLY from an explicit allowlist of non-secret
+ *   metadata fields (id, app_type, baseUrl, wire adapter, defaultModel) and never reads secret-named
+ *   fields, free-text display names, or TOML comments.
+ * - Enforces a narrow URL path grammar and identifier/model syntax checks as defense in depth.
+ * - Source files are opened read-only with O_NOFOLLOW | O_NONBLOCK, descriptor-verified, and
+ *   refused if an active SQLite -wal/-journal sidecar is non-empty.
  * - Apply and restore run only while the proxy is stopped, under the service ownership lease and
  *   the shared config mutation lock, with a durable streaming journal for rollback.
  */
@@ -48,10 +49,11 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import {
   CcSwitchImportError,
   MAX_JSON_BYTES,
-  SECRET_REFUSED_SENTINEL,
+  METADATA_REFUSED_SENTINEL,
+  URL_SYNTAX_REFUSED_SENTINEL,
   equalsAsciiBytes,
   isAllowedMetadataBytes,
-  looksLikeSecretValue,
+  isDisallowedMetadataValue,
   parseCodexTomlBytes,
   readSourceRows,
   readSqliteRows,
@@ -69,7 +71,8 @@ import {
 
 export {
   CcSwitchImportError,
-  SECRET_REFUSED_SENTINEL,
+  METADATA_REFUSED_SENTINEL,
+  URL_SYNTAX_REFUSED_SENTINEL,
   isAllowedMetadataBytes,
   parseCodexTomlBytes,
   readSqliteRows,
@@ -257,8 +260,8 @@ function evaluateExtractedRow(
   const sourceId = (row.id ?? "").trim();
   const appType = (row.appType || "").trim().toLowerCase();
   if (!sourceId) return { ok: false, reason: "malformed_entry" };
-  if (looksLikeSecretValue(sourceId, "id") || (appType !== "" && looksLikeSecretValue(appType, "app"))) {
-    return { ok: false, reason: "secret_in_nonsecret_field" };
+  if (isDisallowedMetadataValue(sourceId, "id") || (appType !== "" && isDisallowedMetadataValue(appType, "app"))) {
+    return { ok: false, reason: "disallowed_metadata" };
   }
   if (!isValidProviderName(targetName)) return { ok: false, reason: "invalid_provider_name" };
   if (row.settingsType !== "object") return { ok: false, reason: "malformed_entry" };
@@ -279,7 +282,7 @@ function evaluateExtractedRow(
       baseUrl = resolved.baseUrl.trim();
       defaultModel = resolved.defaultModel?.trim() || (row.genericModel ?? "").trim() || undefined;
       const wire = resolved.wireApi.trim().toLowerCase();
-      if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
+      if (wire === METADATA_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "disallowed_metadata" };
       if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
       else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
       else return { ok: false, reason: "malformed_entry" };
@@ -294,7 +297,7 @@ function evaluateExtractedRow(
         baseUrl = resolved.baseUrl.trim();
         defaultModel = resolved.defaultModel?.trim() || (row.genericModel ?? "").trim() || undefined;
         const wire = resolved.wireApi.trim().toLowerCase();
-        if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
+        if (wire === METADATA_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "disallowed_metadata" };
         if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
         else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
         else return { ok: false, reason: "malformed_entry" };
@@ -305,7 +308,7 @@ function evaluateExtractedRow(
       baseUrl = row.genericBaseUrl.trim();
       defaultModel = (row.genericModel ?? "").trim() || undefined;
       const wire = (row.genericWireApi ?? "responses").trim().toLowerCase();
-      if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
+      if (wire === METADATA_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "disallowed_metadata" };
       if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
       else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
       else return { ok: false, reason: "malformed_entry" };
@@ -325,8 +328,11 @@ function evaluateExtractedRow(
   }
 
   if (!baseUrl) return { ok: false, reason: "missing_base_url" };
-  if (looksLikeSecretValue(baseUrl, "url") || (defaultModel !== undefined && looksLikeSecretValue(defaultModel, "model"))) {
-    return { ok: false, reason: "secret_in_nonsecret_field" };
+  if (defaultModel !== undefined && isDisallowedMetadataValue(defaultModel, "model")) {
+    return { ok: false, reason: "disallowed_metadata" };
+  }
+  if (baseUrl === URL_SYNTAX_REFUSED_SENTINEL || isDisallowedMetadataValue(baseUrl, "url")) {
+    return { ok: false, reason: "invalid_base_url" };
   }
   if (providerBaseUrlConfigError(baseUrl) !== null) {
     return { ok: false, reason: "invalid_base_url" };
@@ -678,7 +684,7 @@ function prepareCandidates(options: {
     for (const wanted of filterSet) {
       const matchesAny = rows.some((r, idx) => r.id === wanted || targetNames[idx] === wanted);
       if (!matchesAny) {
-        throw new CcSwitchImportError(`Requested provider "${wanted}" was not found in the CC-Switch source.`);
+        throw new CcSwitchImportError("CC-Switch source does not contain one or more requested --provider IDs.");
       }
     }
   }
@@ -742,6 +748,7 @@ export async function runCcSwitchProviderImport(options: {
   sourcePath?: string;
   selectedProviders?: readonly string[];
   allowPrivateNetwork?: boolean;
+  onBeforeApplyWrite?: (providers: readonly CcSwitchCandidateProvider[]) => void;
 }): Promise<CcSwitchImportResult> {
   if (options.mode === "preview") {
     if (!options.sourcePath) throw new CcSwitchImportError("--source is required for preview and apply.");
@@ -776,6 +783,7 @@ export async function runCcSwitchProviderImport(options: {
           });
           prepared.mode = "apply";
           if (prepared.providers.length === 0) return prepared;
+          options.onBeforeApplyWrite?.(prepared.providers);
 
           const importId = randomUUID();
           const builtEntries = prepared.providers.map(candidate => {
@@ -817,7 +825,7 @@ export async function runCcSwitchProviderImport(options: {
               }
               const validation = validateConfigCandidate(config);
               if (!validation.ok) {
-                throw new CcSwitchImportError(`Imported provider configuration failed validation: ${validation.error}`);
+                throw new CcSwitchImportError("CC-Switch imported provider configuration failed schema validation.");
               }
               return { changed: true, value: builtEntries.length };
             });
