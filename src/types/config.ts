@@ -875,6 +875,8 @@ export interface OcxConfig {
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
   /** Canonical ChatGPT reasoning replay allowances; both default off. */
   nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
+  workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**
