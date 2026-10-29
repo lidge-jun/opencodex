@@ -516,4 +516,3 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     expect(openedConnect).toBe(1);
   });
 });
-
