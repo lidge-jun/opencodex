@@ -210,4 +210,3 @@ describe("Advisor self-fetch credential host policy on the real listener (#7894)
     expect(merged.fallbackPolicies.flatMap(policy => policy.deviceIds)).toEqual(["host"]);
   });
 });
-
