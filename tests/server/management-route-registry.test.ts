@@ -14,6 +14,7 @@ import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } fro
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { scanRoutes, distinctRoutes } from "../helpers/management-route-scan";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 /**
  * Reconciles the declared route registry against source, in three directions.
@@ -92,6 +93,10 @@ describe("management route registry reconciliation", () => {
     // runs through the production async spawn runner, not a mocked event loop.
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-gated-npm-")));
     const gateFile = join(dir, "release");
+    // Hosted Windows took 2703ms before answering (run 40796504652). Keep
+    // responsiveness relative to the child's cap, with room for runner contention.
+    const gateCapMs = process.platform === "win32" ? INTERNAL_DEADLINE_MS : 4_000;
+    const responsiveMs = gateCapMs * 5 / 8;
     const integrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
     const mainJson = JSON.stringify({ name: "@openai/codex", version: "1.4.2",
       optionalDependencies: { "@openai/codex-linux-x64": "1.4.2" },
@@ -103,8 +108,8 @@ describe("management route registry reconciliation", () => {
         "-e",
         'const fs=require("node:fs"),g=process.env.OCX_GATE_FILE,a=process.env.OCX_GATE_ANSWER,d=Date.now()+Number(process.env.OCX_GATE_CAP_MS);'
         + 'const t=setInterval(()=>{if(!fs.existsSync(g)&&Date.now()<=d)return;clearInterval(t);process.stdout.write(a+"\\n",()=>process.exit(0))},15)',
-      ], { ...options, windowsVerbatimArguments: false,
-        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: "4000",
+      ], { ...options, timeout: SPAWN_BUDGET_MS, windowsVerbatimArguments: false,
+        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: String(gateCapMs),
           OCX_GATE_ANSWER: args.join(" ").includes("@openai/codex-linux-x64@") ? backingJson : mainJson } });
     const managed = { schemaVersion: 1, candidateAvailable: true, candidateVersion: "1.0.0",
       candidateSource: "environment", selectionAttested: true,
@@ -125,6 +130,7 @@ describe("management route registry reconciliation", () => {
     const emptyHome = join(dir, "empty-home");
     mkdirSync(emptyHome, { recursive: true });
     process.env.OPENCODEX_HOME = emptyHome;
+    let responseDeadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const makeCtx = (pathname: string): ManagementContext => {
         const req = new Request(`http://localhost${pathname}`);
@@ -140,13 +146,13 @@ describe("management route registry reconciliation", () => {
       const concurrent = await Promise.race([
         handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/jobs/11111111-2222-3333-4444-555555555555"))
           .then(response => ({ kind: "responded" as const, response })),
-        new Promise<{ kind: "blocked" }>(resolve => setTimeout(() => resolve({ kind: "blocked" }), 3_000)),
+        new Promise<{ kind: "blocked" }>(resolve => { responseDeadline = setTimeout(() => resolve({ kind: "blocked" }), responsiveMs); }),
       ]);
       // Under a synchronous spawn this race can only settle after the child cap.
       expect(concurrent.kind).toBe("responded");
       // A parked event loop defers BOTH arms past the child cap, so the response
       // arriving "first" is not enough — the wall clock is the discriminator.
-      expect(Date.now() - firedAt).toBeLessThan(2_500);
+      expect(Date.now() - firedAt).toBeLessThan(responsiveMs);
       if (concurrent.kind === "responded") {
         // POSIX reads an empty store (404); Windows refuses the unsupported store
         // lane (503). Either way the unrelated request answered while planning waited.
@@ -158,12 +164,13 @@ describe("management route registry reconciliation", () => {
       expect(await response?.json()).toMatchObject({ applicable: true, targetVersion: "1.4.2" });
       expect(planner).toHaveBeenCalledTimes(1);
     } finally {
+      clearTimeout(responseDeadline);
       planner.mockRestore();
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("plan dispatch failure returns HTTP 503 without a second dispatch", async () => {
     const dispatch = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker")
