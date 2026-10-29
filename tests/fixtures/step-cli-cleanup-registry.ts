@@ -19,6 +19,10 @@ let clearRejected = false, replacementRejected = false;
 try { await clearStepCliSessions(); } catch { clearRejected = true; }
 const next = poolFor(home, deps, handlers);
 try { await next.open(ref); } catch { replacementRejected = true; }
-console.log(JSON.stringify({ clearRejected, samePool: next === pool, replacementRejected }));
-// No native child was started. Ensure the baseline's accidentally admitted fake is closed too.
-await next.closeAll().catch(() => {});
+// Only fake children exist. Once the observations are flushed, exit this disposable registry
+// instead of waiting for unrelated handles or the baseline's accidentally admitted fake session.
+await new Promise<void>((resolve, reject) => {
+  process.stdout.write(JSON.stringify({ clearRejected, samePool: next === pool, replacementRejected }),
+    error => { if (error) reject(error); else resolve(); });
+});
+process.exit(0);

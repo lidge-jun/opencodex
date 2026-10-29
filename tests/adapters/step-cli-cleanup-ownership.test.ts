@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { promisify } from "node:util";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import type { StepSessionDeps, StepSessionOptions } from "../../src/adapters/step-cli/session";
 import { fixturePath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 function options(cwd: string): StepSessionOptions {
   return { binary: process.execPath, args: [], env: { PATH: process.env.PATH ?? "",
@@ -34,7 +36,7 @@ async function nativePool(recover: boolean) {
   const worker = join(cwd, "worker.ts"), parent = join(cwd, "parent.ts");
   const pidFile = join(cwd, "pids.json"), dispatcher = join(cwd, "step.cmd");
   await writeFile(worker, "setInterval(() => {}, 1000);\n");
-  await writeFile(parent, 'import {spawn} from "node:child_process"; import {writeFileSync} from "node:fs"; const p=spawn(process.execPath,[process.argv[2]],{stdio:"ignore",windowsHide:true}); writeFileSync(process.argv[3],JSON.stringify({parent:process.pid,worker:p.pid})); setInterval(()=>{},1000);\n');
+  await writeFile(parent, 'import {spawn} from "node:child_process"; import {writeFileSync,renameSync} from "node:fs"; const p=spawn(process.execPath,[process.argv[2]],{stdio:"ignore",windowsHide:true}); writeFileSync(process.argv[3]+".tmp",JSON.stringify({parent:process.pid,worker:p.pid})); renameSync(process.argv[3]+".tmp",process.argv[3]); setInterval(()=>{},1000);\n');
   await writeFile(dispatcher, `@echo off\r\n"${process.execPath}" "${parent}" "${worker}" "${pidFile}"\r\n`);
   const roots: number[] = [];
   const children: ChildProcess[] = [];
@@ -169,8 +171,9 @@ test("a closing handle refuses replacement until cleanup is confirmed", async ()
   expect(released).toBe(true);
 });
 
-test("clearing the registry preserves quarantined pool ownership", () => {
-  const output = execFileSync(process.execPath, [fixturePath("step-cli-cleanup-registry.ts")],
-    { env: process.env, encoding: "utf8", windowsHide: true, timeout: 10_000 });
-  expect(JSON.parse(output)).toEqual({ clearRejected: true, samePool: true, replacementRejected: true });
-});
+test("clearing the registry preserves quarantined pool ownership", async () => {
+  // The process isolates a deliberately retained registry; its deadline must precede the test's.
+  const { stdout } = await promisify(execFile)(process.execPath, [fixturePath("step-cli-cleanup-registry.ts")],
+    { env: process.env, encoding: "utf8", windowsHide: true, timeout: INTERNAL_DEADLINE_MS });
+  expect(JSON.parse(stdout)).toEqual({ clearRejected: true, samePool: true, replacementRejected: true });
+}, SPAWN_BUDGET_MS);
