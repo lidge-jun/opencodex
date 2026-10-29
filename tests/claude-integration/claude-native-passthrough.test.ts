@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -1318,7 +1318,11 @@ test("a client that leaves while a non-stream body is pending logs the cancel as
 async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<string, unknown>) {
   const { clearRequestLogsForTests } = await import("../../src/server/request-log");
   clearRequestLogsForTests();
-  saveConfig(cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude));
+  const config = cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude);
+  // These cases assert body failures, not the fixture's 250ms header deadline.
+  // Hosted Windows reached the wrong header-timeout branch in run 40796504652.
+  if (process.platform === "win32") config.connectTimeoutMs = INTERNAL_DEADLINE_MS;
+  saveConfig(config);
   const server = startServer(0);
   try {
     const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
@@ -1353,7 +1357,7 @@ test("a stalled native stream logs a 502 incomplete row and keeps its diagnostic
   } finally {
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("a native stream over the byte cap logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
   const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
@@ -1366,7 +1370,7 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
   } finally {
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("a turn that sent message_stop and then stalls is finished: 200 terminal, no error frame", async () => {
   const source = new ReadableStream<Uint8Array>({
