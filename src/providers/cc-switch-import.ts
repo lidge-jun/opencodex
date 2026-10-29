@@ -31,7 +31,7 @@ import { providerBaseUrlConfigError } from "../config/provider-validation";
 import { assertPlainLocalPath } from "../codex/orca-auth-source";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { providerDestinationConfigError } from "../lib/destination-policy";
-import { listAccounts } from "../oauth/store";
+import { getAuthStorePath, normalizeAuthStoreBuffer } from "../oauth/store";
 import { rewriteProviderReferences } from "./provider-id-rewrite";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { serviceStatePaths } from "../service/state";
@@ -1329,6 +1329,31 @@ function assertStopped(): void {
   }
 }
 
+function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
+  const authPath = getAuthStorePath();
+  let buf: Buffer;
+  try {
+    buf = readFileSync(authPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true; // Fail closed when auth.json exists but cannot be read.
+  }
+  try {
+    const snap = normalizeAuthStoreBuffer(buf);
+    if (snap.kind === "absent") return false;
+    if (snap.kind === "malformed") return true;
+    if ((snap.store[name]?.accounts.length ?? 0) > 0) return true;
+    // Also fail closed if the raw JSON has a malformed entry for this specific provider that normalizeAuthStore dropped.
+    const rawParsed = JSON.parse(buf.toString("utf8")) as Record<string, unknown>;
+    if (Object.hasOwn(rawParsed, name) && !Object.hasOwn(snap.store, name)) return true;
+    return false;
+  } catch {
+    return true;
+  } finally {
+    buf.fill(0);
+  }
+}
+
 /**
  * Exhaustive check that no setting in OcxConfig references the given provider name before
  * --restore deletes it. Runs inside the mutatePersistedConfig callback on every rebase attempt.
@@ -1336,7 +1361,7 @@ function assertStopped(): void {
 export function isProviderReferencedInConfig(config: OcxConfig, name: string): boolean {
   if (config.defaultProvider === name) return true;
   if (Object.keys(config.providers ?? {}).length <= 1) return true;
-  if (listAccounts(name).length > 0) return true;
+  if (hasOrCannotVerifyOAuthAccounts(name)) return true;
   const prefix = `${name}/`;
   const rewriteProbe = rewriteProviderReferences(structuredClone(config), name, "__cc_switch_probe__");
   if (rewriteProbe.changed > 0 || rewriteProbe.collisions.length > 0) return true;

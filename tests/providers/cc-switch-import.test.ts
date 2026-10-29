@@ -11,7 +11,7 @@ import {
 } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
-import { saveCredential } from "../../src/oauth/store";
+import { getAuthStorePath, saveCredential } from "../../src/oauth/store";
 import {
   CC_SWITCH_IMPORT_JOURNAL_FILENAME,
   CcSwitchImportError,
@@ -326,6 +326,22 @@ describe("CC-Switch keyless provider import", () => {
     expect(after1.providers["kimi"]).toBeDefined();
     // Journal remains for the retained entries.
     expect(existsSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME))).toBe(true);
+
+    // If auth.json becomes malformed, restore fails closed and retains remaining journaled entries.
+    const cleanCfg = loadConfig();
+    delete cleanCfg.fallback;
+    saveConfig(cleanCfg);
+    writeFileSync(getAuthStorePath(), "{corrupt-json");
+    const restoredWithCorruptAuth = await runCcSwitchProviderImport({ mode: "restore" });
+    expect(restoredWithCorruptAuth).toEqual({
+      mode: "restore",
+      restored: 0,
+      restoredNames: [],
+      alreadyAbsent: 0,
+      retainedEdited: 3,
+      retainedNames: ["kimi", "prov-b", "prov-c"],
+    });
+    expect(loadConfig().providers["prov-c"]).toBeDefined();
   });
 
   test("rejects adversarial TOML multiline strings, non-scalar JSON paths, secret-like URLs, and private networks without opt-in", async () => {
