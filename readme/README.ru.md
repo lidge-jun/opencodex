@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex — универсальный прокси провайдеров для Codex, Claude Code, Claude Desktop и Grok Build" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — один локальный шлюз для Codex, Claude Code, Claude Desktop, Grok Build и других инструментов" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>Универсальный прокси провайдеров для OpenAI Codex, Claude Code, Claude Desktop и Grok Build</b><br>
-Две команды — и каждый из них работает на любой LLM, которую вы укажете.</p>
+<h3 align="center">Один локальный шлюз для ваших инструментов программирования с ИИ и моделей.</h3>
+<p align="center"><b>Используйте выбранные модели с Codex, Claude Code, Claude Desktop и Grok Build,<br>а OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code и другие подключайте через управляемые конфигурации.</b><br>
+<a href="https://opencodex.me/ru/reference/client-support/">Все поддерживаемые инструменты →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Подписывайтесь на @claudeebum в X"></a>
@@ -80,14 +80,7 @@ Sol ведёт сессию и вызывает подагента Kimi K3.
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <b>Русский</b> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ru/"><b>Полная документация →</b></a>
 </p>
 
-opencodex — лёгкий локальный прокси, который транслирует Responses API Codex в протокол,
-понятный вашему провайдеру: потоковая передача, вызовы инструментов, токены рассуждений и
-изображения — в обе стороны. Используйте Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen,
-Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop и Grok Build. Кроме того,
-он умеет управлять **пулом аккаунтов ChatGPT** для аутентификации Codex: добавляйте аккаунты,
-обновляйте их квоты в панели управления, и новые сессии будут автоматически направляться
-на работоспособный аккаунт с наименьшим использованием, а существующие треды останутся
-закреплёнными за аккаунтом, с которого они начались.
+opencodex — лёгкий локальный шлюз между вашими инструментами программирования и поставщиками моделей. Он принимает запросы API Responses, Chat Completions и Anthropic Messages и переводит их в протокол провайдера, передавая потоковые ответы, вызовы инструментов, рассуждения и изображения там, где это поддерживают клиент, модель и провайдер. Используйте Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama и других провайдеров с Codex, Claude Code, Claude Desktop, Grok Build и инструментами со [страницы поддержки клиентов](https://opencodex.me/ru/reference/client-support/). Он также управляет **пулом аккаунтов ChatGPT** для аутентификации Codex: добавляйте аккаунты и обновляйте их квоты в панели; новые сеансы автоматически направляются на исправный аккаунт с наименьшим использованием, а существующие треды остаются привязаны к исходному аккаунту.
 
 ## Быстрый старт
 
@@ -103,6 +96,21 @@ ocx start                         # прокси + панель управлен
 Откройте **http://localhost:10100** и настройте всё в веб-панели: добавьте провайдеров
 (40+ встроенных или любой OpenAI-совместимый endpoint), выберите модели, управляйте
 аккаунтами. `ocx gui` в любой момент снова откроет панель.
+
+### Подключите свой инструмент
+
+Подключите инструмент, которым вы уже пользуетесь:
+
+| Инструмент | Как подключить |
+|---|---|
+| Codex | Включите переключатель Codex на странице **Connect** панели, затем запускайте `codex` как обычно. При локальном прослушивании встроенный провайдер Codex будет направлен на прокси. В терминале выполните `ocx init` до добавления провайдеров в панели и примите приглашение Codex. |
+| Claude Code | Установив CLI `claude`, выполните `ocx claude`. Команда при необходимости запускает прокси и запускает через него Claude Code. |
+| Claude Desktop | Выполните `ocx claude desktop`. При новой установке команда настраивает профиль шлюза для всего приложения; существующая настройка first-party сохраняется, а `ocx claude desktop apply --gateway` явно переключает режим. См. [руководство Claude Code](https://opencodex.me/ru/guides/claude-code/). После переключения полностью закройте и снова откройте Claude Desktop. |
+| Grok Build | При локальном прослушивании и включённой интеграции Grok команда `ocx start` регистрирует модели, если существует `~/.grok`; выберите модель `ocx-*` в Grok Build. Об удалённой настройке см. [руководство Grok Build](https://opencodex.me/ru/guides/grok-build/). После добавления провайдеров перезапустите прокси (или выполните `ocx ensure`, если включён автозапуск Codex), чтобы обновить список. |
+| Инструменты с управляемой интеграцией | Используйте страницу **Connect** панели или `ocx integration client enable --client <id>`. |
+| Любой другой инструмент | Укажите пользовательский базовый URL, совместимый с OpenAI: `http://localhost:10100/v1`, либо базовый URL Anthropic: `http://localhost:10100`. |
+
+На [странице поддержки клиентов](https://opencodex.me/ru/reference/client-support/) указаны способы подключения и протоколы каждого инструмента.
 
 <details>
 <summary><b>Настольное приложение (бета)</b></summary>

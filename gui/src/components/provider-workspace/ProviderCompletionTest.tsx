@@ -18,43 +18,75 @@ export type CompletionTestResult =
       termination: "completed" | "failed" | "timeout" | "aborted" | "too_large";
       error: { code: string; status?: number; message: string } | null };
 
-type Props = { apiBase: string; provider: string; models: string[] };
+export type CompletionProbeStatus = "untested" | "testing" | "ok" | "failed" | "not-applicable";
 
-export default function ProviderCompletionTest({ apiBase, provider, models }: Props) {
+type Props = {
+  apiBase: string;
+  provider: string;
+  models: string[];
+  onStatusChange?: (state: { status: CompletionProbeStatus; model: string }) => void;
+};
+
+export default function ProviderCompletionTest({ apiBase, provider, models, onStatusChange }: Props) {
   const t = useT();
   const [model, setModel] = useState("");
+  // Permanently clear a selected model that was removed from the list so re-adding it cannot
+  // resurrect an older selection.
+  if (model !== "" && !models.includes(model)) {
+    setModel("");
+  }
   const selectedModel = models.includes(model) ? model : "";
   return (
     <section className="pws-completion-test" aria-label={t("pws.completion.title")}>
       <h4 className="pws-section-title">{t("pws.completion.title")}</h4>
         <Select label={t("pws.completion.model")} value={selectedModel}
           options={[{ value: "", label: t("pws.completion.choose") }, ...models.map(value => ({ value, label: value }))]}
-          onChange={setModel} />
+          onChange={next => {
+            if (next === selectedModel) return;
+            setModel(next);
+            onStatusChange?.({ status: "untested", model: next });
+          }} />
         <CompletionRun key={JSON.stringify([apiBase, provider, selectedModel])}
-          apiBase={apiBase} provider={provider} model={selectedModel} />
+          apiBase={apiBase} provider={provider} model={selectedModel} onStatusChange={onStatusChange} />
     </section>
   );
 }
 
-function CompletionRun({ apiBase, provider, model }: Omit<Props, "models"> & { model: string }) {
+function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props, "models"> & { model: string }) {
   const t = useT();
   const { locale } = useI18n();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CompletionTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const flight = useRef<AbortController | null>(null);
-  useEffect(() => () => { flight.current?.abort(); flight.current = null; }, []);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      flight.current?.abort();
+      flight.current = null;
+    };
+  }, []);
 
   async function run() {
     if (!model || flight.current) return;
     const controller = new AbortController();
     flight.current = controller;
     setBusy(true);
-    setResult(null);
-    setError(null);
+    const isCurrent = () => mounted.current && !controller.signal.aborted && flight.current === controller;
     try {
-      if (!await confirmAction({ message: t("pws.completion.confirm", { model, provider }),
-        confirmLabel: t("pws.completion.run"), signal: controller.signal, locale }) || controller.signal.aborted) return;
+      const confirmed = await confirmAction({
+        message: t("pws.completion.confirm", { model, provider }),
+        confirmLabel: t("pws.completion.run"),
+        signal: controller.signal,
+        locale,
+      });
+      if (!isCurrent()) return;
+      if (!confirmed) return;
+      setResult(null);
+      setError(null);
+      onStatusChange?.({ status: "testing", model });
       // The dashboard's installed fetch wrapper supplies session and CSRF headers, as for the connection test.
       const response = await fetch(`${apiBase}/api/providers/test-completion?name=${encodeURIComponent(provider)}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -62,13 +94,22 @@ function CompletionRun({ apiBase, provider, model }: Omit<Props, "models"> & { m
       });
       const value = await readJsonOrThrow<CompletionTestResult>(response, t("pws.completion.failed"));
       if (!value) throw new Error(t("pws.completion.failed"));
-      if (!controller.signal.aborted) setResult(value);
+      if (isCurrent()) {
+        setResult(value);
+        onStatusChange?.({
+          status: !value.applicable ? "not-applicable" : value.ok ? "ok" : "failed",
+          model,
+        });
+      }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : t("pws.completion.failed"));
+      if (isCurrent()) {
+        setError(cause instanceof Error ? cause.message : t("pws.completion.failed"));
+        onStatusChange?.({ status: "failed", model });
+      }
     } finally {
       if (flight.current === controller) {
         flight.current = null;
-        if (!controller.signal.aborted) setBusy(false);
+        if (mounted.current && !controller.signal.aborted) setBusy(false);
       }
     }
   }

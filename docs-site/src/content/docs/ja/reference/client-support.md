@@ -12,39 +12,40 @@ opencodex は、AI コーディングツールとモデルをつなぐ 1 つの�
 
 - **implemented**: レジストリに登録されたクライアントです。エクスポートされる設定では、表のプロトコルは opencodex が生成する設定から読み取られ、変わると生成が失敗します。*レビュー済み*は、エンドポイントが設定そのものではなくレビューに基づくことを示します（ネイティブクライアントと、設定を特定のエンドポイントに変換するクライアント）。レビューしたコードが残っているかを生成時に確認します。「OpenAI 互換」の行は特定のエンドポイントを主張しません。
 - **test-covered**: implemented であり、レビューで選んだこのクライアントのテストケースへのリンクがあります。生成時に確認するのはテストが存在し無効化されていないことだけです。何を検証しているかはテストを読んでください。
+- **実行確認**: ある時点の観察記録です。表のクライアント製品・バージョンを表の opencodex バージョンで、記載のシナリオにより、その日付に人が実行し、証拠をリンクしました。ほかのバージョンや製品については何も示しません。証拠は結果の追加時にレビューされ、生成時に再実行はされません。ダッシュは記録がないことを示します。
 
 ## クライアント
 
-| クライアント | ネイティブ | 設定エクスポート | 管理ファイル連携 | 受信プロトコル | サポートレベル | 備考 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Codex (CLI, app, SDK) | はい | — | — | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/codex-integration/codex-inject-missing-config.test.ts)) | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/codex-integration/) |
-| Claude Code | はい | — | — | Anthropic Messages (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/claude-integration/claude-cli.test.ts)) | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/claude-code/) |
-| Claude Desktop | はい | — | — | Anthropic Messages (レビュー済み) | implemented | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 |
-| Grok Build | はい | — | — | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/providers/xai/grok-config-inject.test.ts)) | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/grok-build/) |
-| Qoder | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/qoder-client.test.ts)) | ローカルリスナーのみ。 |
-| Qoder CN | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | implemented | ローカルリスナーのみ。 |
-| WorkBuddy | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/agent-clients.test.ts)) | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
-| WorkBuddy AI | — | JSON | はい | Chat Completions | implemented | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
-| OpenCode | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | リモートリスナーにも対応します（API キーヘッダーを追加）。 [ガイド](/ja/guides/opencode/) |
-| Pi | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | ローカルリスナーのみ。 [ガイド](/ja/guides/pi/) |
-| Oh My Pi (omp) | — | YAML | はい | Chat Completions; Responses (ネイティブ OpenAI モデルのみ) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | ローカルリスナーのみ。自分の YAML ブロックだけを編集します。 |
-| Hermes | — | YAML | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/hermes-catalog-refresh.test.ts)) | リモートリスナーにも対応します（API キーヘッダーを追加）。自分の YAML ブロックだけを編集します。 |
-| OpenClaw | — | JSON5 | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/gui/integrations-invariants.test.ts)) | リモートリスナーにも対応します（API キーヘッダーを追加）。 |
-| Kimi CLI | — | TOML | はい | OpenAI 互換（エンドポイントはクライアントが選択） | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export-new-clients.test.ts)) | ローカルリスナーのみ。 |
-| Gajae | — | YAML | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-modality-enum.test.ts)) | ローカルリスナーのみ。 |
-| DSH | — | YAML | はい | Responses | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | ローカルリスナーのみ。クライアントの現在のプロバイダーストアに書き込みます。自分の YAML ブロックだけを編集します。設定ファイル横のロックファイルで書き込みを調整します。 |
-| MCode | — | YAML | はい | Anthropic Messages | implemented | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
-| ZCode | — | JSON | はい | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/integrations-current-store.test.ts)) | ローカルリスナーのみ。クライアントの現在のプロバイダーストアに書き込みます。クライアントがこの設定からエンドポイントを選びます（クライアントの文書化された動作に基づきレビュー済み）。 |
-| Command Code | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/command-code-client.test.ts)) | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
-| Prime | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/prime-client.test.ts)) | ローカルリスナーのみ。 |
-| Aside | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/aside-profiles-catalog-refresh.test.ts)) | ローカルリスナーのみ。 |
-| Raycast | — | YAML | はい | Chat Completions (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/raycast-client.test.ts)) | ローカルリスナーのみ。クライアントがこの設定からエンドポイントを選びます（クライアントの文書化された動作に基づきレビュー済み）。 |
-| omo | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/omo-client.test.ts)) | ローカルリスナーのみ。 |
-| Cline | — | JSON | はい | Responses | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/cline-client.test.ts)) | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
-| Kilo Code | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-reasoning-controls.test.ts)) | リモートリスナーにも対応します（API キーヘッダーを追加）。 |
-| Factory Droid | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/droid-client.test.ts)) | ローカルリスナーのみ。 [ガイド](/ja/guides/factory-droid/) |
-| Gentle Shell | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/gentle-shell-client.test.ts)) | ローカルリスナーのみ。 |
-| T3 Code | — | JSON | はい | Anthropic Messages | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/t3code-client.test.ts)) | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
+| クライアント | ネイティブ | 設定エクスポート | 管理ファイル連携 | 受信プロトコル | サポートレベル | 実行確認 | 備考 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex (CLI, app, SDK) | はい | — | — | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/codex-integration/codex-inject-missing-config.test.ts)) | — | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/codex-integration/) |
+| Claude Code | はい | — | — | Anthropic Messages (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/claude-integration/claude-cli.test.ts)) | — | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/claude-code/) |
+| Claude Desktop | はい | — | — | Anthropic Messages (レビュー済み) | implemented | — | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 |
+| Grok Build | はい | — | — | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/providers/xai/grok-config-inject.test.ts)) | — | opencodex が直接設定します。エクスポートされる設定ファイルはありません。 [ガイド](/ja/guides/grok-build/) |
+| Qoder | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/qoder-client.test.ts)) | — | ローカルリスナーのみ。 |
+| Qoder CN | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | implemented | — | ローカルリスナーのみ。 |
+| WorkBuddy | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/agent-clients.test.ts)) | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
+| WorkBuddy AI | — | JSON | はい | Chat Completions | implemented | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
+| OpenCode | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。 [ガイド](/ja/guides/opencode/) |
+| Pi | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | ローカルリスナーのみ。 [ガイド](/ja/guides/pi/) |
+| Oh My Pi (omp) | — | YAML | はい | Chat Completions; Responses (ネイティブ OpenAI モデルのみ) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | ローカルリスナーのみ。自分の YAML ブロックだけを編集します。 |
+| Hermes | — | YAML | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/hermes-catalog-refresh.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。自分の YAML ブロックだけを編集します。 |
+| OpenClaw | — | JSON5 | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/gui/integrations-invariants.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。 |
+| Kimi CLI | — | TOML | はい | OpenAI 互換（エンドポイントはクライアントが選択） | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export-new-clients.test.ts)) | — | ローカルリスナーのみ。 |
+| Gajae | — | YAML | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-modality-enum.test.ts)) | — | ローカルリスナーのみ。 |
+| DSH | — | YAML | はい | Responses | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | ローカルリスナーのみ。クライアントの現在のプロバイダーストアに書き込みます。自分の YAML ブロックだけを編集します。設定ファイル横のロックファイルで書き込みを調整します。 |
+| MCode | — | YAML | はい | Anthropic Messages | implemented | — | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
+| ZCode | — | JSON | はい | Responses (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/integrations-current-store.test.ts)) | — | ローカルリスナーのみ。クライアントの現在のプロバイダーストアに書き込みます。クライアントがこの設定からエンドポイントを選びます（クライアントの文書化された動作に基づきレビュー済み）。 |
+| Command Code | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/command-code-client.test.ts)) | — | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
+| Prime | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/prime-client.test.ts)) | — | ローカルリスナーのみ。 |
+| Aside | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/aside-profiles-catalog-refresh.test.ts)) | — | ローカルリスナーのみ。 |
+| Raycast | — | YAML | はい | Chat Completions (レビュー済み) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/raycast-client.test.ts)) | — | ローカルリスナーのみ。クライアントがこの設定からエンドポイントを選びます（クライアントの文書化された動作に基づきレビュー済み）。 |
+| omo | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/omo-client.test.ts)) | — | ローカルリスナーのみ。 |
+| Cline | — | JSON | はい | Responses | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/cline-client.test.ts)) | — | ローカルリスナーのみ。設定ファイル横のロックファイルで書き込みを調整します。 |
+| Kilo Code | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-reasoning-controls.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。 |
+| Factory Droid | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/droid-client.test.ts)) | — | ローカルリスナーのみ。 [ガイド](/ja/guides/factory-droid/) |
+| Gentle Shell | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/gentle-shell-client.test.ts)) | — | ローカルリスナーのみ。 |
+| T3 Code | — | JSON | はい | Anthropic Messages | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/t3code-client.test.ts)) | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
 
 ## 受信エンドポイント
 
