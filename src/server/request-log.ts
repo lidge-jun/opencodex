@@ -703,6 +703,8 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      ? { attemptNormalizationDropped: true } : {}),
       ...(entry.spend ? { spend: entry.spend } : {}),
       ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
         ? { cacheProvenance: entry.cacheProvenance }
