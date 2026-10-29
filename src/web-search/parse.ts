@@ -454,7 +454,14 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Compatible Responses servers may omit the final newline. Only physical EOF
+        // admits this carry; byte/decoded limits and failed reads must not flush it.
+        buffer += decoder.decode();
+        const data = sseFieldValue(buffer, "data");
+        if (data !== null) handle(data.trim());
+        break;
+      }
       const remaining = MAX_SIDECAR_STREAM_BYTES - responseBytes;
       const accepted = value.byteLength <= remaining ? value : value.subarray(0, remaining);
       responseBytes += accepted.byteLength;
