@@ -26,7 +26,7 @@ function optionValue(args: readonly string[], name: string): string | undefined 
 }
 
 /**
- * Dispatch internal helpers with strict argument checks and command-specific exit codes.
+ * Dispatch internal helpers with command-specific argument checks and exit codes.
  * The executable-target helper writes one trusted path to stdout only after validation.
  */
 export async function handleInternalCommand(args: readonly string[], execBoundary: CodexExecBoundaryAsyncDeps = {}): Promise<number> {
