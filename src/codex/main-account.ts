@@ -1,9 +1,10 @@
-import { observeMainDecisionCredentialUsable } from "./main-account-cache";
+import { publishCredentialSync } from "../local-credentials/generation";
+import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainDecisionCredentialUsable, type MainQuotaWriter } from "./main-account-cache";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
   CHATGPT_CLIENT_ID,
@@ -31,6 +32,7 @@ import {
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { withNativeMainExclusiveClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
+import { NativeProfileError } from "./native-profile-types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { loadConfig } from "../config";
 import {
@@ -50,6 +52,29 @@ let mainAccountPlan: string | null = null;
 let jwtPlanAttempted = false;
 const MAIN_TOKEN_REFRESH_SKEW_MS = 60_000;
 let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
+let codexOwnedMainCredential: { home: string; expiresAt: number } | null = null;
+export type MainAccountToken = Readonly<{ accessToken: string; chatgptAccountId: string }>;
+const codexOwnedQuotaWriters = new WeakMap<MainAccountToken, { writer: MainQuotaWriter; home: string; credentialGeneration: number }>();
+
+/** Exact RPC result provenance; copied/request-created tokens cannot recapture native quota ownership. */
+export function mainAccountTokenQuotaWriter(token: MainAccountToken): MainQuotaWriter | undefined {
+  return codexOwnedQuotaWriters.get(token)?.writer;
+}
+
+/** A metadata probe may use only the exact owned observation while its home and credential remain current. */
+export function mainAccountTokenIsCurrent(token: MainAccountToken): boolean {
+  const proof = codexOwnedQuotaWriters.get(token);
+  return proof !== undefined && proof.home === resolveCodexHomeDir()
+    && codexOwnedMainCredential?.home === proof.home
+    && codexOwnedMainCredential.expiresAt > Date.now()
+    && proof.credentialGeneration === getMainQuotaCredentialGeneration()
+    && isMainQuotaWriterLive(proof.writer)
+    && matchesMainQuotaCredential(token.accessToken, token.chatgptAccountId);
+}
+
+function forgetCodexOwnedMainUsability(home: string): void {
+  if (codexOwnedMainCredential?.home === home) codexOwnedMainCredential = null;
+}
 
 type MainAuthJsonCredential = {
   path: string;
@@ -86,11 +111,13 @@ export class MainAuthJsonChangedDuringRefreshError extends Error {
 }
 
 export class MainAccountTokenRefreshError extends Error {
-  constructor(readonly reason: "reauth" | "transient", options?: ErrorOptions) {
+  readonly credentialObservedAbsent: boolean;
+  constructor(readonly reason: "reauth" | "transient", options?: ErrorOptions & { credentialObservedAbsent?: boolean }) {
     super(reason === "reauth"
       ? "Codex main account needs reauthentication"
       : "Codex main token refresh did not complete", options);
     this.name = "MainAccountTokenRefreshError";
+    this.credentialObservedAbsent = options?.credentialObservedAbsent === true;
   }
 }
 
@@ -113,12 +140,15 @@ async function refreshNativeMainGrant(
 ): Promise<OAuthCredentials> {
   const resp = await fetch(CHATGPT_TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
       client_id: CHATGPT_CLIENT_ID,
+      grant_type: "refresh_token",
       refresh_token: refreshToken,
-    }).toString(),
+    }),
     signal: options.signal,
   });
   if (!resp.ok) {
@@ -244,9 +274,12 @@ export interface MainAccountCredentialStatus {
 /** One owned physical observation; no credential material escapes this view. */
 export function getMainAccountCredentialStatus(now = Date.now()): MainAccountCredentialStatus {
   const current = readMainAuthJsonCredential();
+  const owned = !current && codexOwnedMainCredential?.home === resolveCodexHomeDir() ? codexOwnedMainCredential : null;
   const refreshGrantRejected = credentialRefreshGrantRejected(current);
   const hasRefreshGrant = !!current?.refreshToken && !refreshGrantRejected;
-  const usable = !refreshGrantRejected && (hasRefreshGrant || mainAccessTokenFresh(current?.accessToken, now, 0));
+  const ownedUsable = !!owned && owned.expiresAt > now;
+  const usable = !refreshGrantRejected
+    && (hasRefreshGrant || mainAccessTokenFresh(current?.accessToken, now, 0) || ownedUsable);
   observeMainDecisionCredentialUsable(usable);
   return {
     refreshGrantRejected,
@@ -303,7 +336,7 @@ function persistRefreshedMainAuthJson(
     refresh_token: refreshToken,
     account_id: chatgptAccountId,
   };
-  atomicWriteFile(
+  publishCredentialSync(() => atomicWriteFile(
     expected.path,
     JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n",
     undefined,
@@ -319,7 +352,7 @@ function persistRefreshedMainAuthJson(
       // the last look we get, so it asks everything it can rather than the cheap question.
       validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
     },
-  );
+  ));
   advanceCodexCredentialMutationEpoch();
   return { accessToken, chatgptAccountId };
 }
@@ -447,17 +480,83 @@ export function beginNativeMainReauth(): {
   };
 }
 
+/**
+ * True only when CODEX_HOME provably does not exist: the resolved path itself
+ * has no directory entry and the nearest existing ancestor resolves to a real
+ * directory. resolve() normalizes the string without dereferencing links, so
+ * lstat sees each component itself -- an existing entry still counts as
+ * existing, and a link in the chain must stat to a directory before the absence
+ * below it counts as genuine. EACCES, a file where a directory belongs, and a
+ * dangling link all stay unproven, which keeps the caller fail closed.
+ */
+function codexHomeProvenMissing(codexHome: string): boolean {
+  const target = resolve(codexHome);
+  let cursor = target;
+  for (;;) {
+    try {
+      lstatSync(cursor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      const parent = dirname(cursor);
+      if (parent === cursor) return false;
+      cursor = parent;
+    }
+  }
+  if (cursor === target) return false;
+  try {
+    return statSync(cursor).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve the main account access token from the owned auth.json read, refreshing through the token endpoint when needed, or return null when no usable credential exists. */
 async function resolveMainAccountToken(
   dependencies: NativeMainRefreshDependencies = {},
   rejectedAccessToken?: string,
 ): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
   if (dependencies.signal?.aborted) throw dependencies.signal.reason;
+  const codexHome = resolveCodexHomeDir();
   const initial = readMainAuthJsonCredential();
   // Every skip below ends a forced refresh WITHOUT asking the token endpoint anything, which from
   // the outside is indistinguishable from a refusal: same failed request, no write, no verdict.
   // A forced refresh is the only caller that passes `rejectedAccessToken`, so only it reports.
   if (!initial) {
+    const refreshMode = await resolveNativeMainRefreshMode(loadConfig());
+    if (refreshMode.mode === "codex") {
+      const refreshTimeout = AbortSignal.timeout(30_000);
+      const signal = dependencies.signal
+        ? AbortSignal.any([dependencies.signal, refreshTimeout])
+        : refreshTimeout;
+      try {
+        return await withNativeMainExclusiveClaim(resolveNativeProfileContext({ codexHome }), () => refreshThroughCodex(
+          null, rejectedAccessToken, dependencies, refreshTimeout,
+          dependencies.codexAuthStatus ?? (options => requestCodexAuthStatus(refreshMode.command!, { ...options, codexHome })),
+          codexHome, rejectedAccessToken !== undefined,
+        ), { waitMs: 30_000, signal });
+      } catch (cause) {
+        forgetCodexOwnedMainUsability(codexHome);
+        // A proven-absent home is the same observed absence as a missing
+        // auth.json: no credential exists to claim or to refresh. Every other
+        // CODEX_HOME_UNAVAILABLE cause -- an entry that exists but cannot be
+        // verified, a dangling link, an untraversable parent -- stays fail
+        // closed; a blanket existsSync check would misclassify them as absence.
+        if (cause instanceof NativeProfileError && cause.code === "CODEX_HOME_UNAVAILABLE"
+          && codexHomeProvenMissing(codexHome)) {
+          // Mode discovery awaited: absence must still belong to this caller and home.
+          dependencies.signal?.throwIfAborted();
+          if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
+          if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-credential");
+          return null;
+        }
+        if (refreshTimeout.aborted && !dependencies.signal?.aborted) {
+          throw new MainAccountTokenRefreshError("transient", { cause });
+        }
+        throw cause;
+      }
+    }
+    forgetCodexOwnedMainUsability(codexHome);
     if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-credential");
     return null;
   }
@@ -504,8 +603,9 @@ async function resolveMainAccountToken(
   // locks and then reaching for the same claim would deadlock.
   try {
     return await withNativeMainExclusiveClaim(
-      resolveNativeProfileContext(),
+      resolveNativeProfileContext({ codexHome }),
       () => withCodexRefreshFileLock(lockKey, signal, async () => {
+        if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
         const locked = readMainAuthJsonCredential();
         if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
         if (credentialRefreshGrantRejected(locked)) throw new MainAccountTokenRefreshError("reauth");
@@ -524,7 +624,7 @@ async function resolveMainAccountToken(
         if (refreshMode?.mode === "codex") {
           const command = refreshMode.command!;
           return refreshThroughCodex(locked, rejectedAccessToken, dependencies, refreshTimeout,
-            dependencies.codexAuthStatus ?? (options => requestCodexAuthStatus(command, options)));
+            dependencies.codexAuthStatus ?? (options => requestCodexAuthStatus(command, { ...options, codexHome })), codexHome);
         }
         const refresh = dependencies.refreshToken ?? refreshNativeMainGrant;
         let refreshed: OAuthCredentials;
@@ -606,32 +706,62 @@ function inFlightMainAccountToken(
  * keyring save succeeds, so the RPC answer is the only place the new token exists for us.
  * The call runs on the refresh timeout alone: killing app-server mid-exchange could retire
  * the grant before Codex saves its successor.
+ *
+ * Returns null when an ordinary read (no locked file credential, nothing upstream rejected)
+ * observes that Codex has no ChatGPT login at all -- an observed absence, not a refresh failure.
  */
 async function refreshThroughCodex(
-  locked: MainAuthJsonCredential,
+  locked: MainAuthJsonCredential | null,
   rejectedAccessToken: string | undefined,
   dependencies: NativeMainRefreshDependencies,
   refreshTimeout: AbortSignal,
   authStatus: NonNullable<NativeMainRefreshDependencies["codexAuthStatus"]>,
-): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  codexHome: string,
+  refresh = true,
+): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
+  // Deferred to keep lifecycle's cache/plan cleanup off this module's load-time import cycle.
+  const { observeCodexOwnedMainAccountCredential } = await import("./account-lifecycle");
+  if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
+  const identityGeneration = captureMainAccountIdentityGeneration();
+  // This observation is only selection evidence. A later request must ask Codex again:
+  // JWT expiry cannot detect logout or an external keyring account switch.
+  forgetCodexOwnedMainUsability(codexHome);
   let status: CodexAuthStatus;
+  let didRefresh = refresh;
   try {
-    status = await authStatus({ refresh: true, signal: refreshTimeout });
+    const readSignal = dependencies.signal ? AbortSignal.any([dependencies.signal, refreshTimeout]) : refreshTimeout;
+    status = await authStatus({ refresh, signal: refresh ? refreshTimeout : readSignal });
+    if (!refresh && status.authMethod === "chatgpt" && status.authToken
+      && !mainAccessTokenFresh(status.authToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
+      dependencies.signal?.throwIfAborted();
+      didRefresh = true;
+      status = await authStatus({ refresh: true, signal: refreshTimeout });
+    }
   } catch (cause) {
+    if (!refresh && dependencies.signal?.aborted) throw dependencies.signal.reason;
     noteNativeMainRefresh("codex-unavailable");
     throw new MainAccountTokenRefreshError("transient", { cause });
   }
+  if (resolveCodexHomeDir() !== codexHome || !isMainAccountIdentityGenerationLive(identityGeneration)) {
+    throw new MainAuthJsonChangedDuringRefreshError();
+  }
   if (status.authMethod === "chatgpt" && !status.authToken) {
-    // The only permanent-failure signal the response carries: Codex withholds the token once
-    // its refresh was refused for good. The specific OAuth code is not on the wire.
+    // A keyring answer is authoritative for this lookup only. Keep the existing file-backed
+    // grant rejection, but retain no keyring refusal that could override a later RPC answer.
     noteNativeMainRefresh("codex-reauth");
-    markMainRefreshGrantRejected(mainRefreshGrantKey(locked)!);
-    throw new MainAccountTokenRefreshError("reauth");
+    const grantKey = locked && mainRefreshGrantKey(locked);
+    if (grantKey) markMainRefreshGrantRejected(grantKey);
+    throw new MainAccountTokenRefreshError("reauth", { credentialObservedAbsent: true });
   }
   const token = status.authToken;
   if (status.authMethod !== "chatgpt" || !token) {
     noteNativeMainRefresh("codex-no-chatgpt-login");
-    throw new MainAccountTokenRefreshError("transient");
+    // An ordinary read with no locked credential and nothing rejected observed a real
+    // absence, not a refresh failure: report no credential instead of a retryable error.
+    // Once the expiring-bearer answer above promoted this lookup into a real refresh, the
+    // same no-login outcome is a refresh failure again.
+    if (locked === null && rejectedAccessToken === undefined && !didRefresh) return null;
+    throw new MainAccountTokenRefreshError("transient", { credentialObservedAbsent: true });
   }
   // A transient Codex refresh failure still answers with its cached bearer.
   if (token === rejectedAccessToken || !mainAccessTokenFresh(token, Date.now(), 0)) {
@@ -639,9 +769,17 @@ async function refreshThroughCodex(
     throw new MainAccountTokenRefreshError("transient");
   }
   noteNativeMainRefresh("codex-ok");
-  if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   if (dependencies.signal?.aborted) throw dependencies.signal.reason;
-  return { accessToken: token, chatgptAccountId: extractAccountId(undefined, token) ?? locked.chatgptAccountId };
+  const result = Object.freeze({
+    accessToken: token,
+    chatgptAccountId: extractAccountId(undefined, token) ?? locked?.chatgptAccountId ?? "",
+  });
+  const writer = observeCodexOwnedMainAccountCredential(token);
+  if (writer) codexOwnedQuotaWriters.set(result, { writer, home: codexHome, credentialGeneration: getMainQuotaCredentialGeneration() });
+  if (writer && dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  const exp = decodeJwtPayload(token)?.exp;
+  codexOwnedMainCredential = { home: codexHome, expiresAt: typeof exp === "number" ? exp * 1000 : Infinity };
+  return result;
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */

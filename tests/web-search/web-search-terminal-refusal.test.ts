@@ -14,8 +14,10 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 const cases = [true, false, undefined].flatMap(terminalRefusalAsFailed =>
-  ["direct", "hidden", "rotated"].map(path => ({ terminalRefusalAsFailed, path })));
-test.each(cases)("a refused web_search iteration stops and meters usage: %j", async ({ terminalRefusalAsFailed, path }) => {
+  ["direct", "hidden", "rotated"].map(path => ({ terminalRefusalAsFailed, path, reason: "content_filter", unfinished: false })))
+  .concat([{ terminalRefusalAsFailed: false, path: "direct", reason: "max_output_tokens", unfinished: true },
+    { terminalRefusalAsFailed: false, path: "direct", reason: "max_output_tokens", unfinished: false }]);
+test.each(cases)("a refused web_search iteration stops and meters usage: %j", async ({ terminalRefusalAsFailed, path, reason, unfinished }) => {
   const hasPrior = path !== "direct";
   const reported: (OcxUsage | undefined)[] = [];
   const rotated: OcxUsage[] = [];
@@ -35,13 +37,13 @@ test.each(cases)("a refused web_search iteration stops and meters usage: %j", as
     async *parseStream() {
       yield { type: "tool_call_start", id: "search-1", name: "web_search" } satisfies AdapterEvent;
       yield { type: "tool_call_delta", arguments: JSON.stringify({ query: "fixture query" }) } satisfies AdapterEvent;
-      yield { type: "tool_call_end" } satisfies AdapterEvent;
+      yield { type: "tool_call_end", ...(unfinished && !(hasPrior && routedSends === 1) ? { incomplete: true as const } : {}) } satisfies AdapterEvent;
       if (hasPrior && routedSends === 1) {
         yield { type: "done", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } } satisfies AdapterEvent;
         return;
       }
       yield {
-        type: "incomplete", reason: "content_filter", retryable: false,
+        type: "incomplete", reason, ...(reason === "content_filter" ? { retryable: false } : {}),
         message: 'upstream ended the turn with stop_reason "refusal"',
         usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 },
       } satisfies AdapterEvent;
@@ -78,6 +80,6 @@ test.each(cases)("a refused web_search iteration stops and meters usage: %j", as
   expect(terminal.response.usage).toMatchObject({ input_tokens: 10, output_tokens: 3, total_tokens: 13 });
   expect(text).toContain(`event: response.${terminalRefusalAsFailed ? "failed" : "incomplete"}`);
   if (terminalRefusalAsFailed) expect(text).toContain('"code":"invalid_prompt"');
-  else expect(text).toContain('"reason":"content_filter"');
+  else expect(text).toContain(`"reason":"${reason}"`);
   expect(text).not.toContain("event: response.completed");
 });

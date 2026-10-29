@@ -30,7 +30,7 @@ Sans ordre global du sélecteur, les priorités sans sélecteur pertinentes sont
 | `subagentModels[i]` | `i` (`0` à `4`) | La carte de classement présentée dans `src/codex/catalog/sync.ts` |
 | Autres modèles acheminés | `5` | Création d'une entrée routé dans `src/codex/catalog/sync.ts` |
 | Modèles routés non mis en avant et présents dans `modelPickerOrder` | `1000 + i` | Rang d’affichage du sélecteur dans `src/codex/catalog/sync.ts` |
-| Slugs GPT natifs par défaut | `9` | Création d'entrées natives dans `src/codex/catalog/sync.ts` |
+| Slugs GPT natifs par défaut | `sourcePriority` | Création d'entrées natives dans `src/codex/catalog/sync.ts` |
 | Modèles natifs non sélectionnés alors qu'une liste sélectionnée existe | Au moins `featured.length + 100` | Fusion du catalogue natif dans `src/codex/catalog/sync.ts` |
 
 La direction API limite `subagentModels` à cinq entrées avec `slice(0, 5)` en
@@ -73,7 +73,7 @@ Sans sélecteur de compte éligible et sans liste de sélection non vide, l'ordr
 3. Modèles natifs non sélectionnés, poussés sous le bloc sélectionné lors de la fusion du catalogue.
 
 Sans `subagentModels`, les modèles routés restent en priorité `5`, les entrées natives GPT utilisent leur
-priorité (normalement `9` pour les entrées construites par opencodex), et le groupe routé reste provider/id
+priorité (sourcePriority, avec `9` en dernier recours), et le groupe routé reste provider/id
 alphabétique.
 
 ## Exemple

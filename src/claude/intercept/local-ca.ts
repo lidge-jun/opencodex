@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sign, X509Certificate, type KeyObject } from "node:crypto";
 import { join } from "node:path";
+import { withConfigDirHardeningSettled } from "../../config/paths";
 import { withLocalCaPublication, type LocalCaFiles } from "./local-ca-files";
 
 /**
@@ -371,7 +372,7 @@ export function ensureLocalInterceptCa(configDir: string): LocalInterceptCa {
  * contention, before binding listeners, without blocking the main event loop. */
 export async function ensureLocalInterceptCaForStartup(configDir: string): Promise<LocalInterceptCa> {
   for (let attempt = 0; ; attempt += 1) {
-    try { return ensureLocalInterceptCa(configDir); }
+    try { return await withConfigDirHardeningSettled(configDir, () => ensureLocalInterceptCa(configDir)); }
     catch (error) {
       if (attempt >= 49 || !(error instanceof Error)
         || !("code" in error) || error.code !== "client_lifecycle_busy") throw error;

@@ -36,6 +36,29 @@ const scriptOf = (job: Job): string => (job.steps ?? []).map(step => step.run ??
 const ACTION_PATH = ".github/actions/setup-project-bun/action.yml";
 const HELPER_PATH = "native/remote-workspace-helper/src/main.rs";
 
+describe("Docker build and runtime input scope", () => {
+  test("selects runtime sources and every GUI build input", () => {
+    for (const path of [
+      "src/config.ts", "src/config/paths.ts", "src/server/index.ts", "src/service.ts",
+      "gui/src/App.tsx", "gui/src/style.css", "gui/public/icon.svg", "gui/index.html",
+      "gui/vite.config.ts", "gui/tsconfig.json", "gui/tsconfig.app.json", "gui/tsconfig.node.json",
+      "gui/package.json", "gui/bun.lock",
+    ]) {
+      expect(`${path}:ci=${matches(filters.ci, path)}`).toBe(`${path}:ci=true`);
+      expect(`${path}:docker=${matches(filters.docker, path)}`).toBe(`${path}:docker=true`);
+    }
+  });
+
+  test("does not select Docker for tests or documentation alone", () => {
+    for (const path of [
+      "tests/server/server-live.test.ts", "gui/tests/claude-code-save.test.ts",
+      "gui/README.md", "docs-site/src/content/docs/index.mdx", "structure/runtime.md",
+    ]) {
+      expect(`${path}:docker=${matches(filters.docker, path)}`).toBe(`${path}:docker=false`);
+    }
+  });
+});
+
 describe("an edit to the setup action alone", () => {
   test("selects a job that runs the action and checks what it installed", () => {
     const selected = jobsSelectedBy(filtersMatching(ACTION_PATH))
@@ -65,10 +88,10 @@ describe("an edit to the setup action alone", () => {
   });
 });
 
-// #6713: user runtimes and compiled artifacts need 1.4.2; isolate runners need the testRunnerBun pin (1.4.3, #4956).
+// Keep runtime and test-runner role selection distinct even when package.json pins both to 1.4.4.
 // Check the active setup at each test command, so a later role switch cannot evade the guard.
 const runsBunTests = (step: Step): boolean =>
-  /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-bun-test-batches\.sh/.test(
+  /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-(?:bun|changed)-tests?(?:-batches)?\.sh/.test(
     (step.run ?? "").split("\n").filter(line => !line.trimStart().startsWith("#")).join("\n"),
   );
 const workflowJobs = new Map(readdirSync(repoPath(".github", "workflows"))

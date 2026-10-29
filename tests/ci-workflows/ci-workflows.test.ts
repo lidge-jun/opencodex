@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
   SCRIPT_BINDINGS,
@@ -117,8 +118,8 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
-    // 20 with three shards, not a longer cap on two: two halves reached their
-    // 20-minute wall with tests still passing (#6978). See the rationale in ci.yml.
+    // 20 with four shards: run 40766068492 cancelled two of three at the
+    // 20-minute wall with no failing tests. See the rationale in ci.yml.
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
     // 75, not 30: the unsharded control measured 50m39s for a complete run and had
     // therefore never finished inside 30. See the rationale in ci.yml and #4905.
@@ -195,13 +196,13 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows shards more finely than Linux. Six shards grew to 13-30 minutes against
-    // the 30-minute wall; nine restores margin while keeping the bound unchanged. The
+    // Windows shards more finely than Linux. Nine reached 30 minutes in run 40756291846;
+    // refreshed weights and eleven restore margin while keeping the bound unchanged. The
     // matrix, runner shard spec, job name and aggregate leg count must move together.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
     const windowsSteps = (ci.jobs?.["platform-windows"] as {
       steps?: Array<{ name?: string; env?: Record<string, string>; run?: string }>;
@@ -260,7 +261,7 @@ describe("GitHub Actions hardening", () => {
     // restores the timing-flake class this lane kept surfacing.
     const macosTestStep = macosSteps.find(step => step.name === "Test in fresh-process batches");
     expect(macosTestStep?.env).toMatchObject({
-      TEST_SHARD: "${{ matrix.shard }}/3", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      TEST_SHARD: "${{ matrix.shard }}/4", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
       BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
     });
     expect(macosTestStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
@@ -269,7 +270,7 @@ describe("GitHub Actions hardening", () => {
       name?: string; strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
     });
     expect(macosJob?.strategy?.["fail-fast"]).toBe(false);
-    expect(macosJob?.strategy?.matrix?.shard).toEqual([1, 2, 3]);
+    expect(macosJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4]);
     // The divisor is written twice; a matrix that grows without both would run a
     // shard selection that skips or repeats files under a misleading check name.
     const macosShardCount = macosJob?.strategy?.matrix?.shard?.length;
@@ -1213,13 +1214,17 @@ describe("GitHub Actions hardening", () => {
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.state == 'success'");
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.login == 'coderabbitai[bot]'");
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.id == 136622811");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'gui-screenshot-waived'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'intake: hygiene-blocked'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'maintainer-sponsored'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'test-exception-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'suppression-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'generated-change-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'dependency-change-approved'");
+    // Every label that can clear or reinstate a hygiene failure must wake the
+    // gate (#7651). Derive the list from HYGIENE_GATE_LABELS instead of
+    // restating it, so a label added there without a wake condition fails here.
+    const { HYGIENE_GATE_LABELS } = createRequire(import.meta.url)(
+      join(repoRoot(), ".github", "scripts", "pr-hygiene.cjs"),
+    ) as { HYGIENE_GATE_LABELS: string[] };
+    const wakeLabels = [
+      ...String(resolver?.["if"] ?? "").matchAll(/github\.event\.label\.name == '([^']+)'/g),
+    ].map(match => match[1]);
+    expect(new Set(wakeLabels).size).toBe(wakeLabels.length);
+    expect([...wakeLabels].sort()).toEqual([...HYGIENE_GATE_LABELS, "gui-screenshot-waived"].sort());
 
     const hygieneWorkflow = Bun.YAML.parse(
       await readText(".github/workflows/pr-hygiene.yml"),
@@ -5030,6 +5035,9 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("withastro/action@e84f40bd8d2caa9e768ec82ad30dd81f0b280853");
     expect(workflow).toContain("actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+    const runtimeBun = (JSON.parse(await readText("package.json")) as { dependencies?: { bun?: string } }).dependencies?.bun;
+    expect(runtimeBun).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(workflow).toContain(`package-manager: bun@${runtimeBun}\n`);
   });
 
   test("issue-quality workflow rejects workflow_dispatch pull request numbers before mutation", async () => {
@@ -5253,6 +5261,15 @@ describe("GitHub Actions hardening", () => {
 
   test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
+    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes;
+    // the main push trend scan stays unfiltered.
+    const triggers = (Bun.YAML.parse(workflow) as {
+      on?: { pull_request?: { types?: string[]; paths?: string[] }; push?: { branches?: string[]; paths?: string[] } };
+    }).on;
+    expect(triggers?.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
+    expect(triggers?.pull_request?.paths).toEqual(["gui/**", ".github/workflows/react-doctor.yml"]);
+    expect(workflow).toContain("directory: gui");
+    expect(triggers?.push).toEqual({ branches: ["main"] });
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2");

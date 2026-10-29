@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 /**
  * Anthropic rejects a `tool_use.id` longer than this. Collision disambiguation has to fit
  * inside it too, which is why candidates are assembled from parts instead of sliced at the end.
@@ -27,7 +25,7 @@ function toolCallIdComponents(rawId: string | undefined): { cleaned: string; has
   const raw = rawId ?? "";
   if (raw.length === 0) return undefined;
   const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const hash = createHash("sha256").update(raw).digest("hex").slice(0, TOOL_CALL_ID_HASH_WIDTH);
+  const hash = Bun.SHA256.hash(raw, "hex").slice(0, TOOL_CALL_ID_HASH_WIDTH);
   return { cleaned, hash };
 }
 

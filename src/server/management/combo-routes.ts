@@ -222,6 +222,10 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      // Clients that do not expose this opt-in must preserve it on unrelated edits.
+      ...(!Object.hasOwn(requestedCombo, "cooldownReprobe") && previous?.cooldownReprobe !== undefined
+        ? { cooldownReprobe: previous.cooldownReprobe }
+        : {}),
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
       // The dashboard does not edit the session pin (#7525): an omitted field keeps it on a JEV save.

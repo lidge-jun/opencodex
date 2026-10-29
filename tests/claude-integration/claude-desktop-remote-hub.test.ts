@@ -7,7 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import type { Desktop3pModelEntry } from "../../src/claude/desktop-3p";
 import { repoPath, fixturePath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { SERVER_BUDGET_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const DATA_KEY = "test-key";
 const cliPath = repoPath("src/cli/index.ts");
@@ -27,6 +27,10 @@ function fixture(side: string, allowedOrigins: string[]) {
   for (const path of [paths.ocx, paths.codex, paths.desktop, paths.user]) mkdirSync(path, { recursive: true });
   // A valid, isolated API-key auth file prevents fallback to a real OAuth account.
   writeFileSync(join(paths.codex, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "fixture-only-not-a-real-key" }), { mode: 0o600 });
+  // Keep a host Codex's asynchronous bundled catalog from changing native order mid-apply.
+  const catalog = join(paths.codex, "fixture-native-catalog.json");
+  writeFileSync(catalog, JSON.stringify({ models: [{ slug: "gpt-5.5", base_instructions: "fixture" }] }));
+  writeFileSync(join(paths.codex, "config.toml"), `model_catalog_json = ${JSON.stringify(catalog)}\n`);
   const env: Record<string, string | undefined> = {
     HOME: paths.user, USERPROFILE: paths.user,
     OPENCODEX_HOME: paths.ocx, CODEX_HOME: paths.codex,
@@ -96,6 +100,21 @@ async function within<T>(promise: Promise<T>, ms: number, label: string): Promis
     ]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
+async function fetchPhase<T>(phase: string, url: string, budgetMs: number, init: RequestInit,
+  consume: (response: Response) => Promise<T>): Promise<T> {
+  // Runs 40679924613 / 40708434824: cold stored-profile cases hit the old 5s/10s
+  // deadlines at 12.51s / 12.31s total; passing companions took 20.24s / 21.64s.
+  // These are whole-case timings, not phase measurements. A 30s Windows server
+  // budget exceeds even the observed complete passing case, without retrying it.
+  const budget = process.platform === "win32" ? SERVER_BUDGET_MS : budgetMs;
+  const started = performance.now();
+  try {
+    const response = await fetch(url, { ...init, signal: AbortSignal.timeout(budget) });
+    return await consume(response);
+  } catch (error) {
+    throw new Error(`${phase} fetch/body failed after ${Math.round(performance.now() - started)}ms (budget ${budget}ms): ${url}`, { cause: error });
+  }
+}
 async function stopOwned(owned: ReturnType<typeof spawnOwned>): Promise<void> {
   if (owned.child.exitCode === null) owned.child.kill("SIGTERM");
   try { await within(owned.child.exited, 8_000, "CLI shutdown deadline"); }
@@ -105,12 +124,12 @@ async function stopOwned(owned: ReturnType<typeof spawnOwned>): Promise<void> {
   }
   await within(Promise.all([owned.stdout, owned.stderr]), 5_000, "CLI output drain deadline");
 }
-async function startHub(fx: Fixture) {
+async function startHub(fx: Fixture, phase: string) {
   const owned = spawnOwned(fx, ["start"]);
   const deadline = performance.now() + 45_000;
   while (performance.now() < deadline) {
     if (owned.child.exitCode !== null) {
-      throw new Error("Hub exited before readiness: " + await within(owned.stderr, 5_000, "Exited hub output deadline"));
+      throw new Error(phase + " hub exited before readiness: " + await within(owned.stderr, 5_000, "Exited hub output deadline"));
     }
     try {
       const runtime = JSON.parse(readFileSync(join(fx.ocx, "runtime-port.json"), "utf8")) as { pid: number; port: number };
@@ -123,7 +142,7 @@ async function startHub(fx: Fixture) {
     } catch { /* listener/runtime record is not ready */ }
     await Bun.sleep(20);
   }
-  throw new Error("Hub readiness deadline");
+  throw new Error(phase + " hub readiness fetch deadline (45000ms)");
 }
 
 function mockProvider() {
@@ -202,7 +221,7 @@ for (const storedProfile of [true, false]) {
         ...(storedProfile ? { desktopProfile: profile("20260211", "20260212") } : {}),
       },
     } as OcxConfig);
-    const first = await startHub(hub);
+    const first = await startHub(hub, "Initial");
     // Retain the allocated endpoint so the client's persisted origin survives restart.
     writeConfig(hub, { ...readConfig(hub), port: first.port });
     const client = fixture("client", [first.origin]);
@@ -220,12 +239,13 @@ for (const storedProfile of [true, false]) {
       },
     } as OcxConfig);
     writeFileSync(join(client.ocx, "service-api-token"), DATA_KEY + "\n", { mode: 0o600 });
-    const snapshotResponse = await fetch(first.origin + "/v1/models?ids=desktop&format=desktop-config", {
-      headers: { "x-opencodex-api-key": DATA_KEY }, signal: AbortSignal.timeout(5_000),
+    const snapshot = await fetchPhase("Desktop snapshot", first.origin + "/v1/models?ids=desktop&format=desktop-config", 5_000, {
+      headers: { "x-opencodex-api-key": DATA_KEY },
+    }, async response => {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return await response.json() as { version: number; models: Desktop3pModelEntry[] };
     });
-    expect(snapshotResponse.status).toBe(200);
-    expect(snapshotResponse.headers.get("cache-control")).toBe("no-store");
-    const snapshot = await snapshotResponse.json() as { version: number; models: Desktop3pModelEntry[] };
     expect(snapshot.version).toBe(1);
     expect(snapshot.models.some(model => model.labelOverride.includes("(native)"))).toBe(true);
     const chosenEntry = snapshot.models.find(model => model.labelOverride === "Model Target (chosen)");
@@ -250,24 +270,25 @@ for (const storedProfile of [true, false]) {
     expect(readConfig(client).claudeCode?.desktopProfile).toEqual(localProfile);
     if (!storedProfile) expect(readConfig(hub).claudeCode?.desktopProfile).toBeUndefined();
 
-    const send = async (origin: string) => {
-      const response = await fetch(origin + "/v1/messages", {
-        method: "POST", signal: AbortSignal.timeout(10_000),
+    const send = async (origin: string, phase: string) => {
+      await fetchPhase(phase, origin + "/v1/messages", 10_000, {
+        method: "POST",
         headers: { "content-type": "application/json", "x-opencodex-api-key": DATA_KEY, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({ model: chosenEntry!.name, max_tokens: 8, stream: true, messages: [{ role: "user", content: "hello" }] }),
+      }, async response => {
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("message_stop");
       });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("message_stop");
     };
-    await send(first.origin);
+    await send(first.origin, "Before restart inference");
     expect(chosen.inference).toEqual([{ url: chosen.server.url.origin + "/v1/chat/completions", model: "model-target" }]);
     expect(decoy.inference).toEqual([]);
 
     await stopOwned(first.owned);
-    const restarted = await startHub(hub);
+    const restarted = await startHub(hub, "Restarted");
     expect(restarted.origin).toBe(first.origin);
     // No model discovery call occurs between restart and this saved-ID request.
-    await send(restarted.origin);
+    await send(restarted.origin, "After restart saved-ID inference");
     expect(chosen.inference).toEqual([
       { url: chosen.server.url.origin + "/v1/chat/completions", model: "model-target" },
       { url: chosen.server.url.origin + "/v1/chat/completions", model: "model-target" },

@@ -37,10 +37,9 @@ tavsiye değildir; Anthropic'in güncel koşullarını kontrol edin.
 Etkinleştirildiğinde operasyonel sözleşme:
 
 - Yukarı akıştan gelen **429**, varsa `Retry-After` (yoksa varsayılan bir geri
-  çekilme) kullanarak o hesabı soğutur, bağlılıklarını temizler ve aynı istek
-  içinde uygun başka bir hesaba dönebilir (sınırlı).
-- Bağlılık **işleme özeldir (process-local)** (proxy yeniden başlatıldığında
-  kaybolur).
+  çekilme) kullanarak o hesabı soğutur ve aynı istek içinde uygun başka bir hesaba
+  dönebilir (sınırlı). Yalnızca ortak kota reddi bağlılıkları temizler; geçici hız sınırlaması bunları korur.
+- Bağlılık aynı yapılandırma dizini ve sağlayıcı örneğinde yeniden başlatma sonrasında korunur (24 saat boşta kalma, en yeni 2.000 bağ). Özel dosya yalnızca oturum ve giriş kimliği özetlerini saklar; ham oturum anahtarı veya token içermez. Kalıcı giriş kimliği olmayan eski hesaplar yeniden girişe kadar işleme özeldir. Token yenileme bağı korur; yeniden giriş, kaldırma, duraklatma, yeniden kimlik doğrulama gereksinimi veya çalışma sırasında elle hesap seçimi bağı geçersiz kılar. Geçici hız sınırlaması nedeniyle başka hesaba yönelme özgün bağı değiştirmez.
 - Token yenileme hataları mevcut `needsReauth` kuralını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir; soğuma `Retry-After` veya varsayılan on dakikadır. Genel izin reddi terminal kalır. Bkz. [hesap kurtarma](/guides/claude-code/).
 - Uygun tüm hesaplar soğutuluyorsa, proxy bilindiğinde `Retry-After` ile
   birlikte **429** (401 değil) döndürür.
@@ -218,6 +217,8 @@ seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
 aynı şekilde geçerlidir.
+
+Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Süre dolduğunda yükleme başarı yanıtı olmadan kesilir; HTTP/2’de yalnızca ilgili akış sıfırlanır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Bu boşta kalma koruması toplam yükleme süresine ek bir sınır getirmez; mevcut çalışma zamanı ve protokol sınırları geçerliliğini korur. Yanıt akışları bu sayacın kapsamı dışındadır.
 
 ## Claude Desktop profili
 

@@ -52,7 +52,9 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 
 [`retryOn429`](/zh-cn/reference/configuration/)（同 key 的 429 重试）仅适用于 API-key 提供商
 （`authMode: "key"`）。OAuth、forward 与本地预设均被排除——同一 token 绝不可重放，本地运行时
-也没有需要保留的远程 key。仅在配置后启用，默认关闭；配置了对象即启用，除非 `enabled: false`。
+也没有需要保留的远程 key。除文档中说明的特定目标默认值外，此功能需手动启用。规范的 Mistral Chat 在现有的按请求发送额度内使用耐心重试策略（6 次重放，10 秒回退间隔）。显式的 `retryOn429` 设置（包括 `enabled: false`）优先。Mistral 预设还会默认转发传入的 prompt 缓存 key；`promptCacheKey: false` 可关闭转发。缓存亲和性会提高复用几率，但不保证命中缓存，也不会消除 token 吞吐量限制。
+
+Mistral 的 Studio 和 Vibe 密钥共用同一个 API-key 提供商。密钥类型和套餐额度见 [Mistral 的 API 密钥文档](https://docs.mistral.ai/admin/identity-access/api-keys)；代理不会根据密钥推断订阅等级。对所有模型，上游显式给出的 `Retry-After` 截止时间会在同一凭据与模型的调用之间共享。没有重试时间的 429，在有效的每分钟计数器显示容量已耗尽，或被拒查询的实测成本超过剩余 token 但仍在公布的完整额度内时，可能触发保守的 60 秒恢复等待。这是本地恢复策略，并非对服务端重置时间的精确预测。正常流量下从不预测下一次查询的缓存或成本。等待结束后发送一次恢复探测；成功即恢复正常流量。缺失、格式错误、零授权、月度额度已耗尽或超过完整额度的依据，不会凭空推断重置，也不会压缩历史。`requestPacing: { "enabled": false }` 或 `retryOn429: { "respectRetryAfter": false }` 可关闭共享节流。对于同一密钥的重放，若 Mistral 的重试时间超过 `retryOn429.maxIntervalMs`，代理会返回 429 及重试提示，而不会提前重放。启用轮询（round-robin）密钥选择时，排队的请求会重新检查密钥冷却并为替代密钥获取节流容量；输出前的密钥拒绝可以在该请求现有的发送上限内切换到健康的密钥恢复。上下文窗口和按模型的压缩偏好保持独立。
 
 ## 1. ChatGPT 登录（forward / 透传）
 
@@ -216,7 +218,7 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-opencodex 内置 105 个预设：84 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 106 个预设：85 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -291,6 +293,12 @@ Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 和
 [OpenGateway 控制台](https://opengateway.ai/api-keys)创建密钥，再运行
 `ocx provider add opengateway` 或在控制台选择 **OpenGateway**。Chat 请求使用配置的
 Bearer 密钥；公开模型列表不能验证密钥有效性。
+在 Responses 协议中，OpenGateway 拒绝重放原生自定义工具调用，因此预设会在发送前将代码模式的 `exec` 等 Codex 自定义工具转换为函数工具。
+工具结果内容数组以文本发送，图像保留在配对的工具结果组之后。不支持的结果部分（包括拒绝和不透明内容）会在发送前以明确的客户端输入错误拒绝。
+图像细节 `original` 映射为网关接受的 `high`；图像字节保持不变。
+原生 Responses 路由还会在将纯文本空补全作为成功返回之前进行检查。
+输出预算耗尽时返回带 `max_output_tokens` 的 `incomplete`；代理不会增加请求的预算。仍有预算且可安全重放的空补全，可在现有发送上限内重试一次。显式设置 `emptyCompletionRetry: false` 或 `OCX_EMPTY_COMPLETION_RETRY=0` 可关闭该重试。出现文本、拒绝、工具活动或未知流事件时不会重放，并保留原始流。此保护不改变其他提供商及其重试默认值。
+重放要求显式 `store: false`、完整输入且仅含客户端执行的工具；声明了 `web_search` 等托管工具时，即使未观察到工具事件也不会自动重放。
 
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
 仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。
@@ -299,7 +307,7 @@ MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Cod
 
 在规范 `opencode-zen` 提供商中，使用 API 密钥认证和官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 时，Gemini 会在默认 `googleMode: ai-studio` 下自动使用 Google 原生 API。Zen 模型 ID 保持不变，包括没有 `-tiered` 后缀的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影响。加载已保存的配置时，仅忽略这些原生模型符合条件的旧 Chat/Responses 覆盖设置，以及符合条件的 Responses 专用 `image_generation` 托管工具偏好。自定义提供商、非密钥认证路由及其他偏好保持不变。
 
-**已移除 `opencode-free` 支持。** OpenCode 的上游免费层级门槛导致所有模型均返回 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。加载现有配置时，会在内存中禁用相关条目和依赖的模型引用，每个进程仅警告一次，不修改文件。如果它原来是默认提供商，将改用标准 OpenAI OAuth 路径作为默认值。请使用 `opencode-go`、需要密钥的 `opencode-zen` 或其他提供商。[OpenCode Zen 条款](https://opencode.ai/docs/zen/)。
+**已移除 `opencode-free` 支持。** OpenCode 的上游免费层级门槛导致所有模型均返回 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。加载现有配置时，会在内存中禁用相关条目和依赖的模型引用，每个进程仅警告一次，加载时不修改文件。下次保存配置时，这些条目及引用将从 config.json 中移除。保存前，原始文件会自动保留到同目录的 `config.json.pre-opencode-free-removal.bak`；如果该名称已被占用，则使用唯一的同级文件名。字节完全相同的独立副本仅在能够验证其仅限所有者访问时才会复用，否则会在旁边写入新的受保护副本。已有文件不会覆盖。首次加载重叠时，可能留下多个相同的受保护副本。警告会显示恢复副本的路径。如需恢复（例如降级后），请将该副本复制回 config.json 并覆盖。如果自动复制失败，警告会提示立即复制 config.json。如果它原来是默认提供商，将改用标准 OpenAI OAuth 路径作为默认值。请使用 `opencode-go`、需要密钥的 `opencode-zen` 或其他提供商。[OpenCode Zen 条款](https://opencode.ai/docs/zen/)。 被动读取仅应用内存中的禁用，不创建副本或显示警告。
 
 保留正常的 Claude Desktop 分配和默认值。源模型允许列表变空的规则会被禁用；注入模型被移除时，原生子代理同步也会被禁用。后续保存配置时不会恢复已移除的引用，并会保留正常的并发编辑。
 
@@ -495,6 +503,9 @@ GPT-5.6 Sol/Terra/Luna 会预置在提供商的回退列表中，因此即使实
 | Codex 登录（Pool 或 Direct） | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` 和 `*-pro` | 922,000（max input 922,000） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` | 1,000,000 |
 
 原生 GPT-5.6 条目保留固定的上游 reasoning 档位，例如 Luna 有 `max`，但没有 `ultra`。路由条目
@@ -527,7 +538,7 @@ GitHub 可能改变协议或账户权限。Auto 每次请求使用选中模型�
 不是已公布的 GitHub 限制；过大的目录、缓慢的协商或意图文本截断都可能影响兼容性。
 
 具名选择时，Copilot 提供混合 wire 目录：其模型（`gpt-5.3-codex`、`gpt-5.4`、
-`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）会拒绝面向
+`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、 `gpt-6.1-sol`、 `gpt-6.1-terra`、 `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）会拒绝面向
 agent 流量的 `/chat/completions`，因此 opencodex 默认将这些模型路由到 Responses API，而其他
 Copilot 模型仍走 chat completions。优先级为：硬 wire 固定 → 显式
 [`modelAdapters`](/zh-cn/reference/configuration/providers/) 条目 → 注册表默认值 → 提供商级

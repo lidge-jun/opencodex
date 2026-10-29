@@ -255,6 +255,28 @@ through `ocx agent subagents set` or the opencodex configuration. Retired native
 excluded by the [shared catalog](catalog.md#shared-catalog); saved user choices are not rewritten
 by that retirement. Quota fallback retains independent shared/Reserve evidence.
 
+### Native source priority
+
+`src/codex/catalog/native-priority.ts` owns native priority provenance for the builder and merge.
+It accepts only safe integers in `0..1000`, trying the current discovered descriptor, pristine
+catalog-backup baseline, the exact slug's retained `opencodex_native_source_priority`, then the
+upstream snapshot, finally `9`. Invalid candidates are skipped. Published `priority` and
+`opencodex_spawn_priority` never supply source provenance. Every ordinary emitted native row
+carries its unbanded source value; `src/codex/catalog/derive-entry.ts` strips it from template clones.
+Featured bare rows retain their rank. With a nonempty featured list, unfeatured bare natives use
+`featured.length + 100 + sourcePriority`; otherwise they use `sourcePriority`. Account-selector
+stride priorities and routed priority `5` (or their existing selector band) keep their own rules;
+the source bound does not promise disjointness from account-selector priorities. Complete picker
+ordering remains the final display override, independently of private guidance priority.
+
+`src/server/codex-model-list.ts` resolves the active catalog path once per live Codex-shaped list,
+reads its pristine baseline and exact-slug retained fields directly from that file, and supplies
+both to the same builder. Missing, null or corrupt catalogs contribute empty inputs. This path
+never creates a backup or publishes a catalog. For equal inputs, live `/v1/models?client_version`,
+the published catalog and its `models_cache.json` copy carry equal priorities. Concurrent reads may
+observe the complete previous or next publication. Coverage: `tests/codex-integration/native-source-priority.test.ts`
+and `tests/server/server-native-catalog-priority.test.ts`.
+
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
 widening Codex's five-row advertisement window. Fresh defaults are Astra, GPT-6.1 Sol and Luna
@@ -301,6 +323,7 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
+- Every PUT that writes the role TOML appends one row to `codex-agent-roles.jsonl` under `integrationsDir()` (`src/codex/role-model-history.ts`): time, `batch`, role, model and effort before and after, and the canonical Codex home (`getCodexHome()`) it wrote. An unchanged save appends nothing, and a failed append is logged without failing the write. Before appending, the writer separates an unterminated suffix with a newline: torn JSON remains skippable and a complete final row remains valid, so a restart does not swallow a newly issued batch's first row. The server hands out batch ids: a write without the optional body field `batch` starts a new batch, and a recorded write's response names it as `batch`; a later write that sends that id (1 to 64 letters, digits or dashes, else 400 `invalid_batch`) joins it, so auto-assign's Apply all and a Restore send the id from their first write's response with every later one. A write joins a batch only while the current home's retained history holds it whole, else 409 `batch_closed`, so an id compaction dropped, or one the server never issued, cannot start over and pass for the beginning of a batch; a batch holds at most 50 rows, else 409 `batch_full`; both are refused before the role file is touched. Each row stores its number in its batch, which keeps that cap durable and lets every read drop a batch missing any of its rows, so a cut batch is never listed or restored. `GET /api/codex-agent-roles` returns the current Codex home's newest whole batches as `history`, never more than 50 rows, when LazyCodex is detected (a batch over 50 rows from an older file is skipped); rows another Codex home wrote are never listed, so a proxy restarted against a different home starts with an empty list. The file is bounded: before appending, the writer captures the last 256 KiB and 1000 rows. An append that crosses either limit compacts that snapshot plus the new row to the newest whole batches, targeting 128 KiB. A kept Restore and its complete source batches are budgeted together, displacing unrelated older batches and using up to 256 KiB and 1000 rows in total when needed. If that group cannot fit both limits, it expires rather than exceeding the bounded read window. A history file it cannot read sets `historyUnavailable: true` with an empty list, and the role list and saves keep working. The dashboard restores a batch by writing each role's earliest `before` through this same PUT under a new batch, naming the restored batch in `restores`; the server refuses such a write with 409 `restore_not_in_history` unless the current home's retained history (every whole batch the file holds, not only the 50 listed rows) holds that batch for that role with exactly those earlier values, so leaving the 50-row listing alone does not invalidate a Restore. Compaction preserves a retained Restore's source from the pre-append snapshot while their combined rows fit both retention limits; this is bounded history, not an indefinite reservation against later writes.
 - On `PUT /api/codex-agent-roles/{role}`, `effort` is optional: omitted keeps the role's
   `model_reasoning_effort`, a level inserts or replaces it, and JSON `null` removes its root line
   and trailing comment. Only a one-line string value can be removed; a multiline or non-string
@@ -342,7 +365,8 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
   one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
   which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
-  gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
+  gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
+  in the tie, then picker order. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
   for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
   replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
@@ -464,7 +488,7 @@ The Models page saves routed snapshots in `modelPickerOrder` and records their o
 `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`). Mode is UI provenance, not a
 catalog sorting policy: catalog writers consume the saved array. Routed-only featured/native
 bands and complete-picker natural-rank preservation remain as described above. Public
-`buildCatalogEntries` accepts the order as its final argument and applies the complete-order
+`buildCatalogEntries` accepts the order before optional native-source inputs and applies the complete-order
 pass after building. On-disk convergence retains its existing post-merge final pass.
 
 Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` after `fastRows`.
@@ -515,7 +539,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

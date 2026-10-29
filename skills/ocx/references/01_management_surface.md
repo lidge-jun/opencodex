@@ -25,12 +25,12 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 13 |
+| [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 49 |
 | [accounts](01_surface_accounts.md) | 42 |
 | [agents-routing](01_surface_agents-routing.md) | 67 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 96 |
+| [observe-system](01_surface_observe-system.md) | 98 |
 | [access-remote](01_surface_access-remote.md) | 33 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -278,6 +278,14 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx system codex-cli-update plan`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-plan)
+
+### `ocx system codex-cli-update apply`
+
+[State-changing task](01_surface_observe-system.md#ocx-system-codex-cli-update-apply)
+
+### `ocx system codex-cli-update status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-status)
 
 ### `ocx system codex-restart`
 
@@ -999,6 +1007,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_integrations.md#ocx-integration-native-cursor-local-installer)
 
+### `ocx stop`
+
+[State-changing task](01_surface_lifecycle.md#ocx-stop)
+
 ### `ocx logs filter`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-logs-filter)
@@ -1497,6 +1509,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 362
-- of those, state-changing: 221
+- declared capabilities: 365
+- of those, state-changing: 223
 - head-resolved invocations: 2

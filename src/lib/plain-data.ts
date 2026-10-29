@@ -29,7 +29,7 @@ export function copyPlainData<T>(value: T): PlainDataCopy<T> {
 /**
  * A stable string for comparing two plain-data values.
  *
- * Key-sorted entry pairs rather than objects, because property order is observable through
+ * Tagged containers and key-sorted entry pairs, because property order is observable through
  * serialization and two values that differ only in it are the same value.
  */
 export function canonicalPlainData(value: unknown): string {
@@ -50,6 +50,7 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return prototype === Object.prototype || prototype === null;
 }
 
+/** Copy one JSON-shaped value through property descriptors, or return `REFUSED` for anything else. */
 function copyValue(value: unknown, seen: Set<object>): unknown {
   if (value === null) return null;
   const type = typeof value;
@@ -69,7 +70,7 @@ function copyValue(value: unknown, seen: Set<object>): unknown {
       if (entry === undefined) continue;
       const item = copyValue(entry, seen);
       if (item === REFUSED) return REFUSED;
-      copied[key] = item;
+      Object.defineProperty(copied, key, { value: item, enumerable: true, writable: true, configurable: true });
     }
     return copied;
   } finally {
@@ -92,12 +93,13 @@ function copyArray(source: unknown[], seen: Set<object>): unknown {
   return copied;
 }
 
+/** Rebuild a value with tagged arrays and objects and key-sorted object entries for comparison. */
 function sorted(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sorted);
+  if (Array.isArray(value)) return ["array", value.map(sorted)];
   if (value !== null && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
+    return ["object", Object.keys(value as Record<string, unknown>)
       .sort()
-      .map(key => [key, sorted((value as Record<string, unknown>)[key])]);
+      .map(key => [key, sorted((value as Record<string, unknown>)[key])])];
   }
   return value;
 }

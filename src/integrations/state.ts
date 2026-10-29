@@ -11,6 +11,9 @@
 import { createClineIO } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, droidDefaultsFromOwnedRows, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import { qoderLegacyCatalogCollision } from "../clients/config-export/qoder";
+import { resolveModelNames, type ExportModelNames } from "../clients/config-export/model-names";
+import { namedExportContext } from "../clients/config-export/alias-selectors";
 import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -18,6 +21,7 @@ import { SNAPSHOT_RETENTION } from "./journal";
 import {
   AmbiguousSelectorError,
   InvalidSelectorError,
+  UnrepresentableSelectorError,
   parseSegment,
   readPath,
   selectIndex,
@@ -120,6 +124,24 @@ export { readPath };
 /** Does the document carry any fragment we would write? */
 export function hasOurFragments(doc: unknown, contribution: ManagedContribution): boolean {
   return contribution.fragments.some(fragment => readPath(doc, fragment.path) !== undefined);
+}
+
+/**
+ * A hand-written Qoder legacy row for one of our models makes Qoder reject the
+ * provider we would add. Rows a record still names are ours for refresh to
+ * drop. Overwrite cannot resolve this either, because the row is not on a path
+ * we write, so the writer and planner ask the same question before overwriting.
+ */
+export function qoderLegacyCatalogConflict(
+  parsed: unknown,
+  record: OwnershipRecord | null,
+  contribution: ManagedContribution | null,
+): boolean {
+  if (contribution?.clientId !== "qoder" && contribution?.clientId !== "qoder-cn") return false;
+  const owned = new Set((record?.fragmentPaths ?? [])
+    .filter(path => Array.isArray(path) && path.every(key => typeof key === "string"))
+    .map(path => readPath(parsed, path)));
+  return qoderLegacyCatalogCollision(parsed, contribution, owned);
 }
 
 /**
@@ -360,6 +382,10 @@ export function classifyIntegration(input: {
     }
     throw error;
   }
+  // Before `absent`: none of our paths is occupied, yet Qoder would reject the provider.
+  if (qoderLegacyCatalogConflict(input.parsed, input.record, input.contribution)) {
+    return { state: "conflict", reason: "unowned-key" };
+  }
   // A catalog can shrink to zero while the record still owns earlier rows.
   // Presence for disable must include those recorded paths, independent of the
   // current export roster; the ownership fingerprint is checked below.
@@ -472,6 +498,7 @@ export function classifyIntegration(input: {
 }
 
 export interface IntegrationStateInput {
+  modelNames?: ExportModelNames;
   clientId: IntegrationClientId;
   models: readonly ExportModel[];
   config: OcxConfig;
@@ -523,6 +550,9 @@ export function buildIntegrationContribution(
   // between two document roots (Command Code) must see the bytes on disk, and
   // routing it through this one builder keeps classify, plan and write agreeing.
   const context = exportContextOf({ ...input, document: parsed });
+  const mode = resolveModelNames(input.clientId, input.modelNames,
+    record?.configPath === effective.configPath ? record.modelNames : undefined);
+  context.models = namedExportContext(input.clientId, { ...context, modelNames: mode }).models;
   if (input.clientId === "droid" && input.droidReasoningDefaults === undefined && record?.configPath === effective.configPath) {
     const inherited = recordedDroidContributionMatches(parsed, record)
       ? droidDefaultsFromOwnedRows(context, parsed, record.fragmentPaths)
@@ -678,7 +708,18 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   const parsed = input.clientId === "cline"
     ? parseClineDocument(loaded.before)
     : parseConfig(loaded.before, effective.format, EXPORT_CLIENTS[input.clientId].jsonc ? { jsonc: true } : undefined);
-  const contribution = buildIntegrationContribution(input, effective, parsed, record);
+  let contribution: ManagedContribution;
+  try {
+    contribution = buildIntegrationContribution(input, effective, parsed, record);
+  } catch (error) {
+    // One catalog row can make this client's ownership unaddressable. Keep its
+    // refusal visible without hiding every other client in a collection read.
+    if (!(error instanceof UnrepresentableSelectorError)) throw error;
+    return { clientId: input.clientId, state: "unsafe", installed, configPath,
+      reason: "unresolvable-path",
+      ...(record?.configPath === configPath ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
+      ...retention };
+  }
   if (input.clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0
     && (!record || record.configPath !== configPath)) {
     return { clientId: input.clientId, state: "unsafe", installed, configPath,

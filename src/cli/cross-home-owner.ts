@@ -9,6 +9,9 @@ import { detectCodexRoutingDrift } from "../codex/routing-drift";
 import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { currentExternalCodexModelProvider } from "../codex/inject";
 import { reconcileJournal } from "../codex/journal";
+import { shouldSyncCodexOnStart } from "../codex/desired-state";
+import { loadConfig } from "../config";
+import { updateTeardownHandoverPending } from "../update/teardown-handover";
 import { markSiblingStart, siblingOfLivePort } from "../codex/sibling-start";
 import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
@@ -350,5 +353,14 @@ export function reconcileStartupJournal(): void {
   const clientState = readClientConnectionState();
   reconcileJournal(clientState.kind === "connected"
     ? { activeClientApiKeyId: clientState.value.apiKeyId }
-    : undefined);
+    : { adoptUpdateHandover: updateTeardownHandoverPending() && startupSyncEnabled() });
+}
+
+/**
+ * #7423: adoption keeps routing only for a startup that will re-publish it. A user who has
+ * since turned the Codex integration off gets the ordinary recovery, even with a stale
+ * handover receipt on disk; an unreadable config is treated the same way.
+ */
+function startupSyncEnabled(): boolean {
+  try { return shouldSyncCodexOnStart(loadConfig()); } catch { return false; }
 }

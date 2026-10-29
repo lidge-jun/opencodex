@@ -21,7 +21,7 @@ const originalFetch = globalThis.fetch;
 
 test("all registered export clients include Cline in file integrations", () => {
   expect(FILE_INTEGRATION_CLIENTS).toEqual([
-    "qoder", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell",
+    "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell", "t3code",
   ]);
 });
 

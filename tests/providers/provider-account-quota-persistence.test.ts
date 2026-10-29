@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cancelPendingAccountQuotaPersist,
   readPersistedAccountQuotas,
+  readPersistedKiroVerdicts,
   schedulePersistAccountQuotas,
 } from "../../src/providers/account-quota-disk";
 import type { ProviderQuota } from "../../src/providers/quota-types";
@@ -103,5 +104,87 @@ describe("provider account quota persistence", () => {
     cancelPendingAccountQuotaPersist();
     await settle();
     expect(existsSync(join(home, FILE))).toBe(false);
+  });
+});
+
+describe("provider quota snapshot deadlines", () => {
+  let elapsed: number;
+  let restoreClock: () => void;
+  const advance = (ms: number) => {
+    elapsed += ms;
+    jest.advanceTimersByTime(ms);
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    elapsed = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    restoreClock = () => clock.mockRestore();
+  });
+
+  afterEach(() => {
+    cancelPendingAccountQuotaPersist();
+    restoreClock();
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  test("a short burst keeps the 250 ms idle debounce", () => {
+    schedulePersistAccountQuotas(() => [[KEY, quota(10)]]);
+    advance(100);
+    schedulePersistAccountQuotas(() => [[KEY, quota(20)]]);
+    advance(249);
+    expect(existsSync(join(home, FILE))).toBe(false);
+    advance(1);
+    expect(readPersistedAccountQuotas().get(KEY)?.monthlyPercent).toBe(20);
+  });
+
+  test("sustained updates persist the latest row and verdict callbacks every second", () => {
+    const key = "kiro\u0000acct-a";
+    const identity = "a".repeat(64);
+    for (let batch = 0; batch < 2; batch++) {
+      for (let update = 1; update <= 10; update++) {
+        const percent = batch * 10 + update;
+        schedulePersistAccountQuotas(() => [[key, { ...quota(percent), identity }]],
+          () => [[key, { exhausted: percent >= 20, identity, observedAt: Date.now() }]]);
+        advance(100);
+      }
+      expect(readPersistedAccountQuotas().get(key)?.monthlyPercent).toBe((batch + 1) * 10);
+      expect(readPersistedKiroVerdicts().get(key)?.exhausted).toBe(batch === 1);
+    }
+  });
+
+  test("cancellation resets the deadline before the next home schedules a write", () => {
+    const oldHome = home;
+    for (let update = 0; update < 9; update++) {
+      schedulePersistAccountQuotas(() => [[KEY, quota(update)]]);
+      advance(100);
+    }
+    cancelPendingAccountQuotaPersist();
+    home = mkdtempSync(join(tmpdir(), "ocx-quota-persist-next-"));
+    process.env.OPENCODEX_HOME = home;
+    try {
+      schedulePersistAccountQuotas(() => [["cursor\u0000new-account", quota(15)]]);
+      advance(249);
+      expect(existsSync(join(home, FILE))).toBe(false);
+      expect(existsSync(join(oldHome, FILE))).toBe(false);
+      advance(1);
+      expect([...readPersistedAccountQuotas().keys()]).toEqual(["cursor\u0000new-account"]);
+    } finally {
+      removeTreeWithRetry(oldHome);
+    }
+  });
+
+  test("a failed write remains best-effort and the next update gets a fresh debounce", () => {
+    mkdirSync(join(home, FILE));
+    schedulePersistAccountQuotas(() => [[KEY, quota(10)]]);
+    expect(() => advance(250)).not.toThrow();
+    rmdirSync(join(home, FILE));
+    advance(1_000);
+    schedulePersistAccountQuotas(() => [[KEY, quota(20)]]);
+    advance(249);
+    expect(existsSync(join(home, FILE))).toBe(false);
+    advance(1);
+    expect(readPersistedAccountQuotas().get(KEY)?.monthlyPercent).toBe(20);
   });
 });

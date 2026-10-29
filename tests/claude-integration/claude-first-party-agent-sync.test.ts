@@ -8,8 +8,10 @@ import { reconcileClaudeFirstPartySettings } from "../../src/claude/first-party-
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let claudeDir = "";
 let config: OcxConfig;
 const previous: Record<string, string | undefined> = {};
@@ -60,6 +62,7 @@ async function dispatch(target: "cli" | "desktop", enabled = true, deps: Managem
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-first-party-agents-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   claudeDir = join(root, "claude");
   for (const key of ENV_KEYS) previous[key] = process.env[key];
   process.env.OPENCODEX_HOME = root;
@@ -77,6 +80,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  lifecycleLock.restore();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
     else process.env[key] = previous[key];

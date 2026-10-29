@@ -15,20 +15,30 @@
  * those records all-or-nothing, so creating one here would hide the rest of the registry seed.
  * Same shape and restraint as `stale-context-window-migration`.
  */
-import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL, MOONSHOT_CN_BASE_URL, MOONSHOT_INTL_BASE_URL } from "./base-url-choices";
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
 import {
   ALIBABA_TOKEN_PLAN_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  KIMI_API_DEFAULT_REASONING_EFFORTS,
+  KIMI_API_MODEL_CONTEXT_WINDOWS,
+  KIMI_API_MODELS,
+  KIMI_API_MODELS_BEFORE_K31,
+  META_MODEL_API_MODELS,
+  META_MUSE_CONTEXT_WINDOW,
+  META_MUSE_MODELS,
+  META_MUSE_WONDER_MODEL,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
-  MINIMAX_M31_FLASH_PREVIEW,
+  MINIMAX_M31_FLASH,
+  MINIMAX_M31_FLASH_MAX_OUTPUT_TOKENS,
   MINIMAX_MODELS,
   MINIMAX_MODELS_BEFORE_M31,
   MINIMAX_MODEL_CONTEXT_WINDOWS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 
 export interface StaleModelRoster {
   /** Registry provider id whose saved rows may carry the old roster. */
@@ -71,16 +81,36 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
 ];
 
 /**
- * MiniMax-M3.1-Flash-Preview (2026-09-30). MiniMax's /v1/models roster does not list the
- * preview, so live discovery cannot add it; the catalog keeps it only when it is configured.
+ * MiniMax-M3.1-Flash (2026-10-21). MiniMax's /v1/models roster does not list the
+ * Flash, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
+  {
+    provider: "meta-model",
+    from: META_MUSE_MODELS,
+    to: META_MODEL_API_MODELS,
+    contextWindows: { [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW },
+    // A Custom row may keep this id pointed at another gateway
+    // (preserveCustomDestination); only api.meta.ai publishes the roster `to` describes.
+    destinationBaseUrls: ["https://api.meta.ai/v1"],
+  },
+  {
+    provider: "deepseek",
+    from: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
+    to: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    contextWindows: { "deepseek-v4-pro": 1_048_576 },
+    destinationBaseUrls: ["https://api.deepseek.com", "https://api.deepseek.com/v1"],
+  },
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,
     to: MINIMAX_MODELS,
-    contextWindows: { [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_MODEL_CONTEXT_WINDOWS[MINIMAX_M31_FLASH_PREVIEW]! },
-    defaultReasoningEfforts: { [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
+    contextWindows: { [MINIMAX_M31_FLASH]: MINIMAX_MODEL_CONTEXT_WINDOWS[MINIMAX_M31_FLASH]! },
+    maxOutputTokens: { [MINIMAX_M31_FLASH]: MINIMAX_M31_FLASH_MAX_OUTPUT_TOKENS },
+    defaultReasoningEfforts: { [MINIMAX_M31_FLASH]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
+    // #7807: Custom destinations keep their roster and partial metadata maps.
+    destinationBaseUrls: ["https://api.minimax.io/v1", "https://api.minimaxi.com/v1", "https://api.minimax.cn/v1"]
+      .flatMap(url => [url, `${url}/chat/completions`]),
   })),
   ...[
     { provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS },
@@ -96,6 +126,16 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
     maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
     defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
   })),
+  // Kimi K3.1 Pro (#7653). Both the International and China platforms list kimi-k3.1-pro and
+  // -highspeed; a Custom URL may be another gateway, so it keeps its saved list.
+  {
+    provider: "moonshot",
+    from: KIMI_API_MODELS_BEFORE_K31,
+    to: KIMI_API_MODELS,
+    contextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
+    defaultReasoningEfforts: KIMI_API_DEFAULT_REASONING_EFFORTS,
+    destinationBaseUrls: [MOONSHOT_INTL_BASE_URL, MOONSHOT_CN_BASE_URL],
+  },
 ];
 
 function sameList(value: unknown, expected: readonly string[]): boolean {
@@ -121,7 +161,7 @@ function fillExisting<T>(container: Record<string, T> | undefined, values: Reado
   let filled = false;
   for (const id of ids) {
     const value = values[id];
-    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) {
+    if (value !== undefined && modelRecordValue(container, id) === undefined) {
       container[id] = value;
       filled = true;
     }

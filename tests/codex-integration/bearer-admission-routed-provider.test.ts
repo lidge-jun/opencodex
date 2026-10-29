@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearComboTargetCooldowns } from "../../src/combos/failover";
-import { startServer } from "../../src/server";
+import { startServer as startProxyServer } from "../../src/server";
 import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests } from "../../src/codex/subagent-model-fallback";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import {
@@ -56,6 +56,38 @@ let nativeAccountIds: Array<string | null> = [];
 const ADMISSION_SECRET = "ocx_data_2132secret";
 const ROUTED_KEY = "sk-routed-provider-key";
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("bearer admission routed provider test");
+
+// Register synchronously, before startup can suspend. A Bun timeout does not
+// unwind the test body's finally, so afterEach must own these resources too.
+const runningServers = new Set<{ stop(force?: boolean): Promise<void> }>();
+const captureClosers = new Set<() => Promise<void>>();
+
+function startServer(...args: Parameters<typeof startProxyServer>): ReturnType<typeof startProxyServer> {
+  return trackServer(startProxyServer(...args));
+}
+
+// One stop in flight at a time. A rejected stop keeps the server registered and
+// clears the cached attempt, so afterEach retries instead of re-reading a failure.
+function trackServer<T extends { stop(force?: boolean): Promise<void> }>(server: T): T {
+  runningServers.add(server);
+  const stop = server.stop.bind(server);
+  let stopping: Promise<void> | undefined;
+  Object.defineProperty(server, "stop", {
+    configurable: true,
+    value: (force?: boolean) => stopping ??= stop(force).then(
+      () => { runningServers.delete(server); },
+      error => { stopping = undefined; throw error; },
+    ),
+  });
+  return server;
+}
+
+async function stopActiveFixtures(): Promise<void> {
+  const servers = await Promise.allSettled([...runningServers].map(server => server.stop(true)));
+  const captures = await Promise.allSettled([...captureClosers].map(close => close()));
+  const failures = [...servers, ...captures].filter(result => result.status === "rejected");
+  if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Admission fixture cleanup failed");
+}
 
 /** A JWT whose `exp` is far in the future, so a stored main token reads as live. */
 function liveJwt(): string {
@@ -122,6 +154,7 @@ function cursorForwardConfig(baseUrl: string, apiKey?: string): OcxConfig {
 async function withCursorCaptureServer<T>(
   run: (baseUrl: string, capturedAuth: Array<string | null>) => Promise<T>,
   beforeResponse?: () => Promise<void>,
+  closeTrace?: BearerIterationTrace,
 ): Promise<T> {
   const capturedAuth: Array<string | null> = [];
   const sessions = new Set<http2.ServerHttp2Session>();
@@ -154,11 +187,17 @@ async function withCursorCaptureServer<T>(
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Cursor capture fixture did not bind");
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= tracedBearerStage(closeTrace, "capture_close", async () => {
+    for (const session of sessions) session.destroy();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    captureClosers.delete(close);
+  });
+  captureClosers.add(close);
   try {
     return await run(`http://127.0.0.1:${address.port}`, capturedAuth);
   } finally {
-    for (const session of sessions) session.destroy();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    await close();
   }
 }
 
@@ -199,24 +238,30 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  resetVisionDescriptionCache();
-  closeRequestHistoryIndex();
-  clearComboTargetCooldowns();
-  resetSubagentModelFallbackStateForTests();
-  if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
-  else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
-  globalThis.fetch = originalFetch;
-  if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOcxHome;
-  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-  else process.env.CODEX_HOME = previousCodexHome;
-  if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  // Startup's config-dir ACL hardening may still hold the homes on Windows; settle it first.
-  if (ocxHome) await removeTreeAfterBackgroundWork(ocxHome);
-  if (codexHome) await removeTreeAfterBackgroundWork(codexHome);
-  ocxHome = "";
-  codexHome = "";
+  try {
+    // Stop under the same homes/fetch overrides that startup captured, before
+    // releasing SQLite handles or removing directories still owned by a server.
+    await stopActiveFixtures();
+  } finally {
+    resetVisionDescriptionCache();
+    closeRequestHistoryIndex();
+    clearComboTargetCooldowns();
+    resetSubagentModelFallbackStateForTests();
+    if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
+    globalThis.fetch = originalFetch;
+    if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOcxHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
+    // Startup's config-dir ACL hardening may still hold the homes on Windows; settle it first.
+    if (ocxHome) await removeTreeAfterBackgroundWork(ocxHome);
+    if (codexHome) await removeTreeAfterBackgroundWork(codexHome);
+    ocxHome = "";
+    codexHome = "";
+  }
 });
 
 async function postResponses(
@@ -267,11 +312,506 @@ async function postClaudeMessages(
   });
 }
 
-async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
+async function startOwnedServer(
+  startupGate: () => Promise<unknown> = waitForNativeMainStartupGate,
+): Promise<ReturnType<typeof startServer>> {
   const server = startServer(0, { inspectNativeCodexOwnership });
-  await waitForNativeMainStartupGate();
-  return server;
+  try {
+    await startupGate();
+    return server;
+  } catch (error) {
+    await server.stop(true);
+    throw error;
+  }
 }
+
+/**
+ * Opt-in stage tracing for the multi-iteration admission loops below. One of
+ * these tests consumed its whole SERVER_BUDGET_MS in CI with no evidence of
+ * which stage ate it — the per-test timeout reports only that the test died.
+ *
+ * OPENCODEX_BEARER_STAGE_TRACE=1 emits one JSON record per stage event on
+ * stderr: a fixed stage name with begin/end/error, the case index, this
+ * iteration's elapsed and the whole-test elapsed against the single 30s
+ * budget the test timeout actually enforces. Records carry enum literals and
+ * numbers only — no path, header, token, or error text — an elapsed
+ * correlation alone never proves an external kill. The request stage spans
+ * the body read, and test_end is emitted from a finally so a failed stage
+ * or assertion still closes the record after capture_close and the fixture's
+ * iteration_end. The fixed "fixture" index attributes shared setup/teardown
+ * and positive controls separately from each negative row's request.
+ * Tracing adds no timers, retries, or files and never alters
+ * the call sequence or cleanup: an undefined trace emits nothing.
+ */
+type BearerTraceStage = "save_config" | "startup_gate" | "positive_control" | "request" | "server_stop" | "capture_close";
+
+interface BearerIterationTrace {
+  begin(stage: BearerTraceStage): void;
+  end(stage: BearerTraceStage): void;
+  error(stage: BearerTraceStage): void;
+  finish(): void;
+}
+
+interface BearerTestTrace {
+  iteration(caseIndex: number | "fixture", caseCount: number): BearerIterationTrace;
+  finish(): void;
+}
+
+function bearerStageTracer(label: string): BearerTestTrace | undefined {
+  if (process.env.OPENCODEX_BEARER_STAGE_TRACE !== "1") return undefined;
+  const startedAt = Date.now();
+  const emit = (record: Record<string, unknown>): void => {
+    console.error(`[bearer-stage-trace] ${JSON.stringify({ label, budgetMs: SERVER_BUDGET_MS, ...record })}`);
+  };
+  emit({ event: "test_begin" });
+  return {
+    finish: () => emit({ event: "test_end", testElapsedMs: Date.now() - startedAt }),
+    iteration: (caseIndex, caseCount) => {
+      const iterationStartedAt = Date.now();
+      const stageStartedAt = new Map<string, number>();
+      emit({
+        event: "iteration_begin",
+        caseIndex,
+        caseCount,
+        testElapsedMs: iterationStartedAt - startedAt,
+      });
+      const mark = (stage: BearerTraceStage, event: "begin" | "end" | "error"): void => {
+        const now = Date.now();
+        const record: Record<string, unknown> = {
+          event: `${stage}_${event}`,
+          caseIndex,
+          iterationElapsedMs: now - iterationStartedAt,
+          testElapsedMs: now - startedAt,
+        };
+        if (event === "begin") {
+          stageStartedAt.set(stage, now);
+        } else {
+          const began = stageStartedAt.get(stage);
+          if (began !== undefined) record.stageElapsedMs = now - began;
+        }
+        emit(record);
+      };
+      return {
+        begin: stage => mark(stage, "begin"),
+        end: stage => mark(stage, "end"),
+        error: stage => mark(stage, "error"),
+        finish: () => emit({
+          event: "iteration_end",
+          caseIndex,
+          iterationElapsedMs: Date.now() - iterationStartedAt,
+          testElapsedMs: Date.now() - startedAt,
+        }),
+      };
+    },
+  };
+}
+
+/** Run `fn` inside a traced stage; an undefined trace changes nothing. */
+async function tracedBearerStage<T>(
+  iteration: BearerIterationTrace | undefined,
+  stage: BearerTraceStage,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (!iteration) return fn();
+  iteration.begin(stage);
+  try {
+    const value = await fn();
+    iteration.end(stage);
+    return value;
+  } catch (error) {
+    iteration.error(stage);
+    throw error;
+  }
+}
+
+/**
+ * Sync counterpart for stages whose body is already synchronous. Routing a
+ * sync call through an async wrapper would add a microtask on every
+ * iteration even with tracing off, so this keeps the original direct call.
+ */
+function tracedBearerStageSync<T>(
+  iteration: BearerIterationTrace | undefined,
+  stage: BearerTraceStage,
+  fn: () => T,
+): T {
+  if (!iteration) return fn();
+  iteration.begin(stage);
+  try {
+    const value = fn();
+    iteration.end(stage);
+    return value;
+  } catch (error) {
+    iteration.error(stage);
+    throw error;
+  }
+}
+
+/**
+ * Opt-in trace capture for the seam tests: enables the env switch, records
+ * parsed stderr records, and always restores both even when a check fails.
+ */
+async function withTraceLines(
+  run: (records: () => Array<Record<string, unknown>>) => Promise<void>,
+): Promise<void> {
+  const previous = process.env.OPENCODEX_BEARER_STAGE_TRACE;
+  process.env.OPENCODEX_BEARER_STAGE_TRACE = "1";
+  const lines: string[] = [];
+  const originalError = console.error;
+  console.error = (line: unknown) => { lines.push(String(line)); };
+  try {
+    await run(() => lines
+      .filter(line => line.startsWith("[bearer-stage-trace] "))
+      .map(line => JSON.parse(line.slice("[bearer-stage-trace] ".length)) as Record<string, unknown>));
+  } finally {
+    console.error = originalError;
+    if (previous === undefined) delete process.env.OPENCODEX_BEARER_STAGE_TRACE;
+    else process.env.OPENCODEX_BEARER_STAGE_TRACE = previous;
+  }
+}
+
+type BearerAdmissionPost = (url: string | URL, model: string, headers: HeadersInit) => Promise<Response>;
+
+/**
+ * The request stage used by the matrix below — and exercised directly by the
+ * seam tests through the injected `post`. The body read belongs to the
+ * stage: a stalled or rejected body is still request work, not unmeasured
+ * time after request_end. Chat keeps the original order — the status
+ * refusal precedes the drain, so an unexpected 200 fails fast instead of
+ * hanging on a stalled body.
+ */
+async function runBearerRequestStage(
+  iteration: BearerIterationTrace | undefined,
+  surface: "Responses" | "Chat",
+  url: string | URL,
+  headers: HeadersInit,
+  post: BearerAdmissionPost,
+): Promise<{ body: unknown }> {
+  return tracedBearerStage(iteration, "request", async () => {
+    const res = await post(url, "cursorcustom/auto", headers);
+    if (surface === "Responses") return { body: await res.json() };
+    expect(res.status).not.toBe(200);
+    return { body: await res.text() };
+  });
+}
+
+interface AdmissionCaseDeps {
+  readonly post?: BearerAdmissionPost;
+}
+
+/** One negative row on the shared fixture; assertions remain per request. */
+async function runTracedAdmissionCase(
+  iteration: BearerIterationTrace | undefined,
+  surface: "Responses" | "Chat",
+  extra: Record<string, string>,
+  url: string | URL,
+  capturedAuth: Array<string | null>,
+  deps: AdmissionCaseDeps = {},
+): Promise<void> {
+  capturedAuth.length = 0;
+  const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+  const post = deps.post ?? (surface === "Chat" ? postChatCompletions : postResponses);
+  const { body } = await runBearerRequestStage(iteration, surface, url, headers, post);
+  if (surface === "Responses") {
+    expect(body).toMatchObject({ status: "failed" });
+  }
+  expect(capturedAuth).toEqual([]);
+}
+
+/**
+ * The matrix loop itself, shared by the parameterized test and the seam
+ * tests so failure-order regressions are checked on the real control flow.
+ */
+async function runTracedAdmissionMatrix(
+  surface: "Responses" | "Chat",
+  cases: ReadonlyArray<Record<string, string>>,
+  deps: AdmissionCaseDeps = {},
+): Promise<void> {
+  const trace = bearerStageTracer(`ChatGPT-claimed bearer (${surface})`);
+  const fixture = trace?.iteration("fixture", cases.length);
+  try {
+    // Auth varies by row; routing/config do not. Rewriting a legacy config and
+    // starting a full proxy per row repeated migration + private-file ACL work
+    // eleven times inside one 30s test budget on hosted Windows.
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      tracedBearerStageSync(fixture, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const server = await tracedBearerStage(fixture, "startup_gate", () => startOwnedServer());
+      const control = (bearer: string) => tracedBearerStage(fixture, "positive_control", async () => {
+        capturedAuth.length = 0;
+        const post = surface === "Chat" ? postChatCompletions : postResponses;
+        const response = await post(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET, authorization: `Bearer ${bearer}`,
+        });
+        await response.text();
+        expect(capturedAuth).toEqual([`Bearer ${bearer}`]);
+      });
+      try {
+        // Both ends must reach the wire on this SAME route, so a cooldown or a
+        // globally disabled path cannot make all negative rows vacuously green.
+        await control("cursor-matrix-before");
+        for (const [caseIndex, extra] of cases.entries()) {
+          const iteration = trace?.iteration(caseIndex, cases.length);
+          try {
+            await runTracedAdmissionCase(iteration, surface, extra, server.url, capturedAuth, deps);
+          } finally {
+            iteration?.finish();
+          }
+        }
+        await control("cursor-matrix-after");
+      } finally {
+        await tracedBearerStage(fixture, "server_stop", () => server.stop(true));
+      }
+    }, undefined, fixture);
+  } finally {
+    fixture?.finish();
+    trace?.finish();
+  }
+}
+
+describe("bearer stage tracer seam", () => {
+  test.each(["Responses", "Chat"])("%s matrix initializes once and brackets every negative row with live controls", async surface => {
+    await withTraceLines(async records => {
+      await runTracedAdmissionMatrix(surface, [
+        { authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "matrix-claim" })}` },
+        { authorization: "Bearer first, Bearer second" },
+      ]);
+      for (const stage of ["save_config", "startup_gate", "server_stop", "capture_close"]) {
+        expect(records().filter(record => record.event === `${stage}_end`)).toHaveLength(1);
+      }
+      const work = records().filter(record => record.event === "request_begin" || record.event === "positive_control_begin");
+      expect(work.map(record => [record.event, record.caseIndex])).toEqual([
+        ["positive_control_begin", "fixture"], ["request_begin", 0],
+        ["request_begin", 1], ["positive_control_begin", "fixture"],
+      ]);
+      expect(records().filter(record => record.event === "positive_control_end")).toHaveLength(2);
+    });
+  });
+
+  test("cleanup stops a server suspended in startup and releases its spend-ledger owner", async () => {
+    saveConfig(mixedConfig());
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = startOwnedServer(() => gate);
+    const server = [...runningServers][0] as ReturnType<typeof startProxyServer>;
+    const url = new URL("/healthz", server.url);
+    try {
+      expect((await originalFetch(url)).status).toBe(200);
+      await stopActiveFixtures();
+      await expect(originalFetch(url)).rejects.toThrow();
+      // Same home, while the old startup promise is STILL suspended: a leaked
+      // spend owner rejects this start even though its listener is gone.
+      const replacement = await startOwnedServer();
+      try {
+        const response = await postResponses(replacement.url, "gateway/gateway-model");
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(routedAuth).toEqual([`Bearer ${ROUTED_KEY}`]);
+      } finally {
+        await replacement.stop(true);
+      }
+    } finally {
+      release();
+      await (await pending).stop(true);
+    }
+  });
+
+  test("cleanup closes a capture fixture whose callback has not returned", async () => {
+    let entered!: (baseUrl: string) => void, release!: () => void;
+    const ready = new Promise<string>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = withCursorCaptureServer(async baseUrl => { entered(baseUrl); await gate; });
+    const url = await ready;
+    try {
+      expect(captureClosers.size).toBe(1);
+      await stopActiveFixtures();
+      await expect(new Promise<void>((resolve, reject) => {
+        const session = http2.connect(url);
+        session.once("connect", () => { session.destroy(); resolve(); });
+        session.once("error", error => { session.destroy(); reject(error); });
+      })).rejects.toThrow();
+      expect(captureClosers.size).toBe(0);
+    } finally {
+      release();
+      await pending;
+    }
+  });
+
+  test("a rejected startup gate stops its server before propagating the error", async () => {
+    saveConfig(mixedConfig());
+    const failure = new Error("fixture startup failure");
+    await expect(startOwnedServer(() => Promise.reject(failure))).rejects.toBe(failure);
+    expect(runningServers.size).toBe(0);
+    const replacement = await startOwnedServer();
+    await replacement.stop(true);
+  });
+
+  test("a rejected stop stays registered and the next cleanup retries it", async () => {
+    const failure = new Error("fixture stop failure");
+    let attempts = 0;
+    const server = trackServer({
+      stop: async (_force?: boolean) => {
+        attempts += 1;
+        if (attempts === 1) throw failure;
+      },
+    });
+    await expect(server.stop(true)).rejects.toBe(failure);
+    expect(runningServers.has(server)).toBe(true);
+    await stopActiveFixtures();
+    expect(attempts).toBe(2);
+    expect(runningServers.has(server)).toBe(false);
+  });
+
+  test("a disabled trace runs a sync stage as a direct call — no microtask, same order", () => {
+    // The whole point of the sync wrapper: a sync body must come back as a
+    // value, not a resolved Promise, when tracing is off.
+    const order: string[] = [];
+    const value = tracedBearerStageSync(undefined, "save_config", () => {
+      order.push("save_config");
+      return "saved";
+    });
+    order.push("auth_write");
+
+    expect(value).toBe("saved");
+    expect(order).toEqual(["save_config", "auth_write"]);
+  });
+
+  test("an enabled trace emits the fixed event sequence without altering call order", async () => {
+    await withTraceLines(async records => {
+      const trace = bearerStageTracer("seam-check");
+      const iteration = trace?.iteration(0, 1);
+      const order: string[] = [];
+
+      tracedBearerStageSync(iteration, "save_config", () => { order.push("save_config"); });
+      await tracedBearerStage(iteration, "request", async () => { order.push("request"); });
+      iteration?.finish();
+      trace?.finish();
+
+      expect(order).toEqual(["save_config", "request"]);
+      const events = records();
+      expect(events.map(record => record.event)).toEqual([
+        "test_begin",
+        "iteration_begin",
+        "save_config_begin",
+        "save_config_end",
+        "request_begin",
+        "request_end",
+        "iteration_end",
+        "test_end",
+      ]);
+      for (const record of events) {
+        expect(record.label).toBe("seam-check");
+        expect(Number.isFinite(record.budgetMs)).toBe(true);
+        expect(Number.isFinite(record.testElapsedMs ?? 0)).toBe(true);
+      }
+    });
+  });
+
+  test("the shared request stage holds request_end until the body settles", async () => {
+    await withTraceLines(async records => {
+      const trace = bearerStageTracer("body-attribution");
+      const iteration = trace!.iteration(0, 1);
+      const events = (name: string) => records().filter(record => record.event === name);
+
+      // Headers resolved but the body is still in flight: the stage must not
+      // end until the read releases. The gate is released in finally so a
+      // failed count check cannot leave the stage promise hanging.
+      let release!: () => void, entered!: () => void;
+      const bodyEntered = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<string>(resolve => { release = () => resolve("payload"); });
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 401,
+        text: () => { entered(); return gate; },
+        json: () => Promise.resolve({}),
+      } as unknown as Response);
+      const pending = runBearerRequestStage(iteration, "Chat", "http://fixture.invalid", {}, post);
+      try {
+        await Promise.race([bodyEntered, pending.then(() => { throw new Error("request settled before body entry"); })]);
+        expect(events("request_end")).toHaveLength(0);
+      } finally {
+        release();
+        await pending.catch(() => {});
+      }
+      expect(events("request_end")).toHaveLength(1);
+
+      const rejectedPost: BearerAdmissionPost = () => Promise.resolve({
+        status: 401,
+        text: () => Promise.reject<string>(new Error("synthetic-stall")),
+        json: () => Promise.reject<unknown>(new Error("synthetic-stall")),
+      } as unknown as Response);
+      const parseError = await runBearerRequestStage(iteration, "Responses", "http://fixture.invalid", {}, rejectedPost)
+        .then(() => null, error => error);
+      expect(parseError).toBeInstanceOf(Error);
+      expect(parseError.message).toBe("synthetic-stall");
+      expect(events("request_error")).toHaveLength(1);
+
+      iteration.finish();
+      trace!.finish();
+    });
+  });
+
+  test("an unexpected Chat 200 fails inside the shared request stage before the body drain", async () => {
+    await withTraceLines(async records => {
+      const trace = bearerStageTracer("chat-200-fast-fail");
+      const iteration = trace!.iteration(0, 1);
+      const events = (name: string) => records().filter(record => record.event === name);
+
+      // A 200 with a body that never settles must fail on the status check
+      // immediately — the assertion precedes the drain inside the stage.
+      let bodyRead = false;
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 200,
+        text: () => { bodyRead = true; return new Promise<string>(() => {}); },
+        json: () => { bodyRead = true; return new Promise<unknown>(() => {}); },
+      } as unknown as Response);
+      const statusError = await runBearerRequestStage(iteration, "Chat", "http://fixture.invalid", {}, post)
+        .then(() => null, error => error);
+      expect(statusError).toBeInstanceOf(Error);
+      expect(bodyRead).toBe(false);
+      expect(events("request_error")).toHaveLength(1);
+      expect(events("request_end")).toHaveLength(0);
+
+      iteration.finish();
+      trace!.finish();
+    });
+  });
+
+  test("an injected stage failure still ends the real matrix with test_end last", async () => {
+    await withTraceLines(async records => {
+      // Real saveConfig, real servers, real capture — only the wire response
+      // is injected, with a Chat 200 the shared request stage must refuse.
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 200,
+        text: () => Promise.resolve("{}"),
+        json: () => Promise.resolve({}),
+      } as unknown as Response);
+
+      const failure = await runTracedAdmissionMatrix("Chat", [{}], { post }).then(() => null, error => error);
+      expect(failure).toBeInstanceOf(Error);
+
+      expect(records().map(record => record.event)).toEqual([
+        "test_begin",
+        "iteration_begin",
+        "save_config_begin",
+        "save_config_end",
+        "startup_gate_begin",
+        "startup_gate_end",
+        "positive_control_begin",
+        "positive_control_end",
+        "iteration_begin",
+        "request_begin",
+        "request_error",
+        "iteration_end",
+        "server_stop_begin",
+        "server_stop_end",
+        "capture_close_begin",
+        "capture_close_end",
+        "iteration_end",
+        "test_end",
+      ]);
+    });
+  });
+});
 
 describe("#2132 bearer admission does not require a ChatGPT credential for routed providers", () => {
   test("a key-authenticated route is served with no stored main credential", async () => {
@@ -746,28 +1286,7 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": {} })}` },
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": { user_id: "u_1" } })}` },
     ];
-    for (const extra of cases) {
-      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
-        saveConfig(cursorForwardConfig(baseUrl));
-        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-        const server = await startOwnedServer();
-        try {
-          const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
-          const response = surface === "Chat"
-            ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
-            : await postResponses(server.url, "cursorcustom/auto", headers);
-          if (surface === "Responses") {
-            expect(await response.json()).toMatchObject({ status: "failed" });
-          } else {
-            expect(response.status).not.toBe(200);
-            await response.text();
-          }
-          expect(capturedAuth).toEqual([]);
-        } finally {
-          await server.stop(true);
-        }
-      });
-    }
+    await runTracedAdmissionMatrix(surface, cases);
   });
 
   test.each(["Responses", "Chat"])("%s keeps an unmarked JWT as the Cursor credential", async surface => {

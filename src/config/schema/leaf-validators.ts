@@ -13,6 +13,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  providerInputModalitiesConfigError,
   contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
@@ -310,6 +311,10 @@ export const providerConfigSchema = z.object({
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  inputModalities: z.unknown().superRefine((value, ctx) => {
+    const error = providerInputModalitiesConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["inputModalities"]),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);
     if (error) ctx.addIssue({ code: "custom", message: error });
@@ -842,6 +847,21 @@ export const clientIntegrationsSchema = z.object({
   codex: z.boolean().optional().catch(undefined),
   grok: z.boolean().optional().catch(undefined),
   "claude-desktop": z.boolean().optional().catch(undefined),
+}).passthrough();
+
+/**
+ * Opt-in opencode-side request timeouts emitted into the generated opencode provider block.
+ * Each field is a positive millisecond count or the literal `false` (disable that wait). A
+ * malformed per-field value degrades to undefined (the field is dropped and opencode keeps its
+ * native default) rather than rejecting the whole config or emitting an opencode config that
+ * opencode would refuse to load. `.passthrough()` keeps a forward-compatible key a later version
+ * might add.
+ */
+const opencodeClientExportTimeout = z.union([z.number().positive().finite(), z.literal(false)]);
+export const opencodeClientExportSchema = z.object({
+  headerTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  chunkTimeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
+  timeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
 }).passthrough();
 
 export const asideProfileSyncSchema = z.object({

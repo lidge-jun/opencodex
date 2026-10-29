@@ -18,7 +18,7 @@ export interface AnthropicPoolOptions {
   available: AnthropicInstanceId[];
   code?: "anthropic_helper_unavailable";
 }
-export interface SidecarOverride { backend?: VisionOverrideBackend; model?: string; anthropicInstance?: AnthropicInstanceId | null }
+export interface SidecarOverride { enabled?: boolean; backend?: VisionOverrideBackend; model?: string; anthropicInstance?: AnthropicInstanceId | null }
 
 export interface ClaudeManualEnvState {
   /**

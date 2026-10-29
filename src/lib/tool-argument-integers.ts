@@ -147,16 +147,36 @@ interface CoerceResult {
   changed: boolean;
 }
 
+interface NumberToken {
+  start: number;
+  raw: string;
+  replacement?: string;
+}
+
 function coerceValue(
   value: unknown,
   schema: SchemaNode | undefined,
   root: SchemaNode,
   depth: number,
+  numbers: Map<string, NumberToken>,
   toolName?: string,
   propertyName?: string,
 ): CoerceResult {
   // A hostile or deeply nested schema must not blow the stack.
   if (depth > 64) return { value, changed: false };
+  // Only scanner-created placeholders reach numeric coercion. Real strings, including
+  // escaped strings that resemble a placeholder, keep their original type and bytes.
+  const token = typeof value === "string" ? numbers.get(value) : undefined;
+  if (token) {
+    const numeric = Number(token.raw);
+    // Number() can round a non-integral token onto an integer (1e-400 -> 0, or
+    // 9007199254740990.5 -> 9007199254740990). Such a token never counts as integral:
+    // it keeps its bytes so the client sees the value that was actually sent.
+    if (Number.isInteger(numeric) && !tokenDenotesInteger(token.raw)) return { value, changed: false };
+    const result = coerceValue(numeric, schema, root, depth, numbers, toolName, propertyName);
+    if (result.changed) token.replacement = JSON.stringify(result.value);
+    return result;
+  }
   const resolved = schema ? resolveRef(schema, root, new Set()) : undefined;
 
   if (typeof value === "number") {
@@ -188,7 +208,7 @@ function coerceValue(
     // in every one of those cases the received value is the right thing to keep.
     if (!integerDeclared || !safelyIntegral(value)) return { value, changed: false };
     // `120000.0` and `120000` are the same JS number; the difference is only in the
-    // serialized text, which is repaired by re-stringifying the parsed value.
+    // serialized text, which is repaired by re-stringifying only this number token.
     return { value, changed: true };
   }
 
@@ -198,7 +218,7 @@ function coerceValue(
     const next = value.map(entry => {
       // Array items have no property name of their own; passing the array's key would
       // let `timeout_ms: [1.5]` inherit the allowlist. Items are judged by schema only.
-      const result = coerceValue(entry, itemSchema, root, depth + 1, toolName);
+      const result = coerceValue(entry, itemSchema, root, depth + 1, numbers, toolName);
       if (result.changed) changed = true;
       return result.value;
     });
@@ -214,16 +234,68 @@ function coerceValue(
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(object)) {
     const childSchema = asSchema(properties?.[key]) ?? additional;
-    const result = coerceValue(entry, childSchema, root, depth + 1, toolName, key);
+    const result = coerceValue(entry, childSchema, root, depth + 1, numbers, toolName, key);
     if (result.changed) changed = true;
     next[key] = result.value;
   }
   return changed ? { value: next, changed } : { value, changed: false };
 }
 
+const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+const INTEGRAL_FLOAT_TOKEN = /^-?(?:0|[1-9]\d*)\.0+$/;
+
+/** True when a JSON number token's exact decimal value is an integer, judged from its text. */
+function tokenDenotesInteger(raw: string): boolean {
+  const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(raw);
+  if (!match) return false;
+  const digits = match[1]! + (match[2] ?? "");
+  // A zero significand is exactly zero for any exponent, even one Number() cannot hold.
+  if (/^0*$/.test(digits)) return true;
+  const exponent = Number(match[3] ?? "0");
+  if (!Number.isFinite(exponent)) return false;
+  const point = match[1]!.length + exponent;
+  const fraction = point <= 0 ? digits : digits.slice(point);
+  return /^0*$/.test(fraction);
+}
+
+/**
+ * Mask numbers before schema traversal and retain their original positions. A prefix absent
+ * from every decoded input string (including keys) prevents placeholder collisions.
+ * Applying repairs to the original text also preserves tokens hidden by duplicate keys.
+ */
+function maskNumberTokens(json: string): { masked: string; numbers: Map<string, NumberToken> } {
+  // One pass collects the tag that follows the base prefix in every colliding decoded string;
+  // the smallest unused tag then yields a prefix no input string can start with. This stays
+  // linear in the input, unlike growing the prefix and rescanning every string.
+  const base = "\u0000ocx-number:";
+  const usedTags = new Set<string>();
+  for (const [raw] of json.matchAll(JSON_STRING_OR_NUMBER)) {
+    if (!raw.startsWith('"')) continue;
+    const value = JSON.parse(raw) as string;
+    if (!value.startsWith(base)) continue;
+    const end = value.indexOf(":", base.length);
+    if (end >= 0) usedTags.add(value.slice(base.length, end));
+  }
+  let tag = 0;
+  while (usedTags.has(String(tag))) tag += 1;
+  const prefix = `${base}${tag}:`;
+  const numbers = new Map<string, NumberToken>();
+  const masked = json.replace(JSON_STRING_OR_NUMBER, (raw: string, start: number) => {
+    if (raw.startsWith('"')) return raw;
+    const key = `${prefix}${numbers.size}`;
+    numbers.set(key, { start, raw });
+    return JSON.stringify(key);
+  });
+  return { masked, numbers };
+}
+
 /**
  * Repair integral floats in a tool-call arguments STRING against the tool's declared
- * parameter schema.
+ * parameter schema, and safe bare integers in string-only fields. When a repair is needed,
+ * safe integral number tokens are normalized as before; non-integral decimals, unsafe integers
+ * and overflowing numbers remain byte-identical, including in duplicate keys and nested arrays,
+ * while safe siblings still get repaired. Strings, duplicate keys and surrounding formatting
+ * retain their bytes.
  *
  * Returns the original string unchanged when there is no schema, the payload does not
  * parse, or nothing needed repair — so an unaffected call keeps its exact bytes and
@@ -239,15 +311,35 @@ export function coerceIntegerToolArguments(
   // -> integer, or bare-integer -> string).
   if (!/\d/.test(args)) return args;
   let parsed: unknown;
+  let numbers: Map<string, NumberToken>;
   try {
-    parsed = JSON.parse(args);
+    // Validate before masking so token substitution cannot turn malformed JSON valid.
+    JSON.parse(args);
+    const masked = maskNumberTokens(args);
+    numbers = masked.numbers;
+    parsed = JSON.parse(masked.masked);
   } catch {
     // Malformed or still-streaming arguments are not this function's problem; the
     // existing paths already handle them.
     return args;
   }
   const root = parameters as SchemaNode;
-  const result = coerceValue(parsed, root, root, 0, toolName);
+  const result = coerceValue(parsed, root, root, 0, numbers, toolName);
   if (!result.changed) return args;
-  return JSON.stringify(result.value);
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const token of numbers.values()) {
+    // Unrepaired tokens are normalized only when the source text itself is an integral float
+    // (digits, then a fraction of zeros) with a safe value, such as 2.0, matching the previous
+    // re-serialization. Every other token, including 9007199254740990.5 and exponent forms,
+    // keeps its exact source text, so no unrepaired value is rounded.
+    const replacement = token.replacement
+      ?? (INTEGRAL_FLOAT_TOKEN.test(token.raw) && Number.isSafeInteger(Number(token.raw))
+        ? JSON.stringify(Number(token.raw))
+        : token.raw);
+    chunks.push(args.slice(cursor, token.start), replacement);
+    cursor = token.start + token.raw.length;
+  }
+  chunks.push(args.slice(cursor));
+  return chunks.join("");
 }

@@ -43,6 +43,12 @@ gate` job is its exact complement on pull requests — it runs wherever the `ci`
 so every pull request scans exactly once and the coverage does not depend on an enumerated path
 list. The aggregate derives the same expectation from its `scoped` result.
 
+The macOS suite has four duration-weighted shards (`macos N/4`, `TEST_SHARD=N/4`), each capped
+at 20 minutes. With the control and widget/bundle job, `lane=all` requests at least six macOS jobs
+for five runner slots; a `ci.yml` change also selects the setup-action macOS leg.
+Widget/bundle waits for `gates`, so the requests need not overlap and a queue is possible rather
+than guaranteed. The fourth shard adds setup overhead while dividing the same suite.
+
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
@@ -102,6 +108,16 @@ already `bun-<version>` of the runtime being started it is kept unchanged, and a
 nests one more `bun-<version>` level beneath it.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
+Local `bun run typecheck` uses the installed Bun runtime's native checker with the root
+`tsconfig.json`, strict options and `src/` scope. `--no-script` prevents a future package `check`
+script from replacing type checking, and the command emits no files. `bun run typecheck:tsc`
+retains the installed TypeScript compiler for comparison and fallback. CI and release preflight
+invoke `tsc` directly; GUI build checks and the separate `testRunnerBun` pin keep their own roles.
+The `prepublishOnly` hook runs `typecheck:tsc` after `audit:high` and before `build:gui`,
+stopping on either audit or compiler failure.
+`tests/ci-workflows/ci-gui-typecheck-gate.test.ts` exercises both package commands against the root
+compiler options, including strict failures in unimported source files and a conflicting `check` script,
+and runs the publish hook with safe audit/build recorders to verify compiler selection and fail-fast order.
 Across the jobs, the workflow runs:
 
 ```bash

@@ -1,4 +1,5 @@
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { JevModelInvokeError, type JevModelInvoke, type JevModelInvokeResult } from "../../combos/jev-model-backend";
 import { JEV_MAX_REQUEST_BYTES, JEV_MAX_RESPONSE_BYTES } from "../../combos/jev";
 import { serializeJevModelRequest } from "../../combos/jev-model-request";
@@ -23,8 +24,8 @@ export interface JevModelInvokerContext {
   /** The request that owns the combo; only its spend root is reused, never its headers. */
   req: Pick<Request, "headers">;
   config: OcxConfig;
-  /** Parent options: only the typed admission scope and Codex auth policy cross over. */
-  options: Pick<HandleResponsesOptions, "admission" | "codexAuthPolicy">;
+  /** Parent options: only the resolved admission scope and Codex auth policy cross over. */
+  options: Pick<HandleResponsesOptions, "admission" | "admissionScope" | "codexAuthPolicy">;
   handleResponses: HandleResponses;
 }
 
@@ -149,6 +150,10 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       const response = await context.handleResponses(request, context.config, childLog, {
         abortSignal: signal,
         ...(context.options.admission ? { admission: context.options.admission } : {}),
+        // The parent's resolved snapshot, not a scope recomputed from its admission: a
+        // capability-authenticated internal call carries the caller's scope while its own
+        // admission is the host's broad key.
+        ...(context.options.admissionScope ? { admissionScope: context.options.admissionScope } : {}),
         ...(context.options.codexAuthPolicy ? { codexAuthPolicy: context.options.codexAuthPolicy } : {}),
         // Explicit nulls: handleResponses captures caller credentials only when these are undefined.
         callerDirectAuth: null,
@@ -164,7 +169,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       }
       const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
       if (bounded.oversized) throw new JevModelInvokeError("malformed", "decision response too large");
-      const result = response.headers.get("content-type")?.includes("text/event-stream")
+      const result = hasResponseMediaType(response.headers, "text/event-stream")
         ? decodeSse(bounded.bytes)
         : (() => {
           let parsed: unknown;

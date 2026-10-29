@@ -119,6 +119,38 @@ async function run(config: OcxConfig, decisionReply: (seen: Seen) => Response, p
 }
 
 describe("JEV model decision backend through the combo runtime", () => {
+  test.each(["text/event-stream", "Text/Event-Stream", "TEXT/EVENT-STREAM; charset=UTF-8"])(
+    "uses the decision from an SSE response with Content-Type %s", async contentType => {
+      const parentLog: RequestLogContext = { model: "", provider: "" };
+      const { response, decisions, targets } = await run(makeConfig(), () => {
+        const reply = completed('{"choice":"luna/gpt-5.6-luna:high"}');
+        reply.headers.set("content-type", contentType);
+        return reply;
+      }, parentLog);
+      expect(response.status).toBe(200);
+      expect(decisions).toHaveLength(1);
+      expect(targets).toHaveLength(1);
+      expect(targets[0]!.model).toBe("luna/gpt-5.6-luna");
+      expect(parentLog.jevDecision).toMatchObject({ backend: "model", gate: "apply" });
+    },
+  );
+
+  test.each(["application/json", 'application/json; profile="text/event-stream"', "text/event-stream-invalid"])(
+    "does not select the SSE parser for JSON with Content-Type %s", async contentType => {
+      const parentLog: RequestLogContext = { model: "", provider: "" };
+      const { response, targets } = await run(makeConfig(), () => new Response(JSON.stringify({
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [
+          { type: "output_text", text: '{"choice":"luna/gpt-5.6-luna:high"}' },
+        ] }],
+      }), { headers: { "content-type": contentType } }), parentLog);
+      expect(response.status).toBe(200);
+      expect(targets).toHaveLength(1);
+      expect(targets[0]!.model).toBe("luna/gpt-5.6-luna");
+      expect(parentLog.jevDecision).toMatchObject({ backend: "model", gate: "apply" });
+    },
+  );
+
   test("asks the decision model with a headerless, tool-free prompt and routes to its choice", async () => {
     const parentLog: RequestLogContext = { model: "", provider: "" };
     const { response, decisions, targets } = await run(makeConfig(), () => completed('{"choice":"luna/gpt-5.6-luna:high"}'), parentLog);

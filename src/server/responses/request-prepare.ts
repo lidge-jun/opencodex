@@ -37,6 +37,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { resolveContextPrincipal } from "../auth-cors";
+import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
   isShadowSourceModel,
@@ -163,7 +164,7 @@ import {
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
 import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
-import { FallbackRefusedError } from "../../routing/fallback-policy";
+import { FallbackRefusedError, guardFallbackHop } from "../../routing/fallback-policy";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -465,6 +466,11 @@ export async function prepareResponsesRequest(
   // Substitutes a known snapshot now; a new catalog is only stored once the request is prepared.
   const commitSkillsSnapshot = snapshotSkillsCatalogInBody(body, skillsSnapshotScopeKey, config);
 
+  const turnMembership = responseTurnMembership(req, config, options.admission);
+  if (turnMembership && body && typeof body === "object" && "input" in body && Array.isArray(body.input)) {
+    body.input = turnMembership.normalize(body.input);
+  }
+
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   let clientToolCatalogRestriction: ClientToolCatalogRestriction | undefined;
@@ -658,14 +664,17 @@ export async function prepareResponsesRequest(
     || secondaryProvider.authMode === "oauth" && configuredAnthropicInstance(config, "anthropic2") !== "anthropic2")) {
     return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
   }
-  const admissionScope = resolveAdmissionModelScope(config, options.admission);
+  const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
     // policy so random/RR cannot refuse while an unmetered target is still usable.
     if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
       config, options.admission, config.combos?.[candidate.combo.comboId],
     )) {
-      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      const pick = pickComboTarget(config, candidate.combo.comboId, {
+        eligible: target => !target.metered,
+        allowCooldownReprobe: false,
+      });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
           comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
@@ -778,6 +787,23 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    // Selection-free hard-lock preflight grants no hop. Enforce the actual ranked destination
+    // against the locked source before admitting this first selection.
+    const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
+    if (hardLockProfileTrace && options.mainHardLockFallbackOverride) {
+      const override = options.mainHardLockFallbackOverride;
+      const hop = guardFallbackHop(config, {
+        site: "routing-profile",
+        route: override.sourceModel,
+        aliases: [`policy/${hardLockProfileTrace.id}`],
+        from: { provider: OPENAI_CODEX_PROVIDER_ID, model: override.sourceModel },
+        to: { provider: route.providerName, model: route.modelId },
+        trigger: "hard_lock",
+        admission: options.admission,
+      });
+      if (!hop.ok) return hop.response;
+      hop.commit();
+    }
     leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
     // Name the phase in the persisted route decision, so the request log says why this turn went to
     // the memory destination instead of leaving it looking like a plain user selection. Set here, on
@@ -1576,6 +1602,7 @@ export async function prepareResponsesRequest(
       if (refusal) return refusal;
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
+        headers: selectedForwardHeaders,
         parsed,
         preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(route.provider)
           && parsed._nativeReasoningRetention?.accountSwitch === true,
@@ -1597,6 +1624,8 @@ export async function prepareResponsesRequest(
   commitSkillsSnapshot?.();
   return {
     inboundWire,
+    ...(turnMembership ? { turnMembership } : {}),
+    ...(turnMembership && inboundWire === "responses" && parsed.stream && !parsed._compactionRequest ? { completedToolBlocks: true as const } : {}),
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
     clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and

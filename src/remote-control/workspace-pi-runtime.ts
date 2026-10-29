@@ -137,13 +137,18 @@ class PiRpcProcess {
   async prompt(message: string): Promise<void> {
     if (this.activeSettle) throw new Error("Pi Remote Workspace turn is already active");
     const settled = new Promise<void>((resolve, reject) => { this.activeSettle = { resolve, reject }; });
+    const active = this.activeSettle;
     try {
-      const accepted = await this.command("prompt", { message });
-      if (accepted.success !== true) throw new Error(safeError(accepted.error, "Pi rejected the prompt"));
-      await settled;
-    } catch (error) {
-      this.activeSettle = null;
-      throw error;
+      // Either operation can fail first. Observe both immediately, including an
+      // extension error or child exit that arrives before the prompt response.
+      await Promise.all([
+        this.command("prompt", { message }).then(accepted => {
+          if (accepted.success !== true) throw new Error(safeError(accepted.error, "Pi rejected the prompt"));
+        }),
+        settled,
+      ]);
+    } finally {
+      if (this.activeSettle === active) this.activeSettle = null;
     }
   }
 

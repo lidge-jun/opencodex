@@ -293,6 +293,59 @@ describe("manual compaction config", () => {
 });
 
 describe("manual compaction reuses existing handlers", () => {
+  test.each(["direct", "compaction switch"])("%s sends gpt-6.1-sol's supported low effort", async mode => {
+    const settings = config();
+    settings.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" };
+    if (mode === "direct") delete settings.compactionRouting;
+    else {
+      settings.compactionRouting!.model = "gpt-6.1-sol";
+      delete settings.compactionRouting!.reasoningEffort;
+    }
+    const calls: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const outbound = JSON.parse(String(init?.body));
+      calls.push(outbound);
+      return outbound.reasoning?.effort === "none"
+        ? Response.json({ error: { code: "unsupported_value", param: "reasoning.effort" } }, { status: 400 })
+        : upstreamCompletion(outbound);
+    }) as typeof fetch;
+    const input = { ...body(mode !== "direct"), model: mode === "direct" ? "gpt-6.1-sol" : "gateway/normal", reasoning: { effort: "none", summary: "auto" } };
+    const req = request(input, mode === "direct" ? undefined : "manual");
+    req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+    const response = await handleResponses(req, settings, { model: "", provider: "" });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.model).toBe("gpt-6.1-sol");
+    expect(calls[0]!.reasoning).toMatchObject({ effort: "low", summary: "auto" });
+  });
+
+  test("combo failover normalizes the second native target before its first send", async () => {
+    const settings = config();
+    delete settings.compactionRouting;
+    settings.providers.openai = { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" };
+    settings.combos = { fail: { strategy: "failover", targets: [
+      { provider: "gateway", model: "normal" }, { provider: "openai", model: "gpt-6.1-sol" },
+    ] } };
+    const calls: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const outbound = JSON.parse(String(init?.body));
+      calls.push(outbound);
+      if (outbound.model === "normal") return Response.json({ error: { message: "quota", type: "rate_limit_error" } }, { status: 429 });
+      return outbound.reasoning?.effort === "none"
+        ? Response.json({ error: { code: "unsupported_value", param: "reasoning.effort" } }, { status: 400 })
+        : upstreamCompletion(outbound);
+    }) as typeof fetch;
+    const req = request({ ...body(false), model: "combo/fail", reasoning: { effort: "none", summary: "auto" } });
+    req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+    const response = await handleResponses(req, settings, { model: "", provider: "" });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(calls.map(call => [call.model, call.reasoning?.effort])).toEqual([
+      ["normal", "none"], ["gpt-6.1-sol", "low"],
+    ]);
+  });
+
   test("an ordinary turn carrying manual metadata stays on the conversation model", async () => {
     const settings = config();
     const calls: string[] = [];

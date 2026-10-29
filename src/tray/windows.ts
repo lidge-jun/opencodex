@@ -622,11 +622,13 @@ export async function runWindowsTrayHost(): Promise<void> {
   });
 }
 
-function signalTrayStop(): ReturnType<typeof readHeartbeat> {
+function signalTrayStop(beforeMutation?: () => void): ReturnType<typeof readHeartbeat> {
   const previous = readHeartbeat();
   // The stop event name depends only on the current home. Never execute paths
   // recovered from tray-state.json while attempting cleanup or repair.
-  execFileSync(windowsPowerShellPath(), windowsTrayProcessArgs(currentEntry(), "Stop"), {
+  const file = windowsPowerShellPath(), args = windowsTrayProcessArgs(currentEntry(), "Stop");
+  beforeMutation?.();
+  execFileSync(file, args, {
     stdio: "ignore",
     windowsHide: true,
     timeout: 15_000,
@@ -743,11 +745,11 @@ export function startWindowsTray(): WindowsTrayStatus {
   return getWindowsTrayStatus();
 }
 
-export function stopWindowsTray(): WindowsTrayStatus {
+export function stopWindowsTray(beforeMutation?: () => void): WindowsTrayStatus {
   assertWindows();
   let previous = readHeartbeat();
   if (previous) {
-    previous = signalTrayStop();
+    previous = signalTrayStop(beforeMutation);
   }
   if (!waitForTrayExit(previous)) throw new Error("The tray did not exit after the stop signal. Its login registration was preserved.");
   return getWindowsTrayStatus();

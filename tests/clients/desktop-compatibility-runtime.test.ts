@@ -4,8 +4,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
 import { createDesktopCompatibilityRuntime, type DesktopRuntimeIo } from "../../src/codex/desktop-compatibility/runtime";
-import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION, DESKTOP_COMPATIBILITY_ASSESSED_FAMILY } from "../../src/codex/desktop-compatibility/installed-build";
-import type { DesktopAppInstall } from "../../src/codex/desktop-app/types";
+import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION } from "../../src/codex/desktop-compatibility/installed-build";
+import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
+import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 import { UsageRelayController, type UsageIdentity } from "../../src/codex/desktop-compatibility/usage-controller";
 import { desktopCompatibilityRuntimeActive, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 import { captureWindowsCompatibilityContext, assertWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
@@ -206,9 +207,85 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
 }
 
 describe("optional native compatibility runtime", () => {
-  const assessedInstall = (): DesktopAppInstall => ({ id: DESKTOP_COMPATIBILITY_ASSESSED_FAMILY,
-    root: `C:\\Program Files\\WindowsApps\\OpenAI.Codex_${DESKTOP_COMPATIBILITY_ASSESSED_VERSION}_x64__2p2nqsd0c76g0`,
-    relaunch: `${DESKTOP_COMPATIBILITY_ASSESSED_FAMILY}!App` });
+  const assessedInstall = desktopPackageObservation;
+
+  for (const completion of ["success", "rejection"] as const) {
+    test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {
+      let hold = false, entered!: () => void, resolveOld!: (value: boolean) => void, rejectOld!: (error: Error) => void;
+      const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+      // The override isolates the runtime epoch fence: production probe.close() separately drains its child.
+      const io = fixture(true, undefined, () => {
+        if (!hold) return true;
+        entered(); return new Promise<boolean>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; });
+      });
+      const read = async () => {
+        const pac = await fetch(io.runtime.getPacUrl()!).then(response => response.text());
+        const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+        return fetch("https://chatgpt.com/backend-api/wham/usage", {
+          proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+        }).then(response => response.json());
+      };
+      await io.runtime.start(); await read(); hold = true;
+      const oldApply = io.runtime.apply(true).catch(error => error);
+      await enteredPromise;
+      try {
+        hold = false; await io.runtime.stop(); await io.runtime.start();
+        expect((await io.runtime.apply(true)).accepted).toBe(false);
+        expect(await read()).toEqual(usage);
+        expect((await io.runtime.apply(true)).accepted).toBe(true);
+        const generation = io.runtime.status().usage!.generation;
+        if (completion === "success") resolveOld(true); else rejectOld(new Error("old fixture proof rejected"));
+        expect(await oldApply).toBeInstanceOf(Error);
+        expect(io.runtime.status().contextFailure).toBeNull();
+        expect(io.runtime.status().usage).toMatchObject({ mode: "apply", generation });
+        expect((await read()).rate_limit.allowed).toBe(true);
+      } finally {
+        resolveOld(true); await oldApply; await io.runtime.stop();
+      }
+    }, 15_000);
+  }
+
+  for (const failure of ["same-version-replacement", "unverifiable", "ABA"] as const) {
+    test(`${failure} revokes package-bound trial consent before another corrected response`, async () => {
+      let current: DesktopAppInstall | null = assessedInstall();
+      let probe!: ReturnType<typeof createInstalledBuildProbe>;
+      const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+      await io.runtime.start();
+      const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text());
+      const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+      const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+        proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+      }).then(res => res.json());
+      await read(); expect((await io.runtime.apply(true)).accepted).toBe(true);
+      expect((await read()).rate_limit.allowed).toBe(true);
+      const generation = io.runtime.status().usage!.generation;
+      current = failure === "unverifiable" ? null
+        : { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableIdentity: "1024:100:201" } };
+      if (failure === "ABA") {
+        expect(await probe.check()).toBe(true);
+        current = assessedInstall(); expect(await probe.check()).toBe(true);
+      }
+      expect(await read()).toEqual(usage);
+      expect(io.runtime.status().usage).toMatchObject({ mode: "observe", outputs: 0 });
+      expect(io.runtime.status().usage!.generation).toBeGreaterThan(generation);
+      if (failure === "unverifiable") {
+        current = assessedInstall();
+        // Recovery is another identity transition, not permission to revive consent.
+        await expect(io.runtime.apply(true)).rejects.toThrow("build_unverified");
+      }
+      expect((await io.runtime.apply(true)).accepted).toBe(false);
+      expect(await read()).toEqual(usage);
+      expect((await io.runtime.apply(false)).accepted).toBe(false);
+      expect((await io.runtime.apply(true)).accepted).toBe(true);
+      expect((await read()).rate_limit.allowed).toBe(true);
+      expect(JSON.stringify(io.runtime.status())).not.toContain("ChatGPT.exe");
+      expect(JSON.stringify(io.runtime.status())).not.toContain("manifestDigest");
+      await io.runtime.stop(); await io.runtime.start();
+      expect(io.runtime.status().usage?.mode).toBe("observe");
+      expect((await io.runtime.apply(true)).accepted).toBe(false);
+      await io.runtime.stop();
+    }, 15_000);
+  }
 
   test("stop/start retains a completed assessment through routing failure and replacement probe pending", async () => {
     let created = 0, queries = 0, hold = false, entered!: () => void, release!: (install: DesktopAppInstall | null) => void;
@@ -415,7 +492,17 @@ describe("optional native compatibility runtime", () => {
         try { await new Promise<void>((resolve, reject) => { probe.once("error", reject); probe.listen(original[occupied === "connectPort" ? "pacPort" : "connectPort"], "127.0.0.1", resolve); }); }
         finally { await new Promise<void>(resolve => probe.close(() => resolve())); }
       } finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
-      await io.runtime.start(); expect(io.runtime.getPacUrl()).toBe(originalUrl); await io.runtime.stop();
+      // Both fixture listeners are closed; allow their ports to become reusable by Bun.serve.
+      const deadline = performance.now() + 1000;
+      for (;;) {
+        try { await io.runtime.start(); break; }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== "desktop_compatibility_connection_unavailable"
+            || performance.now() >= deadline) throw error;
+          await Bun.sleep(10);
+        }
+      }
+      expect(io.runtime.getPacUrl()).toBe(originalUrl); expect(stored).toEqual(original); await io.runtime.stop();
     }
   });
 });

@@ -11,10 +11,10 @@ import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaqu
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
-import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
+import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -122,7 +122,10 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
       } else {
         pending.events.push(e);
         pending.closed = true;
-        if (pending.name === WEB_SEARCH_TOOL_NAME) {
+        if (e.incomplete) {
+          hasMalformedToolCall = true;
+          passthrough.push(...pending.events);
+        } else if (pending.name === WEB_SEARCH_TOOL_NAME) {
           calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
         } else {
           passthrough.push(...pending.events);
@@ -291,7 +294,7 @@ class LoopError extends Error {
     readonly status: number,
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
-    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable">,
+    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
   ) {
     super(message);
     this.name = "LoopError";
@@ -308,6 +311,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** Chat delivery only; never copied into parsed generation options. */
+  chatRawReasoningVisible?: boolean;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
@@ -520,6 +525,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
       }
       if (body.displaySafe && !body.truncated) upstreamCode = upstreamErrorCode(body.text);
+      // A verified plan refusal keeps its fixed copy, code and provenance through this envelope, so a
+      // combo or policy can still move past it; an unverified echo of the code stays an ordinary failure.
+      const planMessage = body.displaySafe && !body.truncated ? verifiedPlanRefusalMessage(prepared.response, body.text) : undefined;
+      if (planMessage !== undefined) {
+        throw new LoopError(400, `Provider error 400: ${planMessage}`,
+          { type: "error", status: 400, message: planMessage, errorType: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE },
+          { upstreamCode: MODEL_NOT_IN_PLAN_CODE, nonReplayable: isNonReplayableResponse(prepared.response), verifiedPlanRefusal: true });
+      }
       const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
       throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
         { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
@@ -1005,7 +1018,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     firstPrepared = await prepareIterationDrained(false);
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-    if (e instanceof LoopError) return markSidecarContextOverflow(jsonError(e.status, e.message, e.event), loopFailure(e));
+    if (e instanceof LoopError) {
+      const failure = loopFailure(e);
+      const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
+      if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
+      return failed;
+    }
     if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
       { type: "error", message: e.message, errorType: "rate_limit_error", code: e.code, retryable: false });
     throw e;
@@ -1056,8 +1074,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // text).
           // A refused iteration ends the turn even when it carried a search call: running the
           // search would send the refused context back to the model (#7148).
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall
-            && !split.passthrough.some(isTerminalRefusalIncomplete);
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !split.hasMalformedToolCall
+            && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
+              || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -1195,6 +1214,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),

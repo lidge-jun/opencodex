@@ -96,7 +96,7 @@ describe("claude inbound translation", () => {
     expect(body.stream).toBe(true);
     expect(body.parallel_tool_calls).toBe(false);
     expect(body.tool_choice).toBe("auto");
-    expect(body.reasoning).toEqual({ summary: "auto", effort: "medium" });
+    expect(body.reasoning).toEqual({ summary: "auto", effort: "medium", enabled: true });
 
     const tools = body.tools as Record<string, any>[];
     expect(tools).toHaveLength(2);
@@ -212,10 +212,13 @@ describe("claude inbound translation", () => {
 
   test("thinking variants", () => {
     const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
+    const enabled = parseRequest(anthropicToResponsesBody({ ...base, thinking: { type: "enabled" } }));
+    expect(enabled.options.thinkingEnabled).toBe(true);
+    expect(enabled.options.reasoning).toBeUndefined();
     expect((anthropicToResponsesBody({ ...base, thinking: { type: "adaptive" } }) as any).reasoning).toEqual({ summary: "auto" });
     // "disabled" and omitted must NOT collapse to the same state: for a model that thinks by
     // default, omission means thinking is ON and shares the caller's max_tokens (#545).
-    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toEqual({ effort: "none" }); // justified: sibling assertions in this test use the same cast
+    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toEqual({ effort: "none", enabled: false }); // justified: sibling assertions in this test use the same cast
     expect((anthropicToResponsesBody(base) as any).reasoning).toBeUndefined();
     expect(effortForThinkingBudget(1024)).toBe("low");
     expect(effortForThinkingBudget(8192)).toBe("medium");
@@ -246,14 +249,14 @@ describe("claude inbound translation", () => {
       ...base,
       thinking: { type: "enabled", budget_tokens: 1024 },
       output_config: { effort: "xhigh" },
-    }))).toEqual({ summary: "auto", effort: "xhigh" });
+    }))).toEqual({ summary: "auto", effort: "xhigh", enabled: true });
     // disabled thinking suppresses effort entirely (subagent wire, claude-code#65863).
     // Still suppressed — "high" never reaches the wire — but now stated explicitly as the
     // "none" disable sentinel instead of by absence, so a default-on model is told to stop
     // rather than left to think anyway (#545).
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "disabled" }, output_config: { effort: "high" },
-    }))).toEqual({ effort: "none" });
+    }))).toEqual({ effort: "none", enabled: false });
     // unknown effort strings are dropped so downstream defaults win
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "adaptive" }, output_config: { effort: "turbo" },
@@ -428,7 +431,7 @@ describe("claude inbound translation", () => {
 
     expect(body.tools).toEqual([{ type: "web_search" }]);
     expect(body.tool_choice).toEqual({ type: "web_search" });
-    expect(body.reasoning).toEqual({ effort: "none" });
+    expect(body.reasoning).toEqual({ effort: "none", enabled: false });
     expect(() => responsesRequestSchema.parse(body)).not.toThrow();
     expect(() => parseRequest(body)).not.toThrow();
   });

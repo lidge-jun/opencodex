@@ -19,6 +19,7 @@ import {
   webSocketFrameBytes,
 } from "./live-sideband";
 import { markActivity } from "../../lib/sidecar-tracker";
+import { isReplayRefusalResponse } from "../../lib/upstream-retry";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -355,6 +356,12 @@ export function createWebsocketHandler(
                 terminalRecorder = recorder;
               },
             });
+            // This ingress finalizes directly, without the HTTP deferred logger.
+            // Preserve recorder provenance before framing a synthetic 429 as a WS error.
+            if (isReplayRefusalResponse(response)) {
+              logCtx.causeHint = "transport-ambiguous";
+              logCtx.terminalSource = "synthetic";
+            }
             const observeLog = nativeControl?.relayActive
               ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);

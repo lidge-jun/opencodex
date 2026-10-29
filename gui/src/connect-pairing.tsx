@@ -7,15 +7,18 @@ import { useCopyFeedback } from "./components/use-copy-feedback";
 export function ConnectPairingForm({
   target,
   onConnected,
+  onCommitted,
   onPairingStart,
   local = false,
   focusOnMount = false,
 }: {
   target: ApiTarget;
   onConnected: (signal: AbortSignal) => void | Promise<void>;
+  /** Update a surface that may unmount this form only after its handoff commits. */
+  onCommitted?: () => void;
   /** Let a secret-bearing surface expire its previous disclosure lifetime. */
   onPairingStart?: () => void;
-  /** Explicit local pairing for a standalone link join; never an automatic bootstrap. */
+  /** Explicit local pairing for standalone operator actions; never an automatic bootstrap. */
   local?: boolean;
   focusOnMount?: boolean;
 }) {
@@ -61,11 +64,12 @@ export function ConnectPairingForm({
         pendingHandoff.current?.commit();
         pendingHandoff.current = null;
         setValidationPending(false);
+        onCommitted?.();
       }
     } catch (failure) {
       if (!controller.signal.aborted) {
         const kind = failure instanceof PairingError ? failure.kind : "unreachable";
-        if (kind === "remote-link-unauthorized" || kind === "remote-link-forbidden") {
+        if (kind === "refused" || kind === "remote-link-unauthorized" || kind === "remote-link-forbidden") {
           pendingHandoff.current?.rollback();
           pendingHandoff.current = null;
           setValidationPending(false);

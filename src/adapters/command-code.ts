@@ -7,6 +7,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { clearableDeadline } from "../lib/abort";
 import { debugDroppedFrame } from "../lib/debug";
 import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
@@ -15,6 +16,12 @@ import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import {
+  isVerifiedModelNotInPlanResponse,
+  markVerifiedModelNotInPlanResponse,
+  MODEL_NOT_IN_PLAN_CODE,
+  MODEL_NOT_IN_PLAN_REFUSAL_MARKER,
+} from "../lib/errors";
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
@@ -493,6 +500,35 @@ function isReasoningEffortRejection(status: number, payload: string): boolean {
   return (status === 400 || status === 422) && /reasoning[_ -]?effort|unsupported effort|invalid effort/i.test(payload);
 }
 
+/** Command Code reports exhausted credits as BAD_REQUEST; normalize only that refusal
+ * so every caller can reuse the existing OAuth quota rotation and send budget. Key and
+ * forward rows keep the 400: a canonical key row has a same-key 429 retry ladder
+ * (`rateLimitRetryPolicyFor`) that would replay a credential whose credits are gone. */
+async function normalizeCommandCodeCreditRefusal(
+  response: Response, oauth: boolean, signal?: AbortSignal,
+): Promise<Response> {
+  if (!oauth || response.status !== 400) return response;
+  try {
+    const observed = await readBoundedResponseBody(response.clone(), {
+      signal,
+      maxBytes: 8 * 1024,
+      fatalUtf8: true,
+    });
+    if (!observed.displaySafe) return response;
+    const payload = JSON.parse(observed.text);
+    if (payload?.success !== false || payload.error?.code !== "BAD_REQUEST"
+      || typeof payload.error?.message !== "string"
+      || !payload.error.message.startsWith("You have insufficient credits to make this request.")) return response;
+    const headers = new Headers(response.headers);
+    headers.set("x-opencodex-upstream-status", "400");
+    headers.set("x-opencodex-refusal", "insufficient-credits");
+    return new Response(response.body, { status: 429, statusText: "Too Many Requests", headers });
+  } catch (error) {
+    if (signal?.aborted && error === signal.reason) throw error;
+    return response;
+  }
+}
+
 function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest | undefined {
   try {
     const body = JSON.parse(request.body) as { params?: Record<string, unknown> };
@@ -504,20 +540,87 @@ function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest 
   }
 }
 
+/** The upstream's plan refusal prefix; `MODEL_NOT_IN_PLAN_OTHER` and later mentions do not count. */
+const COMMAND_CODE_PLAN_REFUSAL = /^MODEL_NOT_IN_PLAN(?::|$)/;
+/** A model id the message may quote; anything else is described without repeating it. */
+const DISPLAYABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+/**
+ * Fixed client copy for a plan refusal. The upstream detail is never quoted: it is free text this
+ * proxy does not control, and quota or reasoning-effort words in it would steer the downstream
+ * classifiers (quota recording, effort repair) on a refusal that no resend can change.
+ */
+function commandCodePlanRefusalMessage(modelId: string | undefined): string {
+  const model = modelId && DISPLAYABLE_MODEL_ID.test(modelId) ? `the model "${modelId}"` : "the requested model";
+  return `Command Code refused ${model}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
+    + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.";
+}
+
+/**
+ * Command Code refuses a model the account's plan excludes with HTTP 403 and
+ * `MODEL_NOT_IN_PLAN: ...` (#7684). Codex reconnects on every 403 through its whole retry budget,
+ * and a combo reads a 403 as a provider-wide credential verdict. The refusal names one model on one
+ * account, so it becomes a 400 `invalid_request_error` carrying `model_not_in_plan`, which Codex
+ * reports without retrying and combo or policy fallback treat as target-local. Every auth mode
+ * gets it: no account, key or provider cooldown is involved. Any other 403 stays untouched.
+ */
+async function normalizeCommandCodePlanRefusal(
+  response: Response, modelId: string | undefined, signal?: AbortSignal,
+): Promise<Response> {
+  if (response.status !== 403) return response;
+  try {
+    const observed = await readBoundedResponseBody(response.clone(), {
+      signal,
+      maxBytes: 8 * 1024,
+      fatalUtf8: true,
+    });
+    if (!observed.displaySafe || observed.truncated) return response;
+    const payload = JSON.parse(observed.text);
+    if (payload?.success !== false || payload.error?.code !== "FORBIDDEN"
+      || typeof payload.error?.message !== "string"
+      || !COMMAND_CODE_PLAN_REFUSAL.test(payload.error.message)) return response;
+    try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+    const headers = new Headers({ "Content-Type": "application/json" });
+    headers.set("x-opencodex-upstream-status", "403");
+    headers.set("x-opencodex-refusal", MODEL_NOT_IN_PLAN_REFUSAL_MARKER);
+    const refusal = new Response(JSON.stringify({ error: {
+      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(modelId),
+    } }), { status: 400, statusText: "Bad Request", headers });
+    // Identity is the provenance dispatch, combo and policy fallback check; the header is diagnostic.
+    markVerifiedModelNotInPlanResponse(refusal);
+    return refusal;
+  } catch (error) {
+    if (signal?.aborted && error === signal.reason) throw error;
+    return response;
+  }
+}
+
+/** Both Command Code refusal rewrites, in the order every send applies them. */
+async function normalizeCommandCodeRefusal(
+  response: Response, oauth: boolean, modelId: string | undefined, signal?: AbortSignal,
+): Promise<Response> {
+  return normalizeCommandCodePlanRefusal(await normalizeCommandCodeCreditRefusal(response, oauth, signal), modelId, signal);
+}
+
+function requestModelId(request: AdapterRequest): string | undefined {
+  try {
+    const model = (JSON.parse(request.body) as { params?: { model?: unknown } }).params?.model;
+    return typeof model === "string" ? model : undefined;
+  } catch { return undefined; }
+}
+
 async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContext | undefined, executor: typeof globalThis.fetch): Promise<Response> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
-  const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
+  const deadline = clearableDeadline(ctx?.timeoutMs ?? 200_000, ctx?.abortSignal);
   try {
     return await executor(request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
       redirect: "manual",
-      signal: AbortSignal.any([callerSignal, timeout.signal]),
+      signal: deadline.signal,
     });
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
   }
 }
 
@@ -589,6 +692,8 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
 
 export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const executor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  // Only an OAuth row has sibling accounts for the rewritten 429 to rotate to.
+  const creditRefusalRotates = provider.authMode === "oauth";
   // The server builds one adapter per routed request and hands parseStream a guarded wrapper
   // rather than the Response fetchResponse returned, so the stream reads the declared catalog of
   // the request this instance last built. A parser with no built request restores nothing.
@@ -651,8 +756,12 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
     },
     async fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
       const send = createAdapterPhysicalSend(ctx, executor);
-      const response = await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) });
-      if (response.ok) return response;
+      const modelId = requestModelId(request);
+      const response = await normalizeCommandCodeRefusal(
+        await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) }), creditRefusalRotates, modelId, ctx?.abortSignal,
+      );
+      // A plan refusal is final for this model: no effort downgrade can change the plan.
+      if (response.ok || isVerifiedModelNotInPlanResponse(response)) return response;
       const currentEffort = (() => {
         try { return (JSON.parse(request.body) as { params?: { reasoning_effort?: unknown } }).params?.reasoning_effort; } catch { return undefined; }
       })();
@@ -664,9 +773,6 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         body = observed.text;
       } catch { return response; }
       if (!isReasoningEffortRejection(response.status, body)) return response;
-      const modelId = (() => {
-        try { return (JSON.parse(request.body) as { params?: { model?: unknown } }).params?.model; } catch { return undefined; }
-      })();
       if (typeof modelId !== "string") return response;
       // An operator who wrote this ladder authorized the rung deliberately. Replaying the turn
       // without it would answer at the provider default and hide a wrong configuration behind a
@@ -678,9 +784,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
       try {
-        return await send({ url: retry.url, sendClass: "repair", recovery: "reasoning-effort-downgrade",
+        return await normalizeCommandCodeRefusal(await send({ url: retry.url, sendClass: "repair", recovery: "reasoning-effort-downgrade",
           beforeDispatch: () => { try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ } },
-          dispatch: physical => fetchCommandCode(retry, ctx, physical) });
+          dispatch: physical => fetchCommandCode(retry, ctx, physical) }), creditRefusalRotates, modelId, ctx?.abortSignal);
       } catch (error) {
         if (error instanceof SendBudgetExhaustedError) return response;
         throw error;

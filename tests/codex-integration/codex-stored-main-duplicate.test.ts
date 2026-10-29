@@ -14,6 +14,7 @@ import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex
 import { clearAccountQuota } from "../../src/codex/quota";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { setMainAccountPlan } from "../../src/codex/main-account";
+import { observeMainCodexCollisionIdentity } from "../../src/codex/collision-identity";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -23,16 +24,18 @@ let previousOcxHome: string | undefined;
 let config: OcxConfig;
 const poolId = "stored-main-duplicate";
 const email = "member@example.test";
-function jwt(plan: string, member?: string): string {
+function jwt(plan: string, member?: string, userId?: string, accountId = "shared-account"): string {
   return `header.${Buffer.from(JSON.stringify({
     exp: Math.floor(Date.now() / 1000) + 3600,
-    "https://api.openai.com/auth": { chatgpt_plan_type: plan },
+    chatgpt_account_id: accountId,
+    "https://api.openai.com/auth": { chatgpt_plan_type: plan, ...(userId ? { chatgpt_user_id: userId } : {}) },
     ...(member ? { "https://api.openai.com/profile": { email: member } } : {}),
   })).toString("base64url")}.fake`;
 }
-function native(accountId = "shared-account", plan = "plus", member: string | undefined = email, observe = true): void {
+function native(accountId = "shared-account", plan = "plus", member: string | undefined = email,
+  observe = true, userId?: string): void {
   writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
-    tokens: { access_token: jwt(plan, member), account_id: accountId },
+    tokens: { access_token: jwt(plan, member, userId, accountId), account_id: accountId },
   }));
   if (observe) reconcileMainCodexAccountRuntimeState();
 }
@@ -83,6 +86,75 @@ afterEach(() => {
 });
 
 describe("stored Pool duplicate of native main", () => {
+  test("official rows join the same upstream user without exposing identity claims", async () => {
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
+    native("shared-account", "plus", email, true, "same-user");
+    saveCodexAccountCredential(poolId, { accessToken: jwt("plus", email, "same-user"),
+      refreshToken: "fake-refresh", chatgptAccountId: "shared-account", expiresAt: Date.now() + 3600_000 });
+    const rows = await runPassiveRead(() => listCodexAuthAccounts(config));
+    const main = rows.find(row => row.id === "__main__")!;
+    const pool = rows.find(row => row.id === poolId)!;
+    expect(main).toMatchObject({ slotId: "__main__", slotKind: "native-main" });
+    expect(pool).toMatchObject({ slotId: poolId, slotKind: "pool" });
+    expect(main.upstreamAccountKey).toMatch(/^uai1_[0-9a-f]{64}$/);
+    expect(pool.upstreamAccountKey).toBe(main.upstreamAccountKey);
+    expect(JSON.stringify(rows)).not.toContain("same-user");
+    expect(JSON.stringify(rows)).not.toContain("shared-account");
+
+    saveCodexAccountCredential(poolId, { accessToken: jwt("plus", email, "other-user"),
+      refreshToken: "fake-refresh", chatgptAccountId: "shared-account", expiresAt: Date.now() + 3600_000 });
+    const changed = await runPassiveRead(() => listCodexAuthAccounts(config));
+    expect(changed.find(row => row.id === poolId)?.upstreamAccountKey).toMatch(/^uai1_[0-9a-f]{64}$/);
+    expect(changed.find(row => row.id === poolId)?.upstreamAccountKey).not.toBe(main.upstreamAccountKey);
+    expect(changed.find(row => row.id === "__main__")?.upstreamAccountKey).toBe(main.upstreamAccountKey);
+  });
+
+  test("a missing user claim or local secret preserves separate registered slots", async () => {
+    native();
+    const noSecret = await runPassiveRead(() => listCodexAuthAccounts(config));
+    expect(noSecret.map(row => row.slotKind)).toEqual(["native-main", "pool"]);
+    expect(noSecret.every(row => row.upstreamAccountKey === undefined)).toBe(true);
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
+    const noClaim = await runPassiveRead(() => listCodexAuthAccounts(config));
+    expect(noClaim.every(row => row.upstreamAccountKey === undefined)).toBe(true);
+  });
+  test("conflicting native user claims and pool account claims omit join keys", async () => {
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
+    writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({ tokens: {
+      access_token: jwt("plus", email, "access-user"),
+      id_token: jwt("plus", email, "different-user"),
+      account_id: "shared-account",
+    } }));
+    reconcileMainCodexAccountRuntimeState();
+    saveCodexAccountCredential(poolId, { accessToken: jwt("plus", email, "access-user", "other-account"),
+      refreshToken: "fake-refresh", chatgptAccountId: "shared-account", expiresAt: Date.now() + 3600_000 });
+    const rows = await runPassiveRead(() => listCodexAuthAccounts(config));
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.upstreamAccountKey === undefined)).toBe(true);
+    expect(rows.map(row => row.slotId)).toEqual(["__main__", poolId]);
+  });
+  test("conflicting replacement native claims remove a previously observed join key", async () => {
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
+    native("shared-account", "plus", email, true, "same-user");
+    expect((await runPassiveRead(() => listCodexAuthAccounts(config)))[0]?.upstreamAccountKey).toMatch(/^uai1_/);
+    observeMainCodexCollisionIdentity({
+      access_token: jwt("plus", email, "same-user", "other-account"),
+      account_id: "shared-account",
+    });
+    expect((await runPassiveRead(() => listCodexAuthAccounts(config)))[0]?.upstreamAccountKey).toBeUndefined();
+  });
+  test("malformed present native ID token suppresses a previously observed join key", async () => {
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "admin-api-token"), `ocx_admin_${"x".repeat(43)}\n`);
+    native("shared-account", "plus", email, true, "same-user");
+    expect((await runPassiveRead(() => listCodexAuthAccounts(config)))[0]?.upstreamAccountKey).toMatch(/^uai1_/);
+    observeMainCodexCollisionIdentity({
+      access_token: jwt("plus", email, "same-user"),
+      id_token: "malformed",
+      account_id: "shared-account",
+    });
+    expect((await runPassiveRead(() => listCodexAuthAccounts(config)))[0]?.upstreamAccountKey).toBeUndefined();
+    expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+  });
   test("existing duplicate is ineligible without deleting its credential or config row", () => {
     native();
     expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");

@@ -19,6 +19,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 let releaseInheritedSpendHome: (() => void) | undefined;
 let previousCatalogStateOverride: string | undefined;
 // Taken per inherited-home dispatch because the pool retry row installs a different home. The
@@ -26,6 +27,10 @@ let previousCatalogStateOverride: string | undefined;
 // it would need; no row here calls it twice today, so this is defence, not a fixed regression.
 const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome ??= acquireOwnedSpendHome(); };
 beforeEach(() => {
+  // These fixtures own HTTP responses; a WebSocket upgrade must never contact a real provider.
+  globalThis.WebSocket = class {
+    constructor() { throw new Error("unexpected WebSocket in HTTP response fixture"); }
+  } as unknown as typeof WebSocket;
   previousCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   // Response rewriting is independent of the host's running Codex processes. Without
   // this fixture, V2 guidance enumerates real Windows processes and can outlive a case.
@@ -39,6 +44,7 @@ afterEach(() => {
   releaseInheritedSpendHome?.();
   releaseInheritedSpendHome = undefined;
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   clearResponseStateForTests();
 });
 
@@ -55,6 +61,7 @@ function config(
         adapter: "openai-responses",
         baseUrl: CODEX_FORWARD_BASE_URL,
         authMode: "forward",
+        upstreamWebsocket: false,
         ...(snapshotRepair ? { responsesSnapshotRepair: true } : {}),
       },
     },
@@ -640,6 +647,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
             baseUrl: CODEX_FORWARD_BASE_URL,
             authMode: "forward",
             codexAccountMode: "pool",
+            upstreamWebsocket: false,
           },
         },
         codexAccounts: ["pool-a", "pool-b"].map(id => ({

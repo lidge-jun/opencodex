@@ -359,7 +359,7 @@ describe("findLiveProxy", () => {
       }) as typeof fetch,
     });
 
-    expect(live).toEqual({ pid: 4242, port: 58195, source: "runtime", version: "2.6.17" });
+    expect(live).toEqual({ pid: 4242, port: 58195, hostname: "127.0.0.1", source: "runtime", version: "2.6.17" });
     expect(urls).toEqual(["http://127.0.0.1:58195/healthz"]);
   });
 
@@ -372,7 +372,7 @@ describe("findLiveProxy", () => {
       fetchFn: (async () => healthz(OURS)) as typeof fetch,
     });
 
-    expect(live).toEqual({ pid: 4242, port: 10100, source: "config", version: "2.6.17" });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "config", version: "2.6.17" });
   });
 
   test("a foreign listener on the configured port is not treated as our proxy", async () => {
@@ -415,7 +415,7 @@ describe("findLiveProxy", () => {
 
     // The record's pid 1111 may be dead/reused — synthesizing it would let `ocx stop`
     // kill an unrelated process via the taskkill/kill fallback.
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime", version: "2.6.16" });
+    expect(live).toEqual({ pid: null, port: 58195, hostname: "127.0.0.1", source: "runtime", version: "2.6.16" });
   });
 
   test("an orphaned record whose healthz pid mismatches is rejected (config fallback still runs)", async () => {
@@ -440,7 +440,7 @@ describe("findLiveProxy", () => {
     });
 
     // healthz-reported pids must pass identity verification before they become kill targets.
-    expect(live).toEqual({ pid: null, port: 58195, source: "config", version: "2.6.17" });
+    expect(live).toEqual({ pid: null, port: 58195, hostname: "127.0.0.1", source: "config", version: "2.6.17" });
   });
 
   test("a pidless legacy healthz never promotes an unverified cheap pid to a kill target", async () => {
@@ -453,7 +453,7 @@ describe("findLiveProxy", () => {
       fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
     });
 
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime", version: "2.6.16" });
+    expect(live).toEqual({ pid: null, port: 58195, hostname: "127.0.0.1", source: "runtime", version: "2.6.16" });
   });
 
   test("a pidless legacy healthz returns the cheap pid once full identity verification echoes it", async () => {
@@ -471,7 +471,7 @@ describe("findLiveProxy", () => {
     });
 
     expect(verified).toEqual([1111]);
-    expect(live).toEqual({ pid: 1111, port: 58195, hostname: undefined, source: "runtime", version: "2.6.16" });
+    expect(live).toEqual({ pid: 1111, port: 58195, hostname: "127.0.0.1", source: "runtime", version: "2.6.16" });
   });
 
   test("a verifier answering with a DIFFERENT pid than the candidate is rejected (TOCTOU guard)", async () => {
@@ -484,7 +484,7 @@ describe("findLiveProxy", () => {
       fetchFn: (async () => healthz(legacyBody)) as typeof fetch,
     });
 
-    expect(live).toEqual({ pid: null, port: 58195, hostname: undefined, source: "runtime", version: "2.6.16" });
+    expect(live).toEqual({ pid: null, port: 58195, hostname: "127.0.0.1", source: "runtime", version: "2.6.16" });
   });
 });
 
@@ -617,7 +617,7 @@ describe("findLiveProxy single-deadline candidate gating", () => {
     });
     expect(urls).toEqual(["http://127.0.0.1:58195/healthz", "http://127.0.0.1:10100/healthz"]);
     expect(urls).toHaveLength(2);
-    expect(live).toEqual({ pid: 4242, port: 10100, hostname: undefined, source: "config", version: "2.6.17" });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "config", version: "2.6.17" });
   });
 });
 
@@ -1138,7 +1138,7 @@ describe("client-role discrimination (#4662)", () => {
       configFn: () => ({ port: 10100 }),
       fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
     });
-    expect(live).toEqual({ pid: 4242, port: 10100, source: "runtime", version: "2.6.17", role: "client" });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime", version: "2.6.17", role: "client" });
   });
 
   test("findLiveProxy reports the role on the configured-port path", async () => {
@@ -1149,6 +1149,6 @@ describe("client-role discrimination (#4662)", () => {
       verifyPidFn: candidate => candidate,
       fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
     });
-    expect(live).toEqual({ pid: 4242, port: 10100, hostname: undefined, source: "config", version: "2.6.17", role: "client" });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "config", version: "2.6.17", role: "client" });
   });
 });

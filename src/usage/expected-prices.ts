@@ -71,6 +71,9 @@ const GPT6_API_PRICING = "https://developers.openai.com/api/docs/changelog (2026
  */
 const GPT61_SOL: Cost4 = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 };
 const GPT61_SOL_API_PRICING = "https://developers.openai.com/api/docs/pricing (2026-09-30: GPT-6.1 Sol $2 / $0.10 cached / $2.50 cache write / $10; >272K $4 / $0.20 / $5 / $15)";
+/** GPT-6.1 Terra (2026-10-26): 30-minute cache writes; >272K reprices the whole request. */
+const GPT61_TERRA: Cost4 = { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 };
+const GPT61_TERRA_API_PRICING = "https://developers.openai.com/api/docs/models/gpt-6.1-terra (2026-10-27: GPT-6.1 Terra $1 / $0.05 cached / $1.25 cache write / $5; >272K $2 / $0.10 / $2.50 / $7.50)";
 /**
  * Daybreak aliases. `daybreak-*-latest` never appears in the pricing table itself — only its
  * current snapshot does — so these tuples are the snapshot's published rates and carry
@@ -97,6 +100,10 @@ const GEMINI_38_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, ca
 const GEMINI_4_ARGON: Cost4 = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
+// K3.1 Pro and its highspeed variant: flat 1M-context pricing (no context tiering). Like K3,
+// cacheWrite is the default 5-minute TTL rate; the 1h tier ($4 / $8) is not modelled.
+const KIMI_K31_PRO: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 };
+const KIMI_K31_PRO_HIGHSPEED: Cost4 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 };
 const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0.95 };
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
@@ -236,12 +243,19 @@ const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-deta
  * cache-write charge.
  */
 const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
-// Historical K2 rows retain their 2026-07-20 verification; they do not price retargeted aliases.
-const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (historical official table; cacheWrite derived from cache-miss input)";
+// K2.7 Code / K2.6 were re-read on the official table 2026-10-24 (unchanged). The K2 series
+// closes to new users 2026-10-31 and retires by end of December 2026. kimi-k2.5 was
+// discontinued 2026-08-31 and left the table, so its row keeps the 2026-07-20 snapshot for
+// pricing historical usage. None of these price retargeted aliases.
+const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing/chat (official K2 series table; cacheWrite derived from cache-miss input)";
+const KIMI_K25_PRICING = "https://platform.kimi.ai/docs/pricing (historical official table, 2026-07-20; kimi-k2.5 discontinued 2026-08-31 per https://platform.kimi.ai/docs/models; cacheWrite derived from cache-miss input)";
 // K3 publishes a separate cache-write price: $3/1M for the default 5-minute TTL.
 // Coding presets share an endpoint/product, but these API reference estimates are not plan
 // billing or quota: K3's 1M model consumes about twice the quota of k3-256k.
 const KIMI_K3_PRICING = "https://platform.kimi.ai/docs/pricing/chat (API reference estimate; default 5-minute cache-write rate, not Code Plan billing/quota); https://www.kimi.com/code/docs/en/kimi-code/models.html";
+// K3.1 Pro shares the K3 table and caveats; the highspeed variant consumes about twice the
+// Code Plan quota of the regular one, which these list-price estimates do not reproduce.
+const KIMI_K31_PRICING = KIMI_K3_PRICING;
 // Z.AI publishes one USD table for the international surface; the Coding Plan
 // subscription and the domestic bigmodel.cn endpoints bill differently
 // (subscription quota / CNY tiers), so every GLM row below is verified-derived:
@@ -296,9 +310,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Display estimates use API prices for both login and API-key routes, including cache writes.
   { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: `API-reference comparison estimate: ${ASTRA_API_PRICING}`, verifiedAt: "2026-09-05", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "gpt-6.1-sol", cost4: GPT61_SOL, source: GPT61_SOL_API_PRICING, verifiedAt: "2026-09-30", status: "verified" },
+  { provider: "openai-apikey", modelId: "gpt-6.1-terra", cost4: GPT61_TERRA, source: GPT61_TERRA_API_PRICING, verifiedAt: "2026-10-27", status: "verified" },
   { provider: "openai-apikey", modelId: "gpt-6-sol", cost4: GPT6_SOL, source: GPT6_API_PRICING, verifiedAt: "2026-09-23", status: "verified" },
   { provider: "openai-apikey", modelId: "gpt-6-luna", cost4: GPT6_LUNA, source: GPT6_API_PRICING, verifiedAt: "2026-09-23", status: "verified" },
   { provider: "openai", modelId: "gpt-6.1-sol", cost4: GPT61_SOL, source: `API-reference comparison estimate: ${GPT61_SOL_API_PRICING}`, verifiedAt: "2026-09-30", status: "verified-derived" },
+  { provider: "openai", modelId: "gpt-6.1-terra", cost4: GPT61_TERRA, source: `API-reference comparison estimate: ${GPT61_TERRA_API_PRICING}`, verifiedAt: "2026-10-27", status: "verified-derived" },
   { provider: "openai", modelId: "gpt-6-sol", cost4: GPT6_SOL, source: `API-reference comparison estimate: ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "openai", modelId: "gpt-6-luna", cost4: GPT6_LUNA, source: `API-reference comparison estimate: ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   // claude-fable-5-1 now HAS a generated jawcode row, so the two Anthropic surfaces resolve
@@ -437,34 +453,43 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "google-antigravity", modelId: "claude-opus-5-5-medium", cost4: CLAUDE_OPUS_55, source: `derived: Anthropic Claude Opus 5.5 reference price; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "claude-opus-5-5-high", cost4: CLAUDE_OPUS_55, source: `derived: Anthropic Claude Opus 5.5 reference price; ${ANTHROPIC_PRICING}`, verifiedAt: "2026-10-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gpt-oss-120b-medium", cost4: { input: 0.03, output: 0.15, cacheRead: 0, cacheWrite: 0 }, source: "derived: gpt-oss-120b open-weights — OpenRouter advertised lowest https://openrouter.ai/openai/gpt-oss-120b/providers", verifiedAt: "2026-07-20", status: "verified-derived" },
-  // Kimi / Moonshot — official price tables are now published (2026-07-20 re-check;
-  // previously empty). kimi = Kimi Code OAuth surface, moonshot = CN key surface,
-  // kimi-code = API key surface (expected list price, not actual billing).
-  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // Kimi / Moonshot — official tables re-read 2026-10-24 (platform.kimi.ai/docs/pricing/chat).
+  // kimi / kimi-responses = Kimi Code OAuth surface, kimi-code = its API-key form, moonshot =
+  // the separately billed platform API (api.moonshot.ai, or .cn). Coding-surface rows are
+  // expected list prices, not Code Plan billing or quota.
+  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3.1-pro", cost4: KIMI_K31_PRO, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3.1-pro-highspeed", cost4: KIMI_K31_PRO_HIGHSPEED, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_K25_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   // kimi-for-coding now serves K2.8 Preview. No verified K2.8 price: keep all three
   // Coding presets unknown rather than reusing the alias's retired K2.7 price.
-  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k3.1-pro", cost4: KIMI_K31_PRO, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k3.1-pro-highspeed", cost4: KIMI_K31_PRO_HIGHSPEED, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "moonshot", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_K25_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3.1-pro", cost4: KIMI_K31_PRO, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3.1-pro-highspeed", cost4: KIMI_K31_PRO_HIGHSPEED, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_K25_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   // Responses reuses the kimi OAuth account and the same Coding endpoint/model seeds.
-  { provider: "kimi-responses", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi-responses", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
-  { provider: "kimi-responses", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3.1-pro", cost4: KIMI_K31_PRO, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3.1-pro-highspeed", cost4: KIMI_K31_PRO_HIGHSPEED, source: KIMI_K31_PRICING, verifiedAt: "2026-10-24", status: "verified-derived" },
   // Qwen3.8-Max: vendor-published input/output rate (verified). See QWEN38_MAX_PRICING
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
@@ -534,6 +559,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "gpt-5-6-sol", cost4: GPT56_SOL, source: `enterprise list column (self-serve shows discounted 1.2/6); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "gpt-6-1-sol", cost4: GPT61_SOL, source: `derived: GPT-6.1 Sol added 2026-09-30 ahead of Devin's modelCostData table (devin.ai/blog/gpt-6-1-sol; uid spelled like gpt-5-6-sol); OpenAI API list price ${GPT61_SOL_API_PRICING}`, verifiedAt: "2026-09-30", status: "verified-derived" },
+  // 261027 preemptive: GPT-6.1 Terra (Devin uid follows Sol; API-reference estimate, not billing).
+  { provider: "devin-cli", modelId: "gpt-6-1-terra", cost4: GPT61_TERRA, source: `derived: OpenAI API list price ${GPT61_TERRA_API_PRICING}; Devin uid mirrors gpt-6-1-sol`, verifiedAt: "2026-10-27", status: "verified-derived" },
   { provider: "devin-cli", modelId: "gpt-6-sol", cost4: GPT6_SOL, source: `derived: GPT-6 Sol/Luna added 2026-09-23 ahead of Devin's modelCostData table; OpenAI API list price ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin-cli", modelId: "gpt-6-luna", cost4: GPT6_LUNA, source: `derived: GPT-6 Sol/Luna added 2026-09-23 ahead of Devin's modelCostData table; OpenAI API list price ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -553,6 +580,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin", modelId: "gpt-5-6-luna", cost4: GPT56_LUNA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "gpt-5-6-terra", cost4: GPT56_TERRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "gpt-6-1-sol", cost4: GPT61_SOL, source: `derived: GPT-6.1 Sol added 2026-09-30 ahead of Devin's modelCostData table (devin.ai/blog/gpt-6-1-sol; uid spelled like gpt-5-6-sol); OpenAI API list price ${GPT61_SOL_API_PRICING}`, verifiedAt: "2026-09-30", status: "verified-derived" },
+  // 261027 preemptive: GPT-6.1 Terra (Devin uid follows Sol; API-reference estimate, not billing).
+  { provider: "devin", modelId: "gpt-6-1-terra", cost4: GPT61_TERRA, source: `derived: OpenAI API list price ${GPT61_TERRA_API_PRICING}; Devin uid mirrors gpt-6-1-sol`, verifiedAt: "2026-10-27", status: "verified-derived" },
   { provider: "devin", modelId: "gpt-6-sol", cost4: GPT6_SOL, source: `derived: GPT-6 Sol/Luna added 2026-09-23 ahead of Devin's modelCostData table; OpenAI API list price ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin", modelId: "gpt-6-luna", cost4: GPT6_LUNA, source: `derived: GPT-6 Sol/Luna added 2026-09-23 ahead of Devin's modelCostData table; OpenAI API list price ${GPT6_API_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin", modelId: "claude-opus-4-8", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -634,6 +663,8 @@ export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   // standard tuples; the stale bases made these look like 1.6/0.4 (#907).
   "gpt-5.6-terra": 2,
   "gpt-5.6-luna": 2,
+  // GPT-6.1 Terra model page (2026-10-27): Fast mode costs 2× standard.
+  "gpt-6.1-terra": 2,
   "gpt-5.5": 2.5,
   "gpt-5.4-mini": 2,
   "gpt-5.4": 2,
@@ -673,8 +704,9 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
         provider,
         modelId,
         multiplier,
-        source: modelId === "gpt-6-astra" ? ASTRA_API_PRICING : "https://openai.com/api-fast-mode/",
-        verifiedAt: modelId === "gpt-6-astra" ? "2026-09-05" : "2026-08-05",
+        source: modelId === "gpt-6-astra" ? ASTRA_API_PRICING
+          : modelId === "gpt-6.1-terra" ? GPT61_TERRA_API_PRICING : "https://openai.com/api-fast-mode/",
+        verifiedAt: modelId === "gpt-6-astra" ? "2026-09-05" : modelId === "gpt-6.1-terra" ? "2026-10-27" : "2026-08-05",
       })),
   ),
   ...["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"].map((modelId): PriorityPricingRule => ({
@@ -769,6 +801,7 @@ const OPENAI_PRICING_DOC = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_CONTEXT_MODELS = [
   "gpt-6-astra",
   "gpt-6.1-sol",
+  "gpt-6.1-terra",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",
@@ -804,8 +837,8 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       inclusive: false,
       multiplier: OPENAI_LONG_CONTEXT,
       confirmedPriorityRelation: "stack",
-      source: OPENAI_PRICING_DOC,
-      verifiedAt: "2026-09-05",
+      source: modelId === "gpt-6.1-terra" ? "https://developers.openai.com/api/docs/models/gpt-6.1-terra" : OPENAI_PRICING_DOC,
+      verifiedAt: modelId === "gpt-6.1-terra" ? "2026-10-27" : "2026-09-05",
     })),
   ),
   {

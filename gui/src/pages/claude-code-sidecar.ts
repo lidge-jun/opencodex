@@ -1,16 +1,29 @@
 /**
  * Claude Code sidecar override helpers — keep Auto as an in-memory draft so
  * users can enter a model before persist. Empty Auto persists only when it
- * carries an explicit pool edit.
+ * carries an explicit activation state or pool edit.
  */
 
 import type { AnthropicInstanceId, SidecarOverride, VisionOverrideBackend } from "./claude-manual-env";
 
 export type SidecarSelectValue = "inherit" | "auto" | VisionOverrideBackend;
 
+// Draft-only provenance follows object spreads but cannot enter JSON or the PUT shape.
+const modelEditStartedDisabled = Symbol("modelEditStartedDisabled");
+type SidecarDraft = SidecarOverride & { [modelEditStartedDisabled]?: true };
+
+/** A confirmed save starts a new editing baseline; drafts without a pending marker keep their identity. */
+export function confirmSidecarOverride(override?: SidecarOverride): SidecarOverride | undefined {
+  if (!override || !(override as SidecarDraft)[modelEditStartedDisabled]) return override;
+  const next = { ...override } as SidecarDraft;
+  delete next[modelEditStartedDisabled];
+  return next;
+}
+
 export type PersistedSidecarOverride = {
-  backend: VisionOverrideBackend | null;
-  model: string;
+  enabled?: boolean;
+  backend?: VisionOverrideBackend | null;
+  model?: string;
   anthropicInstance?: AnthropicInstanceId | null;
 };
 
@@ -38,28 +51,32 @@ export function applySidecarPoolChange(override: SidecarOverride | undefined, va
   return next;
 }
 
-/** Model typing updates the draft in place; empty Auto stays selectable until save. */
+/** Model edits preserve activation unless this draft started disabled. */
 export function applySidecarModelChange(
   override: SidecarOverride | undefined,
   model: string,
 ): SidecarOverride {
-  return { ...override, model };
+  const startedDisabled = override?.enabled === false || (override as SidecarDraft | undefined)?.[modelEditStartedDisabled];
+  return { ...override, model, ...(startedDisabled ? {
+    enabled: model.trim().length > 0, [modelEditStartedDisabled]: true as const,
+  } : {}) };
 }
 
 /**
  * Persist shape for PUT /api/claude-code.
- * Empty Auto drafts ({ backend: undefined } / blank model) become null → reload as Inherit.
+ * Empty Auto drafts become null → Inherit unless an explicit activation state must survive.
  */
 export function serializeSidecarOverride(
   override?: SidecarOverride,
 ): PersistedSidecarOverride | null {
   if (!override) return null;
   const trimmed = (override.model ?? "").trim();
+  const activation = override.enabled === undefined ? {} : { enabled: override.enabled };
   if (!override.backend) {
-    if (!trimmed && override.anthropicInstance === undefined) return null;
-    return { backend: null, model: trimmed,
+    if (!trimmed && override.anthropicInstance === undefined) return override.enabled === undefined ? null : { ...activation, backend: null, model: "" };
+    return { ...activation, backend: null, model: trimmed,
       ...(override.anthropicInstance !== undefined ? { anthropicInstance: override.anthropicInstance } : {}) };
   }
-  return { backend: override.backend, model: trimmed,
+  return { ...activation, backend: override.backend, model: trimmed,
     ...(override.anthropicInstance !== undefined ? { anthropicInstance: override.anthropicInstance } : {}) };
 }

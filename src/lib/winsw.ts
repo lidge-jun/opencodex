@@ -184,9 +184,11 @@ const SERVICE_COMMAND_TIMEOUT_MS = 15_000;
 /** `stopwait` outlasts the SCM `<stoptimeout>` (20s in the generated service definition) plus overhead; still bounded so a wedged SCM cannot hang the CLI. */
 const SERVICE_STOPWAIT_TIMEOUT_MS = 40_000;
 
-function runWinsw(args: string[]): string {
+function runWinsw(args: string[], beforeMutation?: () => void): string {
   const timeoutMs = args[0] === "stopwait" ? SERVICE_STOPWAIT_TIMEOUT_MS : SERVICE_COMMAND_TIMEOUT_MS;
-  return execFileSync(winswExePath(), args, {
+  const file = winswExePath();
+  beforeMutation?.();
+  return execFileSync(file, args, {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs,
   }).trim();
 }
@@ -352,8 +354,10 @@ export function startWinswService(): void { runWinsw(["start"]); }
  * catch cannot decide whether it is safe for lifecycle callers to continue. Re-read
  * SCM state and only accept the two states that cannot still own the proxy listener.
  */
-export function stopWinswService(): void {
-  try { runWinsw(["stopwait"]); } catch { /* classify by verified state below */ }
+export function stopWinswService(beforeMutation?: () => void): void {
+  let refused = false;
+  const gate = beforeMutation && (() => { try { beforeMutation(); } catch (error) { refused = true; throw error; } });
+  try { runWinsw(["stopwait"], gate); } catch (error) { if (refused) throw error; /* classify by verified state below */ }
   const status = statusWinswRaw();
   if (status === "stopped" || status === "nonexistent") return;
   if (status === "unknown") {
