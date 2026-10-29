@@ -3,6 +3,8 @@ title: Codex App 模型選擇器
 description: opencodex 模型如何透過共享 Codex 目錄出現在 Codex App、Codex CLI 和 Codex TUI 中。
 ---
 
+預設值為 `false`。在 `config.json` 中設定 `"omitDisabledNativeModels": true` 並執行 `ocx sync`，即可從目錄、快取與 Codex 格式的 HTTP 模型清單中移除已停用的 native 列。移除前經過驗證的繼承範本會另外保留，因此 routed 列的中繼資料不變，直接請求的路由也不變。下文的 hide 說明適用於預設設定。
+
 opencodex 不會修改 Codex App。它會寫入 Codex CLI/TUI 所使用的同一套 Codex 設定和模型目錄。
 Codex 的 app-server 會讀取這份共享狀態，但部分 Codex Desktop 版本會在 renderer 套用第二層
 遠端模型 allowlist，仍可能把已路由的列從選擇器中移除。

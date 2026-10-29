@@ -499,7 +499,7 @@ Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例
 | Assistant `tool_use` | `function_call`（`input` → JSON 字符串化的 `arguments`） |
 | 用户 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 前缀） |
 | 重放 `thinking` / `redacted_thinking` | `reasoning` 项；签名和脱敏载荷保存在有界 `ocxr1` 信封中 |
-| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`）. 在到 `api.anthropic.com` 的转换路由上，带类型的 `web_search_*` 和 `web_fetch_*` 声明也会发送到 Anthropic 并在服务端执行；如果网页搜索边车提供了 `web_search`，则优先使用边车。搜索和抓取结果以 `server_tool_use` 及对应的 `web_search_tool_result` / `web_fetch_tool_result` 块返回客户端 |
+| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`）. 在到 `api.anthropic.com` 的转换路由上，带类型的 `web_search_*` 和 `web_fetch_*` 声明也会发送到 Anthropic 并在服务端执行；如果网页搜索边车提供了 `web_search`，则优先使用边车。搜索和抓取结果以 `server_tool_use` 及对应的 `web_search_tool_result` / `web_fetch_tool_result` 块返回客户端 带有 `allowed_domains`、`blocked_domains` 或 `user_location` 的托管搜索会从转换后的 Responses/Chat 路由中移除；强制调用已移除的搜索返回 400。有效的 `defer_loading` 函数定义仍可作为普通函数调用。参见[转换限制](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)。 |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定函数→`{type:"function",name}`，托管 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

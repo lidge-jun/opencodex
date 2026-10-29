@@ -1,4 +1,5 @@
 {
+  "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",

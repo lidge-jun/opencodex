@@ -1,4 +1,6 @@
 {
+  "web-search-eof.test.ts": "web-search",
+  "openai-chat-single-system.test.ts": "adapters/openai",
   "fix-search-frame-shapes.test.ts": "web-search",
   "fix-search-orphan-source.test.ts": "web-search",
   "fix-search-unicode-clamp.test.ts": "web-search",

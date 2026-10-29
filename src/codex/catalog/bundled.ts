@@ -33,7 +33,8 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { decodeOverlayState } from "../shim-state-file";
 
 
-import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
+import { activeCodexModelsCachePath, catalogBackupPathFor, ensureStrictCatalogFields, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
+import { retainedNativeInheritanceTemplate } from "./native-template";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { isSpawnableCodexCandidate } from "../exec-invocation";
 import { validatedCodexExecInvocation, validatedCodexExecInvocationAsync } from "../exec-boundary";
@@ -729,8 +730,14 @@ export function readCurrentCodexModelsCache(): RawCatalog | null {
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
   const bundled = bundledCodexCatalogSnapshot();
-  const fromRows = (catalog: RawCatalog | null) => findSupportedNativeTemplate(catalog
-    ? { ...catalog, models: (catalog.models ?? []).filter(isPlainObject) } : null);
+  const fromRows = (catalog: RawCatalog | null) => {
+    const template = findSupportedNativeTemplate(catalog
+      ? { ...catalog, models: (catalog.models ?? []).filter(isPlainObject) } : null);
+    // An emitted native has already passed strict normalization. Match that read surface,
+    // including property insertion order, when the native survives only as source evidence.
+    return template && template === retainedNativeInheritanceTemplate(catalog)
+      ? ensureStrictCatalogFields(structuredClone(template)) : template;
+  };
   // Template inheritance only. The validity gates in this file keep `findNativeTemplate`
   // so a catalog carrying only a newly launched native row stays valid (#2813).
   const native = fromRows(readCatalog(catalogPath))

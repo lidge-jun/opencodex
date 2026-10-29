@@ -1,10 +1,11 @@
-import { useId, type RefObject } from "react";
+import { useId, useState, type RefObject } from "react";
 import { useT } from "../i18n/shared";
 import { useModalDialog } from "../pages/dashboard-shared";
 import { kiroVerificationLink } from "../kiro-device-login-helpers";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { useKiroDeviceLogin } from "./use-kiro-device-login";
 import KiroLoginChooser from "./KiroLoginChooser";
+import { KiroIamLoginForm, KiroIamProfilePicker } from "./KiroIamLoginForm";
 import type { KiroFinalOutcome } from "../kiro-device-login-finalizer";
 import "../styles/kiro-device-login.css";
 
@@ -23,6 +24,7 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
   const titleId = useId();
   const dialogRef = useModalDialog(true, triggerRef);
   const login = useKiroDeviceLogin(apiBase, onSettled, pollDelay);
+  const [iamSetup, setIamSetup] = useState(false);
   const copy = useCopyFeedback<string>();
   const { state } = login;
   const view = state.view;
@@ -36,10 +38,19 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
       {state.phase === "idle" && (
         <>
           <p className="muted">{t(addAccount ? "kiroLogin.addDescription" : "kiroLogin.loginDescription")}</p>
-          <KiroLoginChooser disabled={busy} onCli={() => { onClose(); onCli(addAccount); }} onMethod={method => { void login.start(method); }} />
+          {iamSetup
+            ? <KiroIamLoginForm disabled={busy} onBack={() => setIamSetup(false)} onStart={options => { void login.start("iam-identity-center", options); }} />
+            : <KiroLoginChooser disabled={busy} onCli={() => { onClose(); onCli(addAccount); }} onMethod={method => {
+              if (method === "iam-identity-center") setIamSetup(true);
+              else void login.start(method);
+            }} />}
         </>
       )}
       {state.phase === "starting" && <p role="status" aria-live="polite">{t("kiroLogin.starting")}</p>}
+      {view?.profiles && (state.phase === "select-profile" || state.phase === "selecting") && <>
+        <KiroIamProfilePicker profiles={view.profiles} disabled={state.phase === "selecting"} onSelect={arn => { void login.selectProfile(arn); }} />
+        {state.error === "profile" && <p role="alert" className="notice-warn">{t("kiroLogin.profileFailed")}</p>}
+      </>}
       {view && (state.phase === "pending" || state.phase === "done" || state.phase === "failed" || state.phase === "expired" || state.phase === "ended") && (
         <>
           {view.userCode && (
@@ -59,6 +70,7 @@ export default function KiroDeviceLoginDialog({ apiBase, triggerRef, addAccount,
       )}
       <p role="status" aria-live="polite">
         {state.phase === "pending" && t("kiroLogin.pending")}
+        {state.phase === "selecting" && t("kiroLogin.selecting")}
         {state.phase === "done" && t("kiroLogin.done")}
         {state.phase === "expired" && t("kiroLogin.expired")}
         {state.phase === "ended" && t("kiroLogin.ended")}

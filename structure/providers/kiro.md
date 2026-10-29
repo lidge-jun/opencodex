@@ -12,19 +12,37 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 
 ## Kiro CLI executable resolution
 
-Native device login is an add-only Kiro account path for Builder ID, Google, and GitHub.
-It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
-flow table. A flow ID is returned only at start; status and cancellation require that ID and
+Native device login is an add-only Kiro account path for AWS IAM Identity Center, Builder ID, Google, and GitHub.
+It uses the fixed AWS OIDC host for Builder ID, the fixed Kiro social authorization host for
+Google and GitHub, and the selected region's AWS OIDC host for IAM, with guarded outbound
+POSTs and a bounded process-local flow table. A flow ID is returned only at start; status and cancellation require that ID and
 the same management principal kind. Polling follows the server's interval, and only an exact
 approval shape reaches the protected OAuth store. Device codes and tokens never enter
 management responses. Social polling accepts `authorized` and the legacy `approved` alias, with the same token and profile checks. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
 refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
 or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
 hyphen characters. Completed flow results are consumed once, terminal entries expire after
-60 seconds, and the table holds at most 16 entries. Terminal entries retain no config snapshot.
+60 seconds, and the table holds at most 16 entries. Capacity pruning evicts only terminal entries;
+pending approval and live profile selection are preserved. Terminal entries retain no config snapshot.
+Once the protected credential write accepts a commit, expiry preserves that flow until configuration
+publication settles; concurrent status and cancellation cannot turn an accepted write into an expired flow.
 Explicit reauth rotates login identity, while token
 refresh preserves it. A first-account config-publication failure compensates the new slot
 through the existing receipt ownership check.
+
+IAM starts also require an HTTPS `*.awsapps.com/start` portal and a commercial AWS SSO region.
+`src/oauth/kiro-iam-identity-center.ts` validates them before registration. The hub sends the portal
+as an OIDC argument, never fetches it, and uses the selected region's fixed AWS OIDC host.
+After approval, bounded `ListAvailableProfiles` pagination queries the AWS CLI's US East and Frankfurt
+service endpoints. A single profile is selected automatically; several profiles produce a live
+`select-profile` state containing only ARN, name and region. A selection POST to `/api/oauth/login`
+supplies the provider, flow ID and an ARN from that flow's list; it requires the same principal.
+`GetUsageLimits` resolves this grant's user email for the selected profile before persistence.
+The credential stores its SSO region, profile API region and client registration together.
+Two users sharing an organization ARN append distinct slots without a duplicate-profile warning;
+an already stored user/profile pair still receives the existing duplicate warning. Selection never
+changes the active account. Cancellation, expiry and the active-flow cap also cover profile selection.
+Staged grants remain private and are cleared on every terminal outcome.
 
 Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
 `src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
@@ -217,8 +235,14 @@ finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, 
 from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
 positive value overwrites an earlier one.
 
-Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
-`tokenUsage` on any event, which is why Kiro token usage stays estimated. The parser preserves
+Spend arrives in `meteringEvent` as **credits, not tokens**. Kiro token usage stays estimated
+unless a `metadataEvent` carries a `tokenUsage` block; no captured response did. That block is the
+only frame that yields a measured count: the parser marks the usage `upstreamReported`,
+`mergeKiroUsage` keeps the mark only when both legs of a two-leg turn have it, and
+`usageForFinalLog` (`src/usage/log.ts`) then skips the provider-wide estimated mark while
+`finalizedUsage` (`src/server/request-log.ts`) skips the local input floor. A turn without
+`tokenUsage`, a leg without it, and a count read off the bridged Responses wire all keep the
+estimated mark. The parser preserves
 `meteringEvent` unit/usage (`amount` is an alias) and optional `unitPlural`; credit readings populate
 `OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
 is a snapshot; separate completion-fallback responses add their credits. Missing metering stays

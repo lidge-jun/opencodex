@@ -147,7 +147,8 @@
         "src/codex/",
         "src/config.ts",
         "src/config/",
-        "src/types.ts"
+        "src/types.ts",
+        "src/types/config.ts"
       ]
     },
     {
@@ -741,6 +742,13 @@
       ]
     },
     {
+      "path": "providers/lm-studio-chat.md",
+      "tier": 4,
+      "title": "LM Studio Chat instructions",
+      "scope": "Preset-scoped single-leading-system normalization, configuration and editor policy.",
+      "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
@@ -957,6 +965,16 @@
       "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
       "documents": [
         "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/claude-desktop-model-visibility.md",
+      "tier": 5,
+      "title": "Claude Desktop Model Visibility",
+      "scope": "Per-client selection of the rows the Claude Desktop 3P model list carries.",
+      "documents": [
+        "src/claude/",
+        "src/server/"
       ]
     },
     {

@@ -187,6 +187,7 @@ function mergeKiroUsage(
     ...(sumOptional("providerCredits") !== undefined ? { providerCredits: sumOptional("providerCredits") } : {}),
     ...(sumOptional("reasoningOutputTokens") !== undefined ? { reasoningOutputTokens: sumOptional("reasoningOutputTokens") } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
+    ...(first.upstreamReported && second.upstreamReported ? { upstreamReported: true as const } : {}),
   };
 }
 

@@ -83,6 +83,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelAutoCompactTokenLimitsConfigError } from "../../providers/auto-compact-budget";
 import { hasFastWireCapabilityConflict } from "../../providers/fastwire";
 import { parseDesktopProfile } from "../../claude/desktop-profile";
+import { parseDesktopModelVisibility } from "../../claude/desktop-model-visibility";
 import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/intercept/model-bindings";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
@@ -234,6 +235,8 @@ export const configSchema = z.object({
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   preferModelAliasIds: z.boolean().optional().catch(false),
+  // Catalog omission is opt-in; malformed hand edits preserve the hidden-row default.
+  omitDisabledNativeModels: z.boolean().optional().catch(false),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
   // Fast selectors default on; malformed hand edits disable them without rejecting providers.
@@ -420,7 +423,7 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
     if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
     }
@@ -464,6 +467,17 @@ export const configSchema = z.object({
         ctx.addIssue({
           code: "custom",
           path: ["claudeCode", "desktopProfile"],
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (claude.desktopModelVisibility !== undefined) {
+      try {
+        parseDesktopModelVisibility(claude.desktopModelVisibility);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["claudeCode", "desktopModelVisibility"],
           message: error instanceof Error ? error.message : String(error),
         });
       }

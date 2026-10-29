@@ -574,6 +574,13 @@ export interface OcxUsage {
   reasoningOutputTokens?: number;
   estimated?: boolean;
   /**
+   * The adapter read these counts off the upstream's own usage frame. Only an adapter whose
+   * provider is estimated by default (usageForFinalLog) sets it, and a merge keeps it only when
+   * every leg had it. A figure taken off a bridged wire or guessed never carries it, so the
+   * provider default still marks those as estimated.
+   */
+  upstreamReported?: true;
+  /**
    * The raw upstream usage object for Responses-shaped upstreams (openai/codex#41980 parity):
    * codex-rs preserves the complete `response.usage` object through its own pipeline, so fields
    * the proxy does not model (subscription metadata, future counters) must survive the bridged /
