@@ -200,7 +200,8 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429, ou n'importe quel 5xx | Refroidissez la cible et passez à la prochaine cible éligible. |
 | Erreur classée comme erreur d’authentification, d’abonnement, de quota, de limitation de débit, de surcharge ou de serveur en amont | Place la cible en période de refroidissement et bascule, même si le statut seul ne suffit pas. |
-| Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
+| Annulation client (499), `origin_rejected`, refus de cyber-politique ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
+| Dépassement de contexte confirmé avant la sortie, y compris HTTP 400 | Essaie la prochaine cible admissible non tentée sans refroidissement ; à épuisement, renvoie la première erreur de contexte HTTP 400 confirmée (un refus de contexte avec un autre statut fait aussi passer à la cible suivante, sans être conservé). |
 | Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, rejet d'entrée d'image propre à un modèle (`param: input`), ou refus d'un média d'entrée que la route ne peut pas lire (`unsupported_input_modality`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
 | Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
@@ -210,8 +211,14 @@ valeur `Retry-After` valide, opencodex l’utilise à la place ; les en-têtes d
 acceptées, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
-le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
+le temps de recharge expire. Si aucune cible n’a été tentée et qu’aucune n’est éligible, le proxy renvoie HTTP 503 avec
 `error.code = "combo_unavailable"`.
+
+Après un refus de contexte HTTP 400 confirmé, l’épuisement des cibles ou du budget d’envoi renvoie
+le premier refus sous `context_length_exceeded`, avant toute erreur ultérieure réessayable, même de quota.
+Cela inclut les cibles restantes incompatibles avec la relecture du raisonnement ou sans consentement
+de dépense. L’annulation, un refus fatal ultérieur ou un refus explicite de la politique de repli reste
+prioritaire ; aucune cible facturée sans consentement ne reçoit la requête.
 
 :::note
 Le basculement est intentionnellement limité. Il facilite la disponibilité, l'authentification et l'authentification spécifiques à la cible.
@@ -366,7 +373,7 @@ message de validation.
 
 ### Pourquoi le basculement s'est-il arrêté après la première erreur ?
 
-L’erreur était terminale plutôt que spécifique à la cible. Corriger une entrée invalide, réduire un contexte surdimensionné,
+L’erreur était terminale plutôt que spécifique à la cible. Corriger une entrée invalide,
 gérer un refus de politique ou corriger l’origine de la demande rejetée. Les combos ne sautent pas dans ces cas-là.
 
 ## Compatibilité des paramètres facultatifs

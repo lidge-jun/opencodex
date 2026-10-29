@@ -356,6 +356,21 @@
       "documents": ["src/adapters/openai-responses/", "src/bridge/"]
     },
     {
+      "path": "transports/max-output-completion.md",
+      "tier": 3,
+      "title": "Opt-in Responses Text Completion",
+      "scope": "Default-off translated Responses text-only token-limit completion and exclusions.",
+      "documents": [
+        "src/bridge/max-output-completion.ts",
+          "src/bridge/sse.ts",
+          "src/bridge/response-json.ts",
+        "src/config/schema/config-schema.ts",
+        "src/types/config.ts",
+        "src/server/responses/adapter-delivery.ts",
+        "src/server/responses/run-turn-execution.ts"
+      ]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",

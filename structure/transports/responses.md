@@ -573,6 +573,7 @@ reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 
 
 ## Adapter-to-Responses bridge
 
+Opt-in translated Responses text-only token-limit completion follows [the text completion policy](max-output-completion.md).
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body

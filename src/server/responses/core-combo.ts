@@ -1,7 +1,7 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
-import { comboCooldownRetryAfterSeconds, type CodexAccountModelRefusal } from "../../combos/failover";
+import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
   isCodexReasoningEffort,
@@ -869,10 +869,15 @@ export async function executeComboResponses(
   // "OpenAI account pool has no usable account credential" while every Claude account was spent.
   let quotaFailure: Response | undefined;
   let quotaFailedChildLog: RequestLogContext | undefined;
+  let contextFailure: { response: Response; childLog: RequestLogContext } | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (): Response => {
+    if (contextFailure) {
+      adoptFailedChildLog(contextFailure.childLog);
+      return contextFailure.response;
+    }
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
@@ -1402,6 +1407,12 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    // Retain a confirmed target context refusal when later retryable failures exhaust the ladder.
+    // Hard stops above still return their own verdict, and every attempt keeps its own usage.
+    if (!contextFailure && failure.response.status === 400 && isDefiniteContextOverflow(400, failure.classificationText)) {
+      contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
+        failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
+    }
     // A bare status made a revoked credential read as a provider outage. Log only the parsed
     // code and message, never the raw envelope, as one redacted, bounded line.
     const failureReason = sanitizeLogMetadataString(
@@ -1500,6 +1511,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
+        if (contextFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }
@@ -1526,7 +1538,7 @@ export async function executeComboResponses(
   }
   const failure = exhaustedFailure();
   if (
-    lastFailure?.status === 413
+    failure === lastFailure && lastFailure?.status === 413
     && lastFailureClassifiesOverflow
   ) {
     if (localAdmissionRefusals?.length) logCtx.errorCode = "input_admission_refused";
