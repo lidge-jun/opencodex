@@ -209,7 +209,7 @@ rejecting non-ResponseItem input types—including official xAI endpoints (`api.
 `promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper
 from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair;
 Historical/live tags survive replacements, synthesized outputs and bridge restoration; transformed-input consumers read each tag, never a recalculated prefix.
-Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets; loaded search tools join the live catalog or top-level tools.
+Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets. Only current-turn `tool_search_output` discoveries join a live wrapper, top-level tools or the top-level fallback; source provenance is checked before merging declarations. Historical discoveries remain replay context and grant no current hosted-tool authority. `tests/providers/xai/xai-loaded-tool-provenance.test.ts` covers these paths and stored two-turn continuations.
 
 Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening it:
 a root `oneOf` whose branches differ in one property becomes that property's `oneOf`, or its `anyOf`

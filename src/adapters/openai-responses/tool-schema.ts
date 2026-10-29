@@ -199,8 +199,16 @@ function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unk
 export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: number): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  const loadedTools = body.input.flatMap(item =>
-    isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = body.input.some(hasItemProvenance);
+  const isCurrentItem = (item: unknown, index: number): boolean =>
+    hasProvenance ? !isHistoricalItem(item) : index >= currentTurnStart;
+
+  // Filter the source before declarations lose their item's provenance in a live catalog.
+  const loadedTools = body.input.flatMap((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
       ? item.tools
       : []
   );
@@ -211,15 +219,9 @@ export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: num
     return tools === body.tools ? body : { ...body, tools };
   }
 
-  const currentTurnStart = Number.isFinite(replayPrefixLength)
-    ? Math.max(0, Math.trunc(replayPrefixLength!))
-    : 0;
-  const hasProvenance = body.input.some(hasItemProvenance);
-
-  const currentAdditionalToolsIndex = body.input.findIndex((item, index) => {
-    const isHistorical = hasProvenance ? isHistoricalItem(item) : (index < currentTurnStart);
-    return !isHistorical && isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools);
-  });
+  const currentAdditionalToolsIndex = body.input.findIndex((item, index) =>
+    isCurrentItem(item, index) && isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+  );
 
   if (currentAdditionalToolsIndex < 0) {
     return { ...body, tools: mergeLoadedTools([], loadedTools) };

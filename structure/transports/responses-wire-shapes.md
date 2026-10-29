@@ -163,7 +163,7 @@ and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `
 configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
 Credentials, query, fragment, foreign hosts and other resource paths are excluded. The existing
 URL constructor canonicalizes trailing base slashes before this check. Malformed wrappers remain unchanged and
-the shared mixed-ciphertext agent-message gate remains fail-closed. Responses passthrough clones and tags historical and current input items before any rewrite, including identity repair; symbol provenance survives message replacement, prompt-cache cleanup, filtering and tool lowering without entering serialized requests. Promotion uses provenance rather than positions in shortened input.
+the shared mixed-ciphertext agent-message gate remains fail-closed. Responses passthrough clones and tags historical and current input items before any rewrite, including identity repair; symbol provenance survives message replacement, prompt-cache cleanup, filtering and tool lowering without entering serialized requests. Promotion uses provenance rather than positions in shortened input. Discovery-source filtering follows the [current-turn catalog contract](responses.md#responses-httpsse) before nested tool definitions enter a live catalog.
 
 The canonical `opencode-go` registry entry defaults to `statelessResponses: true` because Go
 rejects reasoning ciphertext combined with `previous_response_id` (#3838). Existing derive
