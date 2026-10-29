@@ -832,6 +832,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return handleHubUsage(req, config, policy);
       }
 
+      if (url.pathname === "/v1/usage/windows" && req.method === "GET") {
+        const { handleHubUsageWindows } = await import("../hub-usage-windows");
+        return handleHubUsageWindows(req, config, policy);
+      }
+
       if (url.pathname === "/v1/hub-state" && (req.method === "GET" || req.method === "HEAD")) {
         // #4236: a connected client had no way to learn which providers this hub can actually
         // serve, so `ocx status` on the client reported the CLIENT's empty credential store as
