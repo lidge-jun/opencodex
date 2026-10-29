@@ -264,6 +264,18 @@ export interface OcxClaudeCodeConfig {
    * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
    */
   desktopNativeModels?: boolean;
+  /**
+   * Which models the Claude Desktop 3P list carries (src/claude/desktop-model-visibility.ts).
+   * Unset lists every available model. Independent of desktopProfile tiers and of
+   * provider-wide disabledModels; other clients are unaffected.
+   */
+  desktopModelVisibility?: OcxClaudeDesktopModelVisibility;
+}
+
+/** `include`: only `routes` (new models hidden). `exclude`: all but `routes` (new models listed). */
+export interface OcxClaudeDesktopModelVisibility {
+  mode: "include" | "exclude";
+  routes: string[];
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";

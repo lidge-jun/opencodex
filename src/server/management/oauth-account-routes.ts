@@ -37,7 +37,8 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
-import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
+import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
+import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { emailMaskingEnabled } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -259,7 +260,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Omitted mode is the localhost-callback flow this route has always run.
@@ -282,13 +283,28 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const reauth = body.reauth === true || Boolean(accountId);
     if (provider === "kiro") {
       if (reauth && !accountId) return jsonResponse({ error: "Kiro reauth requires an accountId" }, 400);
+      if (body.flowId !== undefined) {
+        if (reauth || body.method !== undefined || typeof body.flowId !== "string" || body.flowId.length > 128
+          || typeof body.profileArn !== "string" || body.profileArn.length > 256) return jsonResponse({ error: "invalid Kiro profile selection" }, 400);
+        const owner = principal ?? "admin-token";
+        const baseline = kiroDeviceConfigBaseline(body.flowId, owner);
+        const status = await selectKiroDeviceProfile(body.flowId, owner, body.profileArn);
+        if (!status) return jsonResponse({ error: "unknown Kiro profile selection" }, 404);
+        if (status.state === "done") {
+          reconcileLiveConfigFromDisk(config, baseline ?? structuredClone(config));
+          reconcileLiveStateStores();
+        }
+        return jsonResponse(status);
+      }
       if (body.method !== undefined) {
-        if (body.method !== "builder-id" && body.method !== "google" && body.method !== "github") {
+        if (body.method !== "builder-id" && body.method !== "google" && body.method !== "github" && body.method !== "iam-identity-center") {
           return jsonResponse({ error: "invalid Kiro device method" }, 400);
         }
         if (reauth) return jsonResponse({ error: "native_login_is_add_only" }, 400);
+        const iam = body.method === "iam-identity-center" ? parseKiroIamOptions(body) : undefined;
+        if (body.method === "iam-identity-center" && !iam) return jsonResponse({ error: "invalid Kiro IAM portal or region" }, 400);
         try {
-          return jsonResponse(await startKiroDeviceLogin(body.method as KiroDeviceMethod, principal ?? "admin-token", readConfigDiagnostics().config));
+          return jsonResponse(await startKiroDeviceLogin(body.method as KiroDeviceMethod, principal ?? "admin-token", readConfigDiagnostics().config, iam));
         } catch {
           return jsonResponse({ error: "Kiro device login could not start" }, 409);
         }

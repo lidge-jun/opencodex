@@ -885,29 +885,29 @@ jobs:
         run: bun run src/cli/index.ts help
 
   platform-macos:
-    name: macos ${{ matrix.shard }}/3
+    name: macos ${{ matrix.shard }}/4
     needs: changes
     # Never on pull requests: macOS legs run after merge, on push to
     # main/preview, and on dispatch and the schedule.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    # Three shards. Unsharded, this job was the critical path on every green dev
-    # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
-    # 260905_test_modularization_and_windows/003), so it was split in two. The
-    # suite then outgrew two halves: across seventeen dev dispatches from
-    # 2026-10-04 to 10-12 the slower half's test step went from 867s to 1155s,
-    # and run 38214884055 cancelled macos 2/2 at this cap with 68 files left
-    # while every test it had run was passing (#6978). Replaying the duration
-    # assignment against those runs' measured per-file times puts the slowest of
-    # three shards at 635-796s of tests, about 14 minutes with setup. The cap
-    # stays 20: the suite needs another shard, not a longer wait, and a wedged
-    # shard (#4956) is still cut off as early as before. The full-membership
-    # control runs the same bounded batches without sharding on explicit dispatch.
+    # Four shards. Three replaced two after run 38214884055 hit this cap with
+    # 68 files left and no failing tests (#6978). The suite outgrew three too:
+    # run 40727740334 took 13.1-16.4m, 40743681086 12.7-13.7m, and
+    # 40756291846 15.0-17.1m. In dev lane=all run 40766068492 (b16bc0978b),
+    # macos 1/3 (123090588998) reached batch 73/88 and macos 2/3
+    # (123090589363) batch 93/93 before this cap cancelled them, with no failing
+    # tests. The cap stays 20: the suite needs another shard, not a longer wait,
+    # and a wedged shard (#4956) is still cut off as early as before. Four suite
+    # shards + control + widget/bundle request six macOS jobs for five runner
+    # slots: one queues, and each run pays one extra shard's setup overhead.
+    # The full-membership control runs the same bounded batches without sharding
+    # on explicit dispatch.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -953,7 +953,7 @@ jobs:
 
       - name: Test in fresh-process batches
         env:
-          TEST_SHARD: ${{ matrix.shard }}/3
+          TEST_SHARD: ${{ matrix.shard }}/4
           BUN_TEST_FILE_SCOPE: all
           BUN_TEST_BATCH_SIZE: '12'
           BUN_TEST_PARALLEL: '1'

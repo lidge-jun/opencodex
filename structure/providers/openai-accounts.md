@@ -259,7 +259,7 @@ and native-main refresh. Exact structured terminal codes apply only to authentic
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
 status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
-or credential material. Pool refresh errors keep that status/code without changing cooldown class.
+or credential material. Pool refresh errors keep that status/code without changing cooldown class. `mapCodexAuthContextErrorToResponse` in `src/server/responses/codex-auth-error.ts` marks only ordinary account-cooldown Responses with process-local provenance; combo reconstruction preserves it under the [combo cooldown contract](../transports/responses-failover.md#single-target-cooldown-retry-ownership). This limits restated account delays at target recording without changing account admission, quota health, probe ownership, client Retry-After or any hard-lock, credit, Reserve or transient policy.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
