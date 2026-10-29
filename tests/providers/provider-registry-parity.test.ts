@@ -1206,9 +1206,10 @@ describe("provider registry parity", () => {
 
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
-    // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    // The CLI-backed members are `key` because the turn leaves this machine and keyless because the
+    // CLI reads the operator's own sign-in. claude-cli is Claude Code; step-cli is StepCode, whose
+    // Step Plan login likewise lives in the CLI rather than in OpenCodex.
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "step-cli", "claude-cli"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {

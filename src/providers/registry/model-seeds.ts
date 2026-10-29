@@ -1209,6 +1209,48 @@ export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fro
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
 
+/**
+ * Step Plan catalog as the StepCode CLI serves it (`GET {step_plan}/v1/models`, 2026-10-17).
+ *
+ * Verified against a signed-in `step_plan` login, including `max_input_tokens` and the per-model
+ * `reasoning_effort_support_list`. The four `stepaudio-*` entries the same endpoint returns are
+ * deliberately absent: they are speech models, they hold no chat tools, and a row that routes a text
+ * turn into them answers `model_invalid`. `liveModels` stays false on the registry row for the same
+ * reason Claude Code's row does — the CLI, not the adapter's own HTTP path, owns discovery.
+ */
+export const STEP_CLI_MODELS = [
+  "step-5-preview",
+  "step-3.7-flash",
+  "step-3.5-flash",
+  "step-3.5-flash-2603",
+  "step-router-v1",
+];
+
+export const STEP_CLI_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "step-5-preview": 1_024_000,
+  "step-3.7-flash": 262_144,
+  "step-3.5-flash": 262_144,
+  "step-3.5-flash-2603": 262_144,
+  "step-router-v1": 262_144,
+};
+
+/**
+ * Every published model is text-only for this route.
+ *
+ * `step-5-preview` and `step-3.7-flash` do accept images upstream, but nothing verifies that a
+ * headless StepCode turn hands those bytes to the model, and the adapter refuses image input for the
+ * same reason the Qoder and Claude Code rows do. Advertising a modality the route cannot honour makes
+ * route selection pick this row for a picture it then answers blind; the vision sidecar still
+ * captions images into text before they arrive.
+ */
+export const STEP_CLI_NO_VISION_MODELS = [...STEP_CLI_MODELS];
+
+/**
+ * The three档 Step advertises. `xhigh` and `max` are not advertised and must not be offered: the
+ * service maps them onto `high` server-side, so publishing them would let the client believe it chose
+ * a depth it did not.
+ */
+export const STEP_CLI_REASONING_EFFORTS = ["low", "medium", "high"];
 // AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-26
 // (https://aistupidlevel.info/router/docs#strategies). Each mode picks a model per request, so it
 // declares conservative limits that hold for any pick: a 262,144-token window (the pool's smallest,

@@ -111,6 +111,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEP_CLI_MODELS,
+  STEP_CLI_MODEL_CONTEXT_WINDOWS,
+  STEP_CLI_NO_VISION_MODELS,
+  STEP_CLI_REASONING_EFFORTS,
   AISTUPIDLEVEL_ROUTING_MODES,
   AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
   AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
@@ -1601,6 +1605,40 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: STEPFUN_NO_VISION_MODELS,
     reasoningEfforts: STEPFUN_REASONING_EFFORTS,
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
+  },
+  {
+    // StepCode (阶跃星辰) CLI as the transport for a Step Plan subscription (§三十一). The CLI owns the
+    // account: this row stores no Step token, reads none and injects none, so the only credential in
+    // play is the operator's own `step login`, which the CLI resolves itself.
+    //
+    // GOVERNANCE: routing a Step Plan subscription through a third-party agent harness is Step
+    // 星辰's call, not OpenCodex's — flagged for maintainer review alongside the CodeBuddy and Claude
+    // Code rows above. The Step Plan terms document `step_plan` endpoints for third-party coding
+    // tools, and `--sdk-stdio` is StepCode's own published, MIT-licensed external-client surface; that
+    // is the strongest authorization evidence available without a written permission, and it is not
+    // the same thing as one.
+    id: "step-cli",
+    label: "StepCode CLI (subscription)",
+    adapter: "step-cli",
+    // The destination the subscription's traffic reaches. OpenCodex never sends this host: the CLI
+    // performs every request, so the value exists so the adapter can fail closed when a row is
+    // repointed somewhere this route cannot speak to.
+    baseUrl: "https://api.stepfun.com/step_plan",
+    // `key` + `keyOptional` for the same reason as `claude-cli`: the traffic leaves the machine, so
+    // `local` would misreport the row, but the route is keyless, which is what `keyOptional` states.
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://platform.stepfun.com/docs/zh/step-plan/quick-start",
+    defaultModel: "step-5-preview",
+    models: [...STEP_CLI_MODELS],
+    // Static roster, exactly like the Claude Code and CodeBuddy rows. The CLI serves its catalog over
+    // the SDK stdio protocol rather than at an HTTP path the adapter polls, and a live-discovery
+    // attempt against this row would 404 and then fall back to these ids anyway.
+    liveModels: false,
+    modelContextWindows: { ...STEP_CLI_MODEL_CONTEXT_WINDOWS },
+    noVisionModels: [...STEP_CLI_NO_VISION_MODELS],
+    reasoningEfforts: [...STEP_CLI_REASONING_EFFORTS],
+    note: "Runs Step Plan subscription traffic through StepCode's own harness: the official `step` CLI over its length-prefixed SDK stdio protocol, one long-lived process per conversation. OpenCodex stores no Step token, reads none and injects none — the CLI signs in with `step login` and bills the Step Plan account itself. The sign-in is the one of the user this proxy runs as, so every request served through this row spends that same account. Tool ownership stays with the client: the adapter declares the request's tools as StepCode SDK tools and lets the CLI call back over stdio, so no tool ever executes inside Step and approval never leaves the client. Requires the StepCode CLI (`~/.stepcode/bin/step`) and a signed-in Step Plan session. This route shares the CLI family's 128-tool / 2 MiB catalog ceiling, which a real Codex client can exceed because it flattens every MCP server's tools into the function catalog (measured on Codex 0.162.0: 1749 tools, 2.5 MB); the refusal names both counts so the cause is visible, and the fix is to disable or narrow MCP servers for this provider. LIMITATIONS: StepCode carries conversation history only inside its own process, so one conversation needs one process and a process that dies cannot be reconstructed; a tool that takes longer than two minutes to come back exceeds the CLI's own tool-result window; and the CLI's session system prompt cannot be replaced, so a client instruction is prepended to the turn rather than installed as the system prompt. Routing authorization flagged for maintainer security review.",
   },
   {
     // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns

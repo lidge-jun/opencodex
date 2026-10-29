@@ -1,4 +1,4 @@
-import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -23,6 +23,7 @@ import {
 } from "./protocol";
 import { isBatchDispatcher, resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
 import { inspectBatchDispatcher, type ReadDispatcherFn } from "./batch-dispatcher";
+import { killWindowsProcessTree } from "./process-tree";
 
 /** Injectable spawn for tests; production uses node:child_process. */
 export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -57,14 +58,6 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 /** Bound captured stderr so an error message can never carry an unbounded (or secret) payload. */
 const MAX_STDERR_BYTES = 8 * 1024;
-
-function killWindowsProcessTree(pid: number): void {
-  const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-  execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
-    stdio: "pipe",
-    windowsHide: true,
-  });
-}
 
 /** Env keys a CLI needs to run; everything else is dropped so the child env is scoped and deterministic. */
 const INHERITED_ENV_KEYS = [
