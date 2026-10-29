@@ -139,7 +139,7 @@ service manager has installed for opencodex, read-only and fail-closed. It reads
 definition itself and parses the `CODEX_HOME` and `OPENCODEX_HOME` values embedded in it, because
 installation writes the definition before the state file: an interrupted reinstall can leave the
 two naming different homes, and on macOS a logged-out user can have the plist on disk with no GUI
-domain to query. The probe returns what it saw and does not decide ownership; callers such as
+domain to query (`gui/` 125 is unreachable only when a bounded read of the complete IOConsoleUsers roster excludes the UID; unreadable evidence or `user/` 125 stays unknown, #7697). The probe returns what it saw and does not decide ownership; callers such as
 `src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
 read-only and time-bounded, so it is safe while the proxy runs under that same manager.
 Systemd home parsing in `src/service/systemd-env.ts` decodes the generated quoted escapes and

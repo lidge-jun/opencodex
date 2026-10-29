@@ -3,6 +3,8 @@ title: Codex App model seçicisi
 description: opencodex modellerinin paylaşılan Codex kataloğu aracılığıyla Codex App, Codex CLI ve Codex TUI içinde nasıl göründüğü.
 ---
 
+Varsayılan `false`. `config.json` içinde `"omitDisabledNativeModels": true` ayarlayıp `ocx sync` çalıştırarak devre dışı native satırları katalogdan, önbellekten ve Codex biçimli HTTP model listesinden çıkarabilirsiniz. Çıkarmadan önce doğrulanan kalıtım şablonu routed satırların meta verilerini korur. Doğrudan isteklerin yönlendirmesi değişmez. Aşağıdaki gizleme açıklamaları varsayılan ayarlar içindir.
+
 opencodex, Codex App'i yamalamaz. Codex CLI/TUI'nin kullandığı aynı Codex
 yapılandırmasını ve model kataloğunu yazar. Uygulama sunucusu (app-server) bu
 paylaşılan durumu okur, ancak bazı Codex Desktop sürümleri oluşturucuda

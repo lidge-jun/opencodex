@@ -43,6 +43,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `providers` | `Record<string, OcxProviderConfig>` | — |プロバイダー名からプロバイダー設定へのマップ。 |
 | `openaiProviderTierVersion?` | `2` |移行によって設定される |単一のオプション対応 OpenAI プロジェクションを完了としてマークします。 |
 | `disabledModels?` | `string[]` | — | Codex catalog と `/v1/models` から非表示にする model。直接の proxy 呼び出しはブロックしません。routed id は一覧から削除されます。account-qualified native id は該当する selector row だけを非表示にし、bare native GPT id は bare row とその model の全 account-selector row を非表示にします。Models ページに表示されるのは bare native 行と routed 行だけです。selector-qualified 行を 1 つだけ非表示にするには、この設定フィールドを直接編集してください。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 既定値は `false` です。`config.json` に `"omitDisabledNativeModels": true` を設定して `ocx sync` を実行すると、無効な native 行を catalog、cache、Codex 形式の HTTP モデル一覧から除外します。除外前に検証した継承テンプレートを保持するため routed 行のメタデータは変わりません。直接リクエストのルーティングも変わりません。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | プロバイダーごとの有効なコンテキスト上限。通常のウィンドウは縮小されます。長いウィンドウに対応したネイティブモデルは、そのモデルが対応する上限まで拡張できます。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | プロバイダーごとに最後に選択した上限。無効にしても保持され、この値だけで上限が有効になることはありません。有効な値が保存済みの値より優先されます。 |
 | `contextCapValue?` | `number` | `350000` | 初回の有効化で使う既定値。再び有効にすると、そのプロバイダーの選択値を復元します。`setAll: true` とともにグローバル値を変更すると、有効な上限だけを更新します。値を指定せずに `setAll: true` を送ると、設定済みの全プロバイダーの上限を現在のグローバル値で有効にします。 |

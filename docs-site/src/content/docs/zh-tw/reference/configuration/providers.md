@@ -43,6 +43,7 @@ ocx models provider openrouter on
 | `providers` | `Record<string, OcxProviderConfig>` | — | 供應商名稱到供應商設定的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由遷移設定 | 標記單一選項感知的 OpenAI projection 已完成。 |
 | `disabledModels?` | `string[]` | — | 對 Codex 目錄與 `/v1/models` 隱藏的模型，但不阻擋直接代理呼叫。路由 id 從清單中移除；裸原生 GPT id 取得 `visibility: "hide"`。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 預設值為 `false`。在 `config.json` 中設定 `"omitDisabledNativeModels": true` 並執行 `ocx sync`，即可從目錄、快取與 Codex 格式的 HTTP 模型清單中移除已停用的 native 列。移除前經過驗證的繼承範本會另外保留，因此 routed 列的中繼資料不變，直接請求的路由也不變。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 各供應商目前生效的上下文上限。一般視窗只能縮小；支援長視窗的原生模型可以擴展到該模型支援的上限。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 各供應商最後選擇的上限，停用後仍保留。僅儲存這些值不會啟用上限。生效中的值優先於儲存的選擇值。 |
 | `contextCapValue?` | `number` | `350000` | 首次啟用時使用的預設值。再次啟用時恢復該供應商的選擇值。修改全域值時附帶 `setAll: true` 只會更新已啟用的上限；不帶值的 `setAll: true` 會以目前全域值啟用所有已設定供應商的上限。 |
