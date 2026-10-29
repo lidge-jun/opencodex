@@ -126,6 +126,9 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       }));
     } else {
       console.log(`CC-Switch (${result.mode}): ${result.discovered} discovered, ${result.eligible} eligible, ${result.imported} imported, ${result.conflicts} conflicts, ${result.invalid} invalid.`);
+      if (apply && result.imported > 0) {
+        console.log("Imported destination URLs (verify these endpoints from a trusted CC-Switch source before adding credentials):");
+      }
       for (const p of result.providers) {
         const modelText = p.defaultModel ? ` model=${terminalSafeText(p.defaultModel)}` : "";
         console.log(`  ${terminalSafeText(p.name)} (${terminalSafeText(p.appType)} -> ${terminalSafeText(p.adapter)}) ${terminalSafeText(p.baseUrl)}${modelText}`);
@@ -136,9 +139,9 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       }
       console.log(apply
         ? (result.imported > 0
-          ? "Keyless provider entries saved. Start the proxy ('ocx start') and add credentials with 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo while stopped with 'ocx provider import-cc-switch --restore'."
+          ? "Keyless provider entries saved. Only add credentials to endpoints you trust: start the proxy ('ocx start') and run 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo while stopped with 'ocx provider import-cc-switch --restore'."
           : "No eligible non-conflicting providers were imported; configuration and journal are unchanged.")
-        : "Preview only (no keys extracted or written). Stop the proxy before repeating with --apply.");
+        : "Preview only (strict metadata policy; no keys extracted or written). Verify destination URLs from a trusted source and stop the proxy before repeating with --apply.");
     }
     return result.invalid > 0 && result.eligible === 0 ? 1 : 0;
   } catch (err) {

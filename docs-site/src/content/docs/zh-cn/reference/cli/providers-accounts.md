@@ -65,7 +65,7 @@ ocx models live --provider ark --json
 
 ### 无密钥导入 CC-Switch 提供商
 
-`ocx provider import-cc-switch` 仅从 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 文件只读提取非机密元数据（ID、名称、base URL、协议适配器与默认模型）：SQLite 仅在 SQL 层投影非机密标量字段，JSON/TOML 的临时字节缓冲区会在扫描后立即清零，不会将 API 密钥提取或写入磁盘。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`；应用后先启动代理（`ocx start`），再通过管道标准输入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）添加密钥。`--restore` 仅移除未修改且未被路由引用的导入条目。
+`ocx provider import-cc-switch` 仅从受信任的本地 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 文件按严格的长度、字符集与分段策略只读提取提供商 ID、应用类型、base URL、协议适配器与默认模型。自由文本名称、TOML 注释与凭据字段在解码前即被丢弃，临时字节缓冲区在 `finally` 中清零。由于后续添加的密钥会发送到导入的 `baseUrl`，请仅从受信任的源文件导入并核对 `--apply` 输出的目标 URL。默认预览（`--source <FILE>`）不写入任何内容；`--apply` 与 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 选择条目，对本地或私有网络地址加上 `--allow-private-network`；应用后先启动代理（`ocx start`），再通过管道标准输入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）添加密钥。`--restore` 会以只读字节方式检查 `auth.json`，仅移除未修改且未被路由或 OAuth 账户引用的导入条目。
 
 ## 认证
 

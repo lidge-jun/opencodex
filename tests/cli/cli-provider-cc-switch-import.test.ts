@@ -42,7 +42,6 @@ function makeDeps(calls: unknown[], invalid = 0, eligible = 1): CcSwitchImportCo
         providers: eligible > 0 ? [{
           name: "acme",
           sourceId: "acme",
-          displayName: "Acme",
           appType: "claude",
           adapter: "anthropic",
           baseUrl: "https://api.acme.example",

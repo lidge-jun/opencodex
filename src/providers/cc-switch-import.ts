@@ -2,17 +2,27 @@
  * Keyless CC-Switch provider configuration importer (preview, selective apply, and journaled restore).
  *
  * Security & privacy boundary:
- * - Reads only non-secret provider metadata (id, name, app_type, baseUrl, wire adapter, defaultModel)
+ * - Reads only non-secret provider metadata (id, app_type, baseUrl, wire adapter, defaultModel)
  *   from an explicitly supplied CC-Switch SQLite database (v3.10+) or legacy JSON file.
- * - Never queries, decodes, retains, logs, or writes API keys, bearer tokens, or auth headers.
- * - Source files are opened read-only and verified as bounded plain regular files.
+ * - Drops free-text display names, TOML comments, and credential fields before decoding;
+ *   never queries, decodes, retains, logs, or writes API keys, bearer tokens, or auth headers.
+ * - Source files are opened read-only with O_NOFOLLOW | O_NONBLOCK and descriptor-verified.
  * - Apply and restore run only while the proxy is stopped, under the service ownership lease and
  *   the shared config mutation lock, with a durable streaming journal for rollback.
  */
-import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   getConfigDir,
   getConfigPath,
@@ -28,36 +38,47 @@ import { readConfigFileSnapshot } from "../config/diagnostics";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { readAlivePid, readRuntimePort } from "../config/process-state";
 import { providerBaseUrlConfigError } from "../config/provider-validation";
-import { assertPlainLocalPath } from "../codex/orca-auth-source";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { providerDestinationConfigError } from "../lib/destination-policy";
-import { getAuthStorePath, normalizeAuthStoreBuffer } from "../oauth/store";
+import { getAuthStorePath } from "../oauth/store";
 import { rewriteProviderReferences } from "./provider-id-rewrite";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { serviceStatePaths } from "../service/state";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import {
+  CcSwitchImportError,
+  MAX_JSON_BYTES,
+  SECRET_REFUSED_SENTINEL,
+  isAllowedMetadataBytes,
+  looksLikeSecretValue,
+  parseCodexTomlBytes,
+  readSourceRows,
+  readSqliteRows,
+  resolveCodexProjection,
+  scanCcSwitchJsonBytes,
+  setCcSwitchSourceOpenHookForTests,
+  type CcSwitchInvalidReason,
+  type CodexTomlProjection,
+  type MetadataFieldKind,
+  type RawExtractedRow,
+} from "./cc-switch-import-source";
 
-export class CcSwitchImportError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CcSwitchImportError";
-  }
-}
-
-export type CcSwitchInvalidReason =
-  | "missing_base_url"
-  | "invalid_base_url"
-  | "private_network_refused"
-  | "invalid_provider_name"
-  | "unsupported_app_type"
-  | "ambiguous_codex_provider"
-  | "secret_in_nonsecret_field"
-  | "malformed_entry";
+export {
+  CcSwitchImportError,
+  SECRET_REFUSED_SENTINEL,
+  isAllowedMetadataBytes,
+  parseCodexTomlBytes,
+  readSqliteRows,
+  scanCcSwitchJsonBytes,
+  setCcSwitchSourceOpenHookForTests,
+  type CcSwitchInvalidReason,
+  type CodexTomlProjection,
+  type MetadataFieldKind,
+};
 
 export interface CcSwitchCandidateProvider {
   name: string;
   sourceId: string;
-  displayName: string;
   appType: string;
   adapter: string;
   baseUrl: string;
@@ -90,10 +111,6 @@ export type CcSwitchImportResult = CcSwitchImportPreviewOrApplyResult | CcSwitch
 
 export const CC_SWITCH_IMPORT_JOURNAL_FILENAME = "cc-switch-provider-import-journal.json";
 const JOURNAL_SCHEMA_VERSION = 1;
-const MAX_SQLITE_BYTES = 32 * 1024 * 1024;
-const MAX_JSON_BYTES = 4 * 1024 * 1024;
-const MAX_CODEX_TOML_BYTES = 64 * 1024;
-const SQLITE_MAGIC_PREFIX = "SQLite format 3";
 
 interface JournalEntry {
   name: string;
@@ -109,47 +126,6 @@ interface ImportJournal {
   importId: string;
   createdAt: number;
   entries: JournalEntry[];
-}
-
-interface RawExtractedRow {
-  id: string;
-  appType: string;
-  name: string;
-  settingsType: string | null;
-  claudeBaseUrl: string | null;
-  claudeModel: string | null;
-  genericBaseUrl: string | null;
-  genericModel: string | null;
-  genericWireApi: string | null;
-  codexTomlLines: string | null;
-  codexProjection?: { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason };
-}
-
-// Token-like prefixes or bearer markers that must never appear inside extracted non-secret fields.
-const TOKEN_LIKE_VALUE = /(?:^|[^A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{8,}|rk-[A-Za-z0-9_-]{8,}|pk-[A-Za-z0-9_-]{8,}|ak-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{12,}|gho_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{6,})/i;
-const HIGH_ENTROPY_PATH_SEGMENT = /^[A-Za-z0-9_-]{48,}$/;
-
-function hasControlChars(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const c = value.charCodeAt(i);
-    if (c <= 0x1f || c === 0x7f) return true;
-  }
-  return false;
-}
-
-function looksLikeSecretValue(value: string, isUrl = false): boolean {
-  if (hasControlChars(value) || TOKEN_LIKE_VALUE.test(value)) return true;
-  if (isUrl) {
-    try {
-      const parsed = new URL(value);
-      for (const seg of parsed.pathname.split("/")) {
-        if (HIGH_ENTROPY_PATH_SEGMENT.test(seg)) return true;
-      }
-    } catch {
-      return false;
-    }
-  }
-  return false;
 }
 
 function normalizeProviderSlug(raw: string): string {
@@ -269,932 +245,15 @@ function readJournal(journalPath: string): ImportJournal | null {
   };
 }
 
-/**
- * Syntax-aware, single-line TOML projection for Codex settings_config.config.
- * Operates on a transient UTF-8 byte buffer (zeroed by the caller in finally) and decodes ONLY:
- * - [table] headers (bare or quoted)
- * - root model, model_provider, base_url, openai_base_url, wire_api
- * - [model_providers.<key>] base_url and wire_api
- * Rejects triple-quoted strings, inline tables, arrays, unclosed quotes, or non-assignment lines.
- */
-export interface CodexTomlProjection {
-  model?: string;
-  modelProvider?: string;
-  rootBaseUrl?: string;
-  rootWireApi?: string;
-  providers: Map<string, { baseUrl?: string; wireApi?: string }>;
-}
-
-function parseTomlQuotedString(line: string, startIndex: number): { value: string; restIndex: number } | null {
-  const quote = line[startIndex];
-  if (quote !== '"' && quote !== "'") return null;
-  if (line.slice(startIndex, startIndex + 3) === quote.repeat(3)) return null;
-  let out = "";
-  let i = startIndex + 1;
-  while (i < line.length) {
-    const ch = line[i]!;
-    if (quote === '"' && ch === "\\") {
-      i++;
-      if (i >= line.length) return null;
-      const esc = line[i]!;
-      if (esc === '"' || esc === "\\" || esc === "/") out += esc;
-      else if (esc === "n") out += "\n";
-      else if (esc === "r") out += "\r";
-      else if (esc === "t") out += "\t";
-      else if (esc === "b") out += "\b";
-      else if (esc === "f") out += "\f";
-      else if (esc === "u" && /^[0-9A-Fa-f]{4}$/.test(line.slice(i + 1, i + 5))) {
-        out += String.fromCharCode(parseInt(line.slice(i + 1, i + 5), 16));
-        i += 4;
-      } else return null;
-      i++;
-      continue;
-    }
-    if (ch === quote) return { value: out, restIndex: i + 1 };
-    if (hasControlChars(ch)) return null;
-    out += ch;
-    i++;
-  }
-  return null;
-}
-
-function hasOnlyTomlCommentOrSpace(line: string, fromIndex: number): boolean {
-  const rest = line.slice(fromIndex).trimStart();
-  return rest === "" || rest.startsWith("#");
-}
-
-function parseTableHeader(trimmed: string): { kind: "root_other" } | { kind: "model_provider"; id: string } | null {
-  if (!trimmed.startsWith("[") || trimmed.startsWith("[[")) return null;
-  let i = 1;
-  const segments: string[] = [];
-  while (i < trimmed.length) {
-    while (i < trimmed.length && (trimmed[i] === " " || trimmed[i] === "\t")) i++;
-    if (i >= trimmed.length) return null;
-    let seg = "";
-    if (trimmed[i] === '"' || trimmed[i] === "'") {
-      const parsed = parseTomlQuotedString(trimmed, i);
-      if (!parsed) return null;
-      seg = parsed.value;
-      i = parsed.restIndex;
-    } else {
-      const m = /^[A-Za-z0-9_-]+/.exec(trimmed.slice(i));
-      if (!m) return null;
-      seg = m[0];
-      i += seg.length;
-    }
-    if (!seg) return null;
-    segments.push(seg);
-    while (i < trimmed.length && (trimmed[i] === " " || trimmed[i] === "\t")) i++;
-    if (trimmed[i] === ".") {
-      i++;
-      continue;
-    }
-    if (trimmed[i] === "]") {
-      if (!hasOnlyTomlCommentOrSpace(trimmed, i + 1)) return null;
-      if (segments.length === 2 && segments[0] === "model_providers") {
-        return { kind: "model_provider", id: segments[1]! };
-      }
-      return { kind: "root_other" };
-    }
-    return null;
-  }
-  return null;
-}
-
-const ALLOWED_TOML_KEYS = new Set(["model", "model_provider", "base_url", "openai_base_url", "wire_api"]);
-
-export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
-  if (bytes.length > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
-  const projection: CodexTomlProjection = { providers: new Map() };
-  let currentSection: { kind: "root" } | { kind: "model_provider"; id: string } | { kind: "other" } = { kind: "root" };
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let lineStart = 0;
-
-  for (let idx = 0; idx <= bytes.length; idx++) {
-    if (idx < bytes.length && bytes[idx] !== 0x0a) continue;
-    let lineEnd = idx;
-    if (lineEnd > lineStart && bytes[lineEnd - 1] === 0x0d) lineEnd--;
-    const slice = bytes.subarray(lineStart, lineEnd);
-    lineStart = idx + 1;
-
-    let p = 0;
-    while (p < slice.length && (slice[p] === 0x20 || slice[p] === 0x09)) p++;
-    if (p >= slice.length || slice[p] === 0x23) continue;
-    if (slice[p] === 0x5b) {
-      let headerLine: string;
-      try { headerLine = decoder.decode(slice.subarray(p)); } catch { return { ok: false, reason: "malformed_entry" }; }
-      if (headerLine === "[__MULTILINE_REFUSED__]" || headerLine === "[__MALFORMED_LINE__]") {
-        return { ok: false, reason: "malformed_entry" };
-      }
-      const header = parseTableHeader(headerLine);
-      if (!header) return { ok: false, reason: "malformed_entry" };
-      currentSection = header.kind === "model_provider" ? header : { kind: "other" };
-      continue;
-    }
-
-    let eq = -1;
-    let inKeyQuote = 0;
-    for (let k = p; k < slice.length; k++) {
-      const b = slice[k]!;
-      if (inKeyQuote === 0 && b === 0x23) break;
-      if (inKeyQuote === 0 && (b === 0x22 || b === 0x27)) { inKeyQuote = b; continue; }
-      if (inKeyQuote !== 0 && b === 0x5c && inKeyQuote === 0x22) { k++; continue; }
-      if (inKeyQuote !== 0 && b === inKeyQuote) { inKeyQuote = 0; continue; }
-      if (inKeyQuote === 0 && b === 0x3d) { eq = k; break; }
-    }
-    if (eq < 0) return { ok: false, reason: "malformed_entry" };
-
-    let keyRaw: string;
-    try { keyRaw = decoder.decode(slice.subarray(p, eq)).trim(); } catch { return { ok: false, reason: "malformed_entry" }; }
-    let key = keyRaw;
-    if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-      const kp = parseTomlQuotedString(key, 0);
-      if (!kp || kp.restIndex !== key.length) return { ok: false, reason: "malformed_entry" };
-      key = kp.value;
-    } else if (!/^[A-Za-z0-9_-]+$/.test(key)) {
-      return { ok: false, reason: "malformed_entry" };
-    }
-
-    let vStart = eq + 1;
-    while (vStart < slice.length && (slice[vStart] === 0x20 || slice[vStart] === 0x09)) vStart++;
-    if (vStart >= slice.length) return { ok: false, reason: "malformed_entry" };
-    if (
-      vStart + 2 < slice.length
-      && ((slice[vStart] === 0x22 && slice[vStart + 1] === 0x22 && slice[vStart + 2] === 0x22)
-        || (slice[vStart] === 0x27 && slice[vStart + 1] === 0x27 && slice[vStart + 2] === 0x27))
-    ) {
-      return { ok: false, reason: "malformed_entry" };
-    }
-
-    const relevant =
-      (currentSection.kind === "root" && ALLOWED_TOML_KEYS.has(key))
-      || (currentSection.kind === "model_provider" && (key === "base_url" || key === "wire_api"));
-    if (!relevant) {
-      let q = 0;
-      let depth = 0;
-      for (let k = vStart; k < slice.length; k++) {
-        const b = slice[k]!;
-        if (q === 0 && b === 0x23) break;
-        if (q === 0 && (b === 0x22 || b === 0x27)) { q = b; continue; }
-        if (q !== 0 && b === 0x5c && q === 0x22) { k++; continue; }
-        if (q !== 0 && b === q) { q = 0; continue; }
-        if (q === 0 && (b === 0x5b || b === 0x7b)) depth++;
-        if (q === 0 && (b === 0x5d || b === 0x7d)) {
-          depth--;
-          if (depth < 0) return { ok: false, reason: "malformed_entry" };
-        }
-      }
-      if (q !== 0 || depth !== 0) return { ok: false, reason: "malformed_entry" };
-      continue;
-    }
-
-    let valPart: string;
-    try { valPart = decoder.decode(slice.subarray(vStart)); } catch { return { ok: false, reason: "malformed_entry" }; }
-    const parsedVal = parseTomlQuotedString(valPart, 0);
-    if (!parsedVal || !hasOnlyTomlCommentOrSpace(valPart, parsedVal.restIndex)) {
-      return { ok: false, reason: "malformed_entry" };
-    }
-    const value = parsedVal.value.trim();
-    if (!value) return { ok: false, reason: "malformed_entry" };
-
-    if (currentSection.kind === "root") {
-      if (key === "model") projection.model = value;
-      else if (key === "model_provider") projection.modelProvider = value;
-      else if (key === "base_url" || key === "openai_base_url") projection.rootBaseUrl = value;
-      else if (key === "wire_api") projection.rootWireApi = value;
-    } else if (currentSection.kind === "model_provider") {
-      const entry = projection.providers.get(currentSection.id) ?? {};
-      if (key === "base_url") entry.baseUrl = value;
-      else if (key === "wire_api") entry.wireApi = value;
-      projection.providers.set(currentSection.id, entry);
-    }
-  }
-
-  return { ok: true, value: projection };
-}
-
-function resolveCodexProjection(proj: CodexTomlProjection): { ok: true; baseUrl: string; wireApi: string; defaultModel?: string } | { ok: false; reason: CcSwitchInvalidReason } {
-  let baseUrl: string | undefined;
-  let wireApi = proj.rootWireApi ?? "responses";
-  if (proj.modelProvider !== undefined) {
-    const selected = proj.providers.get(proj.modelProvider);
-    if (!selected?.baseUrl) return { ok: false, reason: "missing_base_url" };
-    baseUrl = selected.baseUrl;
-    if (selected.wireApi) wireApi = selected.wireApi;
-  } else if (proj.providers.size > 1) {
-    return { ok: false, reason: "ambiguous_codex_provider" };
-  } else if (proj.providers.size === 1) {
-    const only = [...proj.providers.values()][0]!;
-    if (!only.baseUrl) return { ok: false, reason: "missing_base_url" };
-    baseUrl = only.baseUrl;
-    if (only.wireApi) wireApi = only.wireApi;
-  } else if (proj.rootBaseUrl) {
-    baseUrl = proj.rootBaseUrl;
-  } else {
-    return { ok: false, reason: "missing_base_url" };
-  }
-  return {
-    ok: true,
-    baseUrl,
-    wireApi,
-    ...(proj.model ? { defaultModel: proj.model } : {}),
-  };
-}
-
-function sqlLineExpr(col: string): string {
-  return `trim(replace(substr(${col}, 1, instr(${col}, char(10)) - 1), char(13), ''))`;
-}
-
-function sqlModelProvidersHeaderPredicate(line: string): string {
-  const inner = `trim(substr(${line}, 2, instr(${line}, ']') - 2))`;
-  const afterKey = `ltrim(substr(${inner}, 16))`;
-  const seg = `trim(substr(${afterKey}, 2))`;
-  return `(
-    substr(${line}, 1, 1) = '['
-    AND substr(${line}, 1, 2) != '[['
-    AND instr(${line}, ']') > 1
-    AND substr(${inner}, 1, 15) = 'model_providers'
-    AND substr(${afterKey}, 1, 1) = '.'
-    AND ${seg} != ''
-    AND (
-      (
-        substr(${seg}, 1, 1) = '"'
-        AND length(${seg}) >= 3
-        AND substr(${seg}, -1, 1) = '"'
-        AND substr(replace(${seg}, char(92) || char(92), ''), -2, 2) != (char(92) || '"')
-        AND instr(replace(replace(substr(${seg}, 2, length(${seg}) - 2), char(92) || char(92), ''), char(92) || char(34), ''), '"') = 0
-      )
-      OR (
-        substr(${seg}, 1, 1) = ''''
-        AND length(${seg}) >= 3
-        AND substr(${seg}, -1, 1) = ''''
-        AND instr(substr(${seg}, 2, length(${seg}) - 2), '''') = 0
-      )
-      OR (
-        substr(${seg}, 1, 1) NOT IN ('"', '''')
-        AND instr(${seg}, '.') = 0
-        AND instr(${seg}, ' ') = 0
-        AND instr(${seg}, char(9)) = 0
-      )
-    )
-  )`;
-}
-
-const SQLITE_SAFE_QUERY = `
-WITH RECURSIVE
-  base AS (
-    SELECT
-      rowid AS rid,
-      CAST(id AS TEXT) AS id,
-      CAST(app_type AS TEXT) AS app_type,
-      CAST(COALESCE(name, id) AS TEXT) AS name,
-      COALESCE(sort_index, 0) AS sort_ord,
-      CASE WHEN json_valid(settings_config) THEN json_type(settings_config) ELSE NULL END AS settings_type,
-      CASE WHEN json_valid(settings_config) AND json_type(settings_config, ?1) = 'text' THEN json_extract(settings_config, ?1) ELSE NULL END AS claude_base_url,
-      CASE
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?2) = 'text' THEN json_extract(settings_config, ?2)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?3) = 'text' THEN json_extract(settings_config, ?3)
-        ELSE NULL
-      END AS claude_model,
-      CASE
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?4) = 'text' THEN json_extract(settings_config, ?4)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?5) = 'text' THEN json_extract(settings_config, ?5)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?6) = 'text' THEN json_extract(settings_config, ?6)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?7) = 'text' THEN json_extract(settings_config, ?7)
-        ELSE NULL
-      END AS generic_base_url,
-      CASE
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?8) = 'text' THEN json_extract(settings_config, ?8)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?9) = 'text' THEN json_extract(settings_config, ?9)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?10) = 'text' THEN json_extract(settings_config, ?10)
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?11) = 'text' THEN json_extract(settings_config, ?11)
-        ELSE NULL
-      END AS generic_model,
-      CASE WHEN json_valid(settings_config) AND json_type(settings_config, ?12) = 'text' THEN json_extract(settings_config, ?12) ELSE NULL END AS generic_wire_api,
-      CASE
-        WHEN json_valid(settings_config) AND json_type(settings_config, ?13) = 'text' THEN
-          CASE
-            WHEN length(CAST(json_extract(settings_config, ?13) AS BLOB)) > ${MAX_CODEX_TOML_BYTES}
-              THEN '[__MALFORMED_LINE__]' || char(10)
-            WHEN instr(json_extract(settings_config, ?13), '"""') > 0 OR instr(json_extract(settings_config, ?13), '''''''') > 0
-              THEN '[__MULTILINE_REFUSED__]' || char(10)
-            ELSE json_extract(settings_config, ?13) || char(10)
-          END
-        ELSE NULL
-      END AS raw_cfg
-    FROM providers
-  ),
-  lines(rid, line, rest, idx, sec) AS (
-    SELECT
-      rid,
-      ${sqlLineExpr("raw_cfg")},
-      substr(raw_cfg, instr(raw_cfg, char(10)) + 1),
-      1,
-      CASE
-        WHEN substr(${sqlLineExpr("raw_cfg")}, 1, 1) = '[' THEN
-          CASE
-            WHEN ${sqlModelProvidersHeaderPredicate(sqlLineExpr("raw_cfg"))} THEN 'mp'
-            ELSE 'other'
-          END
-        ELSE 'root'
-      END
-    FROM base WHERE raw_cfg IS NOT NULL AND instr(raw_cfg, char(10)) > 0
-    UNION ALL
-    SELECT
-      rid,
-      ${sqlLineExpr("rest")},
-      substr(rest, instr(rest, char(10)) + 1),
-      idx + 1,
-      CASE
-        WHEN substr(${sqlLineExpr("rest")}, 1, 1) = '[' THEN
-          CASE
-            WHEN ${sqlModelProvidersHeaderPredicate(sqlLineExpr("rest"))} THEN 'mp'
-            ELSE 'other'
-          END
-        ELSE sec
-      END
-    FROM lines WHERE instr(rest, char(10)) > 0 AND idx <= 500
-  ),
-  projected_lines AS (
-    SELECT rid, idx,
-      CASE
-        WHEN idx > 500 THEN '[__MALFORMED_LINE__]'
-        WHEN line = '' OR substr(line, 1, 1) = '#' THEN NULL
-        WHEN line IN ('[__MULTILINE_REFUSED__]', '[__MALFORMED_LINE__]') THEN line
-        WHEN substr(line, 1, 1) = '[' THEN
-          CASE
-            WHEN sec = 'mp' AND instr(line, ']') > 0 THEN substr(line, 1, instr(line, ']'))
-            WHEN instr(line, ']') > 0 THEN '[other]'
-            ELSE '[__MALFORMED_LINE__]'
-          END
-        WHEN instr(line, '=') = 0 THEN '[__MALFORMED_LINE__]'
-        WHEN sec = 'root' AND trim(trim(substr(line, 1, instr(line, '=') - 1)), ' "''') IN ('model', 'model_provider', 'base_url', 'openai_base_url', 'wire_api')
-          THEN line
-        WHEN sec = 'mp' AND trim(trim(substr(line, 1, instr(line, '=') - 1)), ' "''') IN ('base_url', 'wire_api')
-          THEN line
-        ELSE 'ignored_key = "omitted"'
-      END AS safe_line
-    FROM lines
-  )
-SELECT
-  b.rid AS rid,
-  b.id AS id,
-  b.app_type AS appType,
-  b.name AS name,
-  b.settings_type AS settingsType,
-  b.claude_base_url AS claudeBaseUrl,
-  b.claude_model AS claudeModel,
-  b.generic_base_url AS genericBaseUrl,
-  b.generic_model AS genericModel,
-  b.generic_wire_api AS genericWireApi,
-  p.idx AS lineIdx,
-  p.safe_line AS safeLine
-FROM base b
-LEFT JOIN projected_lines p ON b.rid = p.rid AND p.safe_line IS NOT NULL
-ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC, b.rid ASC, p.idx ASC
-`;
-
-export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
-  let db: Database | undefined;
-  try {
-    db = new Database(sourcePath, { readonly: true, create: false });
-    const rawRows = db.query(SQLITE_SAFE_QUERY).all(
-      "$.env.ANTHROPIC_BASE_URL",
-      "$.env.ANTHROPIC_MODEL",
-      "$.env.ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "$.baseUrl",
-      "$.base_url",
-      "$.env.OPENAI_BASE_URL",
-      "$.env.GEMINI_BASE_URL",
-      "$.model",
-      "$.defaultModel",
-      "$.env.OPENAI_MODEL",
-      "$.env.GEMINI_MODEL",
-      "$.wire_api",
-      "$.config",
-    ) as Array<Omit<RawExtractedRow, "codexTomlLines"> & { rid: number; lineIdx: number | null; safeLine: string | null }>;
-    const byRid = new Map<number, { row: RawExtractedRow; lines: Array<{ idx: number; text: string }> }>();
-    for (const item of rawRows) {
-      let group = byRid.get(item.rid);
-      if (!group) {
-        group = {
-          row: {
-            id: item.id,
-            appType: item.appType,
-            name: item.name,
-            settingsType: item.settingsType,
-            claudeBaseUrl: item.claudeBaseUrl,
-            claudeModel: item.claudeModel,
-            genericBaseUrl: item.genericBaseUrl,
-            genericModel: item.genericModel,
-            genericWireApi: item.genericWireApi,
-            codexTomlLines: null,
-          },
-          lines: [],
-        };
-        byRid.set(item.rid, group);
-      }
-      if (item.lineIdx !== null && item.safeLine !== null) {
-        group.lines.push({ idx: item.lineIdx, text: item.safeLine });
-      }
-    }
-    const result: RawExtractedRow[] = [];
-    for (const group of byRid.values()) {
-      if (group.lines.length > 0) {
-        group.lines.sort((a, b) => a.idx - b.idx);
-        group.row.codexTomlLines = group.lines.map(l => l.text).join("\n");
-      }
-      result.push(group.row);
-    }
-    return result;
-  } catch {
-    throw new CcSwitchImportError("CC-Switch SQLite source could not be read or has an unsupported schema.");
-  } finally {
-    try { db?.close(); } catch { /* ignore */ }
-  }
-}
-
-/**
- * Byte-level UTF-8 JSON scanner for legacy CC-Switch JSON files.
- * Walks the JSON structure on a transient Uint8Array (zeroed in finally) and decodes ONLY
- * allowlisted non-secret scalar fields, skipping over secret values without decoding them into JS strings.
- */
-export function scanCcSwitchJsonBytes(bytes: Uint8Array): RawExtractedRow[] {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let pos = 0;
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-    pos = 3;
-  }
-
-  function skipWs(): void {
-    while (pos < bytes.length) {
-      const b = bytes[pos]!;
-      if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d) pos++;
-      else break;
-    }
-  }
-
-  function scanStringBounds(): { start: number; end: number; hasEscapes: boolean } {
-    if (bytes[pos] !== 0x22) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    pos++;
-    const start = pos;
-    let hasEscapes = false;
-    while (pos < bytes.length) {
-      const b = bytes[pos]!;
-      if (b < 0x20) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      if (b === 0x5c) {
-        hasEscapes = true;
-        pos += 2;
-        if (pos > bytes.length) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-        continue;
-      }
-      if (b === 0x22) {
-        const end = pos;
-        pos++;
-        return { start, end, hasEscapes };
-      }
-      pos++;
-    }
-    throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-  }
-
-  function decodeBoundedString(bounds: { start: number; end: number; hasEscapes: boolean }): string {
-    const raw = decoder.decode(bytes.subarray(bounds.start, bounds.end));
-    if (!bounds.hasEscapes) return raw;
-    try {
-      return JSON.parse(`"${raw}"`) as string;
-    } catch {
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-  }
-
-  function parseJsonEscapedTomlInPlace(bounds: { start: number; end: number }): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
-    if (bounds.end - bounds.start > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
-    const out = new Uint8Array(bounds.end - bounds.start);
-    const encodeInto = new TextEncoder();
-    let readIdx = bounds.start;
-    let writeIdx = 0;
-    try {
-      while (readIdx < bounds.end) {
-        const b = bytes[readIdx]!;
-        if (b !== 0x5c) {
-          out[writeIdx++] = b;
-          readIdx++;
-          continue;
-        }
-        readIdx++;
-        if (readIdx >= bounds.end) return { ok: false, reason: "malformed_entry" };
-        const esc = bytes[readIdx]!;
-        readIdx++;
-        if (esc === 0x22 || esc === 0x5c || esc === 0x2f) out[writeIdx++] = esc;
-        else if (esc === 0x6e) out[writeIdx++] = 0x0a;
-        else if (esc === 0x72) out[writeIdx++] = 0x0d;
-        else if (esc === 0x74) out[writeIdx++] = 0x09;
-        else if (esc === 0x62) out[writeIdx++] = 0x08;
-        else if (esc === 0x66) out[writeIdx++] = 0x0c;
-        else if (esc === 0x75) {
-          if (readIdx + 4 > bounds.end) return { ok: false, reason: "malformed_entry" };
-          const hex = decoder.decode(bytes.subarray(readIdx, readIdx + 4));
-          if (!/^[0-9A-Fa-f]{4}$/.test(hex)) return { ok: false, reason: "malformed_entry" };
-          readIdx += 4;
-          let codePoint = parseInt(hex, 16);
-          if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
-            if (readIdx + 6 > bounds.end || bytes[readIdx] !== 0x5c || bytes[readIdx + 1] !== 0x75) {
-              return { ok: false, reason: "malformed_entry" };
-            }
-            const lowHex = decoder.decode(bytes.subarray(readIdx + 2, readIdx + 6));
-            if (!/^[0-9A-Fa-f]{4}$/.test(lowHex)) return { ok: false, reason: "malformed_entry" };
-            const low = parseInt(lowHex, 16);
-            if (low < 0xdc00 || low > 0xdfff) return { ok: false, reason: "malformed_entry" };
-            readIdx += 6;
-            codePoint = ((codePoint - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
-          } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
-            return { ok: false, reason: "malformed_entry" };
-          }
-          const encoded = encodeInto.encode(String.fromCodePoint(codePoint));
-          out.set(encoded, writeIdx);
-          writeIdx += encoded.length;
-        } else {
-          return { ok: false, reason: "malformed_entry" };
-        }
-      }
-      return parseCodexTomlBytes(out.subarray(0, writeIdx));
-    } finally {
-      out.fill(0);
-    }
-  }
-
-  function skipPrimitive(): void {
-    const start = pos;
-    while (pos < bytes.length) {
-      const b = bytes[pos]!;
-      if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d || b === 0x2c || b === 0x7d || b === 0x5d) break;
-      pos++;
-    }
-    if (pos === start) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    const token = decoder.decode(bytes.subarray(start, pos));
-    if (token !== "true" && token !== "false" && token !== "null" && !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) {
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-  }
-
-  function skipValue(depth = 0): void {
-    if (depth > 64) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    skipWs();
-    if (pos >= bytes.length) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    const b = bytes[pos]!;
-    if (b === 0x22) {
-      scanStringBounds();
-    } else if (b === 0x7b) {
-      pos++;
-      skipWs();
-      if (bytes[pos] === 0x7d) { pos++; return; }
-      for (;;) {
-        skipWs();
-        scanStringBounds();
-        skipWs();
-        if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-        pos++;
-        skipValue(depth + 1);
-        skipWs();
-        if (bytes[pos] === 0x2c) { pos++; continue; }
-        if (bytes[pos] === 0x7d) { pos++; break; }
-        throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      }
-    } else if (b === 0x5b) {
-      pos++;
-      skipWs();
-      if (bytes[pos] === 0x5d) { pos++; return; }
-      for (;;) {
-        skipValue(depth + 1);
-        skipWs();
-        if (bytes[pos] === 0x2c) { pos++; continue; }
-        if (bytes[pos] === 0x5d) { pos++; break; }
-        throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      }
-    } else {
-      skipPrimitive();
-    }
-  }
-
-  function readOptionalScalarString(): string | null {
-    skipWs();
-    if (bytes[pos] === 0x22) return decodeBoundedString(scanStringBounds());
-    skipValue();
-    return null;
-  }
-
-  function parseSettingsObject(row: RawExtractedRow): void {
-    skipWs();
-    if (bytes[pos] !== 0x7b) {
-      row.settingsType = null;
-      skipValue();
-      return;
-    }
-    row.settingsType = "object";
-    pos++;
-    skipWs();
-    if (bytes[pos] === 0x7d) { pos++; return; }
-    for (;;) {
-      skipWs();
-      const key = decodeBoundedString(scanStringBounds());
-      skipWs();
-      if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      pos++;
-      skipWs();
-      if (key === "env" && bytes[pos] === 0x7b) {
-        pos++;
-        skipWs();
-        if (bytes[pos] === 0x7d) { pos++; }
-        else {
-          for (;;) {
-            skipWs();
-            const envKey = decodeBoundedString(scanStringBounds());
-            skipWs();
-            if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-            pos++;
-            if (envKey === "ANTHROPIC_BASE_URL") row.claudeBaseUrl = readOptionalScalarString();
-            else if (envKey === "ANTHROPIC_MODEL") {
-              const v = readOptionalScalarString();
-              if (v) row.claudeModel = v;
-            } else if (envKey === "ANTHROPIC_DEFAULT_SONNET_MODEL") {
-              const v = readOptionalScalarString();
-              if (v && !row.claudeModel) row.claudeModel = v;
-            } else if (envKey === "OPENAI_BASE_URL" || envKey === "GEMINI_BASE_URL") {
-              const v = readOptionalScalarString();
-              if (v && !row.genericBaseUrl) row.genericBaseUrl = v;
-            } else if (envKey === "OPENAI_MODEL" || envKey === "GEMINI_MODEL") {
-              const v = readOptionalScalarString();
-              if (v && !row.genericModel) row.genericModel = v;
-            } else {
-              skipValue();
-            }
-            skipWs();
-            if (bytes[pos] === 0x2c) { pos++; continue; }
-            if (bytes[pos] === 0x7d) { pos++; break; }
-            throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-          }
-        }
-      } else if (key === "baseUrl" || key === "base_url") {
-        const v = readOptionalScalarString();
-        if (v && !row.genericBaseUrl) row.genericBaseUrl = v;
-      } else if (key === "model" || key === "defaultModel") {
-        const v = readOptionalScalarString();
-        if (v && !row.genericModel) row.genericModel = v;
-      } else if (key === "wire_api") {
-        const v = readOptionalScalarString();
-        if (v) row.genericWireApi = v;
-      } else if (key === "config") {
-        skipWs();
-        if (bytes[pos] === 0x22) {
-          row.codexProjection = parseJsonEscapedTomlInPlace(scanStringBounds());
-        } else {
-          skipValue();
-        }
-      } else {
-        skipValue();
-      }
-      skipWs();
-      if (bytes[pos] === 0x2c) { pos++; continue; }
-      if (bytes[pos] === 0x7d) { pos++; break; }
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-  }
-
-  function parseProviderEntryObject(fallbackId = "", fallbackApp = ""): RawExtractedRow {
-    skipWs();
-    if (bytes[pos] !== 0x7b) throw new CcSwitchImportError("Malformed CC-Switch JSON provider entry.");
-    pos++;
-    const row: RawExtractedRow = {
-      id: fallbackId,
-      appType: fallbackApp,
-      name: "",
-      settingsType: null,
-      claudeBaseUrl: null,
-      claudeModel: null,
-      genericBaseUrl: null,
-      genericModel: null,
-      genericWireApi: null,
-      codexTomlLines: null,
-    };
-    skipWs();
-    if (bytes[pos] === 0x7d) { pos++; return row; }
-    for (;;) {
-      skipWs();
-      const key = decodeBoundedString(scanStringBounds());
-      skipWs();
-      if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      pos++;
-      if (key === "id") {
-        const v = readOptionalScalarString();
-        if (v !== null) row.id = v;
-      } else if (key === "app_type" || key === "appType") {
-        const v = readOptionalScalarString();
-        if (v !== null) row.appType = v;
-      } else if (key === "name") {
-        const v = readOptionalScalarString();
-        if (v !== null) row.name = v;
-      } else if (key === "settings_config" || key === "settingsConfig") {
-        parseSettingsObject(row);
-      } else {
-        skipValue();
-      }
-      skipWs();
-      if (bytes[pos] === 0x2c) { pos++; continue; }
-      if (bytes[pos] === 0x7d) { pos++; break; }
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-    if (!row.name) row.name = row.id;
-    return row;
-  }
-
-  function parseProvidersCollection(appHint = ""): RawExtractedRow[] {
-    const out: RawExtractedRow[] = [];
-    skipWs();
-    if (bytes[pos] === 0x5b) {
-      pos++;
-      skipWs();
-      if (bytes[pos] === 0x5d) { pos++; return out; }
-      for (;;) {
-        out.push(parseProviderEntryObject("", appHint));
-        skipWs();
-        if (bytes[pos] === 0x2c) { pos++; continue; }
-        if (bytes[pos] === 0x5d) { pos++; break; }
-        throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      }
-    } else if (bytes[pos] === 0x7b) {
-      pos++;
-      skipWs();
-      if (bytes[pos] === 0x7d) { pos++; return out; }
-      for (;;) {
-        skipWs();
-        const id = decodeBoundedString(scanStringBounds());
-        skipWs();
-        if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-        pos++;
-        out.push(parseProviderEntryObject(id, appHint));
-        skipWs();
-        if (bytes[pos] === 0x2c) { pos++; continue; }
-        if (bytes[pos] === 0x7d) { pos++; break; }
-        throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      }
-    } else {
-      throw new CcSwitchImportError("Malformed CC-Switch JSON providers section.");
-    }
-    return out;
-  }
-
-  function parseAppSection(appName: string): RawExtractedRow[] {
-    const out: RawExtractedRow[] = [];
-    skipWs();
-    if (bytes[pos] !== 0x7b) { skipValue(); return out; }
-    pos++;
-    skipWs();
-    if (bytes[pos] === 0x7d) { pos++; return out; }
-    for (;;) {
-      skipWs();
-      const k = decodeBoundedString(scanStringBounds());
-      skipWs();
-      if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      pos++;
-      if (k === "providers") out.push(...parseProvidersCollection(appName));
-      else skipValue();
-      skipWs();
-      if (bytes[pos] === 0x2c) { pos++; continue; }
-      if (bytes[pos] === 0x7d) { pos++; break; }
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-    return out;
-  }
-
-  const rows: RawExtractedRow[] = [];
-  let sawStructure = false;
-  skipWs();
-  if (bytes[pos] !== 0x7b) throw new CcSwitchImportError("CC-Switch JSON source must be a JSON object.");
-  pos++;
-  skipWs();
-  if (bytes[pos] === 0x7d) {
-    pos++;
-  } else {
-    for (;;) {
-      skipWs();
-      const topKey = decodeBoundedString(scanStringBounds());
-      skipWs();
-      if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-      pos++;
-      if (topKey === "providers") {
-        sawStructure = true;
-        rows.push(...parseProvidersCollection(""));
-      } else if (topKey === "apps") {
-        sawStructure = true;
-        skipWs();
-        if (bytes[pos] !== 0x7b) throw new CcSwitchImportError("Malformed CC-Switch JSON apps section.");
-        pos++;
-        skipWs();
-        if (bytes[pos] === 0x7d) { pos++; }
-        else {
-          for (;;) {
-            skipWs();
-            const appName = decodeBoundedString(scanStringBounds());
-            skipWs();
-            if (bytes[pos] !== 0x3a) throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-            pos++;
-            rows.push(...parseAppSection(appName));
-            skipWs();
-            if (bytes[pos] === 0x2c) { pos++; continue; }
-            if (bytes[pos] === 0x7d) { pos++; break; }
-            throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-          }
-        }
-      } else if (topKey === "claude" || topKey === "codex" || topKey === "openai" || topKey === "gemini" || topKey === "opencode") {
-        sawStructure = true;
-        rows.push(...parseAppSection(topKey));
-      } else {
-        skipValue();
-      }
-      skipWs();
-      if (bytes[pos] === 0x2c) { pos++; continue; }
-      if (bytes[pos] === 0x7d) { pos++; break; }
-      throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
-    }
-  }
-  skipWs();
-  if (pos !== bytes.length || !sawStructure) {
-    throw new CcSwitchImportError("CC-Switch JSON source does not contain a recognized providers structure.");
-  }
-  return rows;
-}
-
-function readSourceRows(sourcePath: string): RawExtractedRow[] {
-  const resolved = resolve(sourcePath);
-  try {
-    assertPlainLocalPath(resolved);
-  } catch {
-    throw new CcSwitchImportError("CC-Switch source path must be a plain regular local file without symlink traversal.");
-  }
-  let fd: number | undefined;
-  let isSqlite = false;
-  let size = 0;
-  const header = Buffer.alloc(16);
-  let jsonBuf: Buffer | undefined;
-  try {
-    try {
-      fd = openSync(resolved, "r");
-      const st = statSync(resolved);
-      if (!st.isFile()) throw new CcSwitchImportError("CC-Switch source path must be a regular file.");
-      size = st.size;
-      const n = readSync(fd, header, 0, 16, 0);
-      if (n === 16 && header.subarray(0, 15).toString("ascii") === SQLITE_MAGIC_PREFIX && header[15] === 0) {
-        isSqlite = true;
-      } else if (/\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
-        throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
-      } else {
-        if (size === 0 || size > MAX_JSON_BYTES) {
-          throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
-        }
-        jsonBuf = Buffer.allocUnsafe(size);
-        let offset = 0;
-        while (offset < size) {
-          const got = readSync(fd, jsonBuf, offset, size - offset, offset);
-          if (got <= 0) break;
-          offset += got;
-        }
-        if (offset !== size) {
-          throw new CcSwitchImportError("CC-Switch JSON source changed while reading.");
-        }
-      }
-    } catch (error) {
-      if (error instanceof CcSwitchImportError) throw error;
-      throw new CcSwitchImportError("CC-Switch source file could not be opened.");
-    } finally {
-      if (fd !== undefined) {
-        try { closeSync(fd); } catch { /* ignore */ }
-      }
-    }
-
-    if (isSqlite) {
-      if (size === 0 || size > MAX_SQLITE_BYTES) {
-        throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
-      }
-      return readSqliteRows(resolved);
-    }
-    return scanCcSwitchJsonBytes(jsonBuf!);
-  } finally {
-    header.fill(0);
-    jsonBuf?.fill(0);
-  }
-}
-
 function evaluateExtractedRow(
   row: RawExtractedRow,
   targetName: string,
   allowPrivateNetwork: boolean,
 ): { ok: true; candidate: CcSwitchCandidateProvider } | { ok: false; reason: CcSwitchInvalidReason } {
   const sourceId = (row.id ?? "").trim();
-  const displayName = (row.name || sourceId).trim();
   const appType = (row.appType || "").trim().toLowerCase();
-  if (!sourceId || !displayName) return { ok: false, reason: "malformed_entry" };
-  if (looksLikeSecretValue(sourceId) || looksLikeSecretValue(displayName)) {
+  if (!sourceId) return { ok: false, reason: "malformed_entry" };
+  if (looksLikeSecretValue(sourceId, "id") || (appType !== "" && looksLikeSecretValue(appType, "app"))) {
     return { ok: false, reason: "secret_in_nonsecret_field" };
   }
   if (!isValidProviderName(targetName)) return { ok: false, reason: "invalid_provider_name" };
@@ -1216,6 +275,7 @@ function evaluateExtractedRow(
       baseUrl = resolved.baseUrl.trim();
       defaultModel = resolved.defaultModel?.trim() || (row.genericModel ?? "").trim() || undefined;
       const wire = resolved.wireApi.trim().toLowerCase();
+      if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
       if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
       else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
       else return { ok: false, reason: "malformed_entry" };
@@ -1230,6 +290,7 @@ function evaluateExtractedRow(
         baseUrl = resolved.baseUrl.trim();
         defaultModel = resolved.defaultModel?.trim() || (row.genericModel ?? "").trim() || undefined;
         const wire = resolved.wireApi.trim().toLowerCase();
+        if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
         if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
         else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
         else return { ok: false, reason: "malformed_entry" };
@@ -1240,6 +301,7 @@ function evaluateExtractedRow(
       baseUrl = row.genericBaseUrl.trim();
       defaultModel = (row.genericModel ?? "").trim() || undefined;
       const wire = (row.genericWireApi ?? "responses").trim().toLowerCase();
+      if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
       adapter = wire === "chat" || wire === "chat_completions" || wire === "openai-chat" ? "openai-chat" : "openai-responses";
     } else {
       return { ok: false, reason: "missing_base_url" };
@@ -1257,7 +319,7 @@ function evaluateExtractedRow(
   }
 
   if (!baseUrl) return { ok: false, reason: "missing_base_url" };
-  if (looksLikeSecretValue(baseUrl, true) || (defaultModel !== undefined && looksLikeSecretValue(defaultModel))) {
+  if (looksLikeSecretValue(baseUrl, "url") || (defaultModel !== undefined && looksLikeSecretValue(defaultModel, "model"))) {
     return { ok: false, reason: "secret_in_nonsecret_field" };
   }
   if (providerBaseUrlConfigError(baseUrl) !== null) {
@@ -1279,7 +341,6 @@ function evaluateExtractedRow(
       candidate: {
         name: targetName,
         sourceId,
-        displayName,
         appType,
         adapter,
         baseUrl,
@@ -1294,7 +355,6 @@ function evaluateExtractedRow(
     candidate: {
       name: targetName,
       sourceId,
-      displayName,
       appType,
       adapter,
       baseUrl,
@@ -1329,28 +389,175 @@ function assertStopped(): void {
   }
 }
 
+/**
+ * Read-only byte-level inspection of ~/.opencodex/auth.json to determine whether `name` has stored
+ * OAuth accounts (or whether auth.json is unreadable/malformed) without decoding any OAuth tokens.
+ */
 function hasOrCannotVerifyOAuthAccounts(name: string): boolean {
   const authPath = getAuthStorePath();
-  let buf: Buffer;
+  let fd: number | undefined;
+  let buf: Buffer | undefined;
   try {
-    buf = readFileSync(authPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    return true; // Fail closed when auth.json exists but cannot be read.
-  }
-  try {
-    const snap = normalizeAuthStoreBuffer(buf);
-    if (snap.kind === "absent") return false;
-    if (snap.kind === "malformed") return true;
-    if ((snap.store[name]?.accounts.length ?? 0) > 0) return true;
-    // Also fail closed if the raw JSON has a malformed entry for this specific provider that normalizeAuthStore dropped.
-    const rawParsed = JSON.parse(buf.toString("utf8")) as Record<string, unknown>;
-    if (Object.hasOwn(rawParsed, name) && !Object.hasOwn(snap.store, name)) return true;
-    return false;
+    try {
+      fd = openSync(
+        authPath,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+      );
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.size > MAX_JSON_BYTES) return true;
+      if (st.size === 0) return true;
+      buf = Buffer.alloc(st.size);
+      let off = 0;
+      while (off < st.size) {
+        const got = readSync(fd, buf, off, st.size - off, off);
+        if (got <= 0) break;
+        off += got;
+      }
+      if (off !== st.size) return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      return true;
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch { /* ignore */ }
+      }
+    }
+    const bytes = buf!;
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let pos = 0;
+    if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) pos = 3;
+    const skipWs = () => {
+      while (pos < bytes.length && (bytes[pos] === 0x20 || bytes[pos] === 0x09 || bytes[pos] === 0x0a || bytes[pos] === 0x0d)) pos++;
+    };
+    const scanStr = (): { start: number; end: number; hasEsc: boolean } => {
+      if (bytes[pos] !== 0x22) throw new Error("malformed");
+      pos++;
+      const start = pos;
+      let hasEsc = false;
+      while (pos < bytes.length) {
+        const b = bytes[pos]!;
+        if (b < 0x20) throw new Error("malformed");
+        if (b === 0x5c) { hasEsc = true; pos += 2; if (pos > bytes.length) throw new Error("malformed"); continue; }
+        if (b === 0x22) { const end = pos; pos++; return { start, end, hasEsc }; }
+        pos++;
+      }
+      throw new Error("malformed");
+    };
+    const decodeKey = (): string => {
+      const b = scanStr();
+      if (b.end - b.start > 128) throw new Error("malformed");
+      const s = decoder.decode(bytes.subarray(b.start, b.end));
+      return b.hasEsc ? (JSON.parse(`"${s}"`) as string) : s;
+    };
+    const skipPrim = () => {
+      const s = pos;
+      while (pos < bytes.length && ![0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x7d, 0x5d].includes(bytes[pos]!)) pos++;
+      if (pos === s) throw new Error("malformed");
+      const t = decoder.decode(bytes.subarray(s, pos));
+      if (t !== "true" && t !== "false" && t !== "null" && !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(t)) {
+        throw new Error("malformed");
+      }
+    };
+    const skipVal = (depth = 0): void => {
+      if (depth > 32) throw new Error("malformed");
+      skipWs();
+      const b = bytes[pos];
+      if (b === 0x22) { scanStr(); return; }
+      if (b === 0x7b) {
+        pos++; skipWs();
+        if (bytes[pos] === 0x7d) { pos++; return; }
+        for (;;) {
+          skipWs(); scanStr(); skipWs();
+          if (bytes[pos] !== 0x3a) throw new Error("malformed");
+          pos++; skipVal(depth + 1); skipWs();
+          if (bytes[pos] === 0x2c) { pos++; continue; }
+          if (bytes[pos] === 0x7d) { pos++; return; }
+          throw new Error("malformed");
+        }
+      }
+      if (b === 0x5b) {
+        pos++; skipWs();
+        if (bytes[pos] === 0x5d) { pos++; return; }
+        for (;;) {
+          skipVal(depth + 1); skipWs();
+          if (bytes[pos] === 0x2c) { pos++; continue; }
+          if (bytes[pos] === 0x5d) { pos++; return; }
+          throw new Error("malformed");
+        }
+      }
+      skipPrim();
+    };
+    skipWs();
+    if (bytes[pos] !== 0x7b) return true;
+    pos++; skipWs();
+    let foundAccounts = false;
+    if (bytes[pos] === 0x7d) {
+      pos++;
+    } else {
+      for (;;) {
+        skipWs();
+        const provKey = decodeKey();
+        skipWs();
+        if (bytes[pos] !== 0x3a) return true;
+        pos++; skipWs();
+        if (provKey !== name) {
+          skipVal();
+        } else {
+          // Inspect the provider entry without decoding any token strings.
+          if (bytes[pos] !== 0x7b) return true;
+          pos++; skipWs();
+          if (bytes[pos] === 0x7d) { pos++; }
+          else {
+            let sawAccountsArray = false;
+            for (;;) {
+              skipWs();
+              const fieldKey = decodeKey();
+              skipWs();
+              if (bytes[pos] !== 0x3a) return true;
+              pos++; skipWs();
+              if (fieldKey === "accounts") {
+                if (bytes[pos] !== 0x5b) return true;
+                sawAccountsArray = true;
+                pos++; skipWs();
+                if (bytes[pos] === 0x5d) {
+                  pos++;
+                } else {
+                  foundAccounts = true;
+                  for (;;) {
+                    skipVal(1); skipWs();
+                    if (bytes[pos] === 0x2c) { pos++; continue; }
+                    if (bytes[pos] === 0x5d) { pos++; break; }
+                    return true;
+                  }
+                }
+              } else if (fieldKey === "activeAccountId" || fieldKey === "selectionRevision") {
+                skipVal(1);
+              } else {
+                // Legacy single-credential shape or unknown field -> retain provider.
+                foundAccounts = true;
+                skipVal(1);
+              }
+              skipWs();
+              if (bytes[pos] === 0x2c) { pos++; continue; }
+              if (bytes[pos] === 0x7d) { pos++; break; }
+              return true;
+            }
+            if (!sawAccountsArray) foundAccounts = true;
+          }
+        }
+        skipWs();
+        if (bytes[pos] === 0x2c) { pos++; continue; }
+        if (bytes[pos] === 0x7d) { pos++; break; }
+        return true;
+      }
+    }
+    skipWs();
+    if (pos !== bytes.length) return true;
+    return foundAccounts;
   } catch {
     return true;
   } finally {
-    buf.fill(0);
+    buf?.fill(0);
   }
 }
 
@@ -1418,7 +625,7 @@ function requireValidPersistedConfig(): OcxConfig {
 
 function assignTargetNames(rows: RawExtractedRow[]): string[] {
   const slugCounts = new Map<string, number>();
-  const rawSlugs = rows.map(r => normalizeProviderSlug(r.id || r.name));
+  const rawSlugs = rows.map(r => normalizeProviderSlug(r.id));
   for (const s of rawSlugs) {
     slugCounts.set(s, (slugCounts.get(s) ?? 0) + 1);
   }

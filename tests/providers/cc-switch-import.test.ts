@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,11 +18,14 @@ import {
   readSqliteRows,
   runCcSwitchProviderImport,
   scanCcSwitchJsonBytes,
+  setCcSwitchSourceOpenHookForTests,
 } from "../../src/providers/cc-switch-import";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Runtime-assembled canary so privacy:scan never sees a literal token prefix in the source file.
 const CANARY_SECRET = ["sk", "canary", "DO", "NOT", "READ", "9876543210abcdef"].join("-");
+const PREFIXLESS_HEX_SECRET = ["9f86d081", "884c7d65", "9a2feaa0", "c55ad015"].join("");
+const PREFIXLESS_MIXED_SECRET = "Ab3Def9Gh1Jk2Lm4Np6Qr8St0Uv";
 
 let scratch: string;
 let targetHome: string;
@@ -81,20 +84,21 @@ afterEach(async () => {
   setIcaclsRunnerForTests(null);
   setAsyncIcaclsRunnerForTests(null);
   setPersistedConfigMutationBeforeCommitForTests(null);
+  setCcSwitchSourceOpenHookForTests(null);
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(scratch);
 });
 
 describe("CC-Switch keyless provider import", () => {
-  test("SQLite preview and apply extract only non-secret fields, keep source read-only, and never materialize secrets", async () => {
+  test("SQLite preview and apply strip TOML comments, drop free-text names, keep source read-only, and never materialize secrets", async () => {
     const codexToml = [
-      'model = "gpt-5.6-sol"',
-      'model_provider = "acme\\"quoted"',
+      `model = "gpt-5.6-sol" # inline_comment_token = "${CANARY_SECRET}" and ${PREFIXLESS_HEX_SECRET}`,
+      `model_provider = "acme\\"quoted" # ${PREFIXLESS_MIXED_SECRET}`,
       `experimental_bearer_token = "${CANARY_SECRET}"`,
-      '[ model_providers . "acme\\"quoted" ]',
-      'base_url = "https://codex.acme.example/v1"',
-      'wire_api = "responses"',
+      `[ model_providers . "acme\\"quoted" ] # header_secret = "${CANARY_SECRET}"`,
+      `base_url = "https://codex.acme.example/v1" # experimental_bearer_token = "${CANARY_SECRET}" ${PREFIXLESS_HEX_SECRET}`,
+      `wire_api = "responses" # ${CANARY_SECRET}`,
       `api_key = "${CANARY_SECRET}"`,
     ].join("\n");
 
@@ -102,12 +106,12 @@ describe("CC-Switch keyless provider import", () => {
       {
         id: "acme-claude",
         app_type: "claude",
-        name: "Acme Claude",
+        name: `FreeTextNameWithSecret ${CANARY_SECRET} ${PREFIXLESS_HEX_SECRET}`,
         settings_config: JSON.stringify({
           env: {
             ANTHROPIC_BASE_URL: "https://claude.acme.example",
             ANTHROPIC_API_KEY: CANARY_SECRET,
-            ANTHROPIC_AUTH_TOKEN: CANARY_SECRET,
+            ANTHROPIC_AUTH_TOKEN: PREFIXLESS_HEX_SECRET,
             ANTHROPIC_MODEL: "claude-sonnet-4-6",
           },
         }),
@@ -116,7 +120,7 @@ describe("CC-Switch keyless provider import", () => {
       {
         id: "acme-codex",
         app_type: "codex",
-        name: "Acme Codex",
+        name: `CodexNameSecret ${PREFIXLESS_MIXED_SECRET}`,
         settings_config: JSON.stringify({
           auth: { OPENAI_API_KEY: CANARY_SECRET },
           config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n[model_providers.acme.extra]\nbase_url = "${CANARY_SECRET}"\n[model_providers."acme".extra]\nwire_api = "${CANARY_SECRET}"\n[model_providers."a"."b"]\nbase_url = "${CANARY_SECRET}"\n`,
@@ -125,10 +129,31 @@ describe("CC-Switch keyless provider import", () => {
       },
     ]);
     const dbBytesBefore = readFileSync(dbPath);
-    // White-box check: SQLite projection itself never returns values from [unrelated_section] or secret keys.
-    expect(JSON.stringify(readSqliteRows(dbPath))).not.toContain(CANARY_SECRET);
+    const decodedStrings: string[] = [];
+    const origDecode = TextDecoder.prototype.decode;
+    const decodeSpy = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: unknown[]) {
+      const res = origDecode.apply(this, args as [BufferSource?, TextDecodeOptions?]);
+      decodedStrings.push(res);
+      return res;
+    });
 
-    const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
+    let preview;
+    try {
+      const sqliteProjected = JSON.stringify(readSqliteRows(dbPath));
+      expect(sqliteProjected).not.toContain(CANARY_SECRET);
+      expect(sqliteProjected).not.toContain(PREFIXLESS_HEX_SECRET);
+      expect(sqliteProjected).not.toContain(PREFIXLESS_MIXED_SECRET);
+
+      preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
+    } finally {
+      decodeSpy.mockRestore();
+    }
+    for (const s of decodedStrings) {
+      expect(s).not.toContain(CANARY_SECRET);
+      expect(s).not.toContain(PREFIXLESS_HEX_SECRET);
+      expect(s).not.toContain(PREFIXLESS_MIXED_SECRET);
+    }
+
     expect(preview).toEqual({
       mode: "preview",
       discovered: 2,
@@ -142,7 +167,6 @@ describe("CC-Switch keyless provider import", () => {
         {
           name: "acme-claude",
           sourceId: "acme-claude",
-          displayName: "Acme Claude",
           appType: "claude",
           adapter: "anthropic",
           baseUrl: "https://claude.acme.example",
@@ -151,7 +175,6 @@ describe("CC-Switch keyless provider import", () => {
         {
           name: "acme-codex",
           sourceId: "acme-codex",
-          displayName: "Acme Codex",
           appType: "codex",
           adapter: "openai-responses",
           baseUrl: "https://codex.acme.example/v1",
@@ -196,7 +219,7 @@ describe("CC-Switch keyless provider import", () => {
         claude: {
           providers: {
             shared: {
-              name: "Shared Claude",
+              name: `NameSecret ${CANARY_SECRET} ${PREFIXLESS_HEX_SECRET}`,
               settingsConfig: {
                 env: {
                   ANTHROPIC_BASE_URL: "https://claude.shared.example",
@@ -225,11 +248,11 @@ describe("CC-Switch keyless provider import", () => {
               settingsConfig: {
                 auth: { OPENAI_API_KEY: CANARY_SECRET },
                 config: [
-                  'model = "gpt-5.6-sol"',
-                  'model_provider = "cjson"',
+                  `model = "gpt-5.6-sol" # comment_secret = "${CANARY_SECRET}" ${PREFIXLESS_HEX_SECRET}`,
+                  `model_provider = "cjson" # ${PREFIXLESS_MIXED_SECRET}`,
                   `experimental_bearer_token = "${CANARY_SECRET}"`,
-                  '[model_providers.cjson]',
-                  'base_url = "https://codex.json.example/v1"',
+                  `[model_providers.cjson] # ${CANARY_SECRET}`,
+                  `base_url = "https://codex.json.example/v1" # ${CANARY_SECRET} ${PREFIXLESS_HEX_SECRET}`,
                   'wire_api = "responses"',
                   `api_key = "${CANARY_SECRET}"`,
                   '[unrelated]',
@@ -243,8 +266,28 @@ describe("CC-Switch keyless provider import", () => {
     };
     writeFileSync(jsonPath, "\uFEFF" + JSON.stringify(doc, null, 2));
     const rawBytes = new Uint8Array(readFileSync(jsonPath));
-    const scanned = scanCcSwitchJsonBytes(rawBytes);
+    const decodedStrings: string[] = [];
+    const origDecode = TextDecoder.prototype.decode;
+    const decodeSpy = spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: unknown[]) {
+      const res = origDecode.apply(this, args as [BufferSource?, TextDecodeOptions?]);
+      decodedStrings.push(res);
+      return res;
+    });
+    let scanned;
+    try {
+      scanned = scanCcSwitchJsonBytes(rawBytes);
+    } finally {
+      decodeSpy.mockRestore();
+    }
+    expect(rawBytes.every(b => b === 0)).toBe(true);
     expect(JSON.stringify(scanned)).not.toContain(CANARY_SECRET);
+    expect(JSON.stringify(scanned)).not.toContain(PREFIXLESS_HEX_SECRET);
+    expect(JSON.stringify(scanned)).not.toContain(PREFIXLESS_MIXED_SECRET);
+    for (const s of decodedStrings) {
+      expect(s).not.toContain(CANARY_SECRET);
+      expect(s).not.toContain(PREFIXLESS_HEX_SECRET);
+      expect(s).not.toContain(PREFIXLESS_MIXED_SECRET);
+    }
     expect(scanned.find(r => r.id === "codex-json")?.codexTomlLines).toBeNull();
 
     const applied = await runCcSwitchProviderImport({
@@ -367,7 +410,26 @@ describe("CC-Switch keyless provider import", () => {
         app_type: "openai",
         name: "SecretUrl",
         settings_config: JSON.stringify({
-          baseUrl: `https://api.example.com/${CANARY_SECRET}`,
+          baseUrl: `https://api.example.com/v1/${PREFIXLESS_HEX_SECRET}`,
+        }),
+      },
+      {
+        id: "prefixless-secret-in-model",
+        app_type: "claude",
+        name: "PrefixlessModel",
+        settings_config: JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: "https://claude.acme.example",
+            ANTHROPIC_MODEL: PREFIXLESS_MIXED_SECRET,
+          },
+        }),
+      },
+      {
+        id: PREFIXLESS_HEX_SECRET,
+        app_type: "openai",
+        name: "PrefixlessId",
+        settings_config: JSON.stringify({
+          baseUrl: "https://api.example.com/v1",
         }),
       },
       {
@@ -404,15 +466,19 @@ describe("CC-Switch keyless provider import", () => {
       },
     ]);
 
+    const projected = JSON.stringify(readSqliteRows(dbPath));
+    expect(projected).not.toContain(PREFIXLESS_HEX_SECRET);
+    expect(projected).not.toContain(PREFIXLESS_MIXED_SECRET);
+
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(7);
+      expect(preview.invalid).toBe(9);
       expect(preview.invalidReasons).toEqual({
         malformed_entry: 3,
         missing_base_url: 1,
-        secret_in_nonsecret_field: 1,
+        secret_in_nonsecret_field: 3,
         private_network_refused: 1,
         ambiguous_codex_provider: 1,
       });
@@ -491,5 +557,37 @@ describe("CC-Switch keyless provider import", () => {
     });
     expect(loadConfig().providers["crash-prov"]).toBeUndefined();
     expect(existsSync(journalPath)).toBe(false);
+  });
+
+  test("refuses FIFO special files without hanging and detects TOCTOU source replacement", async () => {
+    if (process.platform !== "win32") {
+      const fifoPath = join(sourceDir, "pipe.db");
+      const mk = Bun.spawnSync(["mkfifo", fifoPath]);
+      expect(mk.exitCode).toBe(0);
+      await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: fifoPath })).rejects.toThrow(
+        /regular file/,
+      );
+    }
+
+    const dbPath = createSqliteFixture([
+      {
+        id: "toctou-prov",
+        app_type: "openai",
+        name: "Toctou",
+        settings_config: JSON.stringify({ baseUrl: "https://toctou.example.com/v1" }),
+      },
+    ]);
+    const replacementPath = join(sourceDir, "other.db");
+    writeFileSync(replacementPath, readFileSync(dbPath));
+
+    setCcSwitchSourceOpenHookForTests(target => {
+      writeFileSync(target + ".swap", readFileSync(replacementPath));
+      const { renameSync } = require("node:fs");
+      renameSync(target + ".swap", target);
+    });
+
+    await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath })).rejects.toThrow(
+      /changed while opening/,
+    );
   });
 });

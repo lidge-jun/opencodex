@@ -60,7 +60,7 @@ ocx models live --provider ark --json
 
 ### 키 없는 CC-Switch 프로바이더 가져오기
 
-`ocx provider import-cc-switch`는 CC-Switch SQLite(`~/.cc-switch/cc-switch.db`)나 JSON 파일에서 비비밀 메타데이터(ID, 이름, 기본 URL, 프로토콜 어댑터, 기본 모델)만 읽기 전용으로 추출합니다. SQLite에서는 비비밀 스칼라 필드만 SQL로 조회하며, JSON/TOML의 임시 바이트 버퍼는 스캔 직후 0으로 지워져 API 키나 토큰이 추출되거나 디스크에 기록되지 않습니다. 기본 미리보기(`--source <FILE>`)는 아무것도 쓰지 않으며, `--apply`와 `--restore`는 프록시가 멈춘 상태(`ocx stop`)여야 합니다. `--provider <id>`로 대상을 고르고 로컬/사설 주소에는 `--allow-private-network`를 추가해 적용한 뒤, 프록시를 시작(`ocx start`)하고 파이프 표준 입력(`printf '%s\n' "$KEY" | ocx account add-key <provider>`)으로 키를 등록하세요. `--restore`는 수정되지 않았고 라우팅에서도 참조되지 않은 항목만 제거합니다.
+`ocx provider import-cc-switch`는 신뢰할 수 있는 로컬 CC-Switch SQLite(`~/.cc-switch/cc-switch.db`)나 JSON 파일에서 엄격한 길이·문자셋·세그먼트 정책을 통과한 프로바이더 ID, 앱 유형, 기본 URL, 프로토콜 어댑터, 기본 모델만 읽기 전용으로 추출합니다. 자유 텍스트 이름, TOML 주석, 자격 증명 필드는 디코딩 전에 제외되며 임시 바이트 버퍼는 `finally`에서 0으로 지워집니다. 나중에 추가하는 키가 가져온 `baseUrl`로 전송되므로 신뢰할 수 있는 소스 파일만 사용하고 `--apply`가 출력하는 대상 URL을 확인하세요. 기본 미리보기(`--source <FILE>`)는 아무것도 쓰지 않으며, `--apply`와 `--restore`는 프록시가 멈춘 상태(`ocx stop`)여야 합니다. `--provider <id>`로 대상을 고르고 로컬/사설 주소에는 `--allow-private-network`를 추가해 적용한 뒤, 프록시를 시작(`ocx start`)하고 파이프 표준 입력(`printf '%s\n' "$KEY" | ocx account add-key <provider>`)으로 키를 등록하세요. `--restore`는 `auth.json`을 바이트 수준에서 읽기 전용으로 검사하며 수정되지 않았고 라우팅이나 OAuth 계정에서도 참조되지 않은 항목만 제거합니다.
 
 ## 인증
 
