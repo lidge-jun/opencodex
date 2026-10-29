@@ -742,6 +742,13 @@
       ]
     },
     {
+      "path": "providers/lm-studio-chat.md",
+      "tier": 4,
+      "title": "LM Studio Chat instructions",
+      "scope": "Preset-scoped single-leading-system normalization, configuration and editor policy.",
+      "documents": ["src/adapters/openai-chat/", "src/providers/", "src/config/", "src/types/", "src/server/management/", "src/server/auth-cors.ts"]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",

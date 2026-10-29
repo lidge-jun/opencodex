@@ -440,10 +440,15 @@ think: the picker offers `low` / `high` / `max` (default `max`), Codex `medium` 
 and `xhigh` as `max`, and an explicit `none` leaves `reasoning_effort` out so the upstream default
 applies. Fixed sampling parameters (`temperature`, `top_p`, penalties) are not sent. A saved
 `moonshot` model list that is still the previous built-in list gains both ids at startup when it
-points at the International or China endpoint; an edited list or a Custom URL is left as it is.
-The preset default stays `kimi-k2.7-code`. Moonshot closes the K2 series to new accounts on
-2026-10-31 and plans to retire it by the end of December 2026; see the
-[Kimi API model list](https://platform.kimi.ai/docs/models).
+points at the International or China endpoint; this roster refresh adds no models to an edited
+list or a Custom URL. The retired-id migration below applies separately.
+The preset defaults to the vendor-recommended `kimi-k3.1-pro`. `kimi-k2.5`, discontinued on
+2026-08-31, is removed from the API seeds; saved selections on the official International or China
+endpoint migrate to `kimi-k3.1-pro`, refreshing old built-in context and reasoning metadata while
+preserving explicit overrides. Custom destinations keep their saved selections. `kimi-k2.6` and
+`kimi-k2.7-code` (including highspeed) remain selectable for existing users: Moonshot closes the
+K2 series to new accounts on 2026-10-31 and plans to retire it by the end of December 2026; see the
+[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28).
 
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:

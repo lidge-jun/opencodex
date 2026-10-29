@@ -53,6 +53,7 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "preserveResponsesReasoningContent",
   "requiresReasoningPlaceholderModels",
   "foldDeveloperRoleToSystem",
+  "singleLeadingSystemMessage",
   "reasoningWireFormat",
   "omitReasoningEffortWithToolsModels",
   ...RETRY_POLICY_FIELDS,
@@ -159,6 +160,9 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   }
   const fold = provider.foldDeveloperRoleToSystem;
   if (fold !== undefined && typeof fold !== "boolean") return "foldDeveloperRoleToSystem must be a boolean";
+  if (provider.singleLeadingSystemMessage !== undefined && typeof provider.singleLeadingSystemMessage !== "boolean") {
+    return "singleLeadingSystemMessage must be a boolean";
+  }
   const hideRawReasoning = provider.hideRawReasoning;
   if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
   const preserveResponses = provider.preserveResponsesReasoningContent;
@@ -198,6 +202,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.foldDeveloperRoleToSystem;
     else if (typeof value === "boolean") next.foldDeveloperRoleToSystem = value;
     else return { error: "foldDeveloperRoleToSystem must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "singleLeadingSystemMessage")) {
+    const value = rawBody.singleLeadingSystemMessage;
+    if (value === null) delete next.singleLeadingSystemMessage;
+    else if (typeof value === "boolean") next.singleLeadingSystemMessage = value;
+    else return { error: "singleLeadingSystemMessage must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "hideRawReasoning")) {

@@ -3,6 +3,7 @@ import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
 import { applyExplicitChatDeveloperRole } from "./developer-role";
+import { singleLeadingSystemMessages } from "./single-system";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -77,10 +78,11 @@ export function buildOpenAIChatPassthroughRequest(
     // and the conversion changes the role of those messages and nothing else, so the position
     // of every message and every other field survive unchanged. Missing thinking history is
     // repaired below using the same preserve policy as the translated Chat builder.
-    messages: applyExplicitChatDeveloperRole(
+    // The explicit single-system policy can then merge instruction slots.
+    messages: singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
       frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
       provider,
-    ),
+    ), provider),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
