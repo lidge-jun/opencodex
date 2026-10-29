@@ -166,6 +166,17 @@ describe("first-response progression states on ProviderOverview", () => {
 
     await render(<ProviderOverview item={{ ...baseItem, activeNeedsReauth: true }} apiBase="" />);
     expect(stepState("provider")).toBe("needs-attention");
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs attention");
+
+    await render(
+      <ProviderOverview
+        item={{ ...baseItem, authMode: "oauth", hasApiKey: false }}
+        oauth={{ loggedIn: true, needsReauth: true }}
+        apiBase=""
+      />,
+    );
+    expect(stepState("provider")).toBe("needs-attention");
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs attention");
 
     await render(
       <ProviderOverview
@@ -175,9 +186,11 @@ describe("first-response progression states on ProviderOverview", () => {
       />,
     );
     expect(stepState("provider")).toBe("needs-login");
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs setup");
 
     await render(<ProviderOverview item={{ ...baseItem, hasApiKey: false }} apiBase="" />);
     expect(stepState("provider")).toBe("needs-setup");
+    expect(host.querySelector(".pws-kv dd")?.textContent).toContain("Needs setup");
   });
 
   test("models step precedence covers loading, load failed, discovery failed (empty, pending, retained), pending, all-off, configured, and empty", async () => {
@@ -280,6 +293,21 @@ describe("first-response progression states on ProviderOverview", () => {
     expect(stepState("probe")).toBe("untested");
     await render(<ProviderOverview item={baseItem} apiBase="" connectionIdentity="cred-a" availableModels={["model-a"]} />);
     expect(stepState("probe")).toBe("untested");
+
+    // An in-flight probe started under cred-a that resolves after cred-a -> cred-b -> cred-a is ignored.
+    let releaseLate!: (res: Response) => void;
+    respondCompletion = () => new Promise<Response>(resolve => { releaseLate = resolve; });
+    await selectProbeModel("model-a");
+    await act(async () => { runProbeButton().click(); });
+    await act(async () => { acceptActionDialog(document); });
+    expect(stepState("probe")).toBe("testing");
+
+    await render(<ProviderOverview item={baseItem} apiBase="" connectionIdentity="cred-b" availableModels={["model-a"]} />);
+    expect(stepState("probe")).toBe("untested");
+    await render(<ProviderOverview item={baseItem} apiBase="" connectionIdentity="cred-a" availableModels={["model-a"]} />);
+    expect(stepState("probe")).toBe("untested");
+    await act(async () => { releaseLate(Response.json(completionOk)); });
+    expect(stepState("probe")).toBe("untested");
   });
 });
 
@@ -321,18 +349,22 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
   });
 
   test("ProviderModelsNotice focus fallback skips document.body and CSS-hidden buttons in priority order", async () => {
+    const hiddenAncestor = document.createElement("div");
+    hiddenAncestor.style.display = "none";
     const hiddenPrev = document.createElement("button");
-    hiddenPrev.style.display = "none";
-    document.body.append(hiddenPrev);
+    hiddenAncestor.append(hiddenPrev);
+    document.body.append(hiddenAncestor);
 
     const panel = document.createElement("div");
     panel.className = "pws-detail-panel";
+    const disabledBtn = document.createElement("button");
+    disabledBtn.disabled = true;
     const hiddenBtn = document.createElement("button");
     hiddenBtn.textContent = "Hidden action";
     hiddenBtn.style.visibility = "hidden";
     const visibleBtn = document.createElement("button");
     visibleBtn.textContent = "Visible panel action";
-    panel.append(hiddenBtn, visibleBtn);
+    panel.append(disabledBtn, hiddenBtn, visibleBtn);
     document.body.append(panel);
 
     hiddenPrev.focus();
@@ -349,12 +381,30 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     );
     await render(null);
     expect(document.activeElement).toBe(visibleBtn);
-    hiddenPrev.remove();
+    hiddenAncestor.remove();
+
+    const unmountedTrigger = document.createElement("button");
+    document.body.append(unmountedTrigger);
+    unmountedTrigger.focus();
+    await render(
+      <ProviderModelsNotice
+        provider="my-provider"
+        loading={false}
+        failed={false}
+        providerKnown
+        initialRegistration
+        onClose={() => {}}
+        onOpenModels={() => {}}
+      />,
+    );
+    unmountedTrigger.remove();
+    await render(null);
+    expect(document.activeElement).toBe(visibleBtn);
     panel.remove();
   });
 
   test("Providers page joins /api/providers discovery with the model snapshot and refreshes on retry", async () => {
-    let discoveryAttempt = 0;
+    let discoveryPhase: "empty-failed" | "pending-failed" | "retained-failed" | "ok" = "empty-failed";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path === "/api/config") {
@@ -373,17 +423,22 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
       if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
       if (path === "/api/codex-auth/active") return Response.json({ activeCodexAccountId: null });
       if (path === "/api/selected-models") {
-        return Response.json({ selected: {}, available: discoveryAttempt > 0 ? { "my-provider": ["model-a"] } : {}, liveModelCounts: {} });
+        return Response.json({
+          selected: {},
+          available: discoveryPhase === "empty-failed" ? {} : { "my-provider": ["model-a"] },
+          liveModelCounts: {},
+        });
       }
       if (path === "/api/models") {
         return Response.json(
-          discoveryAttempt > 0
-            ? [{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }]
-            : [],
+          discoveryPhase === "empty-failed"
+            ? []
+            : discoveryPhase === "pending-failed"
+              ? [{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: true, initialSelectionPending: true }]
+              : [{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }],
         );
       }
       if (path === "/api/providers") {
-        discoveryAttempt++;
         return Response.json([
           {
             name: "my-provider",
@@ -391,7 +446,7 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
             baseUrl: "https://example.test/v1",
             hasApiKey: true,
             liveModels: true,
-            discovery: discoveryAttempt === 1 ? { status: "failed", reason: "http", httpStatus: 502 } : { status: "ok" },
+            discovery: discoveryPhase === "ok" ? { status: "ok" } : { status: "failed", reason: "http", httpStatus: 502 },
           },
         ]);
       }
@@ -406,13 +461,98 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     expect(stepState("models")).toBe("failed");
     expect(stepText("models")).toContain("502");
 
-    const retryBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('[data-first-response-step="models"] button'))
+    const retry = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[data-first-response-step="models"] button'))
       .find(b => b.textContent === "Retry")!;
+
+    discoveryPhase = "pending-failed";
+    await act(async () => { retry().click(); await new Promise(r => win.setTimeout(r, 30)); });
+    expect(stepState("models")).toBe("failed");
+
+    discoveryPhase = "retained-failed";
+    await act(async () => { retry().click(); await new Promise(r => win.setTimeout(r, 30)); });
+    expect(stepState("models")).toBe("ready-discovery-failed");
+  });
+
+  test("adding a provider selects it when none is open, and preserves an already open provider's dirty Settings", async () => {
+    const configuredProviders: Record<string, { adapter: string; baseUrl: string; hasApiKey: boolean; liveModels: boolean }> = {
+      existing: { adapter: "openai-chat", baseUrl: "https://existing.test/v1", hasApiKey: true, liveModels: false },
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      const method = init?.method ?? "GET";
+      if (path === "/api/config") {
+        return Response.json({
+          port: 0,
+          defaultProvider: "existing",
+          providers: { ...configuredProviders },
+        });
+      }
+      if (path === "/api/providers" && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { name: string };
+        configuredProviders[body.name] = { adapter: "openai-chat", baseUrl: "https://new.test/v1", hasApiKey: true, liveModels: false };
+        return Response.json({ ok: true });
+      }
+      if (path === "/api/providers") {
+        return Response.json(Object.entries(configuredProviders).map(([name, p]) => ({ name, ...p })));
+      }
+      if (path === "/api/oauth/providers") return Response.json({ providers: [] });
+      if (path === "/api/provider-presets") {
+        return Response.json({ providers: [{ id: "custom", label: "Custom Provider", adapter: "openai-chat", baseUrl: "", auth: "key" }] });
+      }
+      if (path === "/api/provider-quotas") return Response.json({ reports: [] });
+      if (path === "/api/usage") return Response.json({ providers: [], models: [] });
+      if (path === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      if (path === "/api/codex-auth/active") return Response.json({ activeCodexAccountId: null });
+      if (path === "/api/selected-models") return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      if (path === "/api/models") return Response.json([]);
+      if (path === "/api/protocols") return Response.json({ protocols: [] });
+      if (path === "/api/provider-request-pacing") return Response.json({ enabled: false, queued: 0, nextSlotInMs: 0 });
+      return Response.json({});
+    }) as typeof fetch;
+
+    await render(<Providers apiBase="" />);
+    await act(async () => { await new Promise(r => win.setTimeout(r, 30)); });
+    expect(host.querySelector(".pws-detail-title")).toBeNull();
+
+    const addProviderThroughModal = async (name: string) => {
+      const addBtn = Array.from(host.querySelectorAll<HTMLButtonElement>(".page-head button"))
+        .find(b => b.textContent?.includes("Add Provider"))!;
+      await act(async () => { addBtn.click(); await new Promise(r => win.setTimeout(r, 10)); });
+      const customTile = Array.from(host.querySelectorAll<HTMLButtonElement>(".modal-card button"))
+        .find(b => b.textContent?.includes("custom"))!;
+      await act(async () => { customTile.click(); await new Promise(r => win.setTimeout(r, 10)); });
+      const inputs = host.querySelectorAll<HTMLInputElement>(".modal-card input");
+      const setInputValue = (input: HTMLInputElement, val: string) => {
+        Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, val);
+        input.dispatchEvent(new win.Event("input", { bubbles: true }));
+      };
+      await act(async () => {
+        setInputValue(inputs[0]!, name);
+        setInputValue(inputs[1]!, "https://new.test/v1");
+      });
+      const submitBtn = host.querySelector<HTMLButtonElement>(".modal-card .btn-primary")!;
+      await act(async () => { submitBtn.click(); await new Promise(r => win.setTimeout(r, 30)); });
+      const closeNoticeBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+        .find(b => b.textContent === "Close")!;
+      await act(async () => { closeNoticeBtn.click(); await new Promise(r => win.setTimeout(r, 15)); });
+    };
+
+    await addProviderThroughModal("first-added");
+    expect(host.querySelector(".pws-detail-title")?.textContent).toContain("First Added");
+    expect(host.querySelector(".pws-detail-panel")?.contains(document.activeElement)).toBe(true);
+
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); await new Promise(r => win.setTimeout(r, 15)); });
+    const baseUrlInput = Array.from(host.querySelectorAll<HTMLInputElement>(".pws-detail-panel input"))
+      .find(i => i.value === "https://new.test/v1")!;
     await act(async () => {
-      retryBtn.click();
-      await new Promise(r => win.setTimeout(r, 30));
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(baseUrlInput, "https://dirty.test/v1");
+      baseUrlInput.dispatchEvent(new win.Event("input", { bubbles: true }));
     });
-    expect(stepState("models")).toBe("ready");
+    expect(host.textContent).toContain("unsaved changes");
+
+    await addProviderThroughModal("second-added");
+    expect(host.querySelector(".pws-detail-title")?.textContent).toContain("First Added");
+    expect(host.textContent).toContain("unsaved changes");
   });
 
   test("discovery freshness: stays loading until /api/providers finishes and marks failed if a later /api/providers read fails", async () => {

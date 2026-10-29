@@ -76,9 +76,15 @@ export default function ProviderOverview({
   const { locale } = useI18n();
   const status = binProviderStatus(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
-  const statusText = status === "ready"
+  const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
+  const effectiveStatus = item.disabled === true
+    ? "disabled"
+    : needsAttention || needsOAuthLogin || status === "needs-setup"
+      ? "needs-setup"
+      : "ready";
+  const statusText = effectiveStatus === "ready"
     ? t("pws.status.ready")
-    : status === "needs-setup"
+    : effectiveStatus === "needs-setup"
       ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
@@ -195,9 +201,9 @@ export default function ProviderOverview({
     ? "disabled"
     : needsAttention
       ? "needs-attention"
-      : item.authMode === "oauth" && oauth?.loggedIn === false
+      : needsOAuthLogin
         ? "needs-login"
-        : status === "needs-setup"
+        : effectiveStatus === "needs-setup"
           ? "needs-setup"
           : "saved";
   const providerStepText = providerStepState === "disabled"
@@ -278,8 +284,8 @@ export default function ProviderOverview({
         <dl className="pws-kv">
           <div className="pws-kv-row">
             <dt>{t("dash.status")}</dt>
-            <dd className={status === "ready" ? "pws-status-ok" : "pws-status-warn"}>
-              {status === "ready"
+            <dd className={effectiveStatus === "ready" ? "pws-status-ok" : "pws-status-warn"}>
+              {effectiveStatus === "ready"
                 ? <IconCheck style={{ width: 13, height: 13 }} aria-hidden="true" />
                 : <IconAlert style={{ width: 13, height: 13 }} aria-hidden="true" />}
               {statusText}
