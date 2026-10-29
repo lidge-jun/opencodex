@@ -885,7 +885,7 @@ export function isValidReasoningWireValue(
     || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
 }
 
-function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
+export function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeUsageAttempt)
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);

@@ -47,6 +47,7 @@ import {
   normalizeClaudeCompatibilityUsageLog,
   normalizeRequestFailureAttribution,
   normalizeRequestSpend,
+  normalizedAttempts,
   readRecentUsageEntries,
   modelIdentityLogFields, recordObservedServedModel,
   usageForFinalLog,
@@ -624,12 +625,17 @@ export function addRequestLog(entry: RequestLogEntry) {
   const servedModel = modelIdentityLogFields(entry).servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
+  const attempts = normalizedAttempts(entry.attempts);
+  const attemptsDropped = Array.isArray(entry.attempts) && attempts.length < entry.attempts.length;
+  const attemptsChanged = Array.isArray(entry.attempts) && !Bun.deepEquals(attempts, entry.attempts);
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
     && servedModel === entry.servedModel
     && entry.claudeCompatibility === undefined
     && entry.jevDecision === undefined
+    && !attemptsChanged
     ? entry
-    : { ...entry, ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
+    : { ...entry, ...(entry.attemptNormalizationDropped === true || attemptsDropped ? { attemptNormalizationDropped: true } : {}),
+      ...(attemptsChanged ? { attempts } : {}),
       ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
   if (!servedModel && retained !== entry) {
