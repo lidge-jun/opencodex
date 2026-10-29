@@ -131,6 +131,7 @@ describe("management route registry reconciliation", () => {
     mkdirSync(emptyHome, { recursive: true });
     process.env.OPENCODEX_HOME = emptyHome;
     let responseDeadline: ReturnType<typeof setTimeout> | undefined;
+    let planPromise: ReturnType<typeof handleCodexCliUpdateRoutes> | undefined;
     try {
       const makeCtx = (pathname: string): ManagementContext => {
         const req = new Request(`http://localhost${pathname}`);
@@ -139,7 +140,7 @@ describe("management route registry reconciliation", () => {
           convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
           syncClaudeAgentDefsBestEffort: async () => {} };
       };
-      const planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
+      planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
       // Let the first gated child spawn, then an unrelated request must still answer.
       const firedAt = Date.now();
       await new Promise(resolve => setTimeout(resolve, 150));
@@ -165,10 +166,17 @@ describe("management route registry reconciliation", () => {
       expect(planner).toHaveBeenCalledTimes(1);
     } finally {
       clearTimeout(responseDeadline);
-      planner.mockRestore();
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        // An assertion failure must release and reap the metadata child before
+        // deleting its gate directory or restoring the planner's environment.
+        writeFileSync(gateFile, "release");
+        await planPromise;
+      } finally {
+        planner.mockRestore();
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   }, SPAWN_BUDGET_MS);
 
