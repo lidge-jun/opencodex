@@ -14,6 +14,14 @@ import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 
 const token = () => "header." + Buffer.from(JSON.stringify({ oid: "11111111-1111-1111-1111-111111111111", tid: "22222222-2222-2222-2222-222222222222", exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url") + ".signature";
 const provider = () => ({ adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL, apiKey: token(), authMode: "oauth" as const });
+const rsFrame = (body: unknown) => JSON.stringify(body) + "\x1e";
+const chatLoopback = (script: (send: (body: unknown) => void) => void) => Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req, server) { if (server.upgrade(req)) return; return new Response(null, { status: 400 }); }, websocket: {
+  message(ws, data) {
+    const frame = JSON.parse(String(data).split("\x1e")[0]);
+    if (frame.protocol) { ws.send(rsFrame({})); return; }
+    if (frame.target === "chat") script(body => ws.send(rsFrame(body)));
+  },
+} });
 const request = (): OcxParsedRequest => ({ modelId: "claude-sonnet", stream: true, options: {}, context: {
   messages: [{ role: "user", content: "Read /trial.txt", timestamp: 0 }],
   tools: [{ name: "read_file", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }],
@@ -31,6 +39,8 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
     expect(() => getToneForModel("constructor")).toThrow("Unknown");
     expect(() => getToneForModel("__proto__")).toThrow("Unknown");
     expect(m365CopilotScenario("claude-opus").scenario).toBe("OfficeWebPaidCopilot");
+    expect(m365CopilotScenario("claude-sonnet")).toEqual(m365CopilotScenario("Claude_Sonnet"));
+    expect(m365CopilotScenario("Claude_Sonnet")).toMatchObject({ scenario: "OfficeWebPaidCopilot", licenseType: "Premium" });
     expect(m365CopilotScenario("gpt-6.1-sol").scenario).toBe("OfficeWebIncludedCopilot");
   });
   test("binds PKCE to Microsoft's fixed native-client callback", () => {
@@ -126,6 +136,41 @@ describe("Microsoft 365 Copilot native transport", () => {
         } });
       expect(answer).toBe("Hello world"); expect(deltas.join("")).toBe(answer); expect(sends).toBe(1);
       expect(chatArguments.threadLevelGptId).toEqual({}); expect(chatArguments.gpts).toBeUndefined();
+    } finally { server.stop(true); }
+  });
+  test("fails the turn when an earlier streamed message changes after a later one started", async () => {
+    const server = chatLoopback(send => {
+      send({ type: 1, target: "update", arguments: [{ cursor: { j: "$['first'].adaptiveCards[0]" }, messages: [{ author: "bot", messageId: "first", text: "Hello" }] }] });
+      send({ type: 1, target: "update", arguments: [{ cursor: { j: "$['second'].adaptiveCards[0]" }, messages: [{ author: "bot", messageId: "second", text: "Second" }] }] });
+      send({ type: 1, target: "update", arguments: [{ messages: [{ author: "bot", messageId: "first", text: "Hello again" }] }] });
+    });
+    try {
+      await expect(runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {}, createSocket: () => new WebSocket("ws://127.0.0.1:" + server.port) }))
+        .rejects.toThrow("changed previously emitted text");
+    } finally { server.stop(true); }
+  });
+  test("fails the turn when the terminal snapshot rewrites already streamed text", async () => {
+    const server = chatLoopback(send => {
+      send({ type: 1, target: "update", arguments: [{ messages: [{ author: "bot", messageId: "first", text: "Hello" }] }] });
+      send({ type: 2, item: { messages: [{ author: "bot", messageId: "first", text: "Jello world" }], result: { value: "Success" } } });
+    });
+    try {
+      await expect(runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {}, createSocket: () => new WebSocket("ws://127.0.0.1:" + server.port) }))
+        .rejects.toThrow("changed previously emitted text");
+    } finally { server.stop(true); }
+  });
+  test("replays chain-of-thought summaries once and emits only the growing suffix", async () => {
+    const thinking: string[] = [];
+    const server = chatLoopback(send => {
+      const summary = (text: string) => ({ type: 1, target: "update", arguments: [{ messages: [{ author: "bot", messageType: "ChainOfThoughtSummary", messageId: "think", text }] }] });
+      send(summary("Step one")); send(summary("Step one")); send(summary("Step one and two"));
+      send({ type: 1, target: "update", arguments: [{ messages: [{ author: "bot", messageId: "answer", text: "Answer" }] }] });
+      send({ type: 2, item: { result: { value: "Success" } } });
+    });
+    try {
+      const answer = await runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {}, onThinking: text => thinking.push(text), createSocket: () => new WebSocket("ws://127.0.0.1:" + server.port) });
+      expect(answer).toBe("Answer");
+      expect(thinking).toEqual(["Step one", " and two"]);
     } finally { server.stop(true); }
   });
 });

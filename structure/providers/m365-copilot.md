@@ -1,6 +1,6 @@
 # Microsoft 365 Copilot
 
-The repository owner has granted a canonical-preset policy exception; maintainer security re-review remains pending. The [public evidence section](../../docs-site/src/content/docs/guides/m365-copilot.md#evidence-and-admission-status) distinguishes Microsoft's documented Graph API from this observed private ChatHub/bootstrap contract.
+The repository owner has granted a canonical-preset policy exception; the independent maintainer security re-review passed on implementation head `359a57431b` (October 28, 2026). The [public evidence section](../../docs-site/src/content/docs/guides/m365-copilot.md#evidence-and-admission-status) distinguishes Microsoft's documented Graph API from this observed private ChatHub/bootstrap contract.
 
 `src/providers/registry/entries-core.ts` registers the opt-in, non-featured `m365-copilot` OAuth provider with live account discovery and an empty offline roster. It is separate from `github-copilot`. `src/providers/m365-copilot-models.ts` keeps old request aliases compatible and accepts Microsoft's native selector IDs so new versions need no alias-table update. A selector is not evidence of an underlying model identity.
 

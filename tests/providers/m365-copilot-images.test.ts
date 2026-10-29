@@ -83,3 +83,26 @@ test("adapter forwards fresh user and tool-result images and reuses earlier conv
     expect(budget.snapshot().currentBytes).toBe(0);
   } finally { budget.dispose(); }
 });
+test("a rebuilt conversation with more history images than the cap uploads only the newest four", async () => {
+  let uploads = 0;
+  const p = provider((async () => Response.json({ docId: "fixture-image-" + ++uploads })) as typeof fetch);
+  const turns: any[][] = [];
+  const adapter = createM365CopilotAdapter(p, { turn: async o => { turns.push(o.images); o.conversation.turns++; return "fixture reply"; } });
+  const images = (count: number) => Array.from({ length: count }, () => ({ type: "image" as const, imageUrl: png }));
+  const budget = createTranslatorBudget();
+  try {
+    const replay: OcxParsedRequest = { modelId: "Claude_Sonnet", stream: false, options: {}, context: { messages: [
+      { role: "user", content: [{ type: "text", text: "Compare these" }, ...images(3)], timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "fixture reply" }], timestamp: 1 },
+      { role: "user", content: [{ type: "text", text: "And these" }, ...images(3)], timestamp: 2 },
+    ] } };
+    const errors: AdapterEvent[] = [];
+    await adapter.runTurn!(replay, { headers: new Headers(), translatorBudget: budget }, () => {});
+    expect(uploads).toBe(4); expect(turns[0]).toHaveLength(4);
+    const fresh: OcxParsedRequest = { modelId: "Claude_Sonnet", stream: false, options: {}, context: { messages: [
+      { role: "user", content: [{ type: "text", text: "A fresh turn with six new images" }, ...images(6)], timestamp: 0 },
+    ] } };
+    await adapter.runTurn!(fresh, { headers: new Headers(), translatorBudget: budget }, event => { if (event.type === "error") errors.push(event); });
+    expect(errors).toContainEqual(expect.objectContaining({ type: "error", status: 413, message: expect.stringContaining("four") }));
+  } finally { budget.dispose(); }
+});

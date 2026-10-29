@@ -5,7 +5,7 @@ description: Sign in to Microsoft 365 Copilot and discover your account's live c
 
 Microsoft 365 Copilot is an experimental native provider, separate from GitHub Copilot. It connects directly to Microsoft's private ChatHub WebSocket service. It requires a work or school account with access to Microsoft 365 Copilot Chat; personal Microsoft accounts are not supported. Availability and quotas remain controlled by Microsoft.
 
-The repository owner granted the built-in preset a canonical-provider policy exception; maintainer security re-review remains pending. The private endpoints described below are observed behavior, not a Microsoft-published API contract.
+The repository owner granted the built-in preset a canonical-provider policy exception; the independent maintainer security re-review passed on implementation head `359a57431b` (October 28, 2026). Exact-head CI status is tracked separately on the pull request. The private endpoints described below are observed behavior, not a Microsoft-published API contract.
 
 ## Sign in
 
@@ -36,6 +36,8 @@ m365-copilot/Gpt_61_Sol_Reasoning
 ```
 
 Text streams and client-executed tools travel through OpenCodex's existing request interfaces. Tool calls are prompt-emulated: the model emits a fenced call, OpenCodex translates it into the client's tool format, and the client executes it under its own permissions. Conversations are scoped to the Microsoft account, model, client session and tool set. Temporary chats keep their live conversation context without adding a persistent Copilot history entry.
+
+Every ChatHub turn also includes Microsoft's built-in `BingWebSearch` tool in the upstream request. It is sent regardless of whether client tools are enabled, and the model may use web search on its own; OpenCodex does not control that server-side capability.
 
 In a failover combo, a Copilot quota refusal before any output advances to the next eligible model or provider when fallback is enabled. Empty thinking placeholders do not count as output. A refusal after real reasoning, text or a tool call stays with that model to avoid replaying a committed turn.
 

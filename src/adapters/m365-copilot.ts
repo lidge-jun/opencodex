@@ -10,7 +10,7 @@ import { estimateTokens } from "../lib/token-estimate";
 import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
 import { createM365Conversation, runM365CopilotTurn, m365RequestSocketRoute, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
-import { m365ImageUrls, uploadM365Images } from "./m365-copilot/images";
+import { m365ImageUrls, uploadM365Images, MAX_IMAGES } from "./m365-copilot/images";
 
 interface ConversationState { conversation: M365Conversation; sent: number; prefix: string; sentImages: number; imagePrefix: string; accessed: number; tail: Promise<void>; pendingNote?: string }
 const conversations = new Map<string, ConversationState>();
@@ -41,6 +41,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
       const key = digest(JSON.stringify([claims.oid, claims.tid, parsed.modelId, incoming.headers.get("session_id") ?? incoming.headers.get("x-codex-session-id"), first?.content, tools?.map(tool => tool.function.name).sort()]));
       for (const [id, state] of conversations) if (Date.now() - state.accessed > 30 * 60_000) conversations.delete(id);
       let state = conversations.get(key);
+      let rebuilt = false;
       if (!state) {
         if (conversations.size >= 64) conversations.delete(conversations.keys().next().value!);
         state = { conversation: createM365Conversation(), sent: 0, prefix: "", sentImages: 0, imagePrefix: "", accessed: Date.now(), tail: Promise.resolve() };
@@ -58,6 +59,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         if (messages.length <= state.sent || state.prefix !== digest(JSON.stringify(messages.slice(0, state.sent)))
           || state.sentImages > imageUrls.length || state.sentImages > 0 && state.imagePrefix !== digest(JSON.stringify(imageUrls.slice(0, state.sentImages)))) {
           state.conversation = createM365Conversation(); state.sent = 0; state.sentImages = 0; state.imagePrefix = ""; state.pendingNote = undefined;
+          rebuilt = true;
         }
         const fresh = messages.slice(state.sent).filter(message => message.role !== "assistant");
         let text = state.sent === 0 ? formatMessages(messages, tools, toolChoice, undefined, defaultFramingForModel(parsed.modelId))
@@ -68,6 +70,9 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         let emittedToolCalls = 0;
         let thinkingText = "";
         heartbeat = setInterval(() => emit({ type: "heartbeat" }), 5_000);
+        // A rebuilt conversation replays its whole history in one turn; ChatHub caps a turn at four images, so keep only
+        // the newest four historical images and mark the skipped ones as sent so a retry never re-uploads them.
+        if (rebuilt && imageUrls.length > MAX_IMAGES && messages.some(message => message.role === "assistant")) state.sentImages = imageUrls.length - MAX_IMAGES;
         const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, incoming.beforePhysicalSend);
         const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, images, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
           route,

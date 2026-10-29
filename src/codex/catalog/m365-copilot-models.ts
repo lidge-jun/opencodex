@@ -19,7 +19,11 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
   try {
     const claims = m365CopilotClaims(auth.apiKey);
     if (session.accountId.toLowerCase() !== (claims.oid + "@" + claims.tid).toLowerCase()) throw new Error("Account mismatch");
-  } catch { return { models: [], state: "degraded" }; }
+  } catch {
+    // The identity changed, so stale cached rows must not be advertised; surface the failure like every other path.
+    if (isCurrent()) markProviderDiscoveryFailed(name, { reason: "provider" });
+    return { models: [], state: "degraded" };
+  }
   const identity = createHash("sha256").update(JSON.stringify([auth.oauthAccountId, session.accountId, session.cookie])).digest("hex");
   const hinted = (models: CatalogModel[]) => applyConfigHintsToCachedModels(name, provider, models, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false);
   const fresh = getFreshCached(name, ttlMs, Date.now(), identity);

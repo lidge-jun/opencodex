@@ -22,9 +22,9 @@ export function getToneForModel(model: string): string {
   return tone;
 }
 export function isSonnet55Model(model: string): boolean { return model === "claude-sonnet-5.5" || model === "Claude_Sonnet"; }
+const M365_COPILOT_PAID_TONES = new Set(["Claude_Opus", "Claude_Sonnet", "Claude_Sonnet_5", "Gpt_6_Reasoning", "DeepWork"]);
 export function m365CopilotScenario(model: string): { scenario: string; licenseType: string } {
-  getToneForModel(model);
-  const paid = ["claude-opus", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "gpt-6-think-deeper", "Claude_Opus", "Claude_Sonnet", "Claude_Sonnet_5", "Gpt_6_Reasoning", "DeepWork"].includes(model);
-  return paid ? { scenario: "OfficeWebPaidCopilot", licenseType: "Premium" }
+  // Resolve the tone first so aliases and native selector IDs pick the same scenario for the same upstream model.
+  return M365_COPILOT_PAID_TONES.has(getToneForModel(model)) ? { scenario: "OfficeWebPaidCopilot", licenseType: "Premium" }
     : { scenario: "OfficeWebIncludedCopilot", licenseType: "Starter" };
 }

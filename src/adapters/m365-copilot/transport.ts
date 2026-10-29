@@ -149,14 +149,28 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
       if (bytes > retainedBytes) options.budget?.chargeRetained(bytes - retainedBytes, { kind: "retained_collectors" });
       else if (bytes < retainedBytes) options.budget?.releaseRetained(retainedBytes - bytes, { kind: "retained_collectors" });
       retainedBytes = bytes;
-      if (text.startsWith(emitted)) { const delta = text.slice(emitted.length); emitted = text; if (delta) options.onText(delta); }
+      // A diverging prefix means already-streamed text would have to change; fail rather than report a truncated answer as done.
+      if (!text.startsWith(emitted)) throw new M365CopilotTurnError("Microsoft 365 Copilot response changed previously emitted text");
+      const delta = text.slice(emitted.length); emitted = text; if (delta) options.onText(delta);
     };
+    const thinkingById = new Map<string, string>();
     const messages = (rows: any[]) => {
       for (const row of rows) {
         if (row?.author !== "bot") continue;
         if (row.messageType === "Disengaged") refusal = true;
         if (typeof row.text !== "string") continue;
-        if (row.messageType === "ChainOfThoughtSummary") options.onThinking?.(row.text);
+        if (row.messageType === "ChainOfThoughtSummary") {
+          // Terminal frames replay summary rows; emit only the unseen suffix per messageId instead of duplicating reasoning.
+          const id = typeof row.messageId === "string" && row.messageId.length <= 256 ? row.messageId : undefined;
+          if (id === undefined) options.onThinking?.(row.text);
+          else {
+            const seen = thinkingById.get(id);
+            if (seen === undefined || row.text.length > seen.length) {
+              options.onThinking?.(seen !== undefined && row.text.startsWith(seen) ? row.text.slice(seen.length) : row.text);
+              thinkingById.set(id, row.text);
+            }
+          }
+        }
         else if (!row.messageType || row.messageType === "Chat") { composer.snapshot(typeof row.messageId === "string" && row.messageId.length <= 256 ? row.messageId : undefined, row.text); advance(); }
       }
     };

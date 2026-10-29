@@ -7,7 +7,7 @@ import { M365_COPILOT_BASE_URL, m365CopilotScenario } from "../../providers/m365
 import { M365CopilotTurnError } from "./transport";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_IMAGES = 4;
+export const MAX_IMAGES = 4;
 const MAX_IMAGE_BATCH_BYTES = MAX_IMAGE_BYTES * MAX_IMAGES;
 export interface M365ImageAnnotation {
   id: string;

@@ -253,6 +253,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/auth-api/pool-mode-gate.ts` | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
+| `src/codex/catalog/m365-copilot-models.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
@@ -326,6 +327,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/m365-copilot-browser.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
+| `src/oauth/m365-copilot-web-session.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/oauth/m365-copilot.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-keychain.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
@@ -342,6 +344,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/api-key-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/providers/codex-capacity.ts` | [`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/providers/m365-copilot-discovery-fetch.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
+| `src/providers/m365-copilot-discovery.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/providers/m365-copilot-models.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/providers/quota-decision-antigravity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota-decision-publication.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |

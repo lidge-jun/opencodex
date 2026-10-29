@@ -556,7 +556,7 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   const workbuddy = normalizeWorkBuddyMetadata(candidate.workbuddy);
   if (workbuddy) normalized.workbuddy = workbuddy;
   const m365 = normalizeM365WebSession(candidate.m365);
-  if (m365 && m365.accountId === normalized.accountId) normalized.m365 = m365;
+  if (m365 && m365.accountId.toLowerCase() === normalized.accountId?.toLowerCase()) normalized.m365 = m365;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;

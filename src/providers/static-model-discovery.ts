@@ -28,8 +28,7 @@ function exactRegistryTransportMatch(
   const legacyMimoLocal = options.allowLegacyMimoLocal === true
     && entry.id === "mimo-free"
     && provider.authMode === "local";
-  const canonicalM365 = entry.id === "m365-copilot" && (provider.authMode === undefined || provider.authMode === "oauth");
-  if (provider.authMode !== undefined && provider.authMode !== "key" && !legacyMimoLocal && !canonicalM365) return false;
+  if (provider.authMode !== undefined && provider.authMode !== "key" && !legacyMimoLocal) return false;
   return normalizedEndpoint(provider.baseUrl) === normalizedEndpoint(entry.baseUrl);
 }
 
