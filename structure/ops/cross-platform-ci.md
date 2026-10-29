@@ -45,7 +45,7 @@ list. The aggregate derives the same expectation from its `scoped` result.
 
 The macOS suite has four duration-weighted shards (`macos N/4`, `TEST_SHARD=N/4`), each capped
 at 20 minutes. With the control and widget/bundle job, `lane=all` requests at least six macOS jobs
-for five runner slots; a `ci.yml` change also selects the setup-action and remote-helper macOS legs.
+for five runner slots; a `ci.yml` change also selects the setup-action macOS leg.
 Widget/bundle waits for `gates`, so the requests need not overlap and a queue is possible rather
 than guaranteed. The fourth shard adds setup overhead while dividing the same suite.
 
