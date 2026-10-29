@@ -68,7 +68,7 @@ export const vi: Record<TKey, string> = {
   "pws.completion.failedShort": "Lỗi",
   "pws.completion.notTested": "Chưa kiểm tra",
   "pws.completion.disableFailed": "Tắt {count} mô hình lỗi",
-  "pws.completion.disableConfirm": "Tắt {count} mô hình không qua kiểm tra trên {provider}? Chúng sẽ bị ẩn khỏi client cho đến khi bạn bật lại trong trang Mô hình.",
+  "pws.completion.disableConfirm": "Tắt {count} mô hình không qua kiểm tra trên {provider}? Cho đến khi bạn bật lại trong trang Mô hình, chúng sẽ không xuất hiện trong catalog và bộ chọn model nhưng vẫn có thể được gọi trực tiếp bằng id chính xác.",
   "pws.completion.disabledDone": "Đã tắt {count} mô hình. Bật lại trong trang Mô hình.",
   "pws.completion.disableError": "Không thể tắt các mô hình lỗi",
 

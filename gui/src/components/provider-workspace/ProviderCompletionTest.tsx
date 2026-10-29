@@ -1,5 +1,5 @@
 /** An explicitly consented, bounded completion probe; it never runs during discovery. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction } from "../../action-dialogs";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useI18n, useT } from "../../i18n/shared";
@@ -21,6 +21,17 @@ export type CompletionTestResult =
 
 export type CompletionProbeStatus = "untested" | "testing" | "ok" | "failed" | "not-applicable";
 
+/**
+ * The server admits one completion test per provider at a time and answers an overlap with 409.
+ * Both probes share this gate so neither control can start while the other is confirming or running.
+ * Each probe gets a stable gate; whether the other probe holds it arrives as the `blocked` prop.
+ */
+export type ProbeGate = {
+  claim(): boolean;
+  release(): void;
+};
+type ProbeOwner = "single" | "bulk";
+
 type Props = {
   apiBase: string;
   provider: string;
@@ -37,6 +48,24 @@ export default function ProviderCompletionTest({ apiBase, provider, models, onSt
     setModel("");
   }
   const selectedModel = models.includes(model) ? model : "";
+  const [active, setActive] = useState<ProbeOwner | null>(null);
+  const holder = useRef<ProbeOwner | null>(null);
+  const gates = useMemo(() => {
+    const gateFor = (owner: ProbeOwner): ProbeGate => ({
+      claim() {
+        if (holder.current !== null && holder.current !== owner) return false;
+        holder.current = owner;
+        setActive(owner);
+        return true;
+      },
+      release() {
+        if (holder.current !== owner) return;
+        holder.current = null;
+        setActive(null);
+      },
+    });
+    return { single: gateFor("single"), bulk: gateFor("bulk") };
+  }, []);
   return (
     <section className="pws-completion-test" aria-label={t("pws.completion.title")}>
       <h4 className="pws-section-title">{t("pws.completion.title")}</h4>
@@ -48,13 +77,17 @@ export default function ProviderCompletionTest({ apiBase, provider, models, onSt
             onStatusChange?.({ status: "untested", model: next });
           }} />
         <CompletionRun key={JSON.stringify([apiBase, provider, selectedModel])}
-          apiBase={apiBase} provider={provider} model={selectedModel} onStatusChange={onStatusChange} />
-        <ProviderBulkCompletionTest apiBase={apiBase} provider={provider} models={models} />
+          apiBase={apiBase} provider={provider} model={selectedModel} onStatusChange={onStatusChange}
+          gate={gates.single} blocked={active === "bulk"} />
+        <ProviderBulkCompletionTest apiBase={apiBase} provider={provider} models={models}
+          gate={gates.bulk} blocked={active === "single"} />
     </section>
   );
 }
 
-function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props, "models"> & { model: string }) {
+function CompletionRun({ apiBase, provider, model, onStatusChange, gate, blocked }: Omit<Props, "models"> & {
+  model: string; gate: ProbeGate; blocked: boolean;
+}) {
   const t = useT();
   const { locale } = useI18n();
   const [busy, setBusy] = useState(false);
@@ -66,13 +99,16 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
     mounted.current = true;
     return () => {
       mounted.current = false;
-      flight.current?.abort();
-      flight.current = null;
+      if (flight.current) {
+        flight.current.abort();
+        flight.current = null;
+        gate.release();
+      }
     };
-  }, []);
+  }, [gate]);
 
   async function run() {
-    if (!model || flight.current) return;
+    if (!model || flight.current || !gate.claim()) return;
     const controller = new AbortController();
     flight.current = controller;
     setBusy(true);
@@ -111,13 +147,14 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
     } finally {
       if (flight.current === controller) {
         flight.current = null;
+        gate.release();
         if (mounted.current && !controller.signal.aborted) setBusy(false);
       }
     }
   }
 
   return <>
-    <button type="button" className="btn btn-ghost btn-sm" disabled={!model || busy} onClick={() => void run()}>
+    <button type="button" className="btn btn-ghost btn-sm" disabled={!model || busy || blocked} onClick={() => void run()}>
       {busy ? t("pws.testing") : t("pws.completion.run")}
     </button>
     {error && <p role="alert" className="pws-inline-error pws-completion-result">{error}</p>}

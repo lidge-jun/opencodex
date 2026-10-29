@@ -7,20 +7,20 @@ import { confirmAction } from "../../action-dialogs";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useI18n, useT } from "../../i18n/shared";
 import { putModelVisibility } from "../../model-visibility";
-import type { CompletionTestResult } from "./ProviderCompletionTest";
+import type { CompletionTestResult, ProbeGate } from "./ProviderCompletionTest";
 
 type RowOutcome = "ok" | "failed" | "skipped";
 type Row = { model: string; outcome: RowOutcome; latencyMs?: number; detail?: string };
 type DisableState = { kind: "idle" } | { kind: "busy" } | { kind: "done"; count: number } | { kind: "error"; message: string };
 
-type Props = { apiBase: string; provider: string; models: string[] };
+type Props = { apiBase: string; provider: string; models: string[]; gate: ProbeGate; blocked: boolean };
 
 /** A failure the upstream actually answered for this model; transport aborts and HTTP refusals are not evidence. */
 function failedModelIds(rows: readonly Row[]): string[] {
   return rows.filter(row => row.outcome === "failed").map(row => row.model);
 }
 
-export default function ProviderBulkCompletionTest({ apiBase, provider, models }: Props) {
+export default function ProviderBulkCompletionTest({ apiBase, provider, models, gate, blocked }: Props) {
   const t = useT();
   const { locale } = useI18n();
   const [rows, setRows] = useState<Row[]>([]);
@@ -31,9 +31,9 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   const flight = useRef<AbortController | null>(null);
   const disableFlight = useRef<AbortController | null>(null);
   useEffect(() => () => {
-    flight.current?.abort(); flight.current = null;
+    if (flight.current) { flight.current.abort(); flight.current = null; gate.release(); }
     disableFlight.current?.abort(); disableFlight.current = null;
-  }, []);
+  }, [gate]);
 
   async function testOne(model: string, signal: AbortSignal): Promise<Row | { stop: string }> {
     try {
@@ -66,7 +66,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   }
 
   async function run() {
-    if (models.length === 0 || flight.current || disableFlight.current) return;
+    if (models.length === 0 || flight.current || disableFlight.current || !gate.claim()) return;
     const controller = new AbortController();
     flight.current = controller;
     setRunning(true);
@@ -90,6 +90,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
     } finally {
       if (flight.current === controller) {
         flight.current = null;
+        gate.release();
         setRunning(false);
       }
     }
@@ -98,6 +99,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   function stop() {
     flight.current?.abort();
     flight.current = null;
+    gate.release();
     setStopped(true);
     setRunning(false);
   }
@@ -139,7 +141,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   return (
     <div className="pws-completion-bulk">
       <div className="row pws-completion-bulk-actions">
-        <button type="button" className="btn btn-ghost btn-sm" disabled={models.length === 0 || running || disable.kind === "busy"} onClick={() => void run()}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={models.length === 0 || running || disable.kind === "busy" || blocked} onClick={() => void run()}>
           {running ? t("pws.completion.progress", { done: String(rows.length), total: String(models.length) }) : t("pws.completion.runAll")}
         </button>
         {running && <button type="button" className="btn btn-ghost btn-sm" onClick={stop}>{t("pws.completion.stop")}</button>}

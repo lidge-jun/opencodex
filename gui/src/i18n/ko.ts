@@ -66,7 +66,7 @@ export const ko: Record<TKey, string> = {
   "pws.completion.failedShort": "실패",
   "pws.completion.notTested": "미테스트",
   "pws.completion.disableFailed": "실패한 모델 {count}개 비활성화",
-  "pws.completion.disableConfirm": "{provider}에서 테스트에 실패한 모델 {count}개를 비활성화할까요? 모델 페이지에서 다시 활성화할 때까지 클라이언트에 표시되지 않습니다.",
+  "pws.completion.disableConfirm": "{provider}에서 테스트에 실패한 모델 {count}개를 비활성화할까요? 모델 페이지에서 다시 활성화할 때까지 카탈로그와 모델 선택기에서 빠지지만, 정확한 id로는 계속 직접 호출할 수 있습니다.",
   "pws.completion.disabledDone": "모델 {count}개를 비활성화했습니다. 모델 페이지에서 다시 활성화할 수 있습니다.",
   "pws.completion.disableError": "실패한 모델을 비활성화하지 못했습니다",
 

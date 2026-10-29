@@ -64,7 +64,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.completion.failedShort": "失敗",
   "pws.completion.notTested": "未測試",
   "pws.completion.disableFailed": "停用 {count} 個失敗的模型",
-  "pws.completion.disableConfirm": "停用 {provider} 上未通過測試的 {count} 個模型？在模型頁面重新啟用之前，用戶端將看不到它們。",
+  "pws.completion.disableConfirm": "停用 {provider} 上未通過測試的 {count} 個模型？在模型頁面重新啟用之前，它們不會出現在目錄和模型選擇器中，但仍可用精確 id 直接呼叫。",
   "pws.completion.disabledDone": "已停用 {count} 個模型。可在模型頁面重新啟用。",
   "pws.completion.disableError": "無法停用失敗的模型",
 

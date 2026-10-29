@@ -67,7 +67,7 @@ export const tr: Record<TKey, string> = {
   "pws.completion.failedShort": "Başarısız",
   "pws.completion.notTested": "Test edilmedi",
   "pws.completion.disableFailed": "Başarısız {count} modeli devre dışı bırak",
-  "pws.completion.disableConfirm": "{provider} üzerinde testi geçemeyen {count} model devre dışı bırakılsın mı? Modeller sayfasında yeniden etkinleştirilene kadar istemcilerden gizlenirler.",
+  "pws.completion.disableConfirm": "{provider} üzerinde testi geçemeyen {count} model devre dışı bırakılsın mı? Modeller sayfasında yeniden etkinleştirilene kadar katalogda ve model seçicide görünmezler, ancak tam kimlikleriyle doğrudan çağrılabilirler.",
   "pws.completion.disabledDone": "{count} model devre dışı bırakıldı. Modeller sayfasında yeniden etkinleştirebilirsiniz.",
   "pws.completion.disableError": "Başarısız modeller devre dışı bırakılamadı",
 

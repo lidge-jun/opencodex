@@ -66,7 +66,7 @@ export const ja: Record<TKey, string> = {
   "pws.completion.failedShort": "失敗",
   "pws.completion.notTested": "未テスト",
   "pws.completion.disableFailed": "失敗した {count} 個のモデルを無効化",
-  "pws.completion.disableConfirm": "{provider} でテストに失敗した {count} 個のモデルを無効化しますか？モデルページで再度有効にするまでクライアントには表示されません。",
+  "pws.completion.disableConfirm": "{provider} でテストに失敗した {count} 個のモデルを無効化しますか？モデルページで再度有効にするまでカタログとモデル選択から外れますが、正確な id では引き続き直接呼び出せます。",
   "pws.completion.disabledDone": "{count} 個のモデルを無効化しました。モデルページで再度有効にできます。",
   "pws.completion.disableError": "失敗したモデルを無効化できませんでした",
 
