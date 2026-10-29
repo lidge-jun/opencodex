@@ -92,6 +92,7 @@ export const CC_SWITCH_IMPORT_JOURNAL_FILENAME = "cc-switch-provider-import-jour
 const JOURNAL_SCHEMA_VERSION = 1;
 const MAX_SQLITE_BYTES = 32 * 1024 * 1024;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_CODEX_TOML_BYTES = 64 * 1024;
 const SQLITE_MAGIC_PREFIX = "SQLite format 3";
 
 interface JournalEntry {
@@ -363,6 +364,7 @@ function parseTableHeader(trimmed: string): { kind: "root_other" } | { kind: "mo
 const ALLOWED_TOML_KEYS = new Set(["model", "model_provider", "base_url", "openai_base_url", "wire_api"]);
 
 export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
+  if (bytes.length > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
   const projection: CodexTomlProjection = { providers: new Map() };
   let currentSection: { kind: "root" } | { kind: "model_provider"; id: string } | { kind: "other" } = { kind: "root" };
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -499,6 +501,45 @@ function resolveCodexProjection(proj: CodexTomlProjection): { ok: true; baseUrl:
   };
 }
 
+function sqlLineExpr(col: string): string {
+  return `trim(replace(substr(${col}, 1, instr(${col}, char(10)) - 1), char(13), ''))`;
+}
+
+function sqlModelProvidersHeaderPredicate(line: string): string {
+  const inner = `trim(substr(${line}, 2, instr(${line}, ']') - 2))`;
+  const afterKey = `ltrim(substr(${inner}, 16))`;
+  const seg = `trim(substr(${afterKey}, 2))`;
+  return `(
+    substr(${line}, 1, 1) = '['
+    AND substr(${line}, 1, 2) != '[['
+    AND instr(${line}, ']') > 1
+    AND substr(${inner}, 1, 15) = 'model_providers'
+    AND substr(${afterKey}, 1, 1) = '.'
+    AND ${seg} != ''
+    AND (
+      (
+        substr(${seg}, 1, 1) = '"'
+        AND length(${seg}) >= 3
+        AND substr(${seg}, -1, 1) = '"'
+        AND substr(replace(${seg}, char(92) || char(92), ''), -2, 2) != (char(92) || '"')
+        AND instr(replace(replace(substr(${seg}, 2, length(${seg}) - 2), char(92) || char(92), ''), char(92) || char(34), ''), '"') = 0
+      )
+      OR (
+        substr(${seg}, 1, 1) = ''''
+        AND length(${seg}) >= 3
+        AND substr(${seg}, -1, 1) = ''''
+        AND instr(substr(${seg}, 2, length(${seg}) - 2), '''') = 0
+      )
+      OR (
+        substr(${seg}, 1, 1) NOT IN ('"', '''')
+        AND instr(${seg}, '.') = 0
+        AND instr(${seg}, ' ') = 0
+        AND instr(${seg}, char(9)) = 0
+      )
+    )
+  )`;
+}
+
 const SQLITE_SAFE_QUERY = `
 WITH RECURSIVE
   base AS (
@@ -533,6 +574,8 @@ WITH RECURSIVE
       CASE
         WHEN json_valid(settings_config) AND json_type(settings_config, ?13) = 'text' THEN
           CASE
+            WHEN length(CAST(json_extract(settings_config, ?13) AS BLOB)) > ${MAX_CODEX_TOML_BYTES}
+              THEN '[__MALFORMED_LINE__]' || char(10)
             WHEN instr(json_extract(settings_config, ?13), '"""') > 0 OR instr(json_extract(settings_config, ?13), '''''''') > 0
               THEN '[__MULTILINE_REFUSED__]' || char(10)
             ELSE json_extract(settings_config, ?13) || char(10)
@@ -544,34 +587,13 @@ WITH RECURSIVE
   lines(rid, line, rest, idx, sec) AS (
     SELECT
       rid,
-      trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')),
+      ${sqlLineExpr("raw_cfg")},
       substr(raw_cfg, instr(raw_cfg, char(10)) + 1),
       1,
       CASE
-        WHEN substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+        WHEN substr(${sqlLineExpr("raw_cfg")}, 1, 1) = '[' THEN
           CASE
-            WHEN (
-    substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '['
-    AND substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 2) != '[['
-    AND instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') > 1
-    AND substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 1, 15) = 'model_providers'
-    AND substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 1, 1) = '.'
-    AND trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)) != ''
-    AND (
-      (
-        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) IN ('"', '''')
-        AND length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) >= 3
-        AND substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), -1, 1) = substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)
-        AND instr(replace(replace(substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 2, length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) - 2), '\\', ''), '\"', ''), substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)) = 0
-      )
-      OR (
-        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) NOT IN ('"', '''')
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), '.') = 0
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), ' ') = 0
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), char(9)) = 0
-      )
-    )
-  ) THEN 'mp'
+            WHEN ${sqlModelProvidersHeaderPredicate(sqlLineExpr("raw_cfg"))} THEN 'mp'
             ELSE 'other'
           END
         ELSE 'root'
@@ -580,34 +602,13 @@ WITH RECURSIVE
     UNION ALL
     SELECT
       rid,
-      trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')),
+      ${sqlLineExpr("rest")},
       substr(rest, instr(rest, char(10)) + 1),
       idx + 1,
       CASE
-        WHEN substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+        WHEN substr(${sqlLineExpr("rest")}, 1, 1) = '[' THEN
           CASE
-            WHEN (
-    substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '['
-    AND substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 2) != '[['
-    AND instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') > 1
-    AND substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 1, 15) = 'model_providers'
-    AND substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 1, 1) = '.'
-    AND trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)) != ''
-    AND (
-      (
-        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) IN ('"', '''')
-        AND length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) >= 3
-        AND substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), -1, 1) = substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)
-        AND instr(replace(replace(substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 2, length(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2))) - 2), '\\', ''), '\"', ''), substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1)) = 0
-      )
-      OR (
-        substr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), 1, 1) NOT IN ('"', '''')
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), '.') = 0
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), ' ') = 0
-        AND instr(trim(substr(ltrim(substr(trim(substr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 2, instr(trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), ']') - 2)), 16)), 2)), char(9)) = 0
-      )
-    )
-  ) THEN 'mp'
+            WHEN ${sqlModelProvidersHeaderPredicate(sqlLineExpr("rest"))} THEN 'mp'
             ELSE 'other'
           END
         ELSE sec
@@ -619,7 +620,7 @@ WITH RECURSIVE
       CASE
         WHEN idx > 500 THEN '[__MALFORMED_LINE__]'
         WHEN line = '' OR substr(line, 1, 1) = '#' THEN NULL
-        WHEN line = '[__MULTILINE_REFUSED__]' THEN '[__MULTILINE_REFUSED__]'
+        WHEN line IN ('[__MULTILINE_REFUSED__]', '[__MALFORMED_LINE__]') THEN line
         WHEN substr(line, 1, 1) = '[' THEN
           CASE
             WHEN sec = 'mp' AND instr(line, ']') > 0 THEN substr(line, 1, instr(line, ']'))
@@ -768,6 +769,7 @@ export function scanCcSwitchJsonBytes(bytes: Uint8Array): RawExtractedRow[] {
   }
 
   function parseJsonEscapedTomlInPlace(bounds: { start: number; end: number }): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
+    if (bounds.end - bounds.start > MAX_CODEX_TOML_BYTES) return { ok: false, reason: "malformed_entry" };
     const out = new Uint8Array(bounds.end - bounds.start);
     const encodeInto = new TextEncoder();
     let readIdx = bounds.start;

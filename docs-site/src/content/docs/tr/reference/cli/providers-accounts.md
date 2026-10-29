@@ -66,7 +66,7 @@ Gizli olan her şey için `--api-key` veya bir OAuth girişi kullanın.
 
 ### Anahtarsız CC-Switch sağlayıcı içe aktarma
 
-`ocx provider import-cc-switch`, CC-Switch SQLite (`~/.cc-switch/cc-switch.db`) veya JSON dosyasından yalnızca gizli olmayan meta verileri (kimlikler, adlar, temel URL'ler, bağdaştırıcılar ve varsayılan modeller) salt okunur olarak çıkarır; API anahtarlarını asla okumaz veya yazmaz. Varsayılan önizleme (`--source <FILE>`) hiçbir şey yazmaz; `--apply` ve `--restore` proxy'nin durdurulmuş olmasını (`ocx stop`) gerektirir. Kayıt seçmek için `--provider <id>`, yerel/özel adresler için `--allow-private-network` kullanın ve ardından `ocx account add-key <provider>` ile anahtar ekleyin. `--restore` yalnızca düzenlenmemiş ve yönlendirmede başvurulmayan girdileri kaldırır.
+`ocx provider import-cc-switch`, CC-Switch SQLite (`~/.cc-switch/cc-switch.db`) veya JSON dosyasından yalnızca gizli olmayan meta verileri (kimlikler, adlar, temel URL'ler, bağdaştırıcılar ve varsayılan modeller) salt okunur olarak çıkarır: SQLite'ta yalnızca gizli olmayan skaler alanlar SQL ile seçilir, JSON/TOML için geçici bayt arabellekleri taramadan hemen sonra sıfırlanır ve API anahtarları diske yazılmaz. Varsayılan önizleme (`--source <FILE>`) hiçbir şey yazmaz; `--apply` ve `--restore` proxy'nin durdurulmuş olmasını (`ocx stop`) gerektirir. Kayıt seçmek için `--provider <id>`, yerel/özel adresler için `--allow-private-network` kullanın; uyguladıktan sonra proxy'yi başlatıp (`ocx start`) standart girdi borusuyla (`printf '%s\n' "$KEY" | ocx account add-key <provider>`) anahtar ekleyin. `--restore` yalnızca düzenlenmemiş ve yönlendirmede başvurulmayan girdileri kaldırır.
 
 ## Kimlik Doğrulama
 

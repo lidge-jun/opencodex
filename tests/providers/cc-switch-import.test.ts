@@ -118,7 +118,7 @@ describe("CC-Switch keyless provider import", () => {
         name: "Acme Codex",
         settings_config: JSON.stringify({
           auth: { OPENAI_API_KEY: CANARY_SECRET },
-          config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n[model_providers.acme.extra]\nbase_url = "${CANARY_SECRET}"\n[model_providers."acme".extra]\nwire_api = "${CANARY_SECRET}"\n`,
+          config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n[model_providers.acme.extra]\nbase_url = "${CANARY_SECRET}"\n[model_providers."acme".extra]\nwire_api = "${CANARY_SECRET}"\n[model_providers."a"."b"]\nbase_url = "${CANARY_SECRET}"\n`,
         }),
         sort_index: 2,
       },
@@ -364,15 +364,23 @@ describe("CC-Switch keyless provider import", () => {
           config: Array.from({ length: 505 }, (_, i) => `# comment ${i}`).concat(['base_url = "https://late.example.com/v1"']).join("\n"),
         }),
       },
+      {
+        id: "oversize-toml-bytes",
+        app_type: "codex",
+        name: "OversizeBytes",
+        settings_config: JSON.stringify({
+          config: "#" + "x".repeat(70_000) + '\nbase_url = "https://huge.example.com/v1"\n',
+        }),
+      },
     ]);
 
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(6);
+      expect(preview.invalid).toBe(7);
       expect(preview.invalidReasons).toEqual({
-        malformed_entry: 2,
+        malformed_entry: 3,
         missing_base_url: 1,
         secret_in_nonsecret_field: 1,
         private_network_refused: 1,

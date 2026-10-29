@@ -60,7 +60,7 @@ ocx models live --provider ark --json
 
 ### キーなしの CC-Switch プロバイダーインポート
 
-`ocx provider import-cc-switch` は CC-Switch の SQLite（`~/.cc-switch/cc-switch.db`）または JSON ファイルから非機密メタデータ（ID、名前、ベース URL、アダプター、既定モデル）のみを読み取り専用で抽出し、API キーやトークンは読み書きしません。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、インポート後に `ocx account add-key <provider>` でキーを登録します。`--restore` は未編集かつルーティングから参照されていない項目のみを削除します。
+`ocx provider import-cc-switch` は CC-Switch の SQLite（`~/.cc-switch/cc-switch.db`）または JSON ファイルから非機密メタデータ（ID、名前、ベース URL、アダプター、既定モデル）のみを読み取り専用で抽出します。SQLite では非機密スカラー項目のみを SQL で射影し、JSON/TOML の一時バイトバッファはスキャン直後にゼロ消去されるため、API キーやトークンが抽出されたりディスクに書き込まれたりすることはありません。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、適用後にプロキシを起動（`ocx start`）してからパイプ標準入力（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）でキーを登録します。`--restore` は未編集かつルーティングから参照されていない項目のみを削除します。
 
 ## 認証
 

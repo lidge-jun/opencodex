@@ -226,13 +226,15 @@ refused before mutation with exit 2. Input errors never echo the submitted value
 ```bash
 ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
 ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
 ocx provider import-cc-switch --restore
 ```
 
-`ocx provider import-cc-switch` reads only non-secret provider metadata (IDs, display names, app types, base URLs, wire dialects and default models) from a plain regular CC-Switch SQLite database or legacy JSON file. API keys and bearer tokens are never read, decoded, or written, and the source file stays read-only:
+`ocx provider import-cc-switch` extracts only non-secret provider metadata (IDs, display names, app types, base URLs, wire dialects and default models) from a plain regular CC-Switch SQLite database or legacy JSON file. For SQLite sources, only non-secret scalar fields are projected in SQL; for legacy JSON and embedded Codex TOML, temporary byte buffers are zeroed immediately after scanning so API keys and bearer tokens are never extracted into provider records or written to disk, and the source file stays read-only:
 
 - **Preview (default):** requires `--source <FILE>`, writes nothing, and reports discovered, eligible, conflicting, and invalid entries.
-- **Apply (`--apply`):** requires a stopped proxy (`ocx stop`) and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Apply writes keyless provider entries and records a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json`; a second apply is refused while an active journal exists. Complete credentials afterwards with `ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
+- **Apply (`--apply`):** requires a stopped proxy (`ocx stop`) and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Apply writes keyless provider entries and records a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json`; a second apply is refused while an active journal exists. Start the proxy (`ocx start`) afterwards to add credentials with `printf '%s\n' "$KEY" | ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
 - **Restore (`--restore`):** requires a stopped proxy and takes no `--source`. It removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, or API keys; any provider you edited or added credentials to is retained.
 
 ## Authentication

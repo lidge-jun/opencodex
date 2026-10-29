@@ -136,9 +136,9 @@ export async function cmdProviderCcSwitchImport(args: string[], deps: CcSwitchIm
       }
       console.log(apply
         ? (result.imported > 0
-          ? "Keyless provider entries saved. Add credentials with 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo with 'ocx provider import-cc-switch --restore'."
+          ? "Keyless provider entries saved. Start the proxy ('ocx start') and add credentials with 'ocx account add-key <provider>' (piped stdin) or 'ocx login <provider>', or undo while stopped with 'ocx provider import-cc-switch --restore'."
           : "No eligible non-conflicting providers were imported; configuration and journal are unchanged.")
-        : "Preview only (no keys read or written). Stop the proxy before repeating with --apply.");
+        : "Preview only (no keys extracted or written). Stop the proxy before repeating with --apply.");
     }
     return result.invalid > 0 && result.eligible === 0 ? 1 : 0;
   } catch (err) {

@@ -378,7 +378,7 @@ Drives no management route.
 | `--allow-private-network` | boolean | Permit loopback or private-network provider base URLs. |
 | `--json` | boolean | Emit the preview, apply, or restore report as JSON. |
 
-- Reads only provider IDs, names, app types, base URLs, wire dialects and default models; API keys and tokens in CC-Switch are never read, decoded, or written.
+- Extracts only provider IDs, names, app types, base URLs, wire dialects and default models; SQLite projects only non-secret scalars in SQL, and legacy JSON/TOML buffers are zeroed immediately after scanning so API keys and tokens are never extracted or written.
 - Source files remain read-only. Apply refuses when an active import journal exists; restore retains any provider that was edited, given credentials, selected as default, or referenced in routing.
 
 ### `ocx models list`

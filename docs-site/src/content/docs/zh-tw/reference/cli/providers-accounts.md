@@ -43,7 +43,7 @@ ocx models live --provider ark --json
 
 ### 無金鑰匯入 CC-Switch 供應商
 
-`ocx provider import-cc-switch` 僅從 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 檔案唯讀擷取非機密中繼資料（ID、名稱、base URL、協定轉接器與預設模型），絕不讀取、解碼或寫入 API 金鑰。預設預覽（`--source <FILE>`）不寫入任何內容；`--apply` 與 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 選擇項目，對本機或私有網路位址加上 `--allow-private-network`，匯入後再用 `ocx account add-key <provider>` 新增金鑰。`--restore` 僅移除未修改且未被路由參照的匯入項目。
+`ocx provider import-cc-switch` 僅從 CC-Switch SQLite（`~/.cc-switch/cc-switch.db`）或 JSON 檔案唯讀擷取非機密中繼資料（ID、名稱、base URL、協定轉接器與預設模型）：SQLite 僅在 SQL 層投影非機密純量欄位，JSON/TOML 的暫存位元組緩衝區會在掃描後立即清零，不會將 API 金鑰擷取或寫入磁碟。預設預覽（`--source <FILE>`）不寫入任何內容；`--apply` 與 `--restore` 要求代理已停止（`ocx stop`）。可用 `--provider <id>` 選擇項目，對本機或私有網路位址加上 `--allow-private-network`；套用後先啟動代理（`ocx start`），再透過管線標準輸入（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）新增金鑰。`--restore` 僅移除未修改且未被路由參照的匯入項目。
 
 ## 認證
 

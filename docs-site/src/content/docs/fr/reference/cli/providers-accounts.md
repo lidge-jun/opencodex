@@ -63,7 +63,7 @@ Utilisez `--api-key` ou un identifiant OAuth pour tout ce qui est secret.
 
 ### Import de fournisseurs CC-Switch sans clé
 
-`ocx provider import-cc-switch` lit uniquement les métadonnées non secrètes (identifiants, noms, URL de base, dialectes et modèles par défaut) depuis un fichier SQLite (`~/.cc-switch/cc-switch.db`) ou JSON CC-Switch, sans lire ni écrire de clés API. L’aperçu (par défaut avec `--source <FILE>`) n’écrit rien. `--apply` et `--restore` exigent que le proxy soit arrêté (`ocx stop`) ; ajoutez `--provider <id>` pour filtrer, `--allow-private-network` pour autoriser une adresse locale/privée, puis configurez les clés via `ocx account add-key <provider>`. `--restore` ne supprime que les entrées importées non modifiées et non référencées.
+`ocx provider import-cc-switch` extrait uniquement les métadonnées non secrètes (identifiants, noms, URL de base, dialectes et modèles par défaut) depuis un fichier SQLite (`~/.cc-switch/cc-switch.db`) ou JSON CC-Switch : en SQLite, seuls les champs scalaires non secrets sont projetés en SQL, et pour le JSON/TOML, les tampons d’octets temporaires sont remis à zéro immédiatement après l’analyse afin qu’aucune clé API ne soit extraite ni écrite sur disque. L’aperçu (par défaut avec `--source <FILE>`) n’écrit rien. `--apply` et `--restore` exigent que le proxy soit arrêté (`ocx stop`) ; ajoutez `--provider <id>` pour filtrer et `--allow-private-network` pour autoriser une adresse locale/privée, puis démarrez le proxy (`ocx start`) et ajoutez les clés via l’entrée standard (`printf '%s\n' "$KEY" | ocx account add-key <provider>`). `--restore` ne supprime que les entrées importées non modifiées et non référencées.
 
 ## Authentification
 
