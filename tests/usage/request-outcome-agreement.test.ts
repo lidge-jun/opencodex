@@ -18,6 +18,8 @@ import {
   createRequestMetricsOwner,
 } from "../../src/server/request-metrics";
 import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract";
+import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
+import { requestLogDto } from "../../src/server/management/shared";
 
 /**
  * The durable ledger, the Prometheus exporter and the dashboard have to answer "how did this
@@ -103,6 +105,25 @@ describe("terminal classification is stated once", () => {
 });
 
 describe("send totals agree across surfaces", () => {
+  test("lossy attempt normalization is exposed to the request log DTO", () => {
+    const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
+      status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" } as const;
+    const entry = { requestId: "lossy", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", spend: { sends: 3, settled: 3, unresolved: 0 },
+      attempts: [attempt, { ...attempt, ordinal: 2, sendCount: 0, adapter: "" }] } as PersistedUsageEntry;
+    const normalized = normalizeUsageEntryForTest(entry);
+    expect(normalized.attempts).toHaveLength(1);
+    expect(normalized.attemptNormalizationDropped).toBe(true);
+    expect(requestLogDto(normalized).attemptNormalizationDropped).toBe(true);
+    expect(normalizeUsageEntryForTest(normalized).attemptNormalizationDropped).toBe(true);
+    expect(normalizeUsageEntryForTest({ ...entry, attempts: [attempt] }).attemptNormalizationDropped).toBeUndefined();
+  });
+
+  test.each(["future-fault", "constructor"])("unknown persisted cause %s is dropped", cause => {
+    const entry = { requestId: "unknown", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", failureCause: cause } as PersistedUsageEntry;
+    expect(normalizeUsageEntryForTest(entry).failureCause).toBeUndefined();
+  });
   /**
    * The budget charged four sends while the attempt rows account for three. Both numbers are
    * real and they answer different questions, so the surfaces have to agree about WHICH one the

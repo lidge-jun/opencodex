@@ -354,6 +354,8 @@ export interface PersistedUsageEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** A persisted attempt roster lost at least one malformed entry during normalization. */
+  attemptNormalizationDropped?: boolean;
   /** Aggregated upstream spend for this logical request; additive, older rows omit it. */
   spend?: PersistedRequestSpend;
   /** Provenance of this row's cache detail; absent rows are reconstructed, never assumed observed. */
@@ -1066,6 +1068,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length)
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }

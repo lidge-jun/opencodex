@@ -78,7 +78,7 @@ const nonnegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 export function failureSummary(
-  row: LogFailureAttribution & { spend?: RequestSpendTotals; attempts?: Array<{ sendCount: number }> },
+  row: LogFailureAttribution & { spend?: RequestSpendTotals; attempts?: Array<{ sendCount: number }>; attemptNormalizationDropped?: boolean },
   fallback: { label: string; description: string } | null,
   t: TFn,
 ): { label?: string; description?: string; sends?: number; unresolved?: number; retries?: number } {
@@ -95,7 +95,7 @@ export function failureSummary(
   result.unresolved = spend.unresolved;
   if (spend.unresolved === 0 && spend.settled === spend.sends
     && (spend.reserved === undefined || spend.reserved <= spend.settled)
-    && Array.isArray(row.attempts) && row.attempts.length === 1
+    && row.attemptNormalizationDropped !== true && Array.isArray(row.attempts) && row.attempts.length === 1
     && nonnegativeInteger(row.attempts[0]?.sendCount) && row.attempts[0].sendCount === spend.sends) {
     result.retries = Math.max(0, spend.sends - 1);
   }

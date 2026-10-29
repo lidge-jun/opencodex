@@ -170,6 +170,16 @@ test.each([
   } finally { await act(async () => { root.unmount(); }); }
 });
 
+test("a lossy normalized attempt roster does not imply retries", async () => {
+  const row = fixture(500, "upstream-fault", 3);
+  row.attemptNormalizationDropped = true;
+  const { root } = await show(row);
+  try {
+    expect(value("Upstream sends")).toBe("3");
+    expect(value("Retries")).toBeUndefined();
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
 test.each([
   ["local failure", "local-refusal", "Refused by this proxy", false],
   ["unknown cause", "future-fault", "Proxy error", true],
@@ -177,13 +187,14 @@ test.each([
   ["legacy row", undefined, "Proxy error", true],
 ] as const)("%s uses the proper headline and attribution", async (_name, cause, headline, fallback) => {
   const row = fixture(500, "upstream-fault", 0);
-  row.failureCause = cause;
+  // Persisted normalization drops unknown causes before they reach the dashboard.
+  row.failureCause = cause === "future-fault" || cause === "constructor" ? undefined : cause;
   if (cause === undefined) { delete row.spend; delete row.attempts; }
   const { root } = await show(row);
   try {
     expect(document.querySelector("#log-detail-title")?.textContent).toContain(`500${headline}`);
     expect(Boolean(document.querySelector(".modal-desc"))).toBe(fallback);
-    if (cause === "future-fault" || cause === "constructor") expect(value("Failure cause")).toBe(cause);
+    if (cause === "future-fault" || cause === "constructor") expect(value("Failure cause")).toBeUndefined();
     if (cause === undefined) expect(value("Upstream sends")).toBe("Unavailable");
   } finally { await act(async () => { root.unmount(); }); }
 });

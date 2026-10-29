@@ -207,6 +207,7 @@ export interface LogEntry extends LogFailureAttribution {
   totalTokens?: number;
   firstOutputMs?: number;
   attempts?: LogAttempt[];
+  attemptNormalizationDropped?: boolean;
   displayMetrics?: LogDisplayMetrics;
   /** Bounded route-decision trace (RI-01); absent for pre-trace rows. */
   routeDecision?: {
