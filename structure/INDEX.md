@@ -123,6 +123,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
 | [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
+| [`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) | Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
 | [`clients/codex-desktop.md`](clients/codex-desktop.md) | Windows package activation, restart context, and protected compatibility authority persistence. |
 | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries. |
@@ -240,7 +241,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
-| `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
+| `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/clients/config-export/` | [`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
@@ -291,7 +292,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md) |
+| `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
@@ -409,7 +410,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
 | `src/types/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/types/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
-| `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
+| `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/update/guarded-port-reclaim.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |

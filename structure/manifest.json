@@ -903,6 +903,13 @@
       "documents": ["src/clients/config-export.ts", "src/clients/config-export/", "src/integrations/", "src/cli/", "src/server/management/"]
     },
     {
+      "path": "clients/omo-export-dialect.md",
+      "tier": 5,
+      "title": "omo Client Export Dialect",
+      "scope": "Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle.",
+      "documents": ["src/clients/config-export.ts", "src/types/config.ts", "src/config/schema/leaf-validators.ts"]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",
