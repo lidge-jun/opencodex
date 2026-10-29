@@ -1,4 +1,5 @@
 import { websocketsEnabled } from "../config";
+import { omitDisabledNativeCatalogEntries } from "../codex/catalog/native-omission";
 import type { OcxConfig } from "../types";
 import { buildCatalogEntries } from "../codex/catalog/build-entries";
 import { loadCatalogTemplate } from "../codex/catalog/bundled";
@@ -42,5 +43,5 @@ export function buildCodexModelList({
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
     nativeSource,
   );
-  return { models: applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)) };
+  return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };
 }

@@ -235,6 +235,8 @@ export const configSchema = z.object({
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   preferModelAliasIds: z.boolean().optional().catch(false),
+  // Catalog omission is opt-in; malformed hand edits preserve the hidden-row default.
+  omitDisabledNativeModels: z.boolean().optional().catch(false),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
   // Fast selectors default on; malformed hand edits disable them without rejecting providers.
