@@ -577,7 +577,7 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
 | 도구 결과의 `tool_reference` | 기본적으로 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트를 보존합니다. [append-only 옵션](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)을 켠 적격 최종 Responses 경로에서는 성공한 클라이언트 검색 결과 위치에 현재 선언된 지연 함수의 정의를 배치할 수 있습니다. 참조만으로 도구 권한이나 서버 측 검색 기능을 추가하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
-| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 |
+| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 `allowed_domains`, `blocked_domains`, `user_location`이 있으면 번역된 Responses/Chat 경로에서 호스팅 검색을 제외하며, 제외된 검색을 강제하면 400을 반환합니다. 유효한 `defer_loading` 함수 정의는 일반 함수로 호출할 수 있습니다. [번역 제한](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)을 참고하세요. |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

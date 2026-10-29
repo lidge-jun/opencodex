@@ -217,8 +217,14 @@ finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, 
 from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
 positive value overwrites an earlier one.
 
-Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
-`tokenUsage` on any event, which is why Kiro token usage stays estimated. The parser preserves
+Spend arrives in `meteringEvent` as **credits, not tokens**. Kiro token usage stays estimated
+unless a `metadataEvent` carries a `tokenUsage` block; no captured response did. That block is the
+only frame that yields a measured count: the parser marks the usage `upstreamReported`,
+`mergeKiroUsage` keeps the mark only when both legs of a two-leg turn have it, and
+`usageForFinalLog` (`src/usage/log.ts`) then skips the provider-wide estimated mark while
+`finalizedUsage` (`src/server/request-log.ts`) skips the local input floor. A turn without
+`tokenUsage`, a leg without it, and a count read off the bridged Responses wire all keep the
+estimated mark. The parser preserves
 `meteringEvent` unit/usage (`amount` is an alias) and optional `unitPlural`; credit readings populate
 `OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
 is a snapshot; separate completion-fallback responses add their credits. Missing metering stays

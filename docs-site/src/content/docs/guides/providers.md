@@ -69,13 +69,21 @@ is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore 
 ## Claude Opus 5.5 progress updates
 
 When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
-OpenCodex requests Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
+OpenCodex defaults to Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
 Progress updates and mid-turn acknowledgements appear as visible assistant commentary in Codex,
 even when thinking summaries are hidden. Reasoning summaries are omitted in this mode because
 Anthropic cannot distinguish progress updates from reasoning under `display: "summarized"`.
 The original signed thinking blocks are preserved for tool continuation; no signature is decoded
 or rewritten. Updates appear once their signed block completes. Other models and compatible
 third-party endpoints retain their existing thinking display behavior.
+
+To request summarized thinking instead, explicitly send `reasoning.summary: "concise"` or
+`"detailed"`. OpenCodex then sends `thinking: {type: "adaptive", display: "summarized"}` without
+the updates beta and returns thinking text as reasoning instead of progress commentary. In this
+mode, Anthropic's progress updates may be folded into the reasoning summary. The choice also
+works when reasoning effort is omitted or `"none"`; it does not change the requested effort.
+Omitting `reasoning.summary` or sending `"auto"` (the Codex default) or `"none"` keeps the updates default. Local summary hiding
+still controls reasoning visibility and does not hide progress commentary in updates mode.
 
 ## Anthropic image input
 
@@ -108,6 +116,12 @@ Only a successful, nonempty completion remembers the rejection for that conversa
 identity for five minutes. Only the refused opaque payloads are suppressed when they can be
 identified; newly issued thinking remains replayable. Plaintext history remains available; a failed or cancelled retry does
 not disable thinking replay on later requests.
+
+## xAI Responses includes
+
+For xAI Responses requests, OpenCodex removes the unsupported `output.encrypted_content` entry
+from `include`, including on the [US regional endpoint](https://docs.x.ai/developers/advanced-api-usage/regions).
+Other include entries are preserved; an empty result omits the field. Other providers are unaffected.
 
 ## Auth modes
 
@@ -1229,6 +1243,14 @@ refreshed by another streaming turn through this provider, and a turn that goes 
 request translation rather than passthrough reports none. An account that has not yet
 served a streaming turn simply shows no quota, which is not an error. Rate limits apply
 per team, not per key.
+
+When the current Muse account's latest-started retained request explicitly reports subscription exhaustion
+with a future reset time, the dashboard quota strip can show that observed limit even if
+Meta omitted the normal usage frame. The Muse chip includes a reset countdown. This reads
+local request-log evidence and never sends a model request. It does not classify an unnamed
+window as five-hour or weekly, and a newer successful request or an elapsed reset removes
+this fallback. The fallback selects by request start time across the server-bounded matching
+log history, so an older request that finishes later cannot hide a newer success.
 
 For a supported setup, use `meta-model` above with your own key.
 

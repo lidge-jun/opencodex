@@ -939,8 +939,11 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (contentType.includes("text/event-stream") && response.body) {
     // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
     // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
-    const bodyGuard = resolvePassthroughBodyGuard(config, upstream.signal);
-    const observed = logIds && onFirstOutput ? observeFirstChunk(response.body!, onFirstOutput) : response.body!;
+    const bodyGuard = {
+      ...resolvePassthroughBodyGuard(config, upstream.signal),
+      ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
+    };
+    const observed = logIds && onFirstOutput ? observeFirstChunk(response.body, onFirstOutput) : response.body;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;

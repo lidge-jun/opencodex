@@ -1,11 +1,11 @@
 import { comboFailureDecision } from "../combos";
 import { httpStatusFromTerminalError } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { sseFieldValue } from "../lib/sse-decoder";
 import type { TranslatorBudget } from "../lib/translator-budget";
-import { createSseInspector } from "./relay";
 import { anthropicUsageToOcx } from "./messages-shared";
 import type { RequestLogContext } from "./request-log";
-import { MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
+import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES, SseFrameCountLimitError, SseFrameTooLargeError } from "./sse-frame-buffer";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "./responses-undeclared-tool-guard";
 
 type Rec = Record<string, unknown>;
@@ -23,11 +23,19 @@ export async function preflightNativeMessagesResponse(
   let failure: Rec | undefined;
   let failureStatus = 502;
   let usage: Rec = {};
-  const inspector = createSseInspector({
-    onOpaquePayload: () => { if (!failure) committed = true; },
-    onParsedPayload: payload => {
+  const inspector = new BoundedSseFrameBuffer();
+  const decoder = new TextDecoder();
+  const inspectFrame = (block: Uint8Array) => {
       if (committed || terminal || failure) return;
-      if (!isRec(payload)) { committed = true; return; }
+      const lines = decoder.decode(block).split(/\r\n|\r|\n/);
+      const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null) ?? null;
+      const data = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null).join("\n");
+      if (!data) return;
+      let payload: unknown;
+      try { payload = JSON.parse(data); } catch { committed = true; return; }
+      // Match the native log tap: the last, untrimmed event field is authoritative. A payload
+      // under another event name is unknown output, never a replayable refusal or prelude.
+      if (!isRec(payload) || (event !== null && event !== payload.type)) { committed = true; return; }
       if (payload.type === "message_start" && isRec(payload.message)) {
         if (isRec(payload.message.usage)) usage = { ...usage, ...payload.message.usage };
         if (!Array.isArray(payload.message.content) || payload.message.content.length !== 0) committed = true;
@@ -45,8 +53,7 @@ export async function preflightNativeMessagesResponse(
         else committed = true;
       } else if (payload.type === "message_stop") terminal = true;
       else committed = true;
-    },
-  });
+  };
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let retained = 0;
@@ -62,7 +69,12 @@ export async function preflightNativeMessagesResponse(
       budget.chargeRetained(next.value.byteLength, { kind: "retained_collectors" });
       retained += next.value.byteLength;
       chunks.push(next.value);
-      inspector.feed(next.value);
+      try {
+        for (const frame of inspector.feed(next.value)) if (!frame.continuation) inspectFrame(frame.block);
+      } catch (error) {
+        if (!(error instanceof SseFrameTooLargeError || error instanceof SseFrameCountLimitError)) throw error;
+        committed = true;
+      }
       if (committed || terminal || failure) break;
     }
     if (failure && !committed) {

@@ -48,7 +48,7 @@ export interface EnsureDesiredIntegrationsDeps {
   syncGrokConfig: (
     port: number,
     config: OcxConfig,
-    opts?: { hostname?: string },
+    opts?: { hostname?: string; probeHostname?: string },
   ) => Promise<GrokInjectResult>;
   removeDesktop3pStandardPivot: typeof removeDesktop3pStandardPivot;
   removeDesktopFirstParty?: typeof removeDesktopFirstParty;
@@ -67,7 +67,7 @@ export interface EnsureDesiredIntegrationsDeps {
 async function defaultSyncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string } = {},
+  opts: { hostname?: string; probeHostname?: string } = {},
 ): Promise<GrokInjectResult> {
   const { syncGrokConfig } = await import("../grok/sync");
   return syncGrokConfig(port, config, opts);
@@ -100,7 +100,7 @@ function io(deps: EnsureDesiredIntegrationsDeps): {
  */
 export async function ensureGrokFenceMatchesDesired(
   port: number,
-  opts: { hostname?: string } = {},
+  opts: { hostname?: string; probeHostname?: string } = {},
   deps: EnsureDesiredIntegrationsDeps = productionDeps,
 ): Promise<void> {
   const config = deps.loadConfig();
@@ -132,7 +132,8 @@ export async function ensureGrokFenceMatchesDesired(
     const g = await deps.syncGrokConfig(
       port,
       config,
-      hostname !== undefined ? { hostname } : {},
+      { ...(hostname !== undefined ? { hostname } : {}),
+        ...(opts.probeHostname !== undefined ? { probeHostname: opts.probeHostname } : {}) },
     );
     if (g.changed) log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!g.ok) error(`⚠️  ${g.message}`);
@@ -227,12 +228,12 @@ export async function ensureClaudeDesktopMatchesDesired(
 }
 
 export type EnsureDesiredIntegrationsBranch =
-  | { kind: "live"; hostname?: string }
+  | { kind: "live"; hostname?: string; probeHostname?: string }
   | { kind: "spawned" };
 
 /**
  * Reconcile the two external integration files after either ensure race window.
- * Only the live proxy's observed bind host crosses this boundary; persisted
+ * The live proxy's bind scope and responding address cross this boundary; persisted
  * config is deliberately loaded inside each mutation helper.
  */
 export async function reconcileEnsureDesiredIntegrations(
@@ -243,7 +244,8 @@ export async function reconcileEnsureDesiredIntegrations(
   const liveHost = branch.kind === "live" ? branch.hostname : undefined;
   await ensureGrokFenceMatchesDesired(
     port,
-    liveHost ? { hostname: liveHost } : {},
+    { ...(liveHost ? { hostname: liveHost } : {}),
+      ...(branch.kind === "live" && branch.probeHostname !== undefined ? { probeHostname: branch.probeHostname } : {}) },
     deps,
   );
   await ensureClaudeDesktopMatchesDesired(deps);
