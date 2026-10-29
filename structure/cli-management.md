@@ -65,6 +65,8 @@ The stop declaration in `src/cli/capabilities-observe-system.ts` covers the read
 
 Generated flag-table cells escape literal pipes, backslashes and line breaks, and absent value types render as empty cells. Rendered Markdown regressions verify that enum choices stay in the meaning cell.
 
+The Advisor entry in `src/cli/capabilities-agents-routing.ts` declares `set --context-mode` and the automatic-consultation exception. The head-help entry in `src/cli/registry.ts` lists the same setting and scopes automatic policy descriptions to context mode. The generated operating reference follows the [Advisor context contract](advisor.md#context-and-safety-boundaries).
+
 The generator checks its closed expected file map and exact contents, including missing or stale owner-marked chapters. It writes expected outputs only and does not automatically delete unrelated/stale documents. `tests/ci-workflows/skill-ocx.test.ts` and the generator-focused tests check regeneration, reachable reference links, actual shipped Markdown and the preserved consent/secret-bearing command rules. Generated status grants no exemption from repository file-size limits.
 
 `skills/ocx/SKILL.md` is the operating guide, distinct from development instructions and installation consent. The index describes declared capabilities; it does not establish full runtime grammar, target-version compatibility, safe autonomous permission or free upstream execution. Handwritten task recipes provide target/readiness checks, command-level authority and read-back guidance.

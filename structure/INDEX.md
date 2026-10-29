@@ -377,6 +377,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/advisor-question.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |

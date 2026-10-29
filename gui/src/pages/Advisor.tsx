@@ -18,6 +18,7 @@ export interface AdvisorSettings {
   model: string;
   effort: string;
   policy: "manual" | "preflight" | "adaptive";
+  contextMode?: "context" | "question-only";
   maxConsultationsPerTask?: number;
   timeoutMs: number;
   contextSharingConsent: "v1" | null;
@@ -72,6 +73,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           model: submitted.model,
           effort: submitted.effort,
           policy: submitted.policy,
+          contextMode: submitted.contextMode ?? "context",
           ...(submitted.maxConsultationsPerTask !== undefined ? { maxConsultationsPerTask: submitted.maxConsultationsPerTask } : {}),
           timeoutMs: submitted.timeoutMs,
           contextSharingConsent: submitted.contextSharingConsent,
@@ -150,11 +152,26 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           </select>
         </div>
         <div className="advisor-editor-row">
+          <label htmlFor="advisor-question-only" className="advisor-editor-label">{t("advisor.questionOnly")}</label>
+          <label className="toggle">
+            <input
+              id="advisor-question-only"
+              type="checkbox"
+              checked={draft.contextMode === "question-only"}
+              disabled={saving}
+              aria-label={t("advisor.questionOnly")}
+              onChange={event => edit({ contextMode: event.target.checked ? "question-only" : "context" })}
+            />
+            <span className="slider" aria-hidden="true" />
+          </label>
+        </div>
+        {draft.contextMode === "question-only" && <p className="muted">{t("advisor.questionOnlyNote")}</p>}
+        <div className="advisor-editor-row">
           <label htmlFor="advisor-policy" className="advisor-editor-label">{t("advisor.policy")}</label>
           <select
             id="advisor-policy"
             value={draft.policy}
-            disabled={saving}
+            disabled={saving || draft.contextMode === "question-only"}
             onChange={event => edit({ policy: event.target.value as AdvisorSettings["policy"] })}
           >
             <option value="manual">{t("advisor.policy.manual")}</option>
@@ -169,7 +186,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             {[1, 2, 3].map(limit => <option key={limit} value={limit}>{limit}</option>)}
           </select>
         </div>}
-        {draft.policy === "adaptive" && <p className="muted">{t("advisor.adaptiveNote")}</p>}
+        {draft.policy === "adaptive" && draft.contextMode !== "question-only" && <p className="muted">{t("advisor.adaptiveNote")}</p>}
         <div style={{ margin: "0.8rem 0" }}>
           <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem" }}>
             <input

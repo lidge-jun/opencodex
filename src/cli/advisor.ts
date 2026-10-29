@@ -7,14 +7,15 @@ const USAGE = `Usage:
   ocx advisor on [--ack-context-sharing] [--json]
   ocx advisor off [--json]
   ocx advisor consent [--revoke] [--json]
-  ocx advisor set [--model <model>] [--effort <effort>] [--policy <manual|preflight|adaptive>] [--max-consultations <1-3>] [--timeout-ms <ms>] [--json]`;
+  ocx advisor set [--model <model>] [--effort <effort>] [--policy <manual|preflight|adaptive>] [--context-mode <context|question-only>] [--max-consultations <1-3>] [--timeout-ms <ms>] [--json]`;
 
-const VALUED_FLAGS = new Set(["--model", "--effort", "--policy", "--timeout-ms", "--max-consultations"]);
+const VALUED_FLAGS = new Set(["--model", "--effort", "--policy", "--context-mode", "--timeout-ms", "--max-consultations"]);
 
 interface SetOptions {
   model?: string;
   effort?: string;
   policy?: string;
+  contextMode?: string;
   timeoutMs?: string;
   maxConsultations?: string;
 }
@@ -32,11 +33,12 @@ function parseSetArgs(args: string[]): SetOptions {
     if (arg === "--model") options.model = value;
     else if (arg === "--effort") options.effort = value;
     else if (arg === "--policy") options.policy = value;
+    else if (arg === "--context-mode") options.contextMode = value;
     else if (arg === "--max-consultations") options.maxConsultations = value;
     else options.timeoutMs = value;
   }
   if (Object.keys(options).length === 0) {
-    throw new CliUsageError("advisor set requires a model, effort, policy, task limit, or timeout option", USAGE);
+    throw new CliUsageError("advisor set requires a model, effort, policy, context mode, task limit, or timeout option", USAGE);
   }
   return options;
 }
@@ -128,6 +130,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (options.model !== undefined) patch.model = options.model;
   if (options.effort !== undefined) patch.effort = options.effort;
   if (options.policy !== undefined) patch.policy = options.policy;
+  if (options.contextMode !== undefined) patch.contextMode = options.contextMode;
   if (options.maxConsultations !== undefined) {
     const limit = Number(options.maxConsultations);
     if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw new CliUsageError("--max-consultations must be an integer between 1 and 3", USAGE);

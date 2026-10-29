@@ -9,12 +9,18 @@ import {
 } from "../../src/advisor/settings";
 
 describe("resolveAdvisorSettings", () => {
+  test("question-only is opt-in and resolves independently from the policy", () => {
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "question-only", policy: "adaptive" } }).contextMode).toBe("question-only");
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "context" } }).contextMode).toBe("context");
+  });
+
   test("absent config resolves to fully disabled defaults", () => {
     const settings = resolveAdvisorSettings({});
     expect(settings.enabled).toBe(false);
     expect(settings.model).toBe("");
     expect(settings.effort).toBe("max");
     expect(settings.policy).toBe("manual");
+    expect(settings.contextMode).toBe("context");
     expect(settings.sources.enabled).toBe("default");
     expect(settings.contextSharingConsent).toBeNull();
     expect(advisorRunnable(settings)).toBe(false);
@@ -217,10 +223,10 @@ test("Advisor CLI exposes activity and adaptive task allowance without granting 
     return Response.json({ entries: [] });
   }) as typeof fetch };
   expect(await handleAdvisorCommand(["activity", "--json"], deps)).toBe(0);
-  expect(await handleAdvisorCommand(["set", "--policy", "adaptive", "--max-consultations", "2", "--json"], deps)).toBe(0);
+  expect(await handleAdvisorCommand(["set", "--policy", "adaptive", "--context-mode", "question-only", "--max-consultations", "2", "--json"], deps)).toBe(0);
   expect(requests).toEqual([
     { path: "/api/advisor/activity", body: null },
-    { path: "/api/advisor/settings", body: { policy: "adaptive", maxConsultationsPerTask: 2 } },
+    { path: "/api/advisor/settings", body: { policy: "adaptive", contextMode: "question-only", maxConsultationsPerTask: 2 } },
   ]);
   expect(await handleAdvisorCommand(["set", "--max-consultations", "4"], deps)).toBe(2);
   expect(requests).toHaveLength(2);

@@ -7,6 +7,16 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 
 这与子代理面（见[代理配置](/zh-cn/reference/configuration/agents/)）不同：子代理是通过 Codex 协作工具由 Worker 发起的委托。顾问是客户端完全不可见的代理侧 sidecar —— 即使从不 spawn 的 Worker 也能获得建议。
 
+## 仅发送问题
+
+要减少重复输入，请在顾问页面启用 **仅发送主模型的问题**，或运行：
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+这个可选设置只发送固定顾问指令和主模型的问题。问题最多保留 2,000 字符，超长时附加截断提示。OpenCodex 不自动附带任务、对话历史、工具结果、工具目录、主模型身份或修复证据。主模型需要自行补充必要背景。系统会拒绝空问题，不请求顾问模型。此模式暂停 preflight 和 adaptive 自动咨询；主动咨询、共享确认和现有次数限制仍然生效。默认值 `context` 保留本文下述上下文共享行为。使用 `--context-mode context` 可以恢复。
+
 ## 配置
 
 在仪表板 **Advisor** 页面从目录选择专家模型。选择器原样保存原生、提供商、指定账户、自定义和组合模型的标识符。已禁用和等待初始选择的模型不会作为新选项。已保存但不在可选目录中的标识符会保留并显示警告，直到您选择其他模型或清除。目录加载失败时保留当前选择并提供重试。请选择能返回文本建议的模型；目录不保证咨询兼容性。CLI 和 API 仍接受路由器支持的模型字符串。
@@ -29,6 +39,7 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 | `model?` | `string` | — | 专家模型。任何路由权威接受的模型字符串：裸原生模型（`gpt-6-astra`）、显式 `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）或账户限定的原生模型。完整支持跨 provider：Worker 与 Advisor 无需同属一个 provider。 |
 | `effort?` | `string` | `"max"` | Advisor 调用的推理强度（`low` 至 `ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 何时咨询顾问。 |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主动提问，并暂停自动咨询。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 自适应任务咨询上限（1–3 次尝试），包含手动调用。 |
 | `timeoutMs?` | `number` | `120000` | 回环咨询超时。 |
 | `contextSharingConsent?` | `"v1"` | 缺省 | 操作者同意把任务上下文发给所配置的顾问 provider。只有 `"v1"` 是当前版本。缺省、过期或其他值都表示不发送任务内容。`enabled: true` 本身不是同意。 |

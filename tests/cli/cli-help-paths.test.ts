@@ -50,6 +50,19 @@ function help(args: string[]) {
 }
 
 describe("explicit CLI help paths", () => {
+  test.each([["help", "advisor"], ["advisor", "--help"]])("Advisor help via %s %s keeps registry options and mode semantics consistent", (...args) => {
+    const result = help(args);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const setDetail = result.stdout.split("\n").find(line => line.includes("ocx advisor set updates"));
+    expect(setDetail).toBeDefined();
+    for (const flag of ["--model", "--effort", "--policy", "--context-mode", "--max-consultations", "--timeout-ms"]) {
+      expect(setDetail).toContain(flag);
+    }
+    expect(result.stdout).toContain("Automatic preflight and adaptive repair calls are paused");
+    expect(result.stdout).toContain("restores the default context-sharing behavior");
+  });
+
   test("full-reference forms agree and preserve detailed variants", () => {
     const full = help(["help", "--all"]);
     expect(full.status).toBe(0);

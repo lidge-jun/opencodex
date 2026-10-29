@@ -7,6 +7,16 @@ Danışman, worker'ın görevini inceleyen ve tavsiye döndüren bağımsız bir
 
 Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/reference/configuration/agents/)): alt ajanlar, Codex'in işbirliği araçları üzerinden worker tarafından başlatılan delegasyondur. Danışman, istemcinin hiç görmediği proxy tarafı bir sidecar'dır — hiçbir şey spawn etmeyen bir worker bile tavsiye alabilir.
 
+## Yalnızca soru
+
+Tekrarlanan girdiyi azaltmak için Advisor sayfasındaki yalnızca soru seçeneğini açın veya çalıştırın:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+Bu mod yalnızca sabit bir talimat ve çalışanın sorusunu gönderir (en fazla 2.000 karakter ve kesilme bildirimi). Görev, geçmiş, araç sonuçları, katalog, çalışan kimliği veya onarım kanıtı eklenmez. Çalışan gerekli bilgileri soruya eklemelidir. Boş sorular sağlayıcı çağrısı yapılmadan reddedilir. Otomatik preflight ve adaptive danışmalar duraklatılır; onay ve mevcut çağrı sınırları geçerlidir. Varsayılan `context` modu aşağıdaki davranışı korur. `--context-mode context` ile geri dönülebilir.
+
 ## Yapılandırma
 
 Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağlayıcı, hesap, özel model ve combo tanımlayıcıları aynen kaydedilir. Devre dışı veya ilk seçimi bekleyen modeller yeni seçenek olarak sunulmaz. Listede bulunmayan kayıtlı tanımlayıcı, değiştirilene veya temizlenene kadar uyarıyla korunur. Yükleme hatası seçimi korur ve yeniden deneme sunar. Metin önerisi verebilen bir model seçin; katalog danışma uyumluluğunu garanti etmez. CLI ve API, yönlendiricinin desteklediği model dizelerini kabul etmeye devam eder.
@@ -29,6 +39,7 @@ Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağ
 | `model?` | `string` | — | Uzman model. Yönlendiricinin kabul ettiği herhangi bir model dizisi: çıplak yerel model (`gpt-6-astra`), açık `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) veya hesap nitelemeli yerel model. Sağlayıcılar arası tam desteklenir. |
 | `effort?` | `string` | `"max"` | Danışman çağrısının muhakeme düzeyi (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Ne zaman danışılır. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Bağlam paylaşımı. `question-only` çalışanın açık sorusunu gerektirir ve otomatik danışmaları duraklatır. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Uyarlanabilir görev bütçesi: manuel çağrılar dahil 1–3 deneme. |
 | `timeoutMs?` | `number` | `120000` | Loopback danışma zaman aşımı. |
 | `contextSharingConsent?` | `"v1"` | yok | Yapılandırılmış danışman sağlayıcısına görev bağlamını gönderme onayı. Güncel değer yalnızca `"v1"`. Yok, eskimiş veya başka bir değer görev içeriğinin gönderilmemesi demektir. `enabled: true` bu onay değildir. |

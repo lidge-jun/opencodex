@@ -93,7 +93,7 @@ function advisorConfig(advisor: OcxConfig["advisor"], workerFetch: typeof fetch)
   return config;
 }
 
-const advisorCallFrames = [
+const advisorCallFramesFor = (question?: string) => [
   { choices: [{ delta: { content: "Let me consult the expert." }, finish_reason: null }] },
   {
     choices: [{
@@ -102,7 +102,7 @@ const advisorCallFrames = [
           index: 0,
           id: "call_adv_1",
           type: "function",
-          function: { name: "advisor", arguments: JSON.stringify({ question: "Where do I start?" }) },
+          function: { name: "advisor", arguments: JSON.stringify({ question }) },
         }],
       },
       finish_reason: null,
@@ -110,6 +110,7 @@ const advisorCallFrames = [
   },
   { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
 ];
+const advisorCallFrames = advisorCallFramesFor("Where do I start?");
 
 const plainFrames = (text: string) => [
   { choices: [{ delta: { content: text }, finish_reason: null }] },
@@ -148,6 +149,65 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  test.each([true, false])("question-only invalid calls preserve consultation allowance and bound continuations (corrected=%s)", async corrected => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = []; const chatRequests: string[] = [];
+    const legs = (corrected ? [undefined, "", "   ", "Where do I start?"] : [undefined]).map(advisorCallFramesFor);
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1",
+      policy: "manual", contextMode: "question-only" }, workerProviderFetch(corrected ? [...legs, plainFrames("Done after correction.")] : legs, workerBodies));
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Task", "invalid-question-retry"), config, logCtx);
+    const frames = await collectSse(response.body!);
+    expect(workerBodies).toHaveLength(5);
+    expect(chatRequests).toHaveLength(corrected ? 1 : 0);
+    if (corrected) {
+      expect(chatRequests[0]).toContain("Where do I start?");
+      expect(workerBodies[4]).toContain(ADVISOR_ADVICE);
+      expect(JSON.stringify(frames)).toContain("Done after correction.");
+    } else {
+      expect(JSON.stringify(frames)).toContain("advisor_continuation_limit");
+    }
+  });
+
+  test.each([
+    ["short", "Where do I start?", "Where do I start?"],
+    ["at limit", "q".repeat(2_000), "q".repeat(2_000)],
+    ["overlong", `  ${"q".repeat(2_000)}  OMITTED_QUESTION_TAIL  `, `${"q".repeat(2_000)}… [truncated]`],
+    ["astral under limit", "😀".repeat(1_500), "😀".repeat(1_500)],
+    ["astral at limit", `${"q".repeat(1_999)}😀`, `${"q".repeat(1_999)}😀`],
+    ["astral over limit", `${"q".repeat(1_999)}😀OMITTED_QUESTION_TAIL`, `${"q".repeat(1_999)}😀… [truncated]`],
+  ])("question-only sends the bounded %s question and returns advice without worker context", async (_label, question, expected) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = []; const chatRequests: string[] = []; const expertBodies: string[] = [];
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1",
+      policy: "preflight", contextMode: "question-only" }, workerProviderFetch([advisorCallFramesFor(question!), plainFrames("Done with advice.")], workerBodies));
+    config.providers.expert!.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expertBodies.push(String(init?.body));
+      return chatCompletion(ADVISOR_ADVICE);
+    }) as typeof fetch;
+    loopbackInterceptor(config, { chatRequests });
+    const history = [
+      { role: "user", content: "PRIVATE_TASK_SENTINEL" },
+      { type: "function_call", call_id: "read_1", name: "read_file", arguments: '{"path":"PRIVATE_FILE_SENTINEL"}' },
+      { type: "function_call_output", call_id: "read_1", output: "PRIVATE_RESULT_SENTINEL" },
+    ];
+    const response = await handleResponses(workerRequest(history, "question-only-wiring"), config, logCtx);
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+    expect(chatRequests).toHaveLength(1); // No automatic preflight despite orientation evidence.
+    expect(expertBodies).toHaveLength(1);
+    const expertMessages = JSON.parse(expertBodies[0]!).messages as { role: string; content: string }[];
+    expect(expertMessages.filter(message => message.role === "user").map(message => message.content)).toEqual([expected]);
+    expect(expertBodies[0]).not.toContain("OMITTED_QUESTION_TAIL");
+    for (const marker of ["PRIVATE_TASK_SENTINEL", "PRIVATE_FILE_SENTINEL", "PRIVATE_RESULT_SENTINEL"]) {
+      expect(workerBodies[0]).toContain(marker);
+      expect(expertBodies[0]).not.toContain(marker);
+    }
+    expect(workerBodies[0]).toContain('"required":["question"]');
+    expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+    expect(JSON.stringify(frames)).toContain("Done with advice.");
+  });
+
   test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {
     releaseSpendHome = acquireOwnedSpendHome();
     let sends = 0;
