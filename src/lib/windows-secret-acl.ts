@@ -45,7 +45,7 @@ import {
   type SubprocessDeadlineScheduler,
 } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
-import { verifyWindowsPrivateEntries, verifyWindowsPrivateEntriesAsync } from "./windows-owner-acl";
+import { verifyWindowsEntriesAcl, verifyWindowsEntriesAclAsync, verifyWindowsPrivateEntries, verifyWindowsPrivateEntriesAsync } from "./windows-owner-acl";
 import {
   cachedCurrentWindowsIdentity,
   resolveCurrentWindowsPrincipal,
@@ -268,6 +268,8 @@ export interface HardenResult {
 
 export interface HardenOptions {
   required: boolean;
+  /** Inspect an existing runtime directory's private DACL, allowing an enabled Admin owner. */
+  verifyExistingRuntimeDirectory?: boolean;
   /**
    * Explicit total budget for this harden call. Shutdown recovery uses a reduced
    * caller-owned slice instead of opening the normal 30-second window.
@@ -1002,7 +1004,14 @@ function shouldVerifyExistingAcl(): boolean {
   return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
 }
 
-function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number): boolean {
+function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number, strictDirectory = false): boolean {
+  if (strictDirectory) {
+    const before = observe(targetPath);
+    const verified = verifyWindowsEntriesAcl([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
+    const after = observe(targetPath);
+    // No name-only fallback or success memo: this proof belongs to this observation only.
+    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+  }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
   if (!identity) return false;
@@ -1027,7 +1036,14 @@ async function existingAclAlreadyCompliantAsync(
   targetPath: string,
   directory: boolean,
   deadline: number,
+  strictDirectory = false,
 ): Promise<boolean> {
+  if (strictDirectory) {
+    const before = observe(targetPath);
+    const verified = await verifyWindowsEntriesAclAsync([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
+    const after = observe(targetPath);
+    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+  }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
   if (!identity) return false;
@@ -1358,7 +1374,7 @@ function hardenEntry(
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
   // Secret compliance does not prove the extra read grants required by a staged payload.
-  if (extraReadAces.length === 0 && existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
+  if (extraReadAces.length === 0 && existingAclAlreadyCompliant(targetPath, directory, deadline, directory && opts.verifyExistingRuntimeDirectory === true)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -1423,7 +1439,7 @@ async function runHardenEntryAsync(
   extraReadAces: readonly string[],
 ): Promise<HardenResult> {
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
-  if (extraReadAces.length === 0 && await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
+  if (extraReadAces.length === 0 && await existingAclAlreadyCompliantAsync(targetPath, directory, deadline, directory && opts.verifyExistingRuntimeDirectory === true)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {

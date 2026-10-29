@@ -196,8 +196,7 @@ sağlayıcıları birden fazla oturum tutabilir. Sağlayıcılar sayfası bu hes
 bir açılır menüde gösterir, başka bir tane eklemenize izin verir ve diğerlerinin
 oturumunu kapatmadan etkin hesabı değiştirir. Normal oturum açmada kimliği olmayan
 Kimi kimlik bilgileri etkin yuvanın yerini alır; açık **Hesap ekle** akışı mevcut
-yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN'sine göre
-anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
+yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları, varsa oturum açan kullanıcının e-posta adresi ile profil ARN'si birlikte kullanılarak ayırt edilir; aynı kuruluş profilini paylaşan kullanıcılar ayrı kimlik bilgilerini koruyabilir. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
 
@@ -279,6 +278,8 @@ paneli Codex hesap havuzu aracılığıyla yeniden kimlik doğrulaması yapın. 
 referansında [`ocx status` / `ocx doctor`](/tr/reference/cli/) bölümüne bakın.
 
 ### Kiro kimlik bilgisi içe aktarma
+
+Panelde **AWS IAM Identity Center** seçeneğini seçip kuruluşunuzun AWS erişim portalı URL’sini ve SSO bölgesini girin. Tarayıcıda cihaz kodunu onaylayın ve birden fazla Kiro profili varsa kaydedilecek profili seçin. CLI veya SSH gerekmez. Aşağıdaki CLI adımları **Kiro CLI** seçeneği içindir.
 
 Kiro oturum açma Kiro CLI'yı bekler: Unix'te `curl -fsSL
 https://cli.kiro.dev/install | bash` ile kurun; Windows PowerShell'de `irm

@@ -42,12 +42,18 @@ export function systemToInstructions(system: unknown): string | undefined {
 
 export function toolsToResponses(tools: unknown): Rec[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
+  // The shared hosted-search lane cannot enforce these constraints on every destination or
+  // sidecar backend. Omit search rather than broaden it; a duplicate declaration cannot opt out.
+  // Typed originals still travel separately to an Anthropic destination.
+  const restrictedSearch = tools.some(raw => isRec(raw) && typeof raw.type === "string"
+    && raw.type.startsWith("web_search")
+    && ["allowed_domains", "blocked_domains", "user_location"].some(key => Object.hasOwn(raw, key)));
   const out: Rec[] = [];
   for (const raw of tools) {
     if (!isRec(raw)) continue;
     const type = typeof raw.type === "string" ? raw.type : "";
     if (type.startsWith("web_search")) {
-      out.push({ type: "web_search" }); // hosted sidecar path
+      if (!restrictedSearch) out.push({ type: "web_search" }); // hosted sidecar path
       continue;
     }
     if (typeof raw.name === "string" && raw.name.length > 0 && isRec(raw.input_schema)) {
@@ -167,6 +173,10 @@ export function toolChoiceToResponses(choice: unknown, body: Rec): void {
       // Anthropic represents hosted WebSearch as a named tool choice, while
       // Responses requires the choice type to match the hosted declaration.
       // Preserve forced-tool intent rather than weakening it to `auto`.
+      if (isClaudeWebSearchToolName(choice.name)
+        && (!Array.isArray(body.tools) || !body.tools.some(tool => isRec(tool) && tool.type === "web_search"))) {
+        throw new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration");
+      }
       body.tool_choice = isClaudeWebSearchToolName(choice.name)
         ? { type: "web_search" }
         : { type: "function", name: choice.name };

@@ -1097,7 +1097,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
         // model both defaults to thinking and accepts being told not to.
       const family = claudeFamilyVersion(parsed.modelId);
-      progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
+      const nativeOpus55 = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
+      const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
+      // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
+      const summaryRequested = summary === "concise" || summary === "detailed";
       const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
       const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
       const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
@@ -1132,7 +1135,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // default 8192-token request can spend everything on thought and return empty text.
           // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
-          // during a long think (#5824). Opus 5.5 uses the documented updates discriminator;
+          // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
           body.thinking = parsed.options.hideThinkingSummary
             ? { type: "adaptive" }
@@ -1181,7 +1184,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (progressUpdates && !reasoningControlsUnsupported && thinkingEnabled !== false) body.thinking = { type: "adaptive", display: "updates" };
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+      }
+      // One discriminator governs the display beta and response classification, including reuse.
+      progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without

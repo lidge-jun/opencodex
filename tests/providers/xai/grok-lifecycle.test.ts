@@ -48,13 +48,15 @@ describe("Grok fence lifecycle wiring", () => {
     expect(grokSyncAt).toBeGreaterThan(afterStartupAt);
   });
 
-  test("ensure passes only the observed live bind host across the mutation boundary", () => {
+  test("ensure passes only the observed live bind scope and probe address across the mutation boundary", () => {
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
     const liveBranch = ensureFn.slice(0, ensureFn.indexOf("const pinPort"));
     const spawnBranch = ensureFn.slice(ensureFn.indexOf("const pinPort"));
 
-    // live.hostname is what the proxy ACTUALLY bound; config.hostname may have drifted.
-    expect(liveBranch).toContain('{ kind: "live", hostname: live.hostname }');
+    // live.hostname is the scope the proxy ACTUALLY bound and live.probeHostname the address
+    // that answered; config.hostname may have drifted and must not cross this boundary.
+    expect(liveBranch).toContain('{ kind: "live", hostname: live.hostname, probeHostname: live.probeHostname }');
+    expect(liveBranch).not.toContain("hostname: config.hostname");
     // Spawn passes no config-derived input; the reconciler loads the current hostname.
     expect(spawnBranch).toContain('{ kind: "spawned" }');
     expect(spawnBranch).not.toContain("current.hostname");

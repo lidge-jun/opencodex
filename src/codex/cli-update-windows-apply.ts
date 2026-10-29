@@ -156,7 +156,8 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
         await flushWindowsSecretAclReapsBeforeRemoval(owner.staging);
         await owner.authority.removeStaging();
         if (owner.toolchain && !await owner.toolchain.release()) return false;
-        if (!await owner.authority.release()) return false;
+        await owner.authority.release();
+        if (!owner.authority.resourcesReleased) return false;
         retained.delete(owner); owner.retention?.release(); return true;
       } catch { return false; } finally { recovering = false; }
     };
@@ -287,16 +288,20 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
     if (installationWindowHeld && !uncertain && !cleanupPending) deps.commitWindow!.exit();
     if (owner && !uncertain && !cleanupPending) {
       const errors: CodexCliApplyCleanupError[] = [];
+      let resourcesReleased = true;
       try {
         await flushWindowsSecretAclReapsBeforeRemoval(owner.staging);
         await owner.authority.removeStaging();
-      } catch { errors.push("staging_cleanup_failed"); }
-      try { if (owner.toolchain && !await owner.toolchain.release()) errors.push("lease_release_unverified"); }
-      catch { errors.push("lease_release_exception"); }
+      } catch { errors.push("staging_cleanup_failed"); resourcesReleased = false; }
+      try { if (owner.toolchain && !await owner.toolchain.release()) {
+        errors.push("lease_release_unverified"); resourcesReleased = false;
+      } }
+      catch { errors.push("lease_release_exception"); resourcesReleased = false; }
       try { if (!await owner.authority.release()) errors.push("lease_release_unverified"); }
       catch { errors.push("lease_release_exception"); }
-      if (!errors.length) { retained.delete(owner); ownerRegistrationPending = false; owner.retention?.release(); }
-      if (output) Object.assign(output, { cleanupErrors: errors, leaseRetained: errors.length > 0 });
+      resourcesReleased &&= owner.authority.resourcesReleased;
+      if (resourcesReleased) { retained.delete(owner); ownerRegistrationPending = false; owner.retention?.release(); }
+      if (output) Object.assign(output, { cleanupErrors: errors, leaseRetained: !resourcesReleased });
     }
     if (output) { Object.freeze(output.cleanupErrors); Object.freeze(output); }
   }
