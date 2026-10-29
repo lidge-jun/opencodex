@@ -12,7 +12,7 @@ name = "opencodex_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
 base64 = "=0.22.1"
@@ -22,14 +22,14 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 uuid = { version = "=1.18.1", features = ["v4"] }
-tauri = { version = "=2.11.6", features = ["tray-icon", "image-png", "macos-private-api"] }
-tauri-utils = "=2.9.3"
+tauri = { version = "=2.12.5", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-utils = "=2.10.2"
 tauri-plugin-autostart = "=2.5.0"
 tauri-plugin-opener = "=2.5.3"
 tauri-plugin-process = "=2.3.0"
 tauri-plugin-shell = "=2.2.1"
 tauri-plugin-single-instance = "=2.4.0"
-tauri-plugin-updater = "=2.9.0"
+tauri-plugin-updater = "=2.14.1"
 tokio = { version = "=1.45.1", features = ["sync", "time"] }
 
 # Linux only, and already in this graph: `tao` enables its own `dbus` feature by default, so
