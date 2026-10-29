@@ -101,11 +101,11 @@ unsupported; deployments that previously relied on such embedding must open it a
 ## Authentication boundaries
 
 Kiro management login starts the native device flow only when `POST /api/oauth/login`
-supplies `method: "builder-id"`, `"google"`, or `"github"`. A method-less request retains
+supplies `method: "builder-id"`, `"google"`, `"github"`, or `"iam-identity-center"`. A method-less request retains
 the Kiro CLI flow used by the dashboard chooser. The KiroDeviceLoginDialog and useKiroDeviceLogin GUI modules own the native chooser and polling. The kiro-device-login-finalizer GUI module continues terminal status reads after dialog unmount; a provisional cancel result is never treated as confirmed success. Hook and finalizer share one status-read operation that owns fetch, bounded body consumption, parsing and cancellation. The complete read has a 45-second ceiling, the detached loop remains bounded by flow expiry plus 60 seconds (and 16 minutes maximum), and closing the dialog transfers rather than clones an in-flight reader so an already-observed terminal reply can still win. Native status and cancellation require `flowId`;
 provider-keyed status and cancellation retain their previous behavior. Device-flow responses
 contain only the flow handle, method, public verification fields, state, expiry, and a
-duplicate-profile warning when applicable. The dashboard renders a native device dialog and links only exact Builder ID or Kiro-owned verification hosts. Kiro account rows show automatic-selection exclusion reasons when present.
+duplicate-profile warning when applicable. IAM's required settings, owner-scoped profile selection and private staged grants follow the [Kiro native login contract](providers/kiro.md#kiro-cli-executable-resolution). The dashboard links only exact regional AWS device-SSO or Kiro-owned verification hosts. Kiro account rows show automatic-selection exclusion reasons when present.
 
 > Decision record: [ADR-6021](decisions/ADR-6021-kiro-status-read-ownership.md)
 

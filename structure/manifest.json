@@ -958,6 +958,16 @@
       ]
     },
     {
+      "path": "clients/claude-desktop-model-visibility.md",
+      "tier": 5,
+      "title": "Claude Desktop Model Visibility",
+      "scope": "Per-client selection of the rows the Claude Desktop 3P model list carries.",
+      "documents": [
+        "src/claude/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/hermes.md",
       "tier": 5,
       "title": "Hermes Profiles",

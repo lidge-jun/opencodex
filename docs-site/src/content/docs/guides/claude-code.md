@@ -286,6 +286,32 @@ backup and replacement; if it detects a concurrent edit, it refuses with `deskto
 Review the edit and reapply. If restoring the profile also fails after a metadata error, the
 reported reason includes both failures; reconcile the profile and metadata before retrying.
 
+#### Choose which models Claude Desktop lists
+
+**Connect → Claude Desktop → Desktop model list** has a checkbox for each model. Search by name or
+filter by provider, then use **Select all matching** or **Clear all matching** to change every match,
+including rows behind **Show more**. Click
+**Save & apply** to write the list to Desktop. Only Claude Desktop's list changes: provider model
+settings, Claude Code, Codex and other clients keep every model.
+
+**Newly discovered models** sets what happens when a provider later adds a model. **List
+automatically** adds it to Desktop. **Keep hidden until selected** leaves it out until you check it.
+The selection is saved in `claudeCode.desktopModelVisibility` and survives catalog refreshes and
+reapplies. Tier families under **Advanced** stay optional and do not affect which models are shown.
+A hidden model keeps its Desktop id, so a conversation that is already using it keeps working.
+
+The card shows the selected, available and applied counts separately. A selected model that is no
+longer available is counted on its own and is not written. If the selection leaves no available
+models, the writer falls back to every available model, including normally hidden routes. Update
+the selection and apply again to narrow it. Before you apply, the card previews the model IDs the
+selected profile file will gain and lose. Its applied count reads that file; it does not verify
+which models the Desktop process has loaded. The status bar shows **Saved — apply to update Desktop**
+until the saved list reaches the profile. Restart Desktop to load profile changes.
+Applying replaces the model list in OpenCodex's Desktop profile,
+including a list edited there by hand. Discovery-only mode (`--discovery-only`) writes no list, so
+it does not use this selection. The dashboard will not save a selection that hides every
+available model.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]
@@ -974,7 +1000,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result by default. The [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load) may place a currently declared deferred function at its successful client discovery result on an eligible final Responses route; a reference alone never grants a tool or enables server-side search |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange Hosted search with `allowed_domains`, `blocked_domains` or `user_location` is omitted on translated Responses/Chat routes; forcing omitted search returns 400. Valid `defer_loading` function definitions remain callable as ordinary functions. See [translation limits](#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -986,6 +1012,23 @@ Replay preserves non-hidden signed blocks (including empty thinking) and opaque 
 **Error cases (400):** malformed JSON; missing/empty `model`; missing/empty `messages`; unsupported
 role; `tool_result` without `tool_use_id`; `tool_use` without id/name; named `tool_choice` without
 name.
+
+### Search restrictions and deferred tools on translated routes
+
+When a `web_search*` tool supplies `allowed_domains`, `blocked_domains` or `user_location`,
+OpenCodex omits hosted search from the translated Responses/Chat catalog, including combo
+fallbacks and search sidecars. Those destinations cannot uniformly preserve the constraints;
+search is never silently widened. Duplicate search declarations cannot bypass this rule.
+A forced hosted-search choice with no surviving declaration returns HTTP 400.
+First-party Anthropic destinations still receive the original typed declarations through the
+existing server-tool lane when translation proceeds; native passthrough preserves them directly.
+Unrestricted translated search remains available under the existing sidecar and admission rules.
+
+Valid function definitions with `defer_loading: true` remain callable as ordinary functions on
+translated combo routes. This eager-loading degradation does not itself cause compatibility
+rejection. Enforce mode still rejects unsupported top-level deferral, schema-less deferred tools,
+server-executed discovery and unsupported discovery history. Eligible direct Responses routes
+can use the [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load).
 
 ### Unicode-property patterns in tool schemas
 
