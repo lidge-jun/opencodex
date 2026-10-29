@@ -481,11 +481,12 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
       Bun.sleepSync = ms => {
         if (ms !== 10 || ++retries > 9) throw new Error('unbounded recovery recheck');
         if (retries === 1) fs.writeFileSync(${JSON.stringify(release)}, 'release');
-        if (retries === 9) fs.writeFileSync(${JSON.stringify(exhausted)}, 'spent');
         sleep(ms);
       }; const { loadConfig } = await import(${JSON.stringify(module)});
       if (loadConfig().providers['opencode-free']) throw new Error('retired provider retained');
-      if (retries === 0 || (${delay} === 500 && retries !== 9)) throw new Error('overlap schedule missed');`;
+      if (retries === 0 || (${delay} === 500 && retries !== 9)) throw new Error('overlap schedule missed');
+      // Release the publisher only after every recheck observed the held original.
+      fs.writeFileSync(${JSON.stringify(exhausted)}, 'spent');`;
     second = Bun.spawn([process.execPath, "--eval", secondScript], { env: { ...process.env }, stdout: "ignore", stderr: "pipe" });
     expect(await second.exited).toBe(0);
     writeFileSync(release, "release");
