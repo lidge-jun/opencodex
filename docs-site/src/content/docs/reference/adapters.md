@@ -260,6 +260,20 @@ blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 
+Meta Responses also receives Codex's current `additional_tools` declarations in the public
+`tools` array. The catalog is captured before history normalization: replayed declarations
+and historical tool-search discoveries cannot activate tools for the new turn. Current
+namespace, custom-tool and long-name aliases retain the existing normalization and response
+restoration. Historical custom calls retain their existing function-call representation without granting
+those old tools current authority. Malformed nested catalogs return HTTP 400 before inference
+rather than being partially promoted.
+
+For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsupported
+`output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
+request before inference. `reasoning.encrypted_content` and other include entries remain
+intact, so stateless reasoning replay is preserved. The same exact-entry normalization
+applies to xAI; unrelated Responses destinations keep their original include list.
+
 For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
 in the request, including when cached-only search is removed. Valid forced function selections
 remain intact. Replayed custom tool calls with missing or invalid item ids receive stable ids

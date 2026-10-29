@@ -20,9 +20,11 @@ afterEach(() => {
   releaseSpendHome = undefined;
 });
 
-function build(provider: OcxProviderConfig, rawBody: Record<string, unknown>) {
+function build(provider: OcxProviderConfig, rawBody: Record<string, unknown>, compact = false, replayPrefixLength?: number) {
   return createAdapter(provider).buildRequest({
     modelId: "muse-spark-1.3",
+    _compactionRequest: compact,
+    _replayPrefixLen: replayPrefixLength,
     context: { messages: [] },
     stream: false,
     options: {},
@@ -190,6 +192,161 @@ describe("Meta Muse tool choice", () => {
       expect(outbound).not.toHaveProperty("tool_choice");
     } finally {
       globalThis.fetch = savedFetch;
+    }
+  });
+});
+
+
+describe("Meta Muse Responses include compatibility", () => {
+  test("drops output encryption while preserving supported reasoning, other includes and caller input", () => {
+    for (const model of ["muse-spark-1.3", "muse-wonder-1.0", "muse-wonder-full-1.0"]) {
+      const raw = { model, include: ["reasoning.encrypted_content", "output.encrypted_content", "message.output_text.logprobs"], store: false };
+      const original = structuredClone(raw);
+      const body = JSON.parse(build(meta, raw).body);
+      expect(body.include).toEqual(["reasoning.encrypted_content", "message.output_text.logprobs"]);
+      expect(body.model).toBe(model);
+      expect(body.store).toBe(false);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("routed compaction preserves supported reasoning encryption", () => {
+    const raw = { include: ["reasoning.encrypted_content", "output.encrypted_content"], store: false };
+    const body = JSON.parse(build(meta, raw, true).body);
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(raw.include).toEqual(["reasoning.encrypted_content", "output.encrypted_content"]);
+  });
+
+  test("omits include when only unsupported output encryption was requested", () => {
+    expect(JSON.parse(build(meta, { include: ["output.encrypted_content"] }).body)).not.toHaveProperty("include");
+  });
+
+  test("preserves unknown and malformed includes for upstream validation", () => {
+    for (const include of [undefined, null, "output.encrypted_content", { value: "output.encrypted_content" }, ["future.include"], [["output.encrypted_content"]]]) {
+      expect(JSON.parse(build(meta, { include }).body).include).toEqual(include);
+    }
+  });
+
+  test("does not infer Meta from a model name, path or lookalike hostname", () => {
+    for (const baseUrl of ["https://api.openai.com/v1", "https://api.meta.ai.example.test/v1", "https://example.test/api.meta.ai/v1"]) {
+      const include = ["reasoning.encrypted_content", "output.encrypted_content"];
+      expect(JSON.parse(build({ ...meta, baseUrl }, { include }).body).include).toEqual(include);
+    }
+  });
+});
+
+
+describe("Meta Muse additional tool catalogs", () => {
+  const lookup = { type: "function", name: "lookup", parameters: { type: "object", properties: {} } };
+  test("moves current namespace tools to the public catalog without changing messages or caller data", () => {
+    const message = { type: "message", role: "user", content: "continue" };
+    const raw = { input: [{ type: "additional_tools", role: "developer", tools: [{ type: "namespace", name: "functions", tools: [lookup] }] }, message] };
+    const original = structuredClone(raw);
+    const body = JSON.parse(build(meta, raw).body);
+    expect(body.input).toEqual([message]);
+    expect(body.tools).toEqual([lookup]);
+    expect(raw).toEqual(original);
+  });
+
+  test("removes replayed wrappers without authorizing their historical tools", () => {
+    const message = { type: "message", role: "user", content: "continue" };
+    const raw = { tools: [], input: [{ type: "additional_tools", tools: [lookup] }, message] };
+    const body = JSON.parse(build(meta, raw, false, 1).body);
+    expect(body.input).toEqual([message]);
+    expect(body.tools).toEqual([]);
+  });
+
+  test("does not promote historical search discoveries or let removed history shift current declarations", () => {
+    const stale = { ...lookup, name: "stale" };
+    const live = { ...lookup, name: "live" };
+    const raw = { input: [
+      { type: "configuration_update", config: {} },
+      { type: "additional_tools", tools: [stale] },
+      { type: "tool_search_output", call_id: "old_search", tools: [stale] },
+      { type: "additional_tools", tools: [live] },
+      { type: "tool_search_output", call_id: "new_search", tools: [{ ...lookup, name: "loaded" }] },
+    ] };
+    const body = JSON.parse(build(meta, raw, false, 3).body);
+    expect(body.tools.map((entry: { name: string }) => entry.name).sort()).toEqual(["live", "loaded"]);
+    expect(body.input.some((item: { type: string }) => item.type === "additional_tools")).toBe(false);
+    expect(JSON.stringify(body.input)).toContain("stale");
+  });
+
+  test("a historical duplicate cannot consume the current declaration", () => {
+    const current = { ...lookup, description: "Current declaration" };
+    const body = JSON.parse(build(meta, { input: [
+      { type: "additional_tools", tools: [lookup] },
+      { type: "additional_tools", tools: [current] },
+    ] }, false, 1).body);
+    expect(body.tools).toEqual([current]);
+  });
+
+  test("rejects malformed catalogs before partial promotion", () => {
+    for (const raw of [
+      { tools: null, input: [{ type: "additional_tools", tools: [lookup] }] },
+      { input: [{ type: "additional_tools", tools: null }, { type: "additional_tools", tools: [lookup] }] },
+      { input: [{ type: "additional_tools", tools: [lookup, { type: "namespace", name: "bad", tools: null }] }] },
+      { input: [{ type: "additional_tools", tools: [lookup, null] }] },
+      { input: [{ type: "tool_search_output", call_id: "s1", tools: [lookup, { type: "namespace", name: "bad", tools: null }] }] },
+    ]) {
+      const original = structuredClone(raw);
+      expect(() => build(meta, raw)).toThrow("Malformed tool catalog for Meta Responses.");
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("preserves historical custom-call conversion without declaring the old tool", () => {
+    for (const toolChoice of ["auto", "none"]) {
+      const raw = { tool_choice: toolChoice, input: [
+        { type: "additional_tools", tools: [{ type: "custom", name: "old_exec", description: "Historical tool" }] },
+        { type: "custom_tool_call", name: "old_exec", call_id: "c1", input: "historical input" },
+        { type: "custom_tool_call_output", call_id: "c1", output: "historical output" },
+        { type: "message", role: "user", content: "continue" },
+      ] };
+      const original = structuredClone(raw);
+      const request = build(meta, raw, false, 3);
+      const body = JSON.parse(request.body);
+      expect(body.tools).toEqual([]);
+      expect(body.input).toEqual([
+        { type: "function_call", name: "old_exec", call_id: "c1", arguments: JSON.stringify({ input: "historical input" }) },
+        { type: "function_call_output", call_id: "c1", output: "historical output" },
+        original.input[3],
+      ]);
+      expect(request.convertedRoutedCustomToolNames?.has("old_exec")).toBe(false);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("malformed nested catalogs return a client error without sending upstream", async () => {
+    const config = { port: 0, defaultProvider: "fixture", providers: { fixture: { ...meta, authMode: "key" } } } as OcxConfig;
+    const savedFetch = globalThis.fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => { sends++; throw new Error("must not send"); }) as typeof fetch;
+    try {
+      releaseSpendHome ??= acquireOwnedSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/muse-spark-1.3", input: [
+          { type: "additional_tools", tools: [lookup, { type: "namespace", name: "bad", tools: null }] },
+          { type: "message", role: "user", content: "continue" },
+        ] }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error", message: "Malformed tool catalog for Meta Responses." } });
+      expect(sends).toBe(0);
+    } finally { globalThis.fetch = savedFetch; }
+  });
+
+  test("none clears declarations after promotion and long-name aliasing", () => {
+    const body = JSON.parse(build(meta, { input: [{ type: "additional_tools", tools: [tool] }], tool_choice: "none" }).body);
+    expect(body.tools).toEqual([]);
+    expect(body.input).toEqual([]);
+  });
+
+  test("leaves the private wrapper intact for unrelated destinations", () => {
+    const raw = { input: [{ type: "additional_tools", tools: [lookup] }] };
+    for (const baseUrl of ["https://api.openai.com/v1", "https://api.meta.ai.example.test/v1"]) {
+      expect(JSON.parse(build({ ...meta, baseUrl }, raw).body).input).toEqual(raw.input);
     }
   });
 });
