@@ -180,8 +180,7 @@ Les fournisseurs OAuth dont les identifiants comportent un identifiant de compte
 peuvent conserver plusieurs connexions. La page **Fournisseurs** affiche ces comptes dans une liste déroulante,
 permet d'en ajouter un autre et de changer de compte actif sans déconnecter les autres. Une connexion ordinaire
 avec un identifiant Kimi qui ne contient aucune information d'identité remplace l'emplacement actif, tandis que l'action explicite **Ajouter un
-compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro sont indexés par ARN de
-profil. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
+compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro utilisent l’ARN du profil avec l’adresse e-mail de l’utilisateur connecté lorsqu’elle est disponible ; plusieurs utilisateurs peuvent conserver des identifiants distincts pour un même profil d’organisation. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
 registre distinct. Les jetons restent dans `~/.opencodex/auth.json` ; `/api/oauth/accounts` ne renvoie que des
 métadonnées masquées.
 
@@ -254,6 +253,8 @@ dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau d
 [`ocx status` / `ocx doctor`](/fr/reference/cli/) dans la référence CLI.
 
 ### Importation des identifiants Kiro
+
+Dans le tableau de bord, choisissez **AWS IAM Identity Center**, puis indiquez l’URL du portail d’accès AWS et la région SSO de votre organisation. Autorisez le code d’appareil dans votre navigateur et choisissez le profil Kiro à enregistrer si plusieurs sont proposés. Aucun CLI ni accès SSH n’est nécessaire. Les instructions CLI ci-dessous concernent le choix **Kiro CLI**.
 
 La connexion Kiro nécessite la CLI Kiro : sous Unix, installez-la avec `curl -fsSL https://cli.kiro.dev/install | bash` ;
 sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1' | iex`, puis connectez-vous avec `kiro-cli login`.
@@ -359,7 +360,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. L’API `moonshot` utilise `kimi-k3.1-pro` par défaut ; les sélections `kimi-k2.5` enregistrées pour les adresses API officielles migrent vers ce modèle. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |

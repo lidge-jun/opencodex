@@ -165,7 +165,7 @@ opt-in した上流がこのフィールドを拒否しても、opencodex はフ
 
 認証情報に固定アカウント ID やメールがある OAuth プロバイダーはログインを複数保持できます。
 Providers ページでアカウントを追加し、別アカウントをログアウトせずにアクティブアカウントだけを切り替えられます。
-アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN をキーに保存されます。
+アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN と、取得できる場合はサインインしたユーザーのメールアドレスを組み合わせて識別されます。同じ組織プロファイルを共有するユーザーも、それぞれ別の認証情報を保持できます。
 `chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
 
@@ -183,6 +183,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 インライン JSON と余分な位置引数は拒否されます。エクスポートファイルは非公開に保ち、インポート後は削除するか安全に保管してください。
 
 ### Kiro 認証情報の取り込み
+
+ダッシュボードでは **AWS IAM Identity Center** を選び、組織の AWS アクセスポータル URL と SSO リージョンを入力すると、CLI や SSH を使わずにアカウントを追加できます。ブラウザーでデバイスコードを承認し、複数の Kiro プロファイルがある場合は保存するものを選択します。以下の CLI 手順は **Kiro CLI** の選択肢に適用されます。
 
 Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
 
@@ -256,7 +258,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`。`moonshot` API の既定モデルは `kimi-k3.1-pro` です。公式 API の保存済み `kimi-k2.5` 選択はこのモデルへ移行します。 |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |

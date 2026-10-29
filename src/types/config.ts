@@ -264,6 +264,18 @@ export interface OcxClaudeCodeConfig {
    * Routing-sidecar alias decoding is unchanged — only the Desktop model list writer.
    */
   desktopNativeModels?: boolean;
+  /**
+   * Which models the Claude Desktop 3P list carries (src/claude/desktop-model-visibility.ts).
+   * Unset lists every available model. Independent of desktopProfile tiers and of
+   * provider-wide disabledModels; other clients are unaffected.
+   */
+  desktopModelVisibility?: OcxClaudeDesktopModelVisibility;
+}
+
+/** `include`: only `routes` (new models hidden). `exclude`: all but `routes` (new models listed). */
+export interface OcxClaudeDesktopModelVisibility {
+  mode: "include" | "exclude";
+  routes: string[];
 }
 
 export type OcxClaudeDesktopFamily = "opus" | "fable" | "sonnet" | "haiku";
@@ -889,6 +901,8 @@ export interface OcxConfig {
    * the bare row plus every generated selector row and omit that model family from raw discovery.
    */
   disabledModels?: string[];
+  /** Omit explicitly disabled native catalog rows, retaining their validated inheritance template. Default: false; direct routing is unchanged. */
+  omitDisabledNativeModels?: boolean;
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: OcxCustomModel[];
   /**

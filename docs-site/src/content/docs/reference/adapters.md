@@ -358,7 +358,9 @@ MiMo model Command Code serves.
 - **Adaptive thinking display:** adaptive-thinking models (Opus 4.7+, Sonnet 5, Fable) are asked
   for `thinking.display: "summarized"`, so a long think reaches Chat and Responses clients as
   reasoning deltas instead of minutes of heartbeats. A request that hides the reasoning summary
-  (`reasoning.summary: "none"`) keeps the provider default.
+  (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
+  defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
+  selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.

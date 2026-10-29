@@ -43,6 +43,7 @@ ocx models provider openrouter on
 | `providers` | `Record<string, OcxProviderConfig>` | — | 提供者名称到提供者配置的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由迁移设置 | 标记单一、可感知选项的 OpenAI 投影已完成。 |
 | `disabledModels?` | `string[]` | — | 从 Codex catalog 和 `/v1/models` 中隐藏、但不阻止直接 proxy 调用的 model。routed id 会从列表中移除。account-qualified native id 只隐藏对应 selector row；bare native GPT id 会隐藏 bare row 以及该 model 的所有 account-selector row。Models 页面只显示裸原生行和路由行；若只隐藏一个 selector-qualified 行，请直接设置此配置字段。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 默认值为 `false`。在 `config.json` 中设置 `"omitDisabledNativeModels": true` 并运行 `ocx sync`，即可从目录、缓存和 Codex 格式的 HTTP 模型列表中移除已禁用的 native 行。移除前经过验证的继承模板会单独保留，因此 routed 行的元数据不变，直接请求的路由也不变。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供商设置的有效上下文上限。普通窗口只能缩小；支持长窗口的原生模型可以扩展到该模型支持的上限。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 各提供商最后选择的上限，关闭后仍保留。仅保存这些值不会启用上限。有效值优先于保存的选择值。 |
 | `contextCapValue?` | `number` | `350000` | 首次开启时使用的默认值。再次开启时恢复该提供商的选择值。修改全局值时附带 `setAll: true` 只会更新已开启的上限；不带值的 `setAll: true` 会按当前全局值开启所有已配置提供商的上限。 |
@@ -155,7 +156,7 @@ selector，而不是分配一个新名称。
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 内置 `xai` 预设在此列出 xAI 文档说明会拒绝这些参数的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；非推理模型保留调用方的 penalty。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 端点拒绝 `response_format` 的精确模型 ID。仅当请求模型与条目完全匹配时才省略该字段；其他 `openai-chat` 模型仍启用 structured-output 转换。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 端点拒绝 `json_schema` 形式但仍接受 `json_object` 的精确模型 ID。这类请求会降级为 `json_object` 而不是被丢弃，因此请求 JSON 的调用方仍能拿到 JSON。同一模型同时出现在两个列表时，以 `noStructuredOutputModels` 为准。`opencode go`、`opencode zen` 预设已为其 DeepSeek 路由内置该项。 |
-| `foldDeveloperRoleToSystem?` | `boolean` | 记录某个 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未设置时按 `system` 发送，`true` 时按 `system` 发送，`false` 时按 `developer` 发送。未设置表示尚未记录该目的地的情况；`true` 记录上游拒绝该角色；`false` 记录其接受该角色。无论哪种情况，消息都保留在对话中的原有位置，只有角色改变。拒绝该角色的目的地会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，这就是未记录状态默认折叠的原因。 |
+| `foldDeveloperRoleToSystem?` | `boolean` | 记录某个 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未设置时按 `system` 发送，`true` 时按 `system` 发送，`false` 时按 `developer` 发送。未设置表示尚未记录该目的地的情况；`true` 记录上游拒绝该角色；`false` 记录其接受该角色。未启用 `singleLeadingSystemMessage` 时，消息保留在对话中的原有位置，只有角色改变。拒绝该角色的目的地会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，这就是未记录状态默认折叠的原因。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
 | `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
@@ -181,23 +182,26 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。`PATCH /api/providers?name=<provider>` 会将请求体与已保存的提供商合并；除仅更新 `requestPacing` 的请求外，凡是修改 `disabled` 以外字段的更新，都会在保存前以同样方式验证合并后提供商的路径，若保留的既有路径无效则返回 `400`，且不更改配置。加载配置文件时也适用同样的路径规则。
 
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/zh-cn/reference/configuration/server/#claude-code-claudecode) 下配置。
 
 ### 保存提供方时会保留什么
 
-用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中八个记录的是某个上游的行为：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
+用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中十个记录的是某个上游的行为：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
 
-| 保存 | 八项设置 | 已存储的 `apiKeyPool` |
+| 保存 | 十项设置 | 已存储的 `apiKeyPool` |
 | --- | --- | --- |
 | 目的地相同，字段省略 | 保留已存储的值，包括显式的 `[]` 或 `false` | 保留 |
 | 新目的地，字段省略 | 不保留；可能套用新目的地的注册表默认值 | 不保留 |
 | 请求中发送了该字段 | 请求中的值 | 请求中的值 |
 
-目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的八项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
+目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的十项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
 
-`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部八项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
+`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部十项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
 
 ### 响应服务等级的可信度
 

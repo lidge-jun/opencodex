@@ -168,7 +168,7 @@ deny-by-default 상태로 유지됩니다.
 
 자격 증명에 고정된 계정 id나 이메일이 있는 OAuth 프로바이더는 로그인을 여러 개 보관할 수 있습니다.
 Providers 페이지에서 계정을 추가하고, 다른 계정을 로그아웃하지 않은 채 활성 계정만 바꿀 수 있습니다.
-계정 식별 정보가 없는 Kimi 자격 증명은 일반 로그인에서는 활성 슬롯을 교체하지만, 명시적인 **계정 추가**에서는 기존 슬롯을 보존하고 별도의 새 슬롯을 활성화합니다. Kiro 계정은 프로필 ARN을 키로 저장됩니다.
+계정 식별 정보가 없는 Kimi 자격 증명은 일반 로그인에서는 활성 슬롯을 교체하지만, 명시적인 **계정 추가**에서는 기존 슬롯을 보존하고 별도의 새 슬롯을 활성화합니다. Kiro 계정은 프로필 ARN과 로그인한 사용자의 이메일(제공되는 경우)을 함께 사용해 구분합니다. 같은 조직 프로필을 공유하는 사용자도 각자의 자격 증명을 별도로 유지할 수 있습니다.
 `chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
 `/api/oauth/accounts`는 마스킹된 메타데이터만 반환합니다.
 
@@ -186,6 +186,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 인라인 JSON과 추가 위치 인수는 거부됩니다. 내보낸 파일은 비공개로 보관하고 가져온 뒤 삭제하거나 안전하게 저장하세요.
 
 ### Kiro 자격 증명 가져오기
+
+대시보드에서 **AWS IAM Identity Center**를 선택하고 조직의 AWS 액세스 포털 URL과 SSO 리전을 입력하면 CLI나 SSH 없이 계정을 추가할 수 있습니다. 브라우저에서 기기 코드를 승인하고 Kiro 프로필이 여러 개면 저장할 프로필을 선택하세요. 아래 CLI 설명은 **Kiro CLI** 선택 항목에 해당합니다.
 
 Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 먼저 `kiro-cli login`으로 로그인하세요. `kiro-cli` 세션이 없으면 `ocx login kiro`는 붙여 넣은 액세스 토큰이나 `KIRO_ACCESS_TOKEN` 환경 변수로 폴백합니다.
 
@@ -260,7 +262,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. `moonshot` API 기본 모델은 `kimi-k3.1-pro`입니다. 공식 API 주소에 저장된 `kimi-k2.5` 선택은 이 모델로 마이그레이션됩니다. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |

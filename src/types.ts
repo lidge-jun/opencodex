@@ -74,6 +74,7 @@ export type {
   OcxClaudeCodeConfig,
   OcxClaudeDesktopFamily,
   OcxClaudeDesktopAssignment,
+  OcxClaudeDesktopModelVisibility,
   OcxClaudeDesktopProfile,
   StorageCleanupPolicy,
   OcxCustomModel,

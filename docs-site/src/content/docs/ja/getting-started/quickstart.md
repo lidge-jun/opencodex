@@ -1,9 +1,9 @@
 ---
 title: クイックスタート
-description: 最初のプロバイダーを構成し、3 つのコマンドで OpenAI Codex を opencodex 経由でルーティングします。
+description: "opencodex をインストールして最初のプロバイダーを追加し、Codex、Claude Code、Claude Desktop、Grok Build など、普段使う対応コーディングツールを接続します。"
 ---
 
-このガイドでは、新規インストールから非 OpenAI モデルに対して Codex を実行するまでを説明します。
+このガイドでは、新規インストールから普段使うコーディングツールで最初のリクエストを送るまでを説明します。手順 1 と 2 は全ツール共通で、手順 3 はツール別です。[クライアント対応ページ](/ja/reference/client-support/)に各ツールと接続方法を記載しています。
 
 ## スタンドアロンバイナリ（npm 不要）
 
@@ -55,9 +55,13 @@ ocx status
 ocx gui       # open the dashboard on the live port
 ```
 
-## 3.Codexを使用する
+## 3. ツールを接続する
 
-Codex は透過的に opencodex と通信するようになりました。
+使用するツールの手順を選んでください。複数のツールを接続でき、プロバイダーとモデルを共有します。
+
+### Codex
+
+手順 1 で Codex の確認に同意した場合、Codex は透過的に opencodex と通信します。確認を拒否した場合、または既存の設定があるためにセットアップが終了した場合は、Codex を実行する前にダッシュボードの **Connect** ページにある Codex スイッチをオンにします。[Codex 統合](/ja/guides/codex-integration/)では変更内容と復元方法を説明しています。
 
 ```bash
 codex "Refactor this function for readability"
@@ -69,6 +73,42 @@ codex "Refactor this function for readability"
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
+
+### Claude Code
+
+`claude` CLI をインストールした状態で実行します。
+
+```bash
+ocx claude
+```
+
+`ocx claude` はプロキシが停止中なら起動し、opencodex を指す環境で Claude Code を起動します。追加の引数はそのまま渡されます。階層のデフォルト、他のランチャー、無効化の方法は [Claude Code](/ja/guides/claude-code/)を参照してください。
+
+### Claude Desktop
+
+```bash
+ocx claude desktop
+```
+
+新規インストールではアプリ全体にゲートウェイプロファイルを設定します。すでに first-party モードを使用している場合はそのまま維持され、`ocx claude desktop apply --gateway` を実行すると明示的に切り替えられます。Desktop を claude.ai のままにして Code タブのみをルーティングする first-party モードは、[Claude Code](/ja/guides/claude-code/)の Claude Desktop モードの節を参照してください。
+
+モードを切り替えた後は、Claude Desktop を完全に終了してから開き直してください。
+
+### Grok Build
+
+ローカルリスナーでは、`~/.grok` が存在すると `ocx start` が表示対象のモデルを `~/.grok/config.toml` に登録します。Grok Build で `ocx-*` モデルを選択します。リモート設定と管理対象ブロックは [Grok Build](/ja/guides/grok-build/)を参照してください。
+
+プロバイダーやモデルを追加した後は、`ocx ensure` を実行するかプロキシを再起動すると Grok Build に反映されます。
+
+### その他のツール
+
+管理対象の統合があるツール（OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code など）は、ダッシュボードの **Connect** ページまたは次のコマンドで接続します。
+
+```bash
+ocx integration client enable --client <id>
+```
+
+各ツールの設定ファイルと変更の反映時期は[統合](/ja/guides/integrations/)を参照してください。カスタムエンドポイントに対応するその他のツールでは、OpenAI 互換ベース URL `http://localhost:10100/v1` または Anthropic ベース URL `http://localhost:10100` を使えます。
 
 ## サブエージェント モデルの選択 (オプション)
 

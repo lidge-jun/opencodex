@@ -722,13 +722,52 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "too many tokens",
 ];
 
+/**
+ * Short provider verdicts that a validation error could otherwise echo as the caller's own value
+ * (#7443). Each counts only at the very start of the provider's leaf message, after JSON envelopes
+ * are unwrapped, and Anthropic's only with its token counts. Text that merely contains one, including
+ * a serialized SDK exception or a quoted caller object, is not evidence: only the phrases dev already
+ * matched as substrings keep that wider reach.
+ */
+const ANCHORED_CONTEXT_OVERFLOW_VERDICTS: readonly RegExp[] = [
+  /^prompt is too long: \d+ tokens > \d+ maximum/i,
+  /^input is too long for requested model\b/i,
+  /^please reduce the length of the messages or completion\b/i,
+];
+
 /** Wrapper envelopes unwrapped before the leaf message is read. */
 const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
 
+/**
+ * Parameter validation echoes the caller's own value, so its prose is not a context verdict even
+ * when the value reads like one: "Invalid 'tools[0].function.name': 'prompt is too long'". These
+ * markers are read anywhere in the text, so an SDK error wrapper that serializes such a record as a
+ * Python dict is refused too, while a quoted genuine verdict in the same wrapper stays evidence.
+ */
+const CONTEXT_PARAM_NAMES = "messages|input|input_text|input_tokens|prompt|contents?|max_tokens|max_completion_tokens|max_output_tokens";
+/** A `param` naming the conversation or a token budget is consistent with an overflow. */
+const CONTEXT_PARAM = new RegExp(`^(?:${CONTEXT_PARAM_NAMES})(?:$|[.[])`, "i");
+const PARAMETER_VALIDATION_CODES: ReadonlySet<string> = new Set(["invalid_value", "invalid_type"]);
+const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
+  /\binvalid_(?:value|type)\b/i,
+  new RegExp(`['"]param['"]\\s*:\\s*['"](?!(?:${CONTEXT_PARAM_NAMES})(?:['".[]))`, "i"),
+  /\binvalid\s+(?:value\s+for\s+)?['"`\u2018\u201c]/i,
+  /\binvalid\s+(?:tool|function|parameter|argument|field|value)\b/i,
+  /\binput_value\s*=/i,
+  /\bvalidation errors? for\b/i,
+];
+
+function isParameterValidationRecord(record: Record<string, unknown>): boolean {
+  if (typeof record.code === "string" && PARAMETER_VALIDATION_CODES.has(record.code.toLowerCase())) return true;
+  return typeof record.param === "string" && record.param.length > 0 && !CONTEXT_PARAM.test(record.param);
+}
+
 function isDefiniteContextOverflowMessage(text: string): boolean {
+  if (PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text))) return false;
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
-    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
+    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
+    || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
 /**
@@ -767,7 +806,7 @@ export function isDefiniteContextOverflow(status: number, message: string): bool
       .find((candidate): candidate is Record<string, unknown> =>
         !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
         && typeof (candidate as Record<string, unknown>).message === "string");
-    if (!source) return false;
+    if (!source || isParameterValidationRecord(source)) return false;
     text = (source.message as string).trim();
   }
   return false;
@@ -902,8 +941,8 @@ export function comboFailureDecision(
   //
   // This MUST be tested before the generic stop list below. Our own refusal message says
   // "context window" -- that is what it refuses on -- and the classifier remaps that phrase,
-  // so checking the stop list first swallowed the signal and ended the chain. An UPSTREAM
-  // `context_length_exceeded` carries no admission code and still falls through to stop.
+  // so checking the stop list first swallowed the signal and ended the chain. Confirmed
+  // upstream context refusals already took the bounded message-classification hop above.
   //
   // Matched on the STRUCTURED code only, which classifyError now preserves for our own
   // refusal. A raw substring test would additionally let any upstream override a terminal

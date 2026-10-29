@@ -39,6 +39,7 @@ export default function ProviderDetails({
   modelRevision,
   modelRowsReady,
   onOpenModels,
+  onOpenConnect,
   onCreateJevAuto,
   modelsLoading,
   modelsLoadFailed,
@@ -81,6 +82,7 @@ export default function ProviderDetails({
   modelRevision: string;
   modelRowsReady: boolean;
   onOpenModels: () => void;
+  onOpenConnect?: () => void;
   onCreateJevAuto?: () => void;
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
@@ -209,6 +211,7 @@ export default function ProviderDetails({
 
   const activeTabId = `pws-tab-${tab}`;
   const activePanelId = `pws-panel-${tab}`;
+  const displayName = formatProviderDisplayName(item.name, t);
 
   return (
     <div className="pws-detail">
@@ -222,7 +225,8 @@ export default function ProviderDetails({
         <ProviderIcon name={item.name} adapter={item.adapter} baseUrl={item.baseUrl} cls="pws-detail-icon" />
         <div className="pws-detail-title-wrap">
           <h2 className="pws-detail-title">
-            {formatProviderDisplayName(item.name, t)}
+            {displayName}
+            {displayName !== item.name && <code className="pws-detail-id">{item.name}</code>}
             {local && <span className="pwi-rail-badge pwi-rail-badge--local">{t("modal.badge.local")}</span>}
             {!local && free && <span className="pwi-rail-badge pwi-rail-badge--free">{t("modal.badge.free")}</span>}
           </h2>
@@ -289,6 +293,15 @@ export default function ProviderDetails({
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
             availableModels={availableModels}
+            selectedModels={selectedModels}
+            modelRows={modelRows}
+            modelRowsReady={modelRowsReady}
+            modelsLoading={modelsLoading}
+            modelsLoadFailed={modelsLoadFailed}
+            onRetryModels={onRetryModels}
+            onOpenModelsTab={() => switchTab("models")}
+            onOpenModels={onOpenModels}
+            onOpenConnect={onOpenConnect}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             currentQuotaReading={currentQuotaReading}
