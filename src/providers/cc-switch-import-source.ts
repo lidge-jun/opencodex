@@ -670,18 +670,9 @@ function parseTomlHeaderBytes(
 
     if (segments.length === 2 && equalsAsciiBytes(segments[0]!, "model_providers")) {
       const idSlice = segments[1]!;
-      const sanitized = new Uint8Array(idSlice.length);
-      for (let k = 0; k < idSlice.length; k++) {
-        const b = idSlice[k]!;
-        sanitized[k] = b === 0x22 || b === 0x5c ? 0x5f : b;
+      if (!isAllowedMetadataBytes(idSlice, "id")) {
+        return { kind: "error", reason: "secret_in_nonsecret_field" };
       }
-      let allowed = false;
-      try {
-        allowed = isAllowedMetadataBytes(sanitized, "id");
-      } finally {
-        sanitized.fill(0);
-      }
-      if (!allowed) return { kind: "error", reason: "secret_in_nonsecret_field" };
       const id = decoder.decode(idSlice);
       return { kind: "model_provider", id };
     }
@@ -725,9 +716,12 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
   let currentSection: { kind: "root" } | { kind: "model_provider"; id: string } | { kind: "other" } = { kind: "root" };
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let lineStart = 0;
+  let lineCount = 0;
 
   for (let idx = 0; idx <= bytes.length; idx++) {
     if (idx < bytes.length && bytes[idx] !== 0x0a) continue;
+    lineCount++;
+    if (lineCount > 501) return { ok: false, reason: "malformed_entry" };
     let lineEnd = idx;
     if (lineEnd > lineStart && bytes[lineEnd - 1] === 0x0d) lineEnd--;
     const slice = bytes.subarray(lineStart, lineEnd);
@@ -824,21 +818,8 @@ export function parseCodexTomlBytes(bytes: Uint8Array): { ok: true; value: Codex
     if (!unescaped || unescaped.length === 0) return { ok: false, reason: "malformed_entry" };
     let value: string;
     try {
-      let checkSlice = unescaped;
-      if (key === "model_provider") {
-        const sanitized = new Uint8Array(unescaped.length);
-        for (let i = 0; i < unescaped.length; i++) {
-          const b = unescaped[i]!;
-          sanitized[i] = b === 0x22 || b === 0x5c ? 0x5f : b;
-        }
-        checkSlice = sanitized;
-      }
-      try {
-        if (!isAllowedMetadataBytes(checkSlice, tomlKeyMetadataKind(key))) {
-          return { ok: false, reason: "secret_in_nonsecret_field" };
-        }
-      } finally {
-        if (checkSlice !== unescaped) checkSlice.fill(0);
+      if (!isAllowedMetadataBytes(unescaped, tomlKeyMetadataKind(key))) {
+        return { ok: false, reason: "secret_in_nonsecret_field" };
       }
       value = decoder.decode(unescaped);
       if (value === SECRET_REFUSED_SENTINEL) return { ok: false, reason: "secret_in_nonsecret_field" };
@@ -899,17 +880,8 @@ function sqlLineExpr(col: string): string {
 function sqlSafeScalar(expr: string, kind: MetadataFieldKind): string {
   if (kind === "app") {
     return `CASE
-      WHEN ${expr} IS NULL OR trim(${expr}) = '' THEN ''
-      WHEN ocx_is_safe_meta(CAST(trim(${expr}) AS BLOB), 'app') = 1 THEN trim(${expr})
-      ELSE '${SECRET_REFUSED_SENTINEL}'
-    END`;
-  }
-  if (kind === "wire") {
-    return `CASE
-      WHEN ${expr} IS NULL THEN NULL
-      WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), 'wire') = 1
-        AND lower(${expr}) IN ('responses', 'openai-responses', 'chat', 'chat_completions', 'openai-completions', 'openai-chat')
-      THEN lower(${expr})
+      WHEN ${expr} IS NULL OR ${expr} = '' THEN ''
+      WHEN ocx_is_safe_meta(CAST(${expr} AS BLOB), 'app') = 1 THEN ${expr}
       ELSE '${SECRET_REFUSED_SENTINEL}'
     END`;
   }
@@ -1052,7 +1024,7 @@ WITH RECURSIVE
       sec,
       line,
       instr(line, ']') AS close_b,
-      trim(replace(replace(trim(substr(ltrim(substr(trim(substr(line, 2, instr(line, ']') - 2)), 16)), 2)), char(92) || char(34), '_'), char(92) || char(92), '_'), ' ''' || char(34)) AS hdr_id,
+      trim(trim(substr(ltrim(substr(trim(substr(line, 2, instr(line, ']') - 2)), 16)), 2)), ' ''' || char(34)) AS hdr_id,
       trim(trim(substr(line, 1, instr(line, '=') - 1)), ' ''' || char(34)) AS norm_key,
       ltrim(substr(line, instr(line, '=') + 1)) AS rhs
     FROM lines
@@ -1088,7 +1060,6 @@ WITH RECURSIVE
       rhs,
       end_q,
       substr(rhs, 2, end_q - 1) AS val_body,
-      replace(replace(substr(rhs, 2, end_q - 1), char(92) || char(34), '_'), char(92) || char(92), '_') AS val_id_clean,
       ltrim(substr(rhs, end_q + 2)) AS tail
     FROM quoted_lines
   ),
@@ -1118,14 +1089,15 @@ WITH RECURSIVE
             WHEN norm_key IN ('base_url', 'openai_base_url') THEN norm_key || ' = "' || ${sqlSafeScalar("val_body", "url")} || '"'
             WHEN norm_key = 'model_provider' THEN
               CASE
-                WHEN ${sqlSafeScalar("val_id_clean", "id")} = '${SECRET_REFUSED_SENTINEL}'
+                WHEN ${sqlSafeScalar("val_body", "id")} = '${SECRET_REFUSED_SENTINEL}'
                   THEN 'model_provider = "${SECRET_REFUSED_SENTINEL}"'
                 ELSE 'model_provider = ' || substr(rhs, 1, end_q + 1)
               END
             WHEN norm_key = 'wire_api' THEN
               CASE
-                WHEN ${sqlSafeScalar("val_body", "wire")} = '${SECRET_REFUSED_SENTINEL}' THEN '[__MALFORMED_LINE__]'
-                ELSE 'wire_api = "' || lower(val_body) || '"'
+                WHEN ${sqlSafeScalar("val_body", "wire")} = '${SECRET_REFUSED_SENTINEL}'
+                  THEN 'wire_api = "${SECRET_REFUSED_SENTINEL}"'
+                ELSE 'wire_api = "' || val_body || '"'
               END
             ELSE 'ignored_key = "omitted"'
           END

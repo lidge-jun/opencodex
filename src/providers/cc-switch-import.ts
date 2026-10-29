@@ -306,7 +306,9 @@ function evaluateExtractedRow(
       defaultModel = (row.genericModel ?? "").trim() || undefined;
       const wire = (row.genericWireApi ?? "responses").trim().toLowerCase();
       if (wire === SECRET_REFUSED_SENTINEL.toLowerCase()) return { ok: false, reason: "secret_in_nonsecret_field" };
-      adapter = wire === "chat" || wire === "chat_completions" || wire === "openai-chat" ? "openai-chat" : "openai-responses";
+      if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
+      else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
+      else return { ok: false, reason: "malformed_entry" };
     } else {
       return { ok: false, reason: "missing_base_url" };
     }

@@ -105,9 +105,9 @@ describe("CC-Switch keyless provider import", () => {
   test("SQLite preview and apply strip TOML comments, drop free-text names, keep source read-only, and never materialize secrets", async () => {
     const codexToml = [
       `model = "gpt-5.6-sol" # inline_comment_token = "${CANARY_SECRET}" and ${PREFIXLESS_HEX_SECRET}`,
-      `model_provider = "acme\\"quoted" # ${PREFIXLESS_MIXED_SECRET}`,
+      `model_provider = "acme.quoted" # ${PREFIXLESS_MIXED_SECRET}`,
       `experimental_bearer_token = "${CANARY_SECRET}"`,
-      `[ model_providers . "acme\\"quoted" ] # header_secret = "${CANARY_SECRET}"`,
+      `[ model_providers . "acme.quoted" ] # header_secret = "${CANARY_SECRET}"`,
       `base_url = "https://codex.acme.example/v1" # experimental_bearer_token = "${CANARY_SECRET}" ${PREFIXLESS_HEX_SECRET}`,
       `wire_api = "responses" # ${CANARY_SECRET}`,
       `api_key = "${CANARY_SECRET}"`,
@@ -302,18 +302,29 @@ describe("CC-Switch keyless provider import", () => {
     });
     let scanned;
     let secretHeaderResult;
+    let escapedQuoteHeaderResult;
+    let escapedQuoteModelProviderResult;
     try {
       scanned = scanCcSwitchJsonBytes(rawBytes);
       const secretHeaderBytes = Buffer.from(`[model_providers.${PREFIXLESS_HEX_SECRET}]\nbase_url = "https://x.example.com/v1"\n`, "utf8");
+      const escapedQuoteHeaderBytes = Buffer.from('[model_providers."foo\\"bar"]\nbase_url = "https://x.example.com/v1"\n', "utf8");
+      const escapedQuoteMpBytes = Buffer.from('model_provider = "foo\\"bar"\n[model_providers.foo]\nbase_url = "https://x.example.com/v1"\n', "utf8");
       try {
         secretHeaderResult = parseCodexTomlBytes(secretHeaderBytes);
+        escapedQuoteHeaderResult = parseCodexTomlBytes(escapedQuoteHeaderBytes);
+        escapedQuoteModelProviderResult = parseCodexTomlBytes(escapedQuoteMpBytes);
       } finally {
         secretHeaderBytes.fill(0);
+        escapedQuoteHeaderBytes.fill(0);
+        escapedQuoteMpBytes.fill(0);
       }
     } finally {
       decodeSpy.mockRestore();
     }
     expect(secretHeaderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
+    expect(escapedQuoteHeaderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
+    expect(escapedQuoteModelProviderResult).toEqual({ ok: false, reason: "secret_in_nonsecret_field" });
+    expect(decodedStrings.join("|")).not.toContain('foo"bar');
     expect(rawBytes.every(b => b === 0)).toBe(true);
     expect(JSON.stringify(scanned)).not.toContain(CANARY_SECRET);
     expect(JSON.stringify(scanned)).not.toContain(PREFIXLESS_HEX_SECRET);
@@ -550,6 +561,14 @@ describe("CC-Switch keyless provider import", () => {
         name: "SecretAppType",
         settings_config: JSON.stringify({ baseUrl: "https://api.example.com/v1" }),
       },
+      {
+        id: "escaped-quote-sqlite",
+        app_type: "codex",
+        name: "EscapedQuoteSqlite",
+        settings_config: JSON.stringify({
+          config: 'model_provider = "foo\\"bar"\n[model_providers."foo\\"bar"]\nbase_url = "https://x.example.com/v1"\n',
+        }),
+      },
     ]);
 
     const decodedDuringSqlite: string[] = [];
@@ -570,6 +589,7 @@ describe("CC-Switch keyless provider import", () => {
     expect(projected).not.toContain(PREFIXLESS_MIXED_SECRET);
     expect(projected).not.toContain("AbcDefGhiJ1-prov");
     expect(projected).not.toContain("AbCdEfGhIjKl");
+    expect(projected).not.toContain('foo"bar');
     expect(rawSqliteRows.find(r => r.id === "mixed-url-path")?.genericBaseUrl).toBe(SECRET_REFUSED_SENTINEL);
     expect(rawSqliteRows.find(r => r.id === "bad-app-kind")?.appType).toBe(SECRET_REFUSED_SENTINEL);
     for (const s of decodedDuringSqlite) {
@@ -577,17 +597,18 @@ describe("CC-Switch keyless provider import", () => {
       expect(s).not.toContain(PREFIXLESS_MIXED_SECRET);
       expect(s).not.toContain("AbcDefGhiJ1-prov");
       expect(s).not.toContain("AbCdEfGhIjKl");
+      expect(s).not.toContain('foo"bar');
     }
 
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(12);
+      expect(preview.invalid).toBe(13);
       expect(preview.invalidReasons).toEqual({
         malformed_entry: 3,
         missing_base_url: 1,
-        secret_in_nonsecret_field: 6,
+        secret_in_nonsecret_field: 7,
         private_network_refused: 1,
         ambiguous_codex_provider: 1,
       });
