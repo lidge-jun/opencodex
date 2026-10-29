@@ -1896,6 +1896,9 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
       const n = readSync(fd, header, 0, 16, 0);
       if (hasSqliteMagicBytes(header, n)) {
         isSqlite = true;
+        if (opened.nlink > 1) {
+          throw new CcSwitchImportError("CC-Switch SQLite source has multiple hard links; import the original CC-Switch database path directly.");
+        }
         if (size === 0 || size > MAX_SQLITE_BYTES) {
           throw new CcSwitchImportError("CC-Switch SQLite source exceeds the maximum supported size.");
         }
@@ -1923,9 +1926,13 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
       assertPlainLocalPath(resolved);
       const afterStat = lstatSync(resolved);
       const afterFd = fstatSync(fd);
+      if (isSqlite && afterFd.nlink > 1) {
+        throw new CcSwitchImportError("CC-Switch SQLite source has multiple hard links; import the original CC-Switch database path directly.");
+      }
       if (
         afterStat.dev !== opened.dev
         || afterStat.ino !== opened.ino
+        || afterStat.nlink !== opened.nlink
         || afterStat.uid !== opened.uid
         || afterStat.gid !== opened.gid
         || afterStat.mode !== opened.mode
@@ -1933,6 +1940,7 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
         || afterStat.mtimeMs !== opened.mtimeMs
         || afterFd.dev !== opened.dev
         || afterFd.ino !== opened.ino
+        || afterFd.nlink !== opened.nlink
         || afterFd.uid !== opened.uid
         || afterFd.gid !== opened.gid
         || afterFd.mode !== opened.mode

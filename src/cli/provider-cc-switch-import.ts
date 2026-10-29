@@ -19,6 +19,7 @@ const SAFE_ERROR_CODES: Readonly<Record<string, string>> = {
   "CC-Switch SQLite source has an unreadable WAL file (-wal); close CC-Switch (or checkpoint the database) and retry.": "sqlite_wal_active",
   "CC-Switch SQLite source has an active rollback journal (-journal); close CC-Switch and retry.": "sqlite_journal_active",
   "CC-Switch SQLite source has an unreadable rollback journal (-journal); close CC-Switch and retry.": "sqlite_journal_active",
+  "CC-Switch SQLite source has multiple hard links; import the original CC-Switch database path directly.": "sqlite_hardlink_refused",
 };
 
 function formatCandidateLine(p: { name: string; sourceId: string; appType: string; adapter: string; baseUrl: string; defaultModel?: string }): string {

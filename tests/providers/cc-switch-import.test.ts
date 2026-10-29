@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -935,6 +935,7 @@ describe("CC-Switch keyless provider import", () => {
       );
       expect(statSync(`${walDbPath}-wal`).size).toBeGreaterThan(0);
 
+      // Original path (nlink === 1) is refused while live-wal.db-wal is non-empty.
       expect(() => readSqliteRows(walDbPath)).toThrow(/uncheckpointed WAL changes.*close CC-Switch/i);
       await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: walDbPath })).rejects.toThrow(
         /uncheckpointed WAL changes.*close CC-Switch/i,
@@ -943,10 +944,43 @@ describe("CC-Switch keyless provider import", () => {
         /uncheckpointed WAL changes.*close CC-Switch/i,
       );
 
-      // Checkpoint and close writer (simulating user closing CC-Switch); retry now succeeds with updated data.
-      writer.run("PRAGMA wal_checkpoint(TRUNCATE);");
+      // Hard-linked alias path has no sibling alias-live.db-wal; descriptor fstat nlink > 1 must refuse
+      // both alias and original fail-closed rather than silently reading stale pre-WAL bytes!
+      const aliasDbPath = join(sourceDir, "alias-live.db");
+      linkSync(walDbPath, aliasDbPath);
+      try {
+        expect(existsSync(`${aliasDbPath}-wal`)).toBe(false);
+        expect(statSync(`${walDbPath}-wal`).size).toBeGreaterThan(0);
+        expect(() => readSqliteRows(aliasDbPath)).toThrow(/multiple hard links.*original CC-Switch database path/i);
+        await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: aliasDbPath })).rejects.toThrow(
+          /multiple hard links.*original CC-Switch database path/i,
+        );
+        await expect(runCcSwitchProviderImport({ mode: "preview", sourcePath: walDbPath })).rejects.toThrow(
+          /multiple hard links.*original CC-Switch database path/i,
+        );
+        const cliJsonOut: string[] = [];
+        const logSpy = spyOn(console, "log").mockImplementation(v => { cliJsonOut.push(String(v)); });
+        try {
+          expect(await cmdProviderCcSwitchImport(["--source", aliasDbPath, "--json"])).toBe(1);
+        } finally {
+          logSpy.mockRestore();
+        }
+        expect(cliJsonOut.join("\n")).not.toContain(aliasDbPath);
+        expect(JSON.parse(cliJsonOut[0]!)).toMatchObject({ error: "sqlite_hardlink_refused" });
+      } finally {
+        writer.close();
+        unlinkSync(aliasDbPath);
+      }
     } finally {
-      writer.close();
+      try { writer.close(); } catch { /* already closed */ }
+    }
+
+    // Reopen and checkpoint cleanly (simulating CC-Switch closing/checkpointing); retry now succeeds with updated data.
+    const checkpointer = new Database(walDbPath);
+    try {
+      checkpointer.run("PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally {
+      checkpointer.close();
     }
 
     const afterClose = await runCcSwitchProviderImport({ mode: "preview", sourcePath: walDbPath });
