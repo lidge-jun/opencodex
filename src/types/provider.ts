@@ -1011,6 +1011,8 @@ export interface OcxProviderConfig {
    * keeps its slot in the conversation.
    */
   foldDeveloperRoleToSystem?: boolean;
+  /** Merge text-only Chat instruction messages into one leading system message. LM Studio seeds true. */
+  singleLeadingSystemMessage?: boolean;
   /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown

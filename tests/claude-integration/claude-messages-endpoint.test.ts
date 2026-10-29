@@ -451,6 +451,7 @@ const MESSAGE_START_FRAME = 'event: message_start\ndata: {"type":"message_start"
 const UNSPACED_USAGE_FRAMES = [
   'event:message_start\ndata:{"type":"message_start","message":{"usage":{"input_tokens":11}}}\n\n',
   'event:message_delta\ndata:{"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+  'event:message_stop\ndata:{"type":"message_stop"}\n\n',
 ].join("");
 
 test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
@@ -467,8 +468,8 @@ test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
 
   // The bytes pass through untouched either way; what the strict prefix broke was the inspection.
   expect(text).toContain("message_start");
-  // "terminal" rather than "eof" is itself part of the fix: recognizing the unspaced
-  // `message_delta` is what lets the tap classify the close as a real terminal frame.
+  // A 200 terminal close depends on recognizing the unspaced frames: an unparsed
+  // `message_stop` would leave the turn looking cut short.
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
   expect(ctx.usage).toEqual(expect.objectContaining({ inputTokens: 11, outputTokens: 7 }));
 });
@@ -1422,7 +1423,7 @@ test("compatibility is uniform across translated adapters and rejects before inf
     { messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "document" }] }] }] },
     { messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "tool_reference", tool_name: "lookup" }] }] }] },
     { tools: [{ type: "tool_search_tool_regex_20251119", name: "tool_search" }] },
-    { tools: [{ name: "lookup", input_schema: { type: "object" }, defer_loading: true }] },
+    { tools: [{ name: "lookup", input_schema: { type: "object" } }], defer_tools: true },
     { tools: [{ name: "lookup", input_schema: { type: "object" }, strict: true }] },
     { tools: [{ name: "lookup", input_schema: { type: "object" }, allowed_callers: ["code_execution_20260120"] }] },
     { tools: [{ type: "web_search_20250305", name: "web_search", allowed_domains: ["example.invalid"] }] },

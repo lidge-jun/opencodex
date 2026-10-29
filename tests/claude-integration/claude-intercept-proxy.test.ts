@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { connect, createServer, type Socket } from "node:net";
+import { connect, createServer, Socket } from "node:net";
 import { CLAUDE_INTERCEPT_HOSTS, isLoopbackTarget, parseConnectRequestLine, startConnectProxy, type ConnectProxyHandle } from "../../src/claude/intercept/connect-proxy";
 import { startClaudeInterceptListener, rewriteInterceptedRequest } from "../../src/claude/intercept/listener";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
@@ -326,12 +326,12 @@ test("isLoopbackTarget covers mapped, unspecified and shorthand loopback literal
 });
 
 test("a dead upstream yields 502 instead of a hung tunnel", async () => {
-  const dead = await startEchoUpstream();
-  await dead.close();
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
     authToken: AUTH_TOKEN,
-    dialUpstream: () => connect({ host: "127.0.0.1", port: dead.port }),
+    // A closed listener's port can be reassigned, even to this proxy. Fail a real socket
+    // asynchronously instead, so this always exercises dial failure before establishment.
+    dialUpstream: () => new Socket().destroy(new Error("connect ECONNREFUSED")),
   });
   cleanups.push(proxy.close);
   expect(await rawRequest(proxy.port, `CONNECT gone.example:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 502");

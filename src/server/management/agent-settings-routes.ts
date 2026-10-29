@@ -972,13 +972,19 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     }
   }
   if (url.pathname === "/api/claude-desktop" && req.method === "PUT") {
-    let body: { profile?: unknown };
+    let body: { profile?: unknown; visibility?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     try {
       const { parseDesktopProfile, preserveDesktopAppliedState, reconcileDesktopProfile, sameProfileContent } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
       const initial = loadConfig();
       const current = await buildClaudeDesktopState(initial);
+      // #7702: absent keeps the stored selection, null clears it (list every model).
+      const { parseDesktopModelVisibility, desktopRouteVisible, readDesktopModelVisibility, sameDesktopModelVisibility } = await import("../../claude/desktop-model-visibility");
+      const visibility = body.visibility === undefined || body.visibility === null ? body.visibility : parseDesktopModelVisibility(body.visibility);
+      if (visibility && !current.models.some(model => model.available && desktopRouteVisible(visibility, model.route))) {
+        throw new Error("Claude Desktop needs at least one visible available model");
+      }
       const availableRoutes = new Set(current.models.filter(item => item.available).map(item => item.route));
       for (const route of Object.keys(parsed.assignments)) {
         if (!current.profile.assignments[route] && !availableRoutes.has(route)) {
@@ -1012,10 +1018,15 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             || (latest && expectedProfile && !sameProfileContent(latest, expectedProfile))) {
             return { changed: false, value: null };
           }
+          if (visibility !== undefined && !sameDesktopModelVisibility(
+            readDesktopModelVisibility(persisted.claudeCode), readDesktopModelVisibility(initial.claudeCode),
+          )) return { changed: false, value: null };
           persisted.claudeCode = {
             ...(persisted.claudeCode ?? {}),
             desktopProfile: preserveDesktopAppliedState(latest ?? current.profile, rebuilt),
           };
+          if (visibility) persisted.claudeCode.desktopModelVisibility = visibility;
+          else if (visibility === null) delete persisted.claudeCode.desktopModelVisibility;
           return { changed: true, value: structuredClone(persisted.claudeCode) };
         });
         if (outcome.status !== "unavailable" && outcome.value !== null) {
@@ -1027,6 +1038,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
               ...(config.claudeCode ?? {}),
               desktopProfile: structuredClone(outcome.value.desktopProfile),
             };
+          }
+          if (visibility !== undefined && config.claudeCode) {
+            if (outcome.value?.desktopModelVisibility) config.claudeCode.desktopModelVisibility = structuredClone(outcome.value.desktopModelVisibility);
+            else delete config.claudeCode.desktopModelVisibility;
           }
         }
         return outcome;
@@ -1383,6 +1398,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         savedFingerprint,
         onDiskFingerprint: observed.fingerprint ?? null,
         configPath: observed.selectedProfilePath,
+        // The list Desktop runs now (#7702), so the dashboard can count and diff against it.
+        appliedModels: gatewayApplied ? (await import("../../claude/desktop-model-visibility")).readAppliedDesktopModels(observed.selectedProfilePath) : null,
         stale,
         // Tri-state by ID match, independent of profile health: null =
         // undeterminable (no/unreadable metadata or no appliedId); a readable

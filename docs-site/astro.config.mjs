@@ -160,6 +160,7 @@ export default defineConfig({
                 { label: "Server & Runtime", translations: { fr: "Serveur et environnement d’exécution", ko: "서버 & 런타임", "zh-CN": "服务器与运行时", "zh-TW": "伺服器與執行階段", ru: "Сервер и рантайм", ja: "サーバー & ランタイム", tr: "Sunucu ve Çalışma Zamanı" }, slug: "reference/configuration/server" },
               ],
             },
+            { label: "Client Support", translations: { fr: "Clients pris en charge", ko: "클라이언트 지원", "zh-CN": "客户端支持", "zh-TW": "用戶端支援", ru: "Поддержка клиентов", ja: "クライアント対応", tr: "İstemci desteği" }, slug: "reference/client-support" },
             { label: "Adapters", translations: { fr: "Adaptateurs", ko: "어댑터", "zh-CN": "适配器", "zh-TW": "適配器", ru: "Адаптеры", ja: "アダプター", tr: "Adaptörler" }, slug: "reference/adapters" },
             { label: "Architecture", translations: { fr: "Architecture", ko: "아키텍처", "zh-CN": "架构", "zh-TW": "架構", ru: "Архитектура", ja: "アーキテクチャ", tr: "Mimari" }, slug: "reference/architecture" },
             { label: "Platform Support", translations: { fr: "Prise en charge des plateformes", ko: "플랫폼 지원", "zh-CN": "平台支持", "zh-TW": "平台支援", ru: "Поддержка платформ", ja: "プラットフォーム対応", tr: "Platform Desteği" }, link: `${SITE_URL}/reference/platform-support` },

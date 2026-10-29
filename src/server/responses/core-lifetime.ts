@@ -3,6 +3,7 @@ import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
+import { carryCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import {
   isNativePassthroughSseResponse,
   markNativePassthroughSseResponse,
@@ -53,6 +54,7 @@ export function finalizeOwnedTranslatorBudget(response: Response, budget: Transl
   if (isNonReplayableResponse(response)) markResponseNonReplayable(finalizedResponse);
   if (isVerifiedModelNotInPlanResponse(response)) markVerifiedModelNotInPlanResponse(finalizedResponse);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(finalizedResponse);
+  carryCodexAccountCooldownResponse(response, finalizedResponse);
   return carryResponseToolOwnership(response, finalizedResponse);
 }
 
@@ -79,6 +81,8 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   if (isEagerRelaySseResponse(response)) markEagerRelaySseResponse(wrapped);
   if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(wrapped);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
+  // Retained compaction delivers through this lease wrapper; keep a local cooldown refusal local (#7850).
+  carryCodexAccountCooldownResponse(response, wrapped);
   return carryResponseToolOwnership(response, carryReplayRefusal(response, wrapped));
 }
 

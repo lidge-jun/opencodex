@@ -556,7 +556,7 @@ Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先
 | Assistant `tool_use` | `function_call`（`input` → JSON 字串化的 `arguments`） |
 | 使用者 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 字首） |
 | 重放 `thinking` / `redacted_thinking` | `reasoning` 項目；簽名與遮蔽載荷保存在有界 `ocxr1` 信封中 |
-| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） |
+| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） 帶有 `allowed_domains`、`blocked_domains` 或 `user_location` 的託管搜尋會從轉換後的 Responses/Chat 路由中移除；強制呼叫已移除的搜尋會回傳 400。有效的 `defer_loading` 函式定義仍可作為一般函式呼叫。參見[轉換限制](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)。 |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定名稱 function→`{type:"function",name}`，hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

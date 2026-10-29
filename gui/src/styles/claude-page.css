@@ -258,3 +258,57 @@
 .claude-desktop-advanced > .ocx-group-stack {
   padding: 0 10px 10px;
 }
+/* Claude Desktop model visibility (#7702). */
+.claude-visibility {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.claude-visibility-counts,
+.claude-visibility-filters,
+.claude-visibility-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.claude-visibility-count {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+}
+.claude-visibility-count.muted,
+.claude-visibility-preview {
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.claude-visibility-filters .input[type="search"] {
+  flex: 1;
+  min-width: 160px;
+}
+.claude-visibility-policy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: var(--text-label);
+}
+.claude-visibility-policy legend {
+  float: left;
+  margin-right: 4px;
+  font-weight: var(--weight-medium);
+}
+.claude-visibility-policy label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.claude-desktop-list-row.hidden-row .claude-desktop-list-names {
+  opacity: 0.55;
+}
+.claude-visibility-preview-title {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
