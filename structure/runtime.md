@@ -479,7 +479,7 @@ Canonical ChatGPT Codex forwarding uses the generated `openai-codex` capability 
 
 An explicitly configured routed `visionSidecar.model` is dispatchable unless capability evidence positively proves it cannot accept images; an unknown custom sidecar is not guessed blind. If a proven text-only main target has no usable sidecar plan, image parts are stripped before the upstream request rather than forwarded raw. `modelInputModalities` is symmetric evidence: `["text","image"]` proves image support while `["text"]` triggers preprocessing. Provider-wide fallback declarations follow the [validated modality contract](config.md#explicit-per-model-capability-declarations); malformed saved values restrict to text before runtime enrichment. Runtime provider hooks such as injected `fetch` functions are preserved without mutation during capability enrichment.
 
-Regression coverage: `tests/vision/vision-cache.test.ts`, `tests/vision/vision-eligibility.test.ts`, `tests/vision/vision-routed.test.ts`, and `tests/adapters/openai/openai-chat-native-policy.test.ts`.
+Routed vision helpers retain frozen caller policy and intersect host limits under the [Advisor admission contract](advisor.md#cross-provider-consultation). Regression coverage: `tests/vision/vision-cache.test.ts`, `tests/vision/vision-eligibility.test.ts`, `tests/vision/vision-routed.test.ts`, and `tests/adapters/openai/openai-chat-native-policy.test.ts`.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 

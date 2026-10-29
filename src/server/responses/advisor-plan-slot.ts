@@ -9,6 +9,7 @@ export interface AdvisorPlanInput {
   workerModelId: string;
   /** Immutable scope captured from the request that is paying for this sidecar. */
   admissionScope?: AdmissionModelScope;
+  admissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   abortSignal?: AbortSignal;
 }
 

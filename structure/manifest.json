@@ -302,6 +302,8 @@
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
+        "src/server/capture-admission-policy.ts",
+        "src/types/admission-policy.ts",
         "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"
       ]
