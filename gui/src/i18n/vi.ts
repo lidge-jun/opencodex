@@ -1242,6 +1242,8 @@ export const vi: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Chưa hoàn tất",
   "logs.detail.outcome.aborted": "Đã hủy",
   "logs.detail.sends.label": "Số lần gửi lên nhà cung cấp",
+  "logs.detail.sends.unavailable": "Không khả dụng",
+  "logs.detail.retries.label": "Lần thử lại",
   "logs.detail.sends.unresolved": "chưa xác định",
   "logs.detail.attempt.recovery.unknown": "Lý do khôi phục không rõ",
   "logs.detail.cause.label": "Nguyên nhân lỗi",

@@ -564,7 +564,7 @@ An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
 labels collapse for reporting; configured provider names ending in `-main` remain separate. Native Messages request and attempt `requestedEffort` labels follow the [native Messages logging contract](data-planes/protocol-paths.md#managed-native-messages).
 
-Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
+The Logs request detail headline prefers a recognized request-level cause over the HTTP status label and omits the status description; unknown causes retain raw attribution and the status fallback. Physical sends are unavailable for absent or invalid spend; retries appear only for one attempt with fully settled, consistent accounting, as sends after the first, floored at zero. Other attempts and recovery reasons remain visible. Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and
 `src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page. `src/server/request-log-filter.ts` accepts the full provider/model label shown by `ocx logs` and bare model IDs, including IDs containing slashes. Qualified failover matches bind provider/model from the same attempt; matching occurs before the row cap and pagination.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.

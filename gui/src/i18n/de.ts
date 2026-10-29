@@ -1204,6 +1204,8 @@ export const de: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Unvollständig",
   "logs.detail.outcome.aborted": "Abgebrochen",
   "logs.detail.sends.label": "Upstream-Sendungen",
+  "logs.detail.sends.unavailable": "Nicht verfügbar",
+  "logs.detail.retries.label": "Wiederholungen",
   "logs.detail.sends.unresolved": "ungeklärt",
   "logs.detail.attempt.recovery.unknown": "Unbekannter Wiederherstellungsgrund",
   "logs.detail.cause.label": "Fehlerursache",

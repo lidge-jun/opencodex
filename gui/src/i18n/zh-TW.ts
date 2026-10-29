@@ -3078,6 +3078,8 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "未完成",
   "logs.detail.outcome.aborted": "已中止",
   "logs.detail.sends.label": "上游傳送次數",
+  "logs.detail.sends.unavailable": "無法使用",
+  "logs.detail.retries.label": "重試",
   "logs.detail.sends.unresolved": "未結算",
   "logs.detail.attempt.recovery.unknown": "未知的復原原因",
   "logs.detail.cause.label": "失敗原因",

@@ -1248,6 +1248,8 @@ export const tr: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Tamamlanmadı",
   "logs.detail.outcome.aborted": "İptal edildi",
   "logs.detail.sends.label": "Yukarı akış gönderimleri",
+  "logs.detail.sends.unavailable": "Kullanılamıyor",
+  "logs.detail.retries.label": "Yeniden denemeler",
   "logs.detail.sends.unresolved": "çözülmemiş",
   "logs.detail.attempt.recovery.unknown": "Bilinmeyen kurtarma nedeni",
   "logs.detail.cause.label": "Hata nedeni",

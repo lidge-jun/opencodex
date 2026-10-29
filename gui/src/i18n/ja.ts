@@ -1145,6 +1145,8 @@ export const ja: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "未完了",
   "logs.detail.outcome.aborted": "中断",
   "logs.detail.sends.label": "アップストリーム送信",
+  "logs.detail.sends.unavailable": "利用不可",
+  "logs.detail.retries.label": "再試行",
   "logs.detail.sends.unresolved": "未確定",
   "logs.detail.attempt.recovery.unknown": "不明なリカバリ理由",
   "logs.detail.cause.label": "失敗の原因",

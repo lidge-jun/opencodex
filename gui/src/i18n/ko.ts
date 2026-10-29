@@ -1243,6 +1243,8 @@ export const ko: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "미완료",
   "logs.detail.outcome.aborted": "중단됨",
   "logs.detail.sends.label": "업스트림 전송",
+  "logs.detail.sends.unavailable": "사용 불가",
+  "logs.detail.retries.label": "재시도",
   "logs.detail.sends.unresolved": "미확인",
   "logs.detail.attempt.recovery.unknown": "알 수 없는 복구 사유",
   "logs.detail.cause.label": "실패 원인",

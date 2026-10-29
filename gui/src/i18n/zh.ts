@@ -1216,6 +1216,8 @@ export const zh: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "未完成",
   "logs.detail.outcome.aborted": "已中止",
   "logs.detail.sends.label": "上游发送次数",
+  "logs.detail.sends.unavailable": "不可用",
+  "logs.detail.retries.label": "重试",
   "logs.detail.sends.unresolved": "未结算",
   "logs.detail.attempt.recovery.unknown": "未知的恢复原因",
   "logs.detail.cause.label": "失败原因",

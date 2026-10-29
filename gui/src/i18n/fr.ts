@@ -1238,6 +1238,8 @@ export const fr: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Incomplet",
   "logs.detail.outcome.aborted": "Interrompu",
   "logs.detail.sends.label": "Envois en amont",
+  "logs.detail.sends.unavailable": "Indisponible",
+  "logs.detail.retries.label": "Nouvelles tentatives",
   "logs.detail.sends.unresolved": "non résolus",
   "logs.detail.attempt.recovery.oauth401": "Réauthentification OAuth",
   "logs.detail.attempt.recovery.key429": "Clé soumise à une limitation de débit (429)",

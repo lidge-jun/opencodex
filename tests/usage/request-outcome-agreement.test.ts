@@ -29,7 +29,7 @@ import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract
  * specifically about a 200 that must NOT read as success.
  */
 
-const LOCALES = ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "ru", "tr", "vi"] as const;
+const LOCALES = ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "ru", "tr", "vi", "pt"] as const;
 
 function sampleValue(snapshot: string, series: string): number {
   const line = snapshot.split("\n").find(row => row.startsWith(series + " "));
@@ -146,8 +146,8 @@ describe("send totals agree across surfaces", () => {
 
   test("the dashboard shows the send total and the unresolved remainder", () => {
     const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    expect(page).toContain("requestPhysicalSends");
-    expect(page).toContain("requestUnresolvedSends");
+    expect(page).toContain("summary.sends");
+    expect(page).toContain("summary.unresolved");
   });
 });
 
@@ -197,9 +197,10 @@ describe("the dashboard recovery roster cannot drift from the durable one", () =
     expect(page).not.toContain('type AttemptRecoveryKind =');
   });
 
-  test("every label key the page names exists in all ten catalogs", () => {
-    const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends|cause|stage|resend)\.[a-zA-Z0-9]+)"/g)]
+  test("every label key the page names exists in all eleven catalogs", () => {
+    const page = ["Logs.tsx", "logs-failure-summary.ts"]
+      .map(file => readFileSync(repoPath("gui", "src", "pages", file), "utf8")).join("\n");
+    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends|retries|cause|stage|resend)\.[a-zA-Z0-9]+)"/g)]
       .map(match => match[1]!))];
     expect(keys.length).toBeGreaterThan(ATTEMPT_RECOVERY_KIND_ROSTER.length);
     const gaps: string[] = [];
@@ -269,7 +270,7 @@ describe("the failure cause is derived once and reported everywhere", () => {
   });
 
   test("every cause the recorder can derive has a dashboard label", () => {
-    const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
+    const page = readFileSync(repoPath("gui", "src", "pages", "logs-failure-summary.ts"), "utf8");
     const block = page.slice(page.indexOf("const FAILURE_CAUSE_KEYS"), page.indexOf("} as const satisfies Record<RequestFailureCause"));
     const missing = REQUEST_METRICS_FAILURE_CAUSES.filter(cause => !block.includes(`"${cause}":`));
     expect(missing).toEqual([]);

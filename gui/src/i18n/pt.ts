@@ -1257,6 +1257,8 @@ export const pt: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Incompleta",
   "logs.detail.outcome.aborted": "Abortada",
   "logs.detail.sends.label": "Envios upstream",
+  "logs.detail.sends.unavailable": "Indisponível",
+  "logs.detail.retries.label": "Novas tentativas",
   "logs.detail.sends.unresolved": "não resolvido",
   "logs.detail.attempt.recovery.unknown": "Motivo de recuperação desconhecido",
   "logs.detail.cause.label": "Causa da falha",

@@ -1221,6 +1221,8 @@ export const ru: Record<TKey, string> = {
   "logs.detail.outcome.incomplete": "Не завершено",
   "logs.detail.outcome.aborted": "Прервано",
   "logs.detail.sends.label": "Отправки к провайдеру",
+  "logs.detail.sends.unavailable": "Недоступно",
+  "logs.detail.retries.label": "Повторные попытки",
   "logs.detail.sends.unresolved": "не подтверждено",
   "logs.detail.attempt.recovery.unknown": "Неизвестная причина восстановления",
   "logs.detail.cause.label": "Причина сбоя",
