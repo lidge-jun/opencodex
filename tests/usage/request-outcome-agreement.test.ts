@@ -115,14 +115,27 @@ describe("send totals agree across surfaces", () => {
       attempts: [attempt, { ...attempt, ordinal: 2, sendCount: 0, adapter: "" }] } as PersistedUsageEntry;
     const normalized = normalizeUsageEntryForTest(entry);
     expect(normalized.attempts).toHaveLength(1);
+    const valid = normalizeUsageEntryForTest({ ...entry, attempts: [attempt] });
+    expect(JSON.stringify(normalized)).toBe(JSON.stringify(valid));
+    expect(JSON.stringify(normalizeUsageEntryForTest(normalized))).toBe(JSON.stringify(normalized));
+    expect(Object.prototype.propertyIsEnumerable.call(normalized, "attemptNormalizationDropped")).toBe(false);
     expect(normalized.attemptNormalizationDropped).toBe(true);
     expect(requestLogEntryFromPersistedUsage(normalized).attemptNormalizationDropped).toBe(true);
     expect(requestLogDto(normalized).attemptNormalizationDropped).toBe(true);
     expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(normalized)), null, key => key).retries).toBeUndefined();
     expect(normalizeUsageEntryForTest(normalized).attemptNormalizationDropped).toBe(true);
     expect(normalizeUsageEntryForTest({ ...entry, attempts: [attempt] }).attemptNormalizationDropped).toBeUndefined();
-    const valid = normalizeUsageEntryForTest({ ...entry, attempts: [attempt] });
     expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(valid)), null, key => key).retries).toBe(2);
+  });
+
+  test("an explicitly persisted normalization-loss marker survives reads and serialization", () => {
+    const entry = { requestId: "marked", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", attemptNormalizationDropped: true } as PersistedUsageEntry;
+    const normalized = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(entry)));
+    expect(normalized.attemptNormalizationDropped).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(normalized, "attemptNormalizationDropped")).toBe(true);
+    expect(JSON.parse(JSON.stringify(normalized)).attemptNormalizationDropped).toBe(true);
+    expect(JSON.stringify(normalizeUsageEntryForTest(normalized))).toBe(JSON.stringify(normalized));
   });
 
   test.each(["future-fault", "constructor"])("unknown persisted cause %s is dropped", cause => {

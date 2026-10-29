@@ -1000,7 +1000,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
@@ -1075,7 +1075,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(entry.attemptNormalizationDropped === true
-      || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length)
+      && Object.prototype.propertyIsEnumerable.call(entry, "attemptNormalizationDropped")
       ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
@@ -1099,6 +1099,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
+  if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true
+    || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length))) {
+    // Preserve the read-time loss signal without changing legacy ledger serialization.
+    Object.defineProperty(normalized, "attemptNormalizationDropped", { value: true, enumerable: false });
+  }
+  return normalized;
 }
 
 // Bound hot-path filesystem hardening to once per second while ensuring an external mode
@@ -1147,7 +1153,11 @@ export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
+  const normalized = normalizeUsageEntry(entry);
+  // Once invalid attempts are removed, persist their loss so future reads can still report it.
+  const line = `${JSON.stringify(normalized.attemptNormalizationDropped === true
+    ? { ...normalized, attemptNormalizationDropped: true }
+    : normalized)}\n`;
   const path = usageLogPath();
   const now = Date.now();
   const doAppend = (): void => {
