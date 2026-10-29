@@ -634,7 +634,7 @@ WITH RECURSIVE
         ELSE 'ignored_key = "omitted"'
       END AS safe_line
     FROM lines
-  ),
+  )
 SELECT
   b.rid AS rid,
   b.id AS id,
