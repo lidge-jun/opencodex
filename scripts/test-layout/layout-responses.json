@@ -1,4 +1,5 @@
 {
+  "advisor-web-search.test.ts": "advisor",
   "passthrough-media-type.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",

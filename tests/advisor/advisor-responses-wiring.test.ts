@@ -21,6 +21,8 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { internalCallCapability } from "../../src/lib/local-internal-call-capability";
 import type { OcxConfig } from "../../src/types";
 import { advisorActivityStore } from "../../src/advisor/activity";
+import { scanEventsForWebSearch } from "../../src/web-search/loop";
+import type { AdapterEvent } from "../../src/types";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -130,6 +132,16 @@ function loopbackInterceptor(config: OcxConfig, recorder: { chatRequests: string
       return await handleChatCompletions(req, config, { model: "", provider: "" });
     }
     throw new Error(`unexpected external fetch during advisor test: ${url}`);
+  }) as typeof fetch;
+}
+
+function stubExaSearch() {
+  const inner = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("exa.ai")) {
+      return Response.json({ results: [{ title: "Fixture source", url: "https://example.test/source", text: "search evidence" }] });
+    }
+    return inner(input, init);
   }) as typeof fetch;
 }
 
@@ -335,6 +347,156 @@ describe("advisor responses wiring (end-to-end)", () => {
     // 6. The worker continued and produced its own final answer.
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
     expect(serialized).toContain("Following the advice");
+  });
+
+  test.each([true, false])("manual advisor works while the web-search sidecar owns the turn (stream=%s)", async stream => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([advisorCallFrames, plainFrames("Advice accepted during a search-enabled turn.")], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+    stubExaSearch();
+
+    const response = await handleResponses(workerRequest("Use a second opinion with search available", undefined, stream, [{ type: "web_search" }]), config, logCtx);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(chatRequests).toHaveLength(1);
+    expect(workerBodies).toHaveLength(2);
+    expect(workerBodies[0]).toContain('"advisor"');
+    expect(workerBodies[0]).toContain('"web_search"');
+    expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+    expect(body).toContain("Advice accepted during a search-enabled turn");
+    expect(body).not.toContain("call_adv_1");
+  });
+
+  test("web_search and advisor calls are fulfilled in worker order without leaking advisor", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const mixedFrames = [
+      { choices: [{ delta: { tool_calls: [
+        { index: 0, id: "call_adv_mixed", type: "function", function: { name: "advisor", arguments: JSON.stringify({ question: "Check the plan" }) } },
+        { index: 1, id: "call_search_mixed", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: "fixture query" }) } },
+      ] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([mixedFrames, plainFrames("Combined search and advice answer")], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+    stubExaSearch();
+
+    const response = await handleResponses(workerRequest("Use both internal tools", undefined, true, [{ type: "web_search" }]), config, logCtx);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(chatRequests).toHaveLength(1);
+    expect(workerBodies).toHaveLength(2);
+    const continuation = JSON.parse(workerBodies[1]!) as {
+      messages: { role: string; tool_calls?: { id: string }[]; tool_call_id?: string; content?: unknown }[];
+    };
+    const sequence = continuation.messages.flatMap(message => message.role === "assistant" && message.tool_calls
+      ? message.tool_calls.map(call => `call:${call.id}`)
+      : message.role === "tool" ? [`result:${message.tool_call_id}`] : []);
+    expect(sequence).toEqual([
+      "call:call_adv_mixed", "result:call_adv_mixed",
+      "call:call_search_mixed", "result:call_search_mixed",
+    ]);
+    expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+    expect(workerBodies[1]).toContain("search evidence");
+    expect(body).toContain("Combined search and advice answer");
+    expect(body).not.toContain("call_adv_mixed");
+  });
+
+  test("a real client tool wins over advisor in a web-search turn", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const mixedFrames = [
+      { choices: [{ delta: { tool_calls: [
+        { index: 0, id: "call_adv_mixed", type: "function", function: { name: "advisor", arguments: "{}" } },
+        { index: 1, id: "call_write", type: "function", function: { name: "Write", arguments: "{}" } },
+      ] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([mixedFrames], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+
+    const response = await handleResponses(workerRequest("Use the client tool", undefined, true, [{ type: "web_search" }]), config, logCtx);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(chatRequests).toHaveLength(0);
+    expect(workerBodies).toHaveLength(1);
+    expect(body).toContain("call_write");
+    expect(body).not.toContain("call_adv_mixed");
+  });
+
+  test("advisor remains bounded while web-search owns repeated continuations", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([advisorCallFrames], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+
+    const response = await handleResponses(workerRequest("Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }]), config, logCtx);
+    const body = await response.text();
+    expect(body).toContain("advisor_continuation_limit");
+    expect(workerBodies).toHaveLength(5);
+    expect(chatRequests.length).toBeLessThanOrEqual(3);
+  });
+
+  test("scanner drops incomplete and unterminated advisor calls", () => {
+    const incomplete = scanEventsForWebSearch([
+      { type: "tool_call_start", id: "adv-incomplete", name: "advisor" },
+      { type: "tool_call_delta", arguments: '{"question":' },
+      { type: "tool_call_end", incomplete: true },
+      { type: "done", stopReason: "max_tokens" },
+    ] as AdapterEvent[], { advisor: true });
+    expect(incomplete.calls).toHaveLength(0);
+    expect(incomplete.hasMalformedToolCall).toBe(true);
+    expect(JSON.stringify(incomplete.passthrough)).not.toContain("advisor");
+
+    const unterminated = scanEventsForWebSearch([
+      { type: "tool_call_start", id: "adv-unterminated", name: "advisor" },
+      { type: "tool_call_delta", arguments: '{"question":' },
+      { type: "done", stopReason: "max_tokens" },
+    ] as AdapterEvent[], { advisor: true });
+    expect(unterminated.calls).toHaveLength(0);
+    expect(unterminated.hasMalformedToolCall).toBe(true);
+    expect(JSON.stringify(unterminated.passthrough)).not.toContain("advisor");
+  });
+
+  test("a consult-less registered plan does not declare advisor in a web-search turn", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const config = advisorConfig(undefined, workerProviderFetch([plainFrames("Preflight-only fixture")], workerBodies));
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    setAdvisorPlanFactory(config, async () => ({
+      tool: { name: "advisor", description: "fixture", parameters: {}, advisor: true },
+      preflightInject: async () => false,
+      attachGuard: () => {},
+    }));
+    try {
+      const response = await handleResponses(workerRequest("No manual plan", undefined, true, [{ type: "web_search" }]), config, logCtx);
+      expect(response.status).toBe(200);
+      expect(workerBodies).toHaveLength(1);
+      const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
+      expect(dispatched.tools?.some(tool => tool.function?.name === "advisor") ?? false).toBe(false);
+      expect(dispatched.tools?.some(tool => tool.function?.name === "web_search") ?? false).toBe(true);
+    } finally { setAdvisorPlanFactory(config, null); }
   });
 
   test("preflight: worker NEVER calls the advisor — OpenCodex consults the expert anyway, exactly once", async () => {
