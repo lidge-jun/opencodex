@@ -15,6 +15,8 @@ import type { OcxConfig } from "../types";
 import { cachedProviderQuotaIsExhausted } from "../combos/resolve";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { accountQuotaCache, hydrateAccountQuotaCache } from "../providers/quota/account-cache";
+import { isCodexQuotaExhausted, listAccountQuotas } from "../codex/quota";
+import { resetAtToMs } from "../codex/quota-types";
 import { isAllowedRequestOrigin, resolveDataPlaneAdmissionSecret, withCors, type DataPlaneAdmissionOptions, type RequestPolicyView } from "./auth-cors";
 
 /** One window of the public body. `resetsAt` is epoch millis, as the poller contract names it. */
@@ -113,6 +115,18 @@ export async function handleHubUsageWindows(req: Request, config: OcxConfig, pol
       if (custom.rejected === true && custom.resetAt === undefined) continue;
       collectWindow(windows, provider, "custom", custom.label, finitePercent(custom.percent), custom.resetAt, exhausted || (custom.rejected === true));
     }
+  }
+  // ChatGPT subscriptions live in the codex pool store, not the generic account-quota cache:
+  // the burst (5-hour), weekly and monthly bars the /usage backend reports. Stored resets may
+  // be in Unix seconds, so normalize them through the pool's own reader before the futures
+  // filter applies. Credits are deliberately absent: a balance has no percentage, and a
+  // percent-less row would freeze the ring's lower half at empty.
+  for (const [, quota] of listAccountQuotas()) {
+    const exhausted = isCodexQuotaExhausted(quota, undefined, true);
+    const ms = (resetAt: number | undefined) => (resetAt === undefined ? undefined : resetAtToMs(resetAt));
+    collectWindow(windows, "ChatGPT", "5-hour", "5-hour", finitePercent(quota.shortPercent), ms(quota.shortResetAt), exhausted);
+    collectWindow(windows, "ChatGPT", "weekly", "Weekly", finitePercent(quota.weeklyPercent), ms(quota.weeklyResetAt), exhausted);
+    collectWindow(windows, "ChatGPT", "monthly", "Monthly", finitePercent(quota.monthlyPercent), ms(quota.monthlyResetAt), exhausted);
   }
   const body = {
     windows: [...windows.entries()].sort((a, b) => {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { accountQuotaCache, clearAccountQuotaCache } from "../../src/providers/quota/account-cache";
+import { clearAccountQuota, updateAccountQuota } from "../../src/codex/quota";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 
@@ -37,11 +38,13 @@ beforeEach(() => {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = `ocx_admin_${"b".repeat(43)}`;
   saveConfig(config());
   clearAccountQuotaCache();
+  clearAccountQuota();
 });
 
 afterEach(async () => {
   await server?.stop(true); server = undefined;
   clearAccountQuotaCache();
+  clearAccountQuota();
   for (const key of envKeys) {
     if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
   }
@@ -112,6 +115,23 @@ test("no account measurements is an empty list, not an error", async () => {
   const response = await fetch(new URL("/v1/usage/windows", server.url), { headers: { "x-opencodex-api-key": KEY } });
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ windows: [] });
+});
+
+test("chatgpt pool windows report under the ChatGPT provider name", async () => {
+  const now = Date.now();
+  server = startServer(0);
+  // Seconds-form and millisecond-form resets both reach the pool store, and the endpoint
+  // must normalize them so the futures filter sees the same instant either way.
+  updateAccountQuota("pool-account", 33, Math.floor((now + 3 * 86_400_000) / 1000), 12, now + 20 * 86_400_000);
+  const response = await fetch(new URL("/v1/usage/windows", server.url), { headers: { "x-opencodex-api-key": KEY } });
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body).toMatchObject({ windows: [
+    { label: "ChatGPT Weekly", provider: "ChatGPT", percent: 33, limited: false },
+    { label: "ChatGPT Monthly", provider: "ChatGPT", percent: 12, limited: false },
+  ] });
+  expect(body.windows.every((row: { resetsAt: number }) => row.resetsAt > Date.now())).toBe(true);
+  expect(JSON.stringify(body)).not.toContain("pool-account");
 });
 
 test("per-model custom windows never duplicate their family bar", async () => {
