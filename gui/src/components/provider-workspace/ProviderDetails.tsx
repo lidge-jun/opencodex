@@ -13,6 +13,7 @@ import { ProviderIcon } from "./ProviderRail";
 import { Switch } from "../../ui";
 import { IconChevron, IconTrash } from "../../icons";
 import ProviderOverview from "./ProviderOverview";
+import { useProviderProbeState } from "./use-provider-probe-state";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
@@ -127,6 +128,7 @@ export default function ProviderDetails({
   // authSurface exists; seeding with the prop would treat it as already seen.
   const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
   const [seenSettingsFocusToken, setSeenSettingsFocusToken] = useState(0);
+  const [mutationRevision, setMutationRevision] = useState(0);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
   }, []);
@@ -147,6 +149,20 @@ export default function ProviderDetails({
     oauth?.needsReauth === undefined ? "" : String(oauth.needsReauth),
     oauthEmail ?? "",
   ]);
+  const probeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels, mutationRevision);
+  if (tab !== "overview" && probeController.completionProbe?.status === "testing") {
+    probeController.clearIfTesting();
+  }
+  const handleUpdateProvider = useMemo(
+    () => onUpdateProvider
+      ? async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
+          const result = await onUpdateProvider(name, patch);
+          if (result.ok) setMutationRevision(revision => revision + 1);
+          return result;
+        }
+      : undefined,
+    [onUpdateProvider],
+  );
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
@@ -292,6 +308,7 @@ export default function ProviderDetails({
             preset={preset}
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
+            probeController={probeController}
             availableModels={availableModels}
             selectedModels={selectedModels}
             modelRows={modelRows}
@@ -299,6 +316,7 @@ export default function ProviderDetails({
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
             onRetryModels={onRetryModels}
+            onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
             onOpenModelsTab={() => switchTab("models")}
             onOpenModels={onOpenModels}
             onOpenConnect={onOpenConnect}
@@ -311,7 +329,7 @@ export default function ProviderDetails({
             onEditSettings={() => switchTab("settings")}
             onViewUsage={() => switchTab("usage")}
             onCreateJevAuto={onCreateJevAuto}
-            onUpdateProvider={onUpdateProvider}
+            onUpdateProvider={handleUpdateProvider}
             reauthBusy={busyProvider === item.name}
             onCancelLogin={authHandlers?.onCancelLogin ? () => void authHandlers.onCancelLogin?.(item.name) : undefined}
             onReauthenticate={
@@ -377,7 +395,7 @@ export default function ProviderDetails({
             busy={busyProvider === item.name}
             loginHint={loginHint}
             authHandlers={authHandlers}
-            onUpdateProvider={onUpdateProvider}
+            onUpdateProvider={handleUpdateProvider}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
             codexController={codexController}
           />
@@ -388,7 +406,7 @@ export default function ProviderDetails({
             item={item}
             apiBase={apiBase}
             availableModels={availableModels}
-            onUpdateProvider={onUpdateProvider}
+            onUpdateProvider={handleUpdateProvider}
             onDirtyChange={setSettingsDirty}
             onRegisterSave={registerSettingsSave}
           />

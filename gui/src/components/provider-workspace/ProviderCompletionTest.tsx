@@ -19,23 +19,42 @@ export type CompletionTestResult =
       error: { code: string; status?: number; message: string } | null };
 
 export type CompletionProbeStatus = "untested" | "testing" | "ok" | "failed" | "not-applicable";
+export type CompletionFailureRecovery = "aborted" | "concurrency" | "auth" | "rate_limit" | "connection" | "model" | "upstream";
 
 type Props = {
   apiBase: string;
   provider: string;
   models: string[];
-  onStatusChange?: (state: { status: CompletionProbeStatus; model: string }) => void;
+  probeKey?: string;
+  selectedModel?: string;
+  onSelectedModelChange?: (model: string) => void;
+  initialResult?: CompletionTestResult | null;
+  initialError?: string | null;
+  onStatusChange?: (state: {
+    status: CompletionProbeStatus;
+    model: string;
+    result?: CompletionTestResult | null;
+    error?: string | null;
+  }) => void;
+  onFixCredentials?: () => void;
+  onFixSettings?: () => void;
+  onFixModels?: () => void;
 };
 
-export default function ProviderCompletionTest({ apiBase, provider, models, onStatusChange }: Props) {
+export default function ProviderCompletionTest({
+  apiBase, provider, models, probeKey, selectedModel: controlledModel, onSelectedModelChange,
+  initialResult = null, initialError = null, onStatusChange,
+  onFixCredentials, onFixSettings, onFixModels,
+}: Props) {
   const t = useT();
-  const [model, setModel] = useState("");
+  const [internalModel, setInternalModel] = useState("");
   // Permanently clear a selected model that was removed from the list so re-adding it cannot
   // resurrect an older selection.
-  if (model !== "" && !models.includes(model)) {
-    setModel("");
+  if (controlledModel === undefined && internalModel !== "" && !models.includes(internalModel)) {
+    setInternalModel("");
   }
-  const selectedModel = models.includes(model) ? model : "";
+  const rawModel = controlledModel !== undefined ? controlledModel : internalModel;
+  const selectedModel = models.includes(rawModel) ? rawModel : "";
   return (
     <section className="pws-completion-test" aria-label={t("pws.completion.title")}>
       <h4 className="pws-section-title">{t("pws.completion.title")}</h4>
@@ -43,21 +62,28 @@ export default function ProviderCompletionTest({ apiBase, provider, models, onSt
           options={[{ value: "", label: t("pws.completion.choose") }, ...models.map(value => ({ value, label: value }))]}
           onChange={next => {
             if (next === selectedModel) return;
-            setModel(next);
+            if (controlledModel === undefined) setInternalModel(next);
+            onSelectedModelChange?.(next);
             onStatusChange?.({ status: "untested", model: next });
           }} />
-        <CompletionRun key={JSON.stringify([apiBase, provider, selectedModel])}
-          apiBase={apiBase} provider={provider} model={selectedModel} onStatusChange={onStatusChange} />
+        <CompletionRun key={JSON.stringify([apiBase, probeKey ?? "", provider, selectedModel])}
+          apiBase={apiBase} provider={provider} model={selectedModel}
+          initialResult={initialResult} initialError={initialError}
+          onStatusChange={onStatusChange}
+          onFixCredentials={onFixCredentials} onFixSettings={onFixSettings} onFixModels={onFixModels} />
     </section>
   );
 }
 
-function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props, "models"> & { model: string }) {
+function CompletionRun({
+  apiBase, provider, model, initialResult = null, initialError = null, onStatusChange,
+  onFixCredentials, onFixSettings, onFixModels,
+}: Omit<Props, "models" | "probeKey" | "selectedModel" | "onSelectedModelChange"> & { model: string }) {
   const t = useT();
   const { locale } = useI18n();
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<CompletionTestResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<CompletionTestResult | null>(initialResult);
+  const [error, setError] = useState<string | null>(initialError);
   const flight = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
@@ -99,12 +125,15 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
         onStatusChange?.({
           status: !value.applicable ? "not-applicable" : value.ok ? "ok" : "failed",
           model,
+          result: value,
+          error: null,
         });
       }
     } catch (cause) {
       if (isCurrent()) {
-        setError(cause instanceof Error ? cause.message : t("pws.completion.failed"));
-        onStatusChange?.({ status: "failed", model });
+        const message = cause instanceof Error ? cause.message : t("pws.completion.failed");
+        setError(message);
+        onStatusChange?.({ status: "failed", model, result: null, error: message });
       }
     } finally {
       if (flight.current === controller) {
@@ -119,17 +148,58 @@ function CompletionRun({ apiBase, provider, model, onStatusChange }: Omit<Props,
       {busy ? t("pws.testing") : t("pws.completion.run")}
     </button>
     {error && <p role="alert" className="pws-inline-error pws-completion-result">{error}</p>}
-    {result && <CompletionResult result={result} />}
+    {error && (
+      <div role="status" className="pws-completion-recovery pws-completion-result muted" data-failure-recovery="request">
+        <span>{t("pws.completion.recovery.request", { model })}</span>
+      </div>
+    )}
+    {result && (
+      <CompletionResult
+        result={result}
+        onFixCredentials={onFixCredentials}
+        onFixSettings={onFixSettings}
+        onFixModels={onFixModels}
+      />
+    )}
   </>;
 }
 
-function CompletionResult({ result }: { result: CompletionTestResult }) {
+function classifyFailureRecovery(result: Extract<CompletionTestResult, { applicable: true }>): CompletionFailureRecovery | null {
+  const err = result.error;
+  if (result.ok || !err) return null;
+  if (result.termination === "aborted" || err.code === "aborted") return "aborted";
+  if (err.code === "credential_changed") return "concurrency";
+  if (err.code === "credential_missing" || err.status === 401 || err.status === 403) return "auth";
+  if (err.status === 429) return "rate_limit";
+  if (
+    result.termination === "timeout"
+    || err.code === "timeout"
+    || err.code === "network"
+    || err.code === "destination_refused"
+    || err.code === "redirect"
+  ) {
+    return "connection";
+  }
+  if (err.status === 400 || err.status === 404 || err.status === 422) return "model";
+  return "upstream";
+}
+
+function CompletionResult({
+  result, onFixCredentials, onFixSettings, onFixModels,
+}: {
+  result: CompletionTestResult;
+  onFixCredentials?: () => void;
+  onFixSettings?: () => void;
+  onFixModels?: () => void;
+}) {
   const t = useT();
   if (!result.applicable) return <div role="status" className="pws-completion-result muted">
     <p>{t("pws.completion.notApplicable")}: {t(`pws.completion.${result.reason}`)}</p>
     {result.detail && <p>{t(`pws.completion.${result.detail}`)}</p>}
     {result.adapter && <p><code>{result.adapter}</code></p>}
   </div>;
+  const recovery = classifyFailureRecovery(result);
+  const fixAuthAction = onFixCredentials ?? onFixSettings;
   return <div role="status" className="pws-completion-result" data-completion-test-state={result.ok ? "ok" : "failed"}>
     <p className={result.ok ? "pws-status-ok" : "pws-status-warn"}>
       {t(result.ok ? "pws.completion.ok" : "pws.completion.failed")}
@@ -147,5 +217,49 @@ function CompletionResult({ result }: { result: CompletionTestResult }) {
     <p className="muted">{t("pws.completion.identity")}</p>
     {result.error && <p role="alert" className="pws-inline-error"><code>{result.error.code}</code>
       {result.error.status !== undefined && <> ({result.error.status})</>}: {result.error.message}</p>}
+    {recovery && (
+      <div className="pws-completion-recovery muted" data-failure-recovery={recovery}>
+        <span>
+          {recovery === "aborted"
+            ? t("pws.completion.recovery.aborted", { model: result.requestedModel })
+            : recovery === "concurrency"
+              ? t("pws.completion.recovery.credentialChanged", { model: result.requestedModel })
+              : recovery === "auth"
+                ? t("pws.completion.recovery.auth", { model: result.requestedModel })
+                : recovery === "rate_limit"
+                  ? t("pws.completion.recovery.rateLimit", { model: result.requestedModel })
+                  : recovery === "connection"
+                    ? t("pws.completion.recovery.connection", { model: result.requestedModel })
+                    : recovery === "model"
+                      ? t("pws.completion.recovery.model")
+                      : t("pws.completion.recovery.upstream", { model: result.requestedModel })}
+        </span>
+        {recovery === "auth" && fixAuthAction && (
+          <button type="button" className="link-btn" data-recovery-action="fix-auth" onClick={fixAuthAction}>
+            {t("pws.completion.recovery.fixAuth")}
+          </button>
+        )}
+        {recovery === "rate_limit" && fixAuthAction && (
+          <button type="button" className="link-btn" data-recovery-action="fix-rate-limit" onClick={fixAuthAction}>
+            {t("pws.completion.recovery.fixAuth")}
+          </button>
+        )}
+        {recovery === "connection" && onFixSettings && (
+          <button type="button" className="link-btn" data-recovery-action="fix-connection" onClick={onFixSettings}>
+            {t("pws.completion.recovery.fixSettings")}
+          </button>
+        )}
+        {recovery === "model" && onFixModels && (
+          <button type="button" className="link-btn" data-recovery-action="fix-model" onClick={onFixModels}>
+            {t("pws.firstResponse.openProviderModels")}
+          </button>
+        )}
+        {recovery === "upstream" && onFixSettings && (
+          <button type="button" className="link-btn" data-recovery-action="fix-settings" onClick={onFixSettings}>
+            {t("pws.completion.recovery.fixSettings")}
+          </button>
+        )}
+      </div>
+    )}
   </div>;
 }
