@@ -98,7 +98,8 @@ export default function ProviderSettings({
   const [modeSaving, setModeSaving] = useState(false);
   const [modeMsg, setModeMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
-  const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase ? "loading" : "idle");
+  // "" is the same-origin dashboard and must load like any other server base.
+  const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase !== undefined ? "loading" : "idle");
   const [endpointChoice, setEndpointChoice] = useState(() => "custom");
   const [pacingEnabled, setPacingEnabled] = useState(item.requestPacing?.enabled === true);
   const [keyPacing, setKeyPacing] = useState<KeyPacingDraft>({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
@@ -145,7 +146,7 @@ export default function ProviderSettings({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
-    if (!apiBase) return;
+    if (apiBase === undefined) return;
     let cancelled = false;
     const providerId = item.name;
     const savedBaseUrl = item.baseUrl;
@@ -176,7 +177,7 @@ export default function ProviderSettings({
   }, [apiBase, item.name]);
 
   useEffect(() => {
-    if (!apiBase) return;
+    if (apiBase === undefined) return;
     let active = true;
     let inFlight = false;
     const load = () => {
