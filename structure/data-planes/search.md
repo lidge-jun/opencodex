@@ -10,6 +10,11 @@ and direct callers keep their existing behavior.
 
 Final client tool output after hosted search follows the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), before client delivery or continuation state. Internal search execution retains its existing behavior.
 
+When the [Advisor sidecar](../advisor.md#execution-paths) is enabled for a fetch-based search turn,
+the same scanner consumes synthetic `web_search` and `advisor` calls in worker order. Both result
+types remain internal, real client tools retain terminal ownership, and the shared Advisor bounds
+apply without spending the web-search allowance. RunTurn search remains preflight-only for Advisor.
+
 ## Serving the relay without ChatGPT auth
 
 `POST /v1/alpha/search` first resolves a non-empty body `model` with `previewRouteModel()`. A route whose
