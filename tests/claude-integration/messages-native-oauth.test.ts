@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, spyOn, mock } from "bun:
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deriveAnthropicAccountDeviceId } from "../../src/adapters/anthropic/account-metadata";
 import { configureSharedSpendLedger, DEFAULT_SPEND_RESERVATION_POLICY, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { saveConfig } from "../../src/config";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
@@ -354,6 +355,11 @@ describe("managed native Messages over Anthropic OAuth", () => {
       `Bearer ${credential(0).access}`, `Bearer ${refreshed}`, `Bearer ${credential(1).access}`,
     ]);
     expect(sent.map(entry => JSON.parse((entry.body.metadata as typeof metadata).user_id).account_uuid)).toEqual([uuidA, uuidA, uuidB]);
+    expect(sent.map(entry => JSON.parse((entry.body.metadata as typeof metadata).user_id).device_id)).toEqual([
+      deriveAnthropicAccountDeviceId(uuidA),
+      deriveAnthropicAccountDeviceId(uuidA),
+      deriveAnthropicAccountDeviceId(uuidB),
+    ]);
     for (const entry of sent) {
       for (const [name, value] of Object.entries(headers)) expect(entry.headers.get(name)).toBe(value);
       expect(entry.headers.has("x-api-key")).toBe(false);
@@ -373,7 +379,7 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${credential(0).access}`);
     const wire = sent[0]!.body.metadata as typeof metadata;
-    expect(JSON.parse(wire.user_id)).toEqual({ account_uuid: uuid, device_id: "fixture-device", session_id: "fixture-session" });
+    expect(JSON.parse(wire.user_id)).toEqual({ account_uuid: uuid, device_id: deriveAnthropicAccountDeviceId(uuid), session_id: "fixture-session" });
     expect(wire.user_id).not.toContain(id!);
     expect(JSON.parse(metadata.user_id).account_uuid).not.toBe(uuid);
   });

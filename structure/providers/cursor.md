@@ -124,6 +124,14 @@ The checkpoint instruction digest includes the format, so a changed schema force
 
 ## Cursor parameterized models
 
+`src/adapters/cursor/catalog.ts` splits thinking/effort variants at the last `-thinking-`
+delimiter and validates its suffix once. `src/adapters/cursor/claude-id.ts` recognizes the
+numeric Claude base before parsing thinking, fast, and effort markers with linear string
+operations. Both retain legacy spelling, marker precedence, and unknown-ID behavior;
+`tests/providers/cursor/cursor-catalog.test.ts` and
+`tests/providers/cursor/cursor-claude-id.test.ts` compare legacy regex results and exercise
+long repeated-delimiter inputs without wall-clock assertions.
+
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
 `cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,
 `cursor/auto-balance`, and `cursor/auto-intelligence` make each optimization level explicit.
@@ -283,7 +291,7 @@ Canonical Spark Lite metadata follows the final serialized model and surviving n
 
 Shared raw-reasoning events retain content-channel presentation; provider-authored thinking keeps its existing summary path. See [bridge contract](chat-compat.md).
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations.
 
 ## Textual pseudo tool-call quarantine
 

@@ -57,7 +57,7 @@ Codex は `spawn_agent` ツールの説明に最大 5 つのモデルを列挙�
 | 3 | `deepseek/deepseek-v4-flash` | `5` | アルファベット順で最初の残りのルーティング済み行 |
 | 4 | `google/gemini-3-pro` | `5` | 次のルーティング済み行 |
 | 5 | `moonshot/kimi-k3` | `5` | 次のルーティング済み行 |
-| 6+ | `zai/glm-5.2`、続いてネイティブ GPT 行 | `5`、続いて `102` | 5 つの枠外 |
+| 6+ | `zai/glm-5.2`、続いてネイティブ GPT 行 | `5`、続いて `102 + sourcePriority` | 5 つの枠外 |
 
 ロスターが空の場合、opencodex は何も固定せず、5 つの枠はカタログ本来の priority に従います。
 

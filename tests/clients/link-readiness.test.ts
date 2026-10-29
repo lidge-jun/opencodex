@@ -199,3 +199,21 @@ test("a Child's /readyz reports an unusable link as 503 pending with a reason, a
   expect(upBody).toMatchObject({ status: "ready", link: { state: "available" } });
   expect(validateReadyzBody(upBody, server.port!)).toMatchObject({ ready: true, status: "ready" });
 });
+
+test("a ready Child's /readyz names its current tunnel connection, and a pending or unknown one omits it", async () => {
+  let verdict: LinkReadiness = { ready: false, reason: "home_unreachable" };
+  let generation: string | undefined = "fixture-child:1";
+  const server = startMachineListener(0, {
+    state: linkConnection(), managementAuthState: authState(), linkKeySource: () => LINK_KEY,
+    linkTunnel: { connected: () => ({ kind: "match" }), pending: () => false, waitForConnected: async () => false },
+    linkReadiness: async () => verdict,
+    linkConnectionGeneration: () => generation,
+  });
+  servers.push(server);
+  const link = async () => ((await (await fetch(new URL("/readyz", server.url))).json()) as { link?: unknown }).link;
+  expect(await link()).toEqual({ state: "unavailable", reason: "home_unreachable" });
+  verdict = { ready: true };
+  expect(await link()).toEqual({ state: "available", connectionGeneration: "fixture-child:1" });
+  generation = undefined;
+  expect(await link()).toEqual({ state: "available" });
+});

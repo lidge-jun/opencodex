@@ -84,10 +84,11 @@ per-model identity и метаданные вместо приближения �
 
 | Маршрут | Id в селекторе и метаданные каталога |
 | --- | --- |
-| Вход Codex (строки с указанием аккаунта выключены) | Bare native-id, например `gpt-5.6-sol`, `gpt-5.6-terra` и `gpt-5.6-luna`; Pool или Direct выбирается через `codexAccountMode`. У строк GPT-5.6 окно каталога 922 000 токенов. |
+| Вход Codex (строки с указанием аккаунта выключены) | Bare native-id, например `gpt-5.6-sol`, `gpt-5.6-terra` и `gpt-5.6-luna`; Pool или Direct выбирается через `codexAccountMode`. У строк GPT-5.6 окно каталога 922 000 токенов. `gpt-6.1-terra`: контекст 500,000 по умолчанию / 872,000 расширенный. |
 | Вход Codex (строки с указанием аккаунта включены и есть подходящие селекторы) | По одной строке `<selector>/<native-openai-model>` для каждой пары подходящего селектора и поддерживаемой нативной модели; каждая строка использует только сопоставленный аккаунт, а bare native-строки скрыты из picker'а. Нативные метаданные и окна контекста сохраняются. |
-| OpenAI (API key) | Ровно восемь namespaced-строк: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и три виртуальных id `*-pro` (контекст 922,000; максимум входа 922,000 у всех восьми) |
+| OpenAI (API key) | Модели с пространством имён включают `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, виртуальные id `*-pro` и псевдонимы Daybreak (контекст 1,050,000; максимум входа 922,000). `openai-apikey/gpt-6.1-terra` добавляет контекст 1,050,000 и максимум выхода 128,000. |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922,000) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` (1,050,000) |
 | Cursor | Статический fallback включает `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` и `cursor/gpt-5.6-luna` (1,000,000), а также обычные/Fast-строки Grok 4.5, 4.6 и 4.7 (500,000). Для 4.6 и 4.7 доступен ещё `xhigh`; какие строки останутся видимыми, решает live-discovery аккаунта. |
 | xAI | Live-discovery имеет приоритет. Fallback-каталог включает `xai/grok-4.6` и `xai/grok-4.7`, а моделью по умолчанию остаётся `xai/grok-4.5`; у всех трёх окно 500,000 токенов. Grok 4.6 и 4.7 поддерживают `low` / `medium` / `high` / `xhigh` (upstream-default: `high`), а Grok 4.5 — только до `high`. |
 

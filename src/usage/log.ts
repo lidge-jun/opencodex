@@ -536,6 +536,10 @@ export function usageTotalTokens(usage: OcxUsage | undefined): number | undefine
  * Providers whose adapters can only estimate usage (no authoritative per-turn frame).
  * Callers should pass the route ADAPTER when available; the name-prefix match is a
  * fallback for paths that only know the configured provider name (e.g. "cursor-mykey").
+ *
+ * Kiro is on the list because most of what reaches the log is a guess: a figure taken off the
+ * bridged Responses wire derives its input from the context checkpoint. The adapter opts a
+ * measured figure out with `upstreamReported`, set where it reads Kiro's own tokenUsage frame.
  */
 function isEstimatedUsageProvider(providerOrAdapter: string): boolean {
   return providerOrAdapter === "kiro" || providerOrAdapter.startsWith("kiro-")
@@ -556,7 +560,9 @@ export function usageForFinalLog(
 ): OcxUsage | undefined {
   if (!usage) return undefined;
   if (locallyAnswered) return usage;
-  if (usage.estimated || isEstimatedUsageProvider(provider)) return { ...usage, estimated: true };
+  if (usage.estimated || (isEstimatedUsageProvider(provider) && !usage.upstreamReported)) {
+    return { ...usage, estimated: true };
+  }
   return usage;
 }
 

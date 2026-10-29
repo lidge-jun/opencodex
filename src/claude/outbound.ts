@@ -1190,28 +1190,48 @@ export async function collectAnthropicMessage(
     }
   };
 
+  const drainFrames = () => {
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawFrame = buffer.slice(0, sep);
+        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
+        // Event name and data as SSE dispatches them: the last event field, untrimmed, and the
+        // data fields joined by newlines.
+        let eventName = "";
+        const dataLines: string[] = [];
+        for (const line of rawFrame.split("\n")) {
+          const eventValue = sseFieldValue(line, "event");
+          if (eventValue !== null) { eventName = eventValue; continue; }
+          const dataValue = sseFieldValue(line, "data");
+          if (dataValue !== null) dataLines.push(dataValue);
+        }
+        const dataLine = dataLines.join("\n");
+        if (!dataLine) continue;
+        let data: unknown;
+        try { data = JSON.parse(dataLine); } catch { continue; }
+        if (!isRec(data)) continue;
+        // A data-only frame is named by its payload type, the same rule the stream tap applies.
+        const name = eventName || (typeof data.type === "string" ? data.type : "");
+        if (name) handle(name, data);
+    }
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer = replaceRetained(buffer, buffer + decoder.decode(value, { stream: true }), "live_transient");
-      let sep: number;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const rawFrame = buffer.slice(0, sep);
-        buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
-        let eventName = "";
-        let dataLine = "";
-        for (const line of rawFrame.split("\n")) {
-          const eventValue = sseFieldValue(line, "event");
-          if (eventValue !== null) { eventName = eventValue.trim(); continue; }
-          const dataValue = sseFieldValue(line, "data");
-          if (dataValue !== null) dataLine += dataValue;
-        }
-        if (!eventName || !dataLine) continue;
-        let data: unknown;
-        try { data = JSON.parse(dataLine); } catch { continue; }
-        if (isRec(data)) handle(eventName, data);
-      }
+      // Frame on LF only after normalizing CRLF/CR line endings, holding a trailing CR until the
+      // next chunk shows whether its LF follows, so a CRLF stream folds like an LF one.
+      const incoming = buffer + decoder.decode(value, { stream: true });
+      const heldCr = incoming.endsWith("\r");
+      const normalized = (heldCr ? incoming.slice(0, -1) : incoming).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
+      buffer = replaceRetained(buffer, normalized, "live_transient");
+      drainFrames();
+    }
+    // At EOF a held CR is a line ending: it can complete the final frame.
+    if (buffer.endsWith("\r")) {
+      buffer = replaceRetained(buffer, buffer.slice(0, -1) + "\n", "live_transient");
+      drainFrames();
     }
   } finally {
     reader.releaseLock();

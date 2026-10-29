@@ -118,6 +118,13 @@ surface in `src/cli/update-restart.ts`, and stop guidance in
 `src/cli/desktop-runtime-guidance.ts`.
 These decisions follow [runtime ownership](../runtime.md#background-service-runtime-ownership).
 
+Update recovery computes the Node install argv (including its backend read) and
+the Bun direct-start runtime provenance before the final mutation authorizer.
+The spawn arguments then use those prepared values; in-memory argv/environment
+formatting is the only allowlisted work between that authorizer and process creation.
+`tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
+exercise refusal when preparation changes the home observation, plus stable-home starts.
+
 The bypass ledger classifies these guards as **early warning**, not enforcement:
 
 | Guard | Surface / tier | Known limit and residual risk | Pass-through assertion |

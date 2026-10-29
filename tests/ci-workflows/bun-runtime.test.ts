@@ -304,8 +304,12 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     ];
     for (const relative of launchers) {
       const text = readFileSync(repoPath(relative), "utf8");
-      const spawnCount = (text.match(/spawn\(process\.execPath/g) ?? []).length;
+      // The updater dispatches its restart through guardedSpawn(gate, kind, process.execPath, ...).
+      const spawnCount = (text.match(/(?:\bspawn\(|\bguardedSpawn\([^,()]+,\s*"[a-z-]+",\s*)process\.execPath/g) ?? []).length;
       const directStampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
+      const preparedStampCount = relative === "src/update/index.ts"
+        ? (text.match(/const runtimeEnv = withProcessRuntimeProvenance\(env\);/g) ?? []).length : 0;
+      if (preparedStampCount > 0) expect(text.match(/env: runtimeEnv\b/g)).toHaveLength(preparedStampCount);
       const detachedStartStampCount = relative === "src/cli/index.ts"
         ? (text.match(/env: detachedStartEnvironment\(\)/g) ?? []).length
         : 0;
@@ -313,7 +317,7 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
         expect(text).toContain("return withProcessRuntimeProvenance(env)");
       }
       expect(spawnCount).toBeGreaterThan(0);
-      expect(directStampCount + detachedStartStampCount).toBe(spawnCount);
+      expect(directStampCount + preparedStampCount + detachedStartStampCount).toBe(spawnCount);
     }
   });
 });

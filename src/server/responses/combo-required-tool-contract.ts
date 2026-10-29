@@ -1,4 +1,5 @@
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { applyReplayRefusalClientHeaders, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientWireOf } from "../inference/client-wire";
 import { isPreinspectedJsonResponse, markPreinspectedJsonResponse } from "../relay";
@@ -97,7 +98,7 @@ export async function judgeBufferedRequiredTool(response: Response, requirement:
 export async function guardBufferedComboRequiredTool(response: Response, rawBody: unknown, adapter?: string): Promise<Response> {
   if (!response.ok || adapter !== "openai-responses" || clientWireOf(response) !== undefined
     || isNonReplayableResponse(response)
-    || !(response.headers.get("content-type") ?? "").includes("application/json")) return response;
+    || !hasResponseMediaType(response.headers, "application/json")) return response;
   const requirement = requiredToolContractOf(rawBody);
   return requirement ? judgeBufferedRequiredTool(response, requirement) : response;
 }

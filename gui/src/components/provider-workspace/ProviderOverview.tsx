@@ -8,6 +8,8 @@ import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
 import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
+import { modelVisible } from "../../model-visibility";
+import { discoveryFailureLabel, type ModelRow } from "../../pages/models-shared";
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountQuotaReading, ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
@@ -15,7 +17,7 @@ import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import ProviderSponsor from "./ProviderSponsor";
-import ProviderCompletionTest from "./ProviderCompletionTest";
+import ProviderCompletionTest, { type CompletionProbeStatus } from "./ProviderCompletionTest";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -34,7 +36,8 @@ type ConnectionTestState = {
 
 export default function ProviderOverview({
   item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
-  apiBase, connectionIdentity, availableModels = [],
+  apiBase, connectionIdentity, availableModels = [], selectedModels, modelRows, modelRowsReady = false,
+  modelsLoading = false, modelsLoadFailed = false, onRetryModels, onOpenModelsTab, onOpenModels, onOpenConnect,
   onEditSettings, onViewUsage, onUpdateProvider,
   onCreateJevAuto,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -47,9 +50,18 @@ export default function ProviderOverview({
   onRefreshQuota?: () => Promise<boolean>;
   oauthEmail?: string;
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
-  oauth?: { loggedIn?: boolean };
+  oauth?: { loggedIn?: boolean; needsReauth?: boolean };
   apiBase?: string;
   availableModels?: string[];
+  selectedModels?: string[];
+  modelRows?: ModelRow[] | null;
+  modelRowsReady?: boolean;
+  modelsLoading?: boolean;
+  modelsLoadFailed?: boolean;
+  onRetryModels?: () => void;
+  onOpenModelsTab?: () => void;
+  onOpenModels?: () => void;
+  onOpenConnect?: () => void;
   /** Opaque active credential identity used only to invalidate stale probe results. */
   connectionIdentity?: string;
   onEditSettings?: () => void;
@@ -63,10 +75,16 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
-  const needsAttention = Boolean(item.activeNeedsReauth);
-  const statusText = status === "ready"
-    ? t("pws.status.connected")
-    : status === "needs-setup"
+  const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
+  const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
+  const effectiveStatus = item.disabled === true
+    ? "disabled"
+    : needsAttention || needsOAuthLogin || status === "needs-setup"
+      ? "needs-setup"
+      : "ready";
+  const statusText = effectiveStatus === "ready"
+    ? t("pws.status.ready")
+    : effectiveStatus === "needs-setup"
       ? (needsAttention ? t("pws.status.needsAttention") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
@@ -91,6 +109,38 @@ export default function ProviderOverview({
   const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
   const connectionResult = connectionTest?.key === connectionProbeKey ? connectionTest.result : null;
+  const configuredModels = [
+    ...new Set([
+      ...(item.models ?? []),
+      ...(item.defaultModel ? [item.defaultModel] : []),
+    ]),
+  ];
+  const completionModels = [
+    ...new Set([
+      ...(item.models ?? []),
+      ...availableModels,
+      ...(item.defaultModel ? [item.defaultModel] : []),
+    ]),
+  ];
+  const [seenProbeKey, setSeenProbeKey] = useState(connectionProbeKey);
+  const [probeEpoch, setProbeEpoch] = useState(0);
+  const [completionProbe, setCompletionProbe] = useState<{
+    epoch: number;
+    model: string;
+    status: CompletionProbeStatus;
+  } | null>(null);
+  if (seenProbeKey !== connectionProbeKey) {
+    setSeenProbeKey(connectionProbeKey);
+    setProbeEpoch(epoch => epoch + 1);
+    if (completionProbe !== null) setCompletionProbe(null);
+  } else if (
+    completionProbe !== null
+    && (completionProbe.epoch !== probeEpoch
+      || (completionProbe.model !== "" && !completionModels.includes(completionProbe.model)))
+  ) {
+    setProbeEpoch(epoch => epoch + 1);
+    setCompletionProbe(null);
+  }
 
   useEffect(() => {
     return () => {
@@ -102,7 +152,8 @@ export default function ProviderOverview({
   }, [connectionProbeKey]);
 
   const testConnection = useCallback(async () => {
-    if (!apiBase) return;
+    // "" is the same-origin dashboard, a real server; only an omitted base has nothing to probe.
+    if (apiBase === undefined) return;
     connectionAbortRef.current?.controller.abort();
     const controller = new AbortController();
     connectionAbortRef.current = { key: connectionProbeKey, controller };
@@ -146,6 +197,88 @@ export default function ProviderOverview({
     : connectionResult?.ok === true
       ? (connectionResult.message || t("pws.connectionOk"))
       : (connectionResult?.error || t("pws.connectionFailed"));
+  const providerStepState = item.disabled === true
+    ? "disabled"
+    : needsAttention
+      ? "needs-attention"
+      : needsOAuthLogin
+        ? "needs-login"
+        : effectiveStatus === "needs-setup"
+          ? "needs-setup"
+          : "saved";
+  const providerStepText = providerStepState === "disabled"
+    ? t("pws.firstResponse.providerDisabled")
+    : providerStepState === "needs-attention"
+      ? t("pws.firstResponse.providerNeedsAttention")
+      : providerStepState === "needs-login"
+        ? t("pws.firstResponse.providerNeedsLogin")
+        : providerStepState === "needs-setup"
+          ? t("pws.firstResponse.providerNeedsSetup")
+          : t("pws.firstResponse.providerSaved");
+
+  const providerRows = (modelRows ?? []).filter(row => row.provider === item.name);
+  const enabledRows = providerRows.filter(row =>
+    modelVisible({ [item.name]: selectedModels ?? [] }, item.name, row.id, row.native === true, row.disabled),
+  );
+  const snapshotReady = modelRows !== undefined && modelRows !== null && modelRowsReady;
+  // Once the model snapshot has settled, its rows are authoritative for whether initial
+  // selection is still pending: /api/config is not re-read when discovery finishes without an
+  // open registration notice, so a stale item.initialModelSelection.status === "pending" must
+  // not override a ready snapshot whose rows have already cleared initialSelectionPending.
+  const isPending = snapshotReady
+    ? providerRows.some(row => row.initialSelectionPending === true)
+    : item.initialModelSelection?.status === "pending";
+  const discoveryFailure = item.liveModels !== false && item.discovery?.status === "failed"
+    ? item.discovery
+    : undefined;
+  const modelsStepState = modelsLoading
+    ? "loading"
+    : modelsLoadFailed
+      ? "failed"
+      : discoveryFailure && (!snapshotReady || isPending || enabledRows.length === 0)
+        ? "failed"
+        : isPending
+          ? "pending"
+          : snapshotReady
+            ? enabledRows.length > 0
+              ? (discoveryFailure ? "ready-discovery-failed" : "ready")
+              : (providerRows.length > 0 || item.initialModelSelection?.status === "all-off")
+                ? "all-off"
+                : configuredModels.length > 0
+                  ? "configured"
+                  : "empty"
+            : item.initialModelSelection?.status === "all-off"
+              ? "all-off"
+              : configuredModels.length > 0 || availableModels.length > 0
+                ? "configured"
+                : "empty";
+  const modelsStepText = modelsStepState === "loading"
+    ? t("pws.firstResponse.modelsLoading")
+    : modelsStepState === "failed"
+      ? (discoveryFailure ? discoveryFailureLabel(t, discoveryFailure) : t("pws.firstResponse.modelsFailed"))
+      : modelsStepState === "pending"
+        ? t("pws.firstResponse.modelsPending")
+        : modelsStepState === "ready-discovery-failed"
+          ? t("pws.firstResponse.modelsReadyDiscoveryFailed", { count: enabledRows.length })
+          : modelsStepState === "ready"
+            ? t("pws.firstResponse.modelsReady", { count: enabledRows.length })
+            : modelsStepState === "all-off"
+              ? t("pws.firstResponse.modelsAllOff")
+              : modelsStepState === "configured"
+                ? t("pws.firstResponse.modelsConfigured", { count: configuredModels.length || availableModels.length })
+                : t("pws.firstResponse.modelsEmpty");
+  const probeStepState: CompletionProbeStatus = completionProbe?.status ?? "untested";
+  const probeStepText = probeStepState === "testing"
+    ? t("pws.testing")
+    : probeStepState === "ok"
+      ? t("pws.firstResponse.probeOk", { model: completionProbe?.model ?? "" })
+      : probeStepState === "failed"
+        ? t("pws.firstResponse.probeFailed", { model: completionProbe?.model ?? "" })
+        : probeStepState === "not-applicable"
+          ? t("pws.completion.notApplicable")
+          : t("pws.firstResponse.probeUntested");
+  const openModelsAction = onOpenModelsTab ?? onOpenModels;
+
   return (
     <>
     <ProviderSponsor item={item} preset={preset} />
@@ -156,8 +289,8 @@ export default function ProviderOverview({
         <dl className="pws-kv">
           <div className="pws-kv-row">
             <dt>{t("dash.status")}</dt>
-            <dd className={status === "ready" ? "pws-status-ok" : "pws-status-warn"}>
-              {status === "ready"
+            <dd className={effectiveStatus === "ready" ? "pws-status-ok" : "pws-status-warn"}>
+              {effectiveStatus === "ready"
                 ? <IconCheck style={{ width: 13, height: 13 }} aria-hidden="true" />
                 : <IconAlert style={{ width: 13, height: 13 }} aria-hidden="true" />}
               {statusText}
@@ -176,7 +309,58 @@ export default function ProviderOverview({
             <dd>{item.defaultModel ?? <span className="muted">—</span>}</dd>
           </div>
         </dl>
-        {apiBase && (
+        <div className="pws-first-response" aria-label={t("pws.firstResponse.title")}>
+          <div className="pws-first-response-row" data-first-response-step="provider" data-step-state={providerStepState}>
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepProvider")}</span>
+            <span className={providerStepState === "saved" ? "pws-status-ok" : "pws-status-warn"}>
+              {providerStepText}
+            </span>
+          </div>
+          <div className="pws-first-response-row" data-first-response-step="models" data-step-state={modelsStepState}>
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepModels")}</span>
+            <span className={
+              modelsStepState === "ready"
+                ? "pws-status-ok"
+                : modelsStepState === "failed" || modelsStepState === "all-off" || modelsStepState === "empty" || modelsStepState === "ready-discovery-failed"
+                  ? "pws-status-warn"
+                  : "muted"
+            }>
+              {modelsStepText}
+            </span>
+            {modelsStepState === "failed" && onRetryModels && (
+              <button type="button" className="link-btn" onClick={onRetryModels}>
+                {t("common.retry")}
+              </button>
+            )}
+            {openModelsAction && (
+              <button type="button" className="link-btn" onClick={openModelsAction}>
+                {t("pws.firstResponse.openProviderModels")}
+              </button>
+            )}
+          </div>
+          <div className="pws-first-response-row" data-first-response-step="clients" data-step-state="info">
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepClients")}</span>
+            <span className="muted">{t("pws.firstResponse.clientStep", { provider: item.name })}</span>
+            {onOpenConnect && (
+              <button type="button" className="link-btn" onClick={onOpenConnect}>
+                {t("pws.firstResponse.openConnect")}
+              </button>
+            )}
+          </div>
+          <div className="pws-first-response-row" data-first-response-step="probe" data-step-state={probeStepState}>
+            <span className="pws-first-response-label">{t("pws.firstResponse.stepProbe")}</span>
+            <span className={
+              probeStepState === "ok"
+                ? "pws-status-ok"
+                : probeStepState === "failed"
+                  ? "pws-status-warn"
+                  : "muted"
+            }>
+              {probeStepText}
+            </span>
+          </div>
+        </div>
+        {apiBase !== undefined && (
           <div className="row" style={{ marginTop: 12, alignItems: "center" }}>
             <button
               type="button"
@@ -197,8 +381,9 @@ export default function ProviderOverview({
             )}
           </div>
         )}
-        {apiBase && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
-          models={[...new Set([...(item.models ?? []), ...availableModels, ...(item.defaultModel ? [item.defaultModel] : [])])]} />}
+        {apiBase !== undefined && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
+          models={completionModels}
+          onStatusChange={next => setCompletionProbe({ epoch: probeEpoch, ...next })} />}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>
             {t("pws.editSettings")}

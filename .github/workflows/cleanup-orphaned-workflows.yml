@@ -35,9 +35,9 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.2
+        # The repository composite reads package.json dependencies.bun from the
+        # checkout above, so this job cannot drift from the runtime pin.
+        uses: ./.github/actions/setup-project-bun
 
       - name: Remove stale workflow histories
         env:

@@ -23,6 +23,13 @@ interface ProviderAdapter {
 스트림으로 표현할 수 없는 전송 방식을 지원합니다. 이후
 [`bridge.ts`](/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
 
+## 공통 도구 인자 보정
+
+브리지는 도구 스키마에 따라 정수 필드의 정수형 실수와 문자열 전용 필드의 안전한 정수를
+보정합니다. 안전한 정수 범위를 벗어난 값, 오버플로 숫자, 보정하지 않는 정수가 아닌 소수는 원래 토큰을 정확히 유지하면서
+다른 안전한 필드는 계속 보정합니다. 중첩 배열과 중복 키의 unsafe 토큰도 모두 보존하므로,
+타임아웃 보정이 관련 없는 식별자를 조용히 바꾸지 않습니다.
+
 ## `openai-chat`
 
 **대상:** OpenAI **Chat Completions**(`POST {baseUrl}/chat/completions`)와 모든 호환 프로바이더
@@ -120,7 +127,7 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
   어댑터는 reasoning effort를 budget으로 매핑하고(minimal 1024 … max 32000), 출력 여유를 둔
   안전한 `max_tokens`를 계산합니다. thinking이 켜지면 Anthropic에서 금지한
   **`temperature`/`top_p`를 제거**합니다.
-- **적응형 thinking 표시:** 적응형 thinking 모델(Opus 4.7+, Sonnet 5, Fable)에는 `thinking.display: "summarized"`를 보내므로, 긴 사고가 몇 분 동안의 heartbeat 대신 reasoning delta로 Chat과 Responses 클라이언트에 전달됩니다. reasoning 요약을 숨기는 요청(`reasoning.summary: "none"`)은 공급자 기본값을 그대로 씁니다.
+- **적응형 thinking 표시:** 적응형 thinking 모델(Opus 4.7+, Sonnet 5, Fable)에는 `thinking.display: "summarized"`를 보내므로, 긴 사고가 몇 분 동안의 heartbeat 대신 reasoning delta로 Chat과 Responses 클라이언트에 전달됩니다. reasoning 요약을 숨기는 요청(`reasoning.summary: "none"`)은 공급자 기본값을 그대로 씁니다. 단, `api.anthropic.com`의 Opus 5.5는 `display: "updates"`가 기본이며, `reasoning.summary`를 `"concise"` 또는 `"detailed"`로 명시하면 updates 베타 없이 `"summarized"`를 사용합니다. [Opus 5.5 진행 업데이트](/guides/providers/#claude-opus-55-progress-updates)를 참고하세요.
 - 항상 `anthropic-version: 2023-06-01`을 보냅니다. `content_block_delta`(`text_delta`,
   `thinking_delta`, `input_json_delta`)를 스트리밍합니다.
 
@@ -147,6 +154,8 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
   block을 보냅니다.
 - `application/vnd.amazon.eventstream`을 디코딩해 text/thinking/tool 이벤트를 복원하고, 잘린 툴
   JSON을 감지합니다. 업스트림이 토큰 수를 반환하지 않아 사용량은 추정합니다.
+  디코더는 종료 시 전송 계층 정리 완료를 기다리지 않고 취소를 시작하므로, 정리 작업이
+  멈춰도 읽기를 중단한 소비자가 디코더 종료를 계속 기다리지 않습니다.
 - `fetchResponse`에서 제한된 횟수만 재시도하고 오류를 분류/마스킹합니다. 비스트리밍 파서는 웹 검색
   루프를 위해 같은 이벤트 스트림을 끝까지 소비합니다.
 ### 완료와 네이티브 stop reason

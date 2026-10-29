@@ -9,6 +9,7 @@ import {
   resolveClaudeDesktopMode,
   type ClaudeDesktopModeObservation,
   type DesktopFirstPartyOptions,
+  type DesktopFirstPartyApplyResult,
 } from "./desktop-first-party";
 import { claudeInterceptCaCertPath } from "./intercept/local-ca";
 import { invalidateClaudeCodeServedCatalog } from "./intercept/cli-catalog";
@@ -39,8 +40,9 @@ export function firstPartyDesired(
 
 export type ClaudeFirstPartyReconcileResult =
   | { ok: true; action: "applied" | "removed" | "unchanged"; changed: boolean; path: string }
-  | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string };
+  | Extract<DesktopFirstPartyApplyResult, { ok: false }>;
 
+// Synchronous leaf: async callers wrap reconciliation in withConfigDirHardeningSettled.
 export function reconcileClaudeFirstPartySettings(
   config: Pick<OcxConfig, "claudeCode" | "port" | "runtimeRole" | "clientIntegrations">,
   desired: ClaudeFirstPartyDesired,

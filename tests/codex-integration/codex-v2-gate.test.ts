@@ -1703,20 +1703,17 @@ describe("cli surface", () => {
     expect(out).not.toContain("V1-only");
   });
 
-  test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (devlog 260715 020)", () => {
+  test("codexFeaturesInvocation: Darwin resolves, Linux passes through, win32 .cmd uses cmd.exe", () => {
     const execFileSync = () => "codex-cli 0.145.0";
-    expect(codexFeaturesInvocation("enable", "multi_agent_v2", "darwin", {
-      env: { PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
-      existsSync: () => false,
-      execFileSync,
-    })).toEqual({ file: "codex", args: ["features", "enable", "multi_agent_v2"], options: {} });
-    expect(codexFeaturesInvocation("enable", "default_mode_request_user_input", "darwin", {
-      env: { PATH: "" },
-      configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
-      existsSync: () => false,
-      execFileSync,
-    })).toEqual({ file: "codex", args: ["features", "enable", "default_mode_request_user_input"], options: {} });
+    for (const platform of ["darwin", "linux"] as const) for (const feature of ["multi_agent_v2", "default_mode_request_user_input"]) {
+      expect(codexFeaturesInvocation("enable", feature, platform, {
+        env: { CODEX_CLI_PATH: "codex", PATH: "/fixture/bin", HOME: "/fixture/home" },
+        configDir: mkdtempSync(join(tmpdir(), "ocx-v2-inv-posix-")),
+        existsSync: path => path === "/fixture/bin/codex",
+        executable: path => path === "/fixture/bin/codex", realpath: path => path,
+        execFileSync,
+      })).toEqual({ file: platform === "darwin" ? "/fixture/bin/codex" : "codex", args: ["features", "enable", feature], options: {} });
+    }
     // Explicit CODEX_CLI_PATH pointing at a .cmd (npm-only Windows Codex install).
     const inv = codexFeaturesInvocation("disable", "multi_agent_v2", "win32", {
       env: { CODEX_CLI_PATH: "C:\\npm\\codex.cmd", ComSpec: "C:\\WINDOWS\\system32\\cmd.exe", PATH: "" },
@@ -1747,6 +1744,8 @@ describe("cli surface", () => {
     process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-cli-config-"));
     const logs: string[] = [];
     const deps = {
+      // This state-transition fixture supplies both invocation and execution.
+      featuresInvocation: (action: "enable" | "disable") => ({ file: "fixture-codex", args: ["features", action, "multi_agent_v2"], options: {} }),
       execFile: (_file: string, args: string[]) => {
         // POSIX: ["features", "enable|disable", ...]; win32 .cmd: ["/d","/s","/c","...enable..."]
         const joined = args.join(" ");

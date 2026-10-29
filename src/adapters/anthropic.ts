@@ -30,11 +30,15 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
+import { CLAUDE_CLI_SDK_PACKAGE_VERSION, CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
+import { resolveThinkingEnabled } from "../clients/reasoning-controls";
+import { resolveReasoningCapabilities } from "../providers/reasoning-capabilities";
+import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
@@ -553,7 +557,7 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
     "Content-Type": "application/json",
     "anthropic-version": ANTHROPIC_API_VERSION,
     "Accept": stream ? "text/event-stream" : "application/json",
-    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+    "User-Agent": `@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`,
   };
 }
 
@@ -564,18 +568,30 @@ export function applyAnthropicKeyAuth(headers: Record<string, string>, provider:
   else headers["x-api-key"] = provider.apiKey;
 }
 
+export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
+  return parsed._codexOwnThreadId?.trim()
+    || parsed._clientThreadId?.trim()
+    || (parsed.options.promptCacheKey?.trim() || undefined)
+    || incoming?.headers?.get("x-claude-code-session-id")?.trim()
+    || incoming?.headers?.get("session_id")?.trim()
+    || incoming?.headers?.get("session-id")?.trim()
+    || incoming?.headers?.get("thread-id")?.trim()
+    || undefined;
+}
+
 /**
  * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
  * Code client fingerprint. Shared by the adapter and the managed native lane.
  */
-export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string, sessionKey?: string | null): void {
   headers["Authorization"] = `Bearer ${accessToken}`;
   headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  headers["User-Agent"] = CLAUDE_CLI_USER_AGENT;
   // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
   // header set is a non-first-party signature. (cch billing-header signing is intentionally
   // out of scope — brittle and version-coupled.)
   Object.assign(headers, CLAUDE_CODE_HEADERS);
-  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken, sessionKey);
   headers["x-client-request-id"] = crypto.randomUUID();
 }
 
@@ -1081,17 +1097,37 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
         // model both defaults to thinking and accepts being told not to.
       const family = claudeFamilyVersion(parsed.modelId);
-      progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
-      const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
-      if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
+      const nativeOpus55 = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
+      const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
+      // Codex sends "auto" by default, so only an explicit concise/detailed request opts out of updates (#7728).
+      const summaryRequested = summary === "concise" || summary === "detailed";
+      const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
+      const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
+      const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
+      const thinkingEnabled = thinkingToggleWire
+        ? resolveThinkingEnabled(provider, parsed.modelId, parsed.options)
+        : undefined;
+      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId)
+        || family?.family === "haiku" || family?.family === "sonnet" || family?.family === "opus";
+      const supportsReasoningEffort = capabilities.supportsReasoningEffort === true;
+      const requestedReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
+      // Native Claude wire constraints outrank a generic toggle declaration. Decode the boolean
+      // into native effort intent, then let the family contract choose budget/adaptive/off shapes.
+      const effectiveReasoning = nativeThinkingContract && thinkingEnabled !== undefined
+        ? thinkingEnabled ? (requestedReasoning && requestedReasoning !== "none" ? requestedReasoning : "high") : "none"
+        : requestedReasoning;
+      if (!reasoningControlsUnsupported && thinkingEnabled !== undefined && !nativeThinkingContract) {
+        body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
+      }
+      if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
-      } else if (effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
+      } else if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
         // Sonnet 5.5 rejects `disabled`; `between_tools` is its lowest setting and turns off up-front
         // thinking. No effort is sent: the API default (high) is inside the range it accepts.
         body.thinking = { type: "between_tools" };
         delete body.temperature;
         delete body.top_p;
-      } else if (typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
+      } else if (!reasoningControlsUnsupported && thinkingEnabled !== false && (thinkingEnabled === undefined || supportsReasoningEffort || nativeThinkingContract) && typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
@@ -1099,7 +1135,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // default 8192-token request can spend everything on thought and return empty text.
           // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
-          // during a long think (#5824). Opus 5.5 uses the documented updates discriminator;
+          // during a long think (#5824). Native Opus 5.5 selects its display below;
           // other models request summarized thinking unless the caller hides it.
           body.thinking = parsed.options.hideThinkingSummary
             ? { type: "adaptive" }
@@ -1148,7 +1184,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (progressUpdates) body.thinking = { type: "adaptive", display: "updates" };
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+        body.thinking = { type: "adaptive", display: summaryRequested ? "summarized" : "updates" };
+      }
+      // One discriminator governs the display beta and response classification, including reuse.
+      progressUpdates = (body.thinking as { display?: string } | undefined)?.display === "updates";
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1223,7 +1263,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
       const headers = anthropicBaseRequestHeaders(parsed.stream);
-      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);

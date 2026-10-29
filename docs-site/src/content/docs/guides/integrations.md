@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Qoder, Cline CLI, Kilo, Command Code, Factory Droid and T3 Code from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
@@ -31,6 +31,7 @@ file, and removes it again. Each client below has its own switch:
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
+| T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
 ## Gentle Shell
 
@@ -127,6 +128,48 @@ access and refuses an authenticated non-loopback bind. When the dedicated unauth
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
 changes refresh an already enabled Qoder integration like the other managed clients.
 Model IDs containing `,` or `]` (for example `kimi/k3[1m]`) are exported like any other model.
+
+## T3 Code
+
+[T3 Code](https://github.com/pingdotgg/t3code) drives the Codex and Claude Code CLIs already
+installed on the machine. Its Codex threads route through opencodex once the
+[Codex integration](/guides/codex-integration/) is enabled, because T3 Code lists Codex models
+through `codex app-server`, which reads `$CODEX_HOME/config.toml` like every Codex client. Routed
+models then appear under Codex with no T3 Code switch, as long as T3 Code runs Codex with the same
+Codex home opencodex manages (`CODEX_HOME`, default `~/.codex`). A T3 Code Codex instance pointed at
+another home does not see the routed catalog.
+
+The **T3 Code** switch adds the Claude side. It needs the Messages API, which every Claude turn
+uses: while Messages is off on the API page, enable and refresh are refused, and disable still
+works.
+
+```bash
+ocx export --client t3code --json
+ocx integration client enable --client t3code
+ocx integration client disable --client t3code
+```
+
+Enable writes one provider instance, `providerInstances.opencodex`, into T3 Code's server settings
+and leaves every other instance and setting alone. It is a Claude instance named **opencodex** that
+runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the non-secret
+`opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
+`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
+re-point it. Each routed model is a custom model keyed by its opencodex selector
+(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+**opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
+`ocx sync` refresh the instance.
+
+T3 Code keeps its data in `T3CODE_HOME` when set, otherwise `~/.t3`. Set the same variable on the
+opencodex process if you relocate it; a relative value is refused. On Windows, use a fully qualified
+drive path (`C:\shared\t3`) or UNC path (`\\server\share\t3`); paths without a drive, such as
+`\shared\t3` or `/shared/t3`, are refused. `~` expands against the effective user home.
+The marker is not a credential, so the integration needs loopback access and refuses an authenticated non-loopback bind unless the
+unauthenticated loopback listener is enabled.
+
+Treat the instance as opencodex's. Marking one of its variables **Sensitive** in T3 Code, adding
+a custom model to it, or toggling it off rewrites the block. The switch then shows a conflict
+instead of overwriting your edit, and **Replace** restores the generated block. To use
+different settings, add your own Claude instance in T3 Code beside it.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -284,6 +327,12 @@ still reads as installed, while a config-path override moves only the file. If y
 are still on the older `.clawdbot` layout, that is found too: the modern directory
 wins when it exists, and the legacy one is used when it is the only one there.
 
+On Windows, overrides requiring absolute paths must include a drive letter
+(`C:\Users\me\client`) or a UNC share (`\\server\share\client`). Drive-less
+rooted forms such as `\Users\me\client` or `/client/config` are refused because
+they depend on the current drive. A selector documented to support `~` still expands
+it against the effective home; Gentle Shell does not expand `~`.
+
 These must be **absolute paths** or start with `~`. A relative one is refused rather
 than resolved, because it would mean whatever directory each process happened to
 start in — and that path is stored with the backup, so it has to name the same file
@@ -380,6 +429,17 @@ profile to apply, disable, replace, or restore OpenCodex for that profile alone;
 own backups and rollback history, and the other profiles stay unchanged. Every profile keeps its own
 `model.default` and other providers: OpenCodex adds only `providers.opencodex`. With no named profiles,
 the page works as before and changes the default profile.
+
+Catalog changes and `ocx sync` automatically refresh only the default profile resolved from the
+running proxy's environment (including `HERMES_HOME`). Named profiles keep their previous catalog.
+After changing the model selection, open **Connect → Hermes**, select each named profile showing
+**Update needed**, and review and confirm **Apply**. The CLI has no named-profile selector.
+With an unchanged catalog, refresh stays **Current** after edits to comments or settings outside
+`providers.opencodex`; it changes neither the file nor the recorded baseline. When a catalog update
+is pending, automatic refresh refuses any Hermes file changed since the last Apply, including those
+unrelated edits. When the catalog shows **Update needed**, review and Apply
+the pending catalog change to resume automatic updates. Apply with an unchanged catalog is a no-op
+and does not accept a new file baseline.
 
 The management API selects a profile with `profile=<name>` on `/api/client-integrations/hermes` and with
 `client=hermes&profile=<name>` on the preview, journal, and restore endpoints;
@@ -479,6 +539,38 @@ ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
 
+### Opt-in alias model names
+
+Hermes and Command Code accept `--model-names alias|routed`. The default is
+`routed`, independent of `preferModelAliasIds`. For example:
+
+```bash
+ocx export --client hermes --model-names alias --json
+ocx integration client preview --client hermes --operation apply --model-names alias --json
+ocx integration client enable --client hermes --model-names alias
+ocx integration client enable --client commandcode --model-names alias
+```
+
+Export is a preview: it uses an already loaded, current catalog and writes no
+client configuration or integration state. If that catalog is unavailable, load
+the model catalog separately and retry. `--out` explicitly writes an export
+artifact; it does not connect the client.
+
+The connection stores the mode. Omitting the flag on later Apply (including the
+dashboard) preserves it; explicit `--model-names routed` resets it. A qualified
+alias such as `AC/AC-model-x` replaces `acme/vendor-model-x` only when the router
+proves the same provider and model. Missing or unsafe aliases and collisions
+fall back to the routed key. Combos retain their existing keys.
+
+After an alias rename or removal, run `ocx sync` or explicitly Apply the connection:
+the next successful managed refresh replaces the old key with the newly validated
+alias or routed fallback. Alias edits do not atomically update client files.
+Refresh remains idempotent and refuses foreign edits. If an alias changes while
+Apply or refresh waits, the write is refused; retry against the current catalog.
+Each named Hermes profile
+stores its own mode; automatic catalog refresh covers only the default profile,
+so named profiles need explicit Apply. Other exporters retain routed names.
+
 ### Preview and bind a terminal write
 
 The existing direct commands remain supported. To bind a write to a reviewed
@@ -575,10 +667,12 @@ ocx mcode
 ```
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
-Raycast, omo, OpenCode, and Kilo catalogs with the current model selection, context windows, and
-reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
+Raycast, omo, OpenCode, Kilo, and Hermes catalogs with the current model selection, context windows, and
+reasoning-effort ladders. Background catalog changes also refresh the connected Hermes default profile unattended;
+an edited Hermes file with a pending catalog update is refused and reported; a never-connected or disabled integration stays untouched.
+Named profiles require [explicit Apply](#hermes-profiles). Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
-Raycast, omo, OpenCode, and Kilo catalogs.
+Raycast, omo, OpenCode, Kilo, and Hermes catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
 you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account
@@ -899,6 +993,8 @@ ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
 
+Under the table, **Change history** lists the newest changes a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, in whole batches and never more than 50, so an Apply all is listed with every role it wrote or not at all, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `integrations/codex-agent-roles.jsonl` under the opencodex config directory, which retains at most 256 KiB and 1000 rows by dropping its oldest whole batches. Compaction targets 128 KiB and preserves a Restore together with its complete source batch when they fit both limits, making room by dropping unrelated older batches; history can still expire as later writes arrive. The writer captures the bounded history before appending so a Restore does not evict its own source at the retention boundary; the omo card's Restore center above tracks only `~/.omo/agent/models.json`. Each change records the Codex home it was made in, and only the current home's changes are listed or restored, so after pointing `CODEX_HOME` elsewhere the list starts empty and a Restore from another home's history is refused. If the history file cannot be read, the section says so in place of the list, and the role table keeps working.
+
 ## Kilo
 
 Kilo CLI, VS Code, and JetBrains share one global config. This integration writes
@@ -911,6 +1007,9 @@ Kilo merges all of these global files. If another candidate also defines
 remove `provider.opencodex` from those files before enabling the integration. An unreadable or unsafe
 candidate also blocks the write. Disable can still remove a block owned in the recorded file
 while another candidate conflicts or cannot be parsed; the other candidate is left untouched.
+
+OpenCodex reads these candidate files as JSONC. A `//` line comment ends at a CR, LF, or CRLF
+line ending, so a file saved with any of these line endings keeps the settings that follow a comment.
 
 The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
 `models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
@@ -926,6 +1025,9 @@ commas in other keys are not preserved. Kilo is on the implicit catalog fan-out:
 sync`, `POST /api/sync`, and visibility, provider, or preset changes refresh an owned Kilo
 block under the same safe owned-only rules as every other client, and a new Kilo session
 loads the updated file.
+
+When reading these candidate files, OpenCodex accepts a trailing comma after an array element or
+object property. Write an empty array or object as `[]` or `{}`; `[,]` and `{,}` are refused as malformed.
 
 ```bash
 ocx integration client enable --client kilo

@@ -696,6 +696,7 @@ pub fn begin_with(app: &AppHandle, mode: Mode) -> bool {
         .store(mode == Mode::Recover, Ordering::Release);
     startup.restart();
     let generation = startup.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    crate::recovery::begin_run(app, generation, mode == Mode::Recover);
     let started = Instant::now();
     startup.set_deadline(started + DEADLINE);
     let app = app.clone();
@@ -725,6 +726,7 @@ pub fn begin_with(app: &AppHandle, mode: Mode) -> bool {
                     ),
                 );
                 if let Expiry::Fired(progress) = &expiry {
+                    crate::recovery::failed(&guard, generation);
                     let _ = guard.emit(PHASE_EVENT, progress);
                 }
                 expiry
@@ -769,7 +771,7 @@ pub fn begin_with(app: &AppHandle, mode: Mode) -> bool {
             (false, Some(held)) => crate::supervisor::RunOutcome::Held(held),
             (false, None) => crate::supervisor::RunOutcome::Failed,
         };
-        crate::supervisor::run_finished(&app, mode, ended, detail.as_deref());
+        crate::supervisor::run_finished(&app, generation, mode, ended, detail.as_deref());
     });
     true
 }
@@ -784,6 +786,7 @@ fn settle(app: &AppHandle, started: Instant, generation: u64, reason: String) {
     };
     startup.with_reporting(|| {
         if let Some(progress) = startup.settle(started, generation, reason) {
+            crate::recovery::failed(app, generation);
             let _ = app.emit(PHASE_EVENT, progress);
         }
     });
@@ -833,6 +836,7 @@ async fn run(app: &AppHandle, started: Instant) {
         endpoint,
         home: answer.home(),
     };
+    crate::recovery::bind_home(app, &target.home);
     let proxy = match ProxyClient::new(endpoint, Auth::new(answer.home())) {
         Ok(proxy) => proxy,
         Err(error) => {
@@ -1809,6 +1813,17 @@ fn emit(app: &AppHandle, mut progress: Progress, failed_in: Option<Phase>) -> bo
         return startup.with_reporting(|| {
             if !startup.publish(&mut progress, failed_in) {
                 return false;
+            }
+            let generation = startup.generation.load(Ordering::Acquire);
+            if progress.phase == Phase::Ready.id() {
+                crate::recovery::ready(
+                    app,
+                    generation,
+                    app.try_state::<AppState>()
+                        .is_some_and(|state| state.owns_runtime()),
+                );
+            } else if progress.phase == Phase::Failed.id() {
+                crate::recovery::failed(app, generation);
             }
             let _ = app.emit(PHASE_EVENT, progress);
             true

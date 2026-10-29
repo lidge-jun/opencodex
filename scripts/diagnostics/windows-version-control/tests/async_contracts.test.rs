@@ -342,24 +342,42 @@ fn invalidation_and_stopped_source_discard_late_catalogs() {
     let result = contract(
         "invalidation",
         r#"
-let release;
-let current = true;
-const deps = {commandCandidates:()=>['C:\\fixture\\codex.exe'],
-  execFile:()=>new Promise(resolve=>{release=resolve})};
-const pending = bundled.loadBundledCodexCatalogAsync(deps);
-bundled.invalidateBundledCatalogCache();
-release(JSON.stringify(catalog));
-const invalidated = await pending;
-const stoppedPending = bundled.loadBundledCodexCatalogAsync(deps,()=>current);
-current = false;
-release(JSON.stringify(catalog));
-return {invalidated:invalidated===null, stopped:(await stoppedPending)===null,
+async function loadCase(change,phase) {
+  let current = phase!=='before-call', release, entered, executions=0;
+  const enteredPromise=new Promise(resolve=>{entered=resolve});
+  const deps={commandCandidates:()=>['C:\\fixture\\codex.exe'],
+    execFile:()=>new Promise(resolve=>{executions++;release=resolve;entered()})};
+  const pending=bundled.loadBundledCodexCatalogAsync(deps,()=>current);
+  const mutate=()=>{if(change==='invalidate')bundled.invalidateBundledCatalogCache();else current=false};
+  if(phase==='immediate')mutate(); // before the first await completes
+  // Each load owns its entry/release: a no-entry completion cannot shift another case.
+  const outcome=await Promise.race([
+    enteredPromise.then(()=>'entered'),pending.then(()=>'settled',()=>'settled')]);
+  if(phase==='entered' && outcome==='entered')mutate();
+  if(outcome==='entered')release(JSON.stringify(catalog));
+  return {rejected:(await pending)===null,outcome,executions};
+}
+// Exercise a real no-entry completion before the in-flight cases, not just their race helper.
+const beforeCall=await loadCase('stop','before-call');
+const invalidatedImmediate=await loadCase('invalidate','immediate');
+const invalidatedInflight=await loadCase('invalidate','entered');
+const stoppedImmediate=await loadCase('stop','immediate');
+const stoppedInflight=await loadCase('stop','entered');
+return {stoppedBeforeCall:beforeCall.rejected,beforeCallOutcome:beforeCall.outcome,beforeCallExecutions:beforeCall.executions,
+  invalidatedImmediate:invalidatedImmediate.rejected,
+  invalidatedInflight:invalidatedInflight.rejected,
+  stoppedImmediate:stoppedImmediate.rejected,
+  stoppedInflight:stoppedInflight.rejected,
+  inflightOutcome:invalidatedInflight.outcome,stopInflightOutcome:stoppedInflight.outcome,
   empty:bundled.bundledCatalogCacheState().valueIdentity===null};
 "#,
     );
     assert_eq!(
         result,
-        serde_json::json!({"invalidated":true,"stopped":true,"empty":true})
+        serde_json::json!({"stoppedBeforeCall":true,"beforeCallOutcome":"settled","beforeCallExecutions":0,
+          "invalidatedImmediate":true,"invalidatedInflight":true,
+          "stoppedImmediate":true,"stoppedInflight":true,
+          "inflightOutcome":"entered","stopInflightOutcome":"entered","empty":true})
     );
 }
 
@@ -370,34 +388,57 @@ fn async_runtime_persistence_rejects_pin_changes_cache_clear_and_stopped_sources
         r#"
 const initial = {version:1,command:'C:\\fixture\\codex.exe',source:'environment',selectedVersion:'0.159.0',
   origin:'discovered',updatedAt:'2026-10-08T00:00:00Z'};
-async function resolveCase(change) {
+async function resolveCase(change,phase) {
   let release;
+  let entered;
+  const enteredPromise = new Promise(resolve=>{entered=resolve});
   let bytes = JSON.stringify(initial);
   let current = true;
-  const dir = join(root,change); fs.mkdirSync(dir);
+  const dir = join(root,change+'-'+phase); fs.mkdirSync(dir);
   const deps = {configDir:dir,env:{CODEX_CLI_PATH:initial.command,PATH:''},platform:'win32',
     discoverAlternatives:false,existsSync:()=>true,readdirSync:()=>[],
     readFileSync:path=>{if(path.endsWith('codex-runtime.json')) return bytes; throw Error('absent')},
-    execFile:()=>new Promise(resolve=>{release=resolve})};
+    execFile:()=>new Promise(resolve=>{release=resolve;entered()})};
   const pending = runtime.resolveAndPersistCodexRuntimeAsync(deps,()=>current);
-  if(change==='pin') bytes = JSON.stringify({...initial,origin:'pinned'}); // same timestamp and command
-  if(change==='clear') runtime.clearCodexRuntimeResolveCache();
-  if(change==='stop') current = false;
-  release('codex-cli 0.160.0');
+  const mutate=()=>{
+    if(change==='pin') bytes = JSON.stringify({...initial,origin:'pinned'}); // same timestamp and command
+    if(change==='clear') runtime.clearCodexRuntimeResolveCache();
+    if(change==='stop') current = false;
+  };
+  // immediate mutations land before the first await completes - the original ordering.
+  if(phase==='immediate')mutate();
+  // Early-return guards may settle before the executor runs: race entry against settle.
+  const outcome=await Promise.race([enteredPromise.then(()=>'entered'),pending.then(()=>'settled',()=>'settled')]);
+  if(phase==='entered')mutate(); // while the executor is in-flight
+  if(outcome==='entered')release('codex-cli 0.160.0');
   const resolved = await pending;
   const file = join(dir,'codex-runtime.json');
   return {accepted:resolved!==null,written:fs.existsSync(file),
-    version:fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')).selectedVersion:null};
+    version:fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')).selectedVersion:null,outcome};
 }
-return {pin:await resolveCase('pin'),clear:await resolveCase('clear'),stop:await resolveCase('stop'),valid:await resolveCase('valid')};
+return {pinImmediate:await resolveCase('pin','immediate'),pinInflight:await resolveCase('pin','entered'),
+  clearImmediate:await resolveCase('clear','immediate'),clearInflight:await resolveCase('clear','entered'),
+  stopImmediate:await resolveCase('stop','immediate'),stopInflight:await resolveCase('stop','entered'),
+  valid:await resolveCase('valid','entered')};
 "#,
     );
-    for name in ["pin", "clear", "stop"] {
+    for name in [
+        "pinImmediate",
+        "pinInflight",
+        "clearImmediate",
+        "clearInflight",
+        "stopImmediate",
+        "stopInflight",
+    ] {
         assert_eq!(result[name]["accepted"], false);
         assert_eq!(result[name]["written"], false);
     }
     assert_eq!(result["valid"]["accepted"], true);
     assert_eq!(result["valid"]["version"], "0.160.0");
+    // An in-flight mutation only exercises the guard if the executor was actually running.
+    for name in ["pinInflight", "clearInflight", "stopInflight", "valid"] {
+        assert_eq!(result[name]["outcome"], "entered");
+    }
 }
 #[test]
 fn failed_refresh_keeps_confirmed_rows_without_a_request_retry_storm() {

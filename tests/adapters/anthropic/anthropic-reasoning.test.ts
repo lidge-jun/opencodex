@@ -26,6 +26,158 @@ async function bodyOf(p: OcxParsedRequest, configuredProvider = provider): Promi
 }
 
 describe("anthropic extended-thinking gate", () => {
+  test.each([[false, "disabled"], [true, "enabled"]] as const)("toggle-only models serialize direct boolean %s as %s", async (thinkingEnabled, type) => {
+    const modelId = "toggle-only-model";
+    const request = parsed(undefined, { temperature: 0.3, topP: 0.9 }, modelId);
+    request.options.thinkingEnabled = thinkingEnabled;
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: false,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
+    expect(b.temperature).toBe(0.3);
+    expect(b.top_p).toBe(0.9);
+  });
+
+  test("toggle-only models apply their capability default without adding strength fields", async () => {
+    const modelId = "toggle-only-default";
+    const b = await bodyOf(parsed(undefined, {}, modelId), {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: false,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "enabled" });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
+  });
+
+  test("models with genuine effort strengths retain their effort wire", async () => {
+    const modelId = "ordinary-strength-model";
+    const b = await bodyOf(parsed("high", {}, modelId), {
+      ...provider,
+      baseUrl: "https://gateway.example.test/anthropic",
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: true,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+  });
+
+  test("an explicit toggle off wins over a genuine high effort", async () => {
+    const modelId = "toggle-dual-axis";
+    const request = parsed("high", { temperature: 0.3, topP: 0.9, thinkingEnabled: false }, modelId);
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: true,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
+    expect(b.temperature).toBe(0.3);
+    expect(b.top_p).toBe(0.9);
+  });
+
+  test("an explicitly unsupported capability suppresses direct Anthropic controls", async () => {
+    const modelId = "unsupported-reasoning";
+    const request = parsed("high", { thinkingEnabled: true }, modelId);
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: { supportsReasoning: false } },
+    });
+    expect(b.thinking).toBeUndefined();
+    expect(b.output_config).toBeUndefined();
+  });
+
+  test.each([
+    "claude-sonnet-5-5", "claude-opus-4-8", "claude-haiku-5-5", "claude-fable-5",
+  ])("%s keeps its native contract with a declared generic toggle", async (modelId) => {
+    const target = {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false,
+      } },
+    };
+    const on = await bodyOf(parsed("high", {}, modelId), target);
+    expect(on.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(on.output_config).toEqual({ effort: "high" });
+    const off = await bodyOf(parsed("none", { maxOutputTokens: 64 }, modelId), target);
+    expect(off.thinking).toEqual(modelId === "claude-sonnet-5-5" ? { type: "between_tools" }
+      : modelId === "claude-haiku-5-5" ? { type: "disabled" } : undefined);
+    expect(off.output_config).toBeUndefined();
+    expect(off.max_tokens).toBe(64);
+    const explicitOff = await bodyOf(parsed("high", { thinkingEnabled: false, maxOutputTokens: 64 }, modelId), target);
+    expect(explicitOff.thinking).toEqual(off.thinking);
+    expect(explicitOff.output_config).toBeUndefined();
+    expect(explicitOff.max_tokens).toBe(64);
+    const explicitOn = await bodyOf(parsed(undefined, { thinkingEnabled: true }, modelId), target);
+    expect(explicitOn.thinking).toEqual(on.thinking);
+  });
+
+  test.each([
+    ["claude-haiku-4-5", true, undefined],
+    ["claude-sonnet-4-6", true, undefined],
+    ["claude-opus-4-6", true, undefined],
+    ["claude-haiku-4-5", false, "high"],
+    ["claude-sonnet-4-6", false, "high"],
+    ["claude-opus-4-6", false, "high"],
+  ] as const)("%s preserves native budget thinking (effort support=%s, effort=%s)", async (modelId, supportsReasoningEffort, reasoning) => {
+    const target = {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort,
+      } },
+    };
+    const options = { temperature: 0.3, topP: 0.9, ...(supportsReasoningEffort ? { thinkingEnabled: true } : {}) };
+    const on = await bodyOf(parsed(reasoning, options, modelId), target);
+    expect(on.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(on.max_tokens).toBe(24576);
+    expect(on.output_config).toBeUndefined();
+    expect(on.temperature).toBeUndefined();
+    expect(on.top_p).toBeUndefined();
+    // Explicit off must still win without allocating a thinking budget or increasing the limit.
+    const off = await bodyOf(parsed("high", { thinkingEnabled: false, maxOutputTokens: 64 }, modelId), target);
+    expect(off.thinking).toBeUndefined();
+    expect(off.output_config).toBeUndefined();
+    expect(off.max_tokens).toBe(64);
+  });
+
+  test("both unsupported axes suppress native thinking and token headroom", async () => {
+    const modelId = "claude-sonnet-5-5";
+    const b = await bodyOf(parsed("high", { thinkingEnabled: true, maxOutputTokens: 64 }, modelId), {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: { supportsThinkingToggle: false, supportsReasoningEffort: false } },
+    });
+    expect(b.thinking).toBeUndefined();
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(64);
+  });
+
   // Sonnet 4.5 takes temperature or top_p alone but 400s on both (live 2026-09-29), so a request
   // carrying both keeps temperature; each field alone survives.
   test("reasoning 'none' does NOT enable thinking and preserves temperature", async () => {

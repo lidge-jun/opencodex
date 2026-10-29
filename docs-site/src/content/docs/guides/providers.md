@@ -69,13 +69,21 @@ is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore 
 ## Claude Opus 5.5 progress updates
 
 When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
-OpenCodex requests Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
+OpenCodex defaults to Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
 Progress updates and mid-turn acknowledgements appear as visible assistant commentary in Codex,
 even when thinking summaries are hidden. Reasoning summaries are omitted in this mode because
 Anthropic cannot distinguish progress updates from reasoning under `display: "summarized"`.
 The original signed thinking blocks are preserved for tool continuation; no signature is decoded
 or rewritten. Updates appear once their signed block completes. Other models and compatible
 third-party endpoints retain their existing thinking display behavior.
+
+To request summarized thinking instead, explicitly send `reasoning.summary: "concise"` or
+`"detailed"`. OpenCodex then sends `thinking: {type: "adaptive", display: "summarized"}` without
+the updates beta and returns thinking text as reasoning instead of progress commentary. In this
+mode, Anthropic's progress updates may be folded into the reasoning summary. The choice also
+works when reasoning effort is omitted or `"none"`; it does not change the requested effort.
+Omitting `reasoning.summary` or sending `"auto"` (the Codex default) or `"none"` keeps the updates default. Local summary hiding
+still controls reasoning visibility and does not hide progress commentary in updates mode.
 
 ## Anthropic image input
 
@@ -108,6 +116,12 @@ Only a successful, nonempty completion remembers the rejection for that conversa
 identity for five minutes. Only the refused opaque payloads are suppressed when they can be
 identified; newly issued thinking remains replayable. Plaintext history remains available; a failed or cancelled retry does
 not disable thinking replay on later requests.
+
+## xAI Responses includes
+
+For xAI Responses requests, OpenCodex removes the unsupported `output.encrypted_content` entry
+from `include`, including on the [US regional endpoint](https://docs.x.ai/developers/advanced-api-usage/regions).
+Other include entries are preserved; an empty result omits the field. Other providers are unaffected.
 
 ## Auth modes
 
@@ -195,10 +209,22 @@ Two exceptions are worth knowing because you can hit them:
 | OrcaRouter | `ocx login orcarouter-oauth` — consent mints a user-owned, long-lived `sk-orca-…` key, and the request then carries a key | `orcarouter` — the same key pasted by hand |
 | Meta Muse | `ocx login meta-muse` can import a local Muse Code CLI key or start device login. Meta scopes that credential to its own CLI, so this is an unsupported use: how the calls settle is not observable from the API, and you should treat every call as billable against your account | `meta-model` is the supported path — every call is metered per token, and a Muse Code subscription does not work there |
 
+When the Grok subscription catalog publishes selectable context windows, opencodex uses the
+widest published rung: `[256000, 500000]` exposes 500k for Grok 4.5–4.7, including the 4.7 Fast
+lane. Your configured model window and enabled Context cap still lower that value. If your plan
+serves a shorter window, configure that limit; the catalog does not verify account entitlement.
+
 Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key equivalent. Google Antigravity is
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+If Antigravity login cannot discover a Cloud Code Assist project, the failure includes a sanitized
+summary for `loadCodeAssist` and the last `onboardUser` response: HTTP status, response category,
+completion/error presence and known project-field types. It distinguishes HTTP refusal, unusable
+JSON, invalid roots, unfinished onboarding and completion with an error or without a project.
+The summary omits upstream values, arbitrary key names and account/project identifiers. Login
+still requires a discovered project and saves no account when discovery fails.
+
 The Antigravity Accounts tab shows an observed membership tier as a badge beside the account
 label, using the upstream tier ID (for example `free-tier` or `gemini-pro`). No badge appears
 when the plan is unknown; it does not affect routing or quota.
@@ -321,7 +347,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer AWS IAM Identity Center, Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `zed` | `zed` | `https://cloud.zed.dev` | Experimental Zed Hosted AI bridge. Uses Zed's native-app RSA callback, exchanges the account token for a short-lived hosted-inference token, and discovers the account's live roster. |
@@ -377,6 +403,13 @@ revokes it, run `ocx login zed` again.
 
 For Zed-hosted OpenAI models, OpenCodex translates `developer` instructions to `system` messages and removes OpenAI-private fields and unsupported built-in tools such as `web_search`. Function and custom tools remain available through the delegate; a tool choice with no supported tools left becomes `none`.
 
+Current-turn tool declarations carried in Codex's `additional_tools` input are promoted into the
+supported tool catalog. Function calls and custom-tool input are relayed in order, including
+interleaved calls, so a tool-using turn can continue after its introductory text. Incomplete calls
+keep only received arguments and remain incomplete; cancellation releases buffered data. Conflicting
+completed custom input, including later deltas, fails the turn with incomplete calls. Function arguments accept JSON whitespace differences outside strings, decoded string escapes, and compatible partial snapshots while preserving delivered bytes. Number literals must match exactly (`1` and `1.0` conflict); object-key order and duplicate members must match too. These conservative conflicts fail the turn. JSON nesting is limited to 65,536 containers; deeper input fails with a clear depth-limit message. Late fragments are validated incrementally. On upstream failure, received text and
+reasoning remain visible and usage retains numeric counters only. The relay is covered by synthetic stream fixtures; live hosted-stream compatibility remains unverified.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request
 (the Responses wire accepts the same field, but opencodex does not send it there today);
@@ -407,10 +440,15 @@ think: the picker offers `low` / `high` / `max` (default `max`), Codex `medium` 
 and `xhigh` as `max`, and an explicit `none` leaves `reasoning_effort` out so the upstream default
 applies. Fixed sampling parameters (`temperature`, `top_p`, penalties) are not sent. A saved
 `moonshot` model list that is still the previous built-in list gains both ids at startup when it
-points at the International or China endpoint; an edited list or a Custom URL is left as it is.
-The preset default stays `kimi-k2.7-code`. Moonshot closes the K2 series to new accounts on
-2026-10-31 and plans to retire it by the end of December 2026; see the
-[Kimi API model list](https://platform.kimi.ai/docs/models).
+points at the International or China endpoint; this roster refresh adds no models to an edited
+list or a Custom URL. The retired-id migration below applies separately.
+The preset defaults to the vendor-recommended `kimi-k3.1-pro`. `kimi-k2.5`, discontinued on
+2026-08-31, is removed from the API seeds; saved selections on the official International or China
+endpoint migrate to `kimi-k3.1-pro`, refreshing old built-in context and reasoning metadata while
+preserving explicit overrides. Custom destinations keep their saved selections. `kimi-k2.6` and
+`kimi-k2.7-code` (including highspeed) remain selectable for existing users: Moonshot closes the
+K2 series to new accounts on 2026-10-31 and plans to retire it by the end of December 2026; see the
+[Kimi API model list](https://platform.kimi.ai/docs/models.md) (checked 2026-10-28).
 
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:
@@ -511,7 +549,7 @@ OAuth providers whose credentials include a stable account id or email can keep 
 login. The Providers page shows those accounts in a dropdown, lets you add another, and switches the
 active account without logging the others out. A normal login with an identity-less Kimi credential
 replaces the active slot, while an explicit **Add account** preserves that slot and activates a new,
-distinct one. Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
+distinct one. Kiro accounts use the profile ARN together with the signed-in user's email when available; different users can keep separate credentials for one organization profile. `chatgpt` is always single-slot because Codex
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
@@ -635,7 +673,19 @@ Other messages, statuses, and AWS SSO responses do not trigger this desktop-spec
 
 ### Kiro credential import
 
-The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
+The dashboard offers native AWS IAM Identity Center, Builder ID, Google, and GitHub device login without Kiro CLI.
+
+For an organization account, choose **AWS IAM Identity Center**, enter your AWS access portal URL
+(for example `https://example.awsapps.com/start`) and the region where your organization configured
+IAM Identity Center. Open the verification link in your own browser, enter the displayed code,
+and authorize the account. The hub completes the grant; no SSH session or browser callback to
+the hub is required. If AWS lists several Kiro profiles, choose the profile to save. With one
+profile the account is saved automatically. The SSO region and the selected profile's API region
+are kept separately. Profile discovery checks AWS's US East and Frankfurt service regions.
+The signed-in user's email is resolved from AWS for the selected profile before saving; users
+sharing one organization profile keep separate account credentials. Cancellation or expiry before
+the credential write saves no account. Native login adds a slot and keeps the existing selection.
+
 The Kiro CLI choice and `ocx login kiro` import path use the CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
 on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then sign in with `kiro-cli login`.
 Without a `kiro-cli` session, `ocx login kiro` falls
@@ -672,7 +722,7 @@ an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redir
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
-The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or regional AWS device-SSO hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ### DeepSeek API
@@ -694,7 +744,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
+opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -786,6 +836,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
+| AI Stupid Level | `https://aistupidlevel.info/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -849,7 +900,7 @@ Each model then uses the request format TokenLab declares for it
 
 | Models | Codex (Responses clients) | Chat clients | Claude Code (Anthropic clients) |
 | --- | --- | --- | --- |
-| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://tokenlab.sh/docs/en/api-reference/responses/create-response) | Chat Completions | Chat Completions |
+| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://tokenlab.sh/docs/en/api-reference/responses/create-response) | Chat Completions | Chat Completions |
 | `claude-*` | [Messages](https://tokenlab.sh/docs/en/api-reference/messages/create-message) | Messages | Messages |
 | Every other model, including `gemini-3.8-flash` | Chat Completions | Chat Completions | Chat Completions |
 
@@ -870,15 +921,42 @@ picker and marks it as a sponsor, and nothing else about routing or defaults cha
 **Modelflare** is an OpenAI-compatible relay at `https://modelflare.dev/v1`. Select **Modelflare**
 in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add modelflare`, and
 give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
-environment. The preset uses Chat Completions and seeds four models that
+environment. The preset uses Chat Completions. The following existing models
 were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
-`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`.
+`gpt-6.1-terra` is a preemptive seed mirroring Sol; it has not been inference-verified here.
+You can add other Chat-compatible
 Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
 do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
 can call only that group's models, so use a Smart key for the full seeded set, or pass
 `--default-model` with a model your key's group serves.
 `deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
 Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
+
+**AI Stupid Level** is a Smart Router at `https://aistupidlevel.info/v1`, operated by S.C. Studio
+Platforms S.R.L. Create a router key at [aistupidlevel.info/router/keys](https://aistupidlevel.info/router/keys)
+and add your own OpenAI, Anthropic, Google, DeepSeek, Kimi or GLM keys to the same account. Then select
+**AI Stupid Level** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add aistupidlevel`, and give it the router key directly or as the reference
+`${AISTUPIDLEVEL_API_KEY}`. The router calls each model with your own provider key, so the provider
+bills you directly and AI Stupid Level adds no markup ([terms](https://aistupidlevel.info/terms#router)).
+The preset uses Chat Completions for every client, Claude Code included, and discovers models from the
+authenticated `GET /v1/models`. Its seeded models are the
+[routing modes](https://aistupidlevel.info/router/docs#strategies): `auto-coding` (the default) sends
+each request to the model with the best measured score on AI Stupid Level's coding benchmark,
+`auto-tooling` and `auto-reasoning` do the same for tool use and reasoning, and `auto-value-coding` or
+`auto-fastest-quality` pick the best-value or fastest model within 5 points of the best. A real model id
+from the live list, such as `aistupidlevel/claude-opus-5-5`, pins one model, and the `X-AISM-Model`
+response header names the model that answered. Routing modes declare a 262,144-token window and 64,000
+output tokens, which hold for any model the router picks. The router accepts text only, so for a
+routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
+Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
+`text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
+are rejected on save; a malformed value in a hand-edited config loads as `["text"]` with a warning.
+The preset's text-only fallback is applied at runtime, including when saved under another provider
+name at the same URL and Chat adapter. It does not follow a custom URL or another adapter.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
@@ -900,6 +978,7 @@ OpenCodex keeps it in the catalog from the preset. An install whose saved MiniMa
 still the previous default receives it on the next start; a list you edited is left as it is;
 register it by hand with
 `ocx models add minimax MiniMax-M3.1-Flash --context-window 1000000`.
+The seed refresh applies only to official MiniMax endpoints; Custom URLs keep their model list.
 
 **OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
 streaming and tool-result continuations. The existing `opencode-go` preset keeps its
@@ -959,7 +1038,7 @@ MiMo's malformed `<parameter=` opener at the start of that standalone block.
 
 Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Claude models on these API-key routes use Anthropic Messages automatically, regardless of `googleMode`. When loading saved configurations, OpenCodex ignores eligible older Gemini and Claude Chat/Responses overrides only for native models in the canonical keyed `opencode-zen` provider on these official Zen routes. It also ignores eligible Responses-only `image_generation` hosted-tool preferences; custom providers, non-key routes, and other preferences remain unchanged.
 
-**`opencode-free` has been removed** because every model now returns `403 permission_denied` under OpenCode's upstream free-tier gate ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Loading an existing configuration disables its entries and dependent model references in memory, warns once per process, and leaves the file unchanged. If it was the default provider, the standard OpenAI OAuth route becomes the default. Use `opencode-go`, keyed `opencode-zen`, or another provider. [OpenCode Zen terms](https://opencode.ai/docs/zen/).
+**`opencode-free` has been removed** because every model now returns `403 permission_denied` under OpenCode's upstream free-tier gate ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Loading an existing configuration disables its entries and dependent model references in memory, warns once per process, and leaves the file unchanged on load. The next configuration save removes them from config.json. Before that save, the original file is automatically preserved as `config.json.pre-opencode-free-removal.bak` beside config.json, or a unique sibling if that name is occupied. An existing byte-identical, independent copy is reused only when its owner-only protection can be verified; otherwise a new protected copy is written beside it. Existing files are never overwritten. Overlapping first loads may leave multiple identical protected copies. The warning names this recovery copy. Restore it by copying it back over config.json, for example after downgrading. If the copy fails, the warning asks you to copy config.json immediately. If it was the default provider, the standard OpenAI OAuth route becomes the default. Use `opencode-go`, keyed `opencode-zen`, or another provider. [OpenCode Zen terms](https://opencode.ai/docs/zen/). Passive reads keep the in-memory projection without creating a copy or emitting the notice.
 
 Healthy Claude Desktop assignments and defaults are preserved. Rules whose source-model allowlist becomes empty are disabled, along with native subagent sync when its injection model is removed. Later config saves keep removed references out of the file while preserving healthy concurrent edits.
 
@@ -968,6 +1047,13 @@ Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible prese
 preset, `xiaomi-mimo`, and a token-plan preset, `mimo`. All three default to MiMo V2.6 (`mimo-v2.6-pro`,
 or `mimo-v2.6-flash` on `xiaomi-mimo`). Xiaomi retires `mimo-v2.5` and `mimo-v2.5-pro` on 2026-10-21
 with no redirect, so switch a saved V2.5 default before then; opencodex does not rewrite it for you.
+
+**Reasoning capabilities.** Model metadata describes three independent capabilities: `supportsReasoning`, `supportsThinkingToggle`, and `supportsReasoningEffort`. An omitted value is unknown; `false` is an explicit declaration. `defaultThinkingEnabled` records the default switch state, while `reasoningEfforts` lists actual strength choices. Per-model declarations live in the provider's `modelCapabilities` map; reasoning axes merge over registry defaults using case-insensitive model IDs, with operator values taking precedence. `/v1/models` exposes the corresponding `supports_reasoning`, `supports_thinking_toggle`, `supports_reasoning_effort`, and `default_thinking_enabled` fields under `capabilities`, without inventing an effort list for fixed-strength models.
+
+Legacy configurations with an explicit empty effort list and no reasoning capability declarations retain `capabilities.supports_reasoning: false` in `/v1/models` discovery. An explicit `supportsReasoning: true` or `supportsThinkingToggle: true` still advertises thinking when the effort list is empty.
+
+Public MiMo V2.6 is one instance: its three models support reasoning and an on/off switch, but no adjustable intensity; thinking defaults to enabled. The wire adapter sends `thinking.type: enabled/disabled`. OCX's Responses ingress also accepts `reasoning.enabled` independently of `reasoning.effort`. For clients that only offer effort enums, Codex catalogs and OpenCode/Kilo exports represent this switch as `none/high`; those values are client compatibility aliases, not MiMo strength levels. Client-owned labels may still say “High.” Fixed reasoning models without a switch get no fabricated control. Xiaomi's [deep-thinking guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking) describes the public MiMo switch; free, token-plan, third-party routes and older MiMo models keep their existing declarations.
+
 Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
 During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
 answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before
@@ -1182,6 +1268,14 @@ request translation rather than passthrough reports none. An account that has no
 served a streaming turn simply shows no quota, which is not an error. Rate limits apply
 per team, not per key.
 
+When the current Muse account's latest-started retained request explicitly reports subscription exhaustion
+with a future reset time, the dashboard quota strip can show that observed limit even if
+Meta omitted the normal usage frame. The Muse chip includes a reset countdown. This reads
+local request-log evidence and never sends a model request. It does not classify an unnamed
+window as five-hour or weekly, and a newer successful request or an elapsed reset removes
+this fallback. The fallback selects by request start time across the server-bounded matching
+log history, so an older request that finishes later cannot hide a newer success.
+
 For a supported setup, use `meta-model` above with your own key.
 
 **Command Code quota.** The dashboard and `ocx account refresh` probe Command Code's
@@ -1352,7 +1446,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
 - **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
-- **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
+- **Image Input:** Global continues forwarding supported images through the shared projection without a per-model vision allowlist. CN retains its vision-sidecar defaults. Its raw-image route admits only one canonical base64 PNG of at most 1 MiB decoded in a single user turn with `DeepSeek-Flash` or `Qwen3.8-Flash`. Use `qoderclicn 1.1.70`: [issue #7516](https://github.com/lidge-jun/opencodex/issues/7516) reports Windows 11 x64 live success for those models on both `--attachment` and inline `--input-format stream-json --output-format stream-json` stdin; OpenCodex uses only stdin. The adapter validates base64 length/padding, decoded PNG signature and basic IHDR fields before CLI discovery; it does not decompress pixels or validate every PNG chunk/CRC. The 1 MiB ceiling is an OpenCodex resource policy, not a verified vendor maximum: the reported live evidence covers a 96×96 PNG, whose RGBA raster is only 36 KiB. Larger inputs require separate verification. Other CLI versions have not been verified, and the adapter does not probe the installed version. CN refuses raw URL images, other image formats/models, multiple images, tool-result images and image-bearing history/multi-turn replay before starting the CLI with `unsupported_input_modality`; use the vision sidecar for those inputs. Injected CLI tests cover serialization and cancellation without claiming live upstream support. Qoder's supported projection keeps image blocks in conversation order and marks unsupported references as `[image omitted: unsupported reference]`. Global stateless replay can still associate historical images unreliably with their original text; CN does not enable that unverified replay surface.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
@@ -1551,6 +1645,9 @@ visible even while live catalogs lag:
 | Codex login (Pool or Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` plus `*-pro` | 922,000 (922,000 max input) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 The native GPT-5.6 entries preserve the pinned upstream reasoning ladders (for example, Luna has
@@ -1597,7 +1694,7 @@ seconds per call, including pacing and body reads. These are OpenCodex safeguard
 GitHub limits; oversized catalogs, slow negotiation or a truncated intent excerpt can affect compatibility.
 
 For named selections, Copilot fronts a mixed-wire catalog: the following models (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
 completions. The precedence is: hard wire pin → your explicit

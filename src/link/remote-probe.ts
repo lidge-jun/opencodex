@@ -1,3 +1,4 @@
+import { windowsChildHttpArgv } from "./remote-windows";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
 export const LINK_COMMAND_WORK_MS = 15_000;
@@ -16,7 +17,8 @@ export function linkRestartBudget(latencyMs = 0): number {
 }
 
 /** Credential-free Child HTTP probe. Ignore curlrc/proxies; never follow a redirect. */
-export function remoteChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs = LINK_RELAY_VERIFY_MS): string[] {
+export function remoteChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs = LINK_RELAY_VERIFY_MS, platform: "posix" | "windows" = "posix"): string[] {
+  if (platform === "windows") return windowsChildHttpArgv(port, path, timeoutMs);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid Child port");
   const seconds = Math.max(1, Math.ceil(Math.min(LINK_RELAY_VERIFY_MS, timeoutMs) / 1000));
   return ["sh", "-c", 'curl -q --noproxy "*" --silent --show-error --fail --connect-timeout 3 --max-time "$3" --write-out "\\n%{http_code}" "http://127.0.0.1:$1/$2"', "ocx-child-http", String(port), path, String(seconds)];

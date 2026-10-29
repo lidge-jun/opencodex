@@ -3,6 +3,7 @@ import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
 import { applyExplicitChatDeveloperRole } from "./developer-role";
+import { singleLeadingSystemMessages } from "./single-system";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -10,10 +11,12 @@ import { applyGithubCopilotContextTier } from "../../providers/github-copilot-co
 import { canonicalFastTierMarker, decideTier, type ResolvedFastPolicy } from "../../providers/fastwire";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { isDebugEnabled } from "../../lib/debug-settings";
-import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
+import { mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
+import { resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy } from "./reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls } from "./reasoning-wire";
+import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
 import { planNativeChatReasoningReplay } from "./reasoning-replay";
 import type { OcxReasoningReplayScopeRef } from "../../types";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
@@ -75,10 +78,11 @@ export function buildOpenAIChatPassthroughRequest(
     // and the conversion changes the role of those messages and nothing else, so the position
     // of every message and every other field survive unchanged. Missing thinking history is
     // repaired below using the same preserve policy as the translated Chat builder.
-    messages: applyExplicitChatDeveloperRole(
+    // The explicit single-system policy can then merge instruction slots.
+    messages: singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
       frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
       provider,
-    ),
+    ), provider),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
@@ -87,22 +91,40 @@ export function buildOpenAIChatPassthroughRequest(
   const replayPlan = planNativeChatReasoningReplay(body.messages, provider, modelId, replayScope,
     Array.isArray(rawBody.tools) && rawBody.tools.length > 0, maxSerializedBytes);
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
+  const toggleWire = declaresThinkingToggleWire(provider, modelId);
+  const independentControls = declaresIndependentChatReasoningControls(provider, modelId);
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
-  const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;
+  const reasoningDisabled = modelInList(provider.noReasoningModels, modelId)
+    || (!toggleWire && rawEfforts?.length === 0) || reasoningControlsAreUnsupported(provider, modelId);
   if (reasoningDisabled) {
     delete body.reasoning_effort;
   }
   const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
   const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
-  applyExplicitChatReasoningWirePolicy({
+  const explicitThinkingEnabled = rawBody.reasoning !== null && typeof rawBody.reasoning === "object"
+    && typeof (rawBody.reasoning as { enabled?: unknown }).enabled === "boolean"
+    ? (rawBody.reasoning as { enabled: boolean }).enabled
+    : undefined;
+  const explicitReasoning = applyExplicitChatReasoningWirePolicy({
     provider,
     modelId,
     hasTools,
+    thinkingEnabled: explicitThinkingEnabled,
     requestedEffort,
-    wireEffort: requestedEffort,
+    wireEffort: toggleWire && independentControls ? mapReasoningEffort(provider, modelId, requestedEffort) : requestedEffort,
     reasoningDisabled,
     body,
   });
+  let reasoningLog = explicitReasoning.handled ? explicitReasoning.reasoningLog : undefined;
+  // A native caller's own thinking object is already in the upstream wire shape. Forward it only
+  // on a provider-declared toggle wire, below an explicit reasoning.enabled but above a default.
+  if (!reasoningDisabled && toggleWire && independentControls
+    && resolveReasoningCapabilities(provider, modelId).supportsThinkingToggle !== false
+    && explicitThinkingEnabled === undefined
+    && rawBody.thinking !== undefined) {
+    body.thinking = rawBody.thinking;
+    reasoningLog = undefined;
+  }
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
   if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
@@ -208,5 +230,8 @@ export function buildOpenAIChatPassthroughRequest(
     });
   }
 
-  return { url, method: "POST", headers, body: bodyJson };
+  return {
+    url, method: "POST", headers, body: bodyJson,
+    ...(reasoningLog ? { reasoningLog } : {}),
+  };
 }

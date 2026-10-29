@@ -4,8 +4,10 @@ import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
+import { mergeReasoningModelCapabilities } from "./reasoning-capabilities";
 import {
   PROVIDER_REGISTRY,
+  normalizedProviderEndpoint,
   registryEntryForProviderDestination,
   registryModelServiceTierCapabilityApplies,
   type ProviderRegistryEntry,
@@ -31,6 +33,7 @@ export interface DerivedKeyLoginProvider {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  modelCapabilities?: OcxProviderConfig["modelCapabilities"];
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
@@ -58,6 +61,7 @@ export interface DerivedKeyLoginProvider {
   escapeBuiltinToolNames?: boolean;
   openaiChatEofTolerance?: boolean;
   foldDeveloperRoleToSystem?: boolean;
+  singleLeadingSystemMessage?: boolean;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   project?: string;
   location?: string;
@@ -263,6 +267,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(staticPolicy.modelContextWindows ? { modelContextWindows: { ...staticPolicy.modelContextWindows } } : {}),
     ...(staticPolicy.modelDisplayNames ? { modelDisplayNames: { ...staticPolicy.modelDisplayNames } } : {}),
     ...(staticPolicy.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(staticPolicy.modelInputModalities) } : {}),
+    ...(staticPolicy.modelCapabilities ? { modelCapabilities: structuredClone(staticPolicy.modelCapabilities) } : {}),
     ...(staticPolicy.modelMaxInputTokens ? { modelMaxInputTokens: { ...staticPolicy.modelMaxInputTokens } } : {}),
     ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
     ...(staticPolicy.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...staticPolicy.modelMaxOutputTokens } } : {}),
@@ -283,6 +288,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
     ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
     ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
+    ...(entry.singleLeadingSystemMessage !== undefined ? { singleLeadingSystemMessage: entry.singleLeadingSystemMessage } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.chatCompletionsPath !== undefined ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
@@ -340,6 +346,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
+      ...(entry.modelCapabilities ? { modelCapabilities: structuredClone(entry.modelCapabilities) } : {}),
       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
@@ -362,6 +369,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
       ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
       ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
+      ...(entry.singleLeadingSystemMessage !== undefined ? { singleLeadingSystemMessage: entry.singleLeadingSystemMessage } : {}),
       ...(entry.googleMode ? { googleMode: entry.googleMode } : {}),
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.location ? { location: entry.location } : {}),
@@ -484,6 +492,8 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
  */
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
+  const capabilities = mergeReasoningModelCapabilities(destination?.modelCapabilities, prov.modelCapabilities);
+  if (capabilities) prov.modelCapabilities = capabilities;
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
   if (destination?.modelDefaultReasoningEfforts) {
     prov.modelDefaultReasoningEfforts = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts)[0];
@@ -500,6 +510,9 @@ function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   if (destination?.modelReasoningEfforts) {
     prov.modelReasoningEfforts = fillRecordOfArrays(destination.modelReasoningEfforts, prov.modelReasoningEfforts);
   }
+  if (destination?.modelDefaultReasoningEfforts) {
+    [prov.modelDefaultReasoningEfforts] = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts);
+  }
   if (prov.reasoningEfforts === undefined && destination?.reasoningEfforts !== undefined) {
     prov.reasoningEfforts = [...destination.reasoningEfforts];
   }
@@ -511,6 +524,23 @@ export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProvid
     && prov.reasoningWireFormat === "gateway-object"
     && prov.reasoningEfforts?.length === 1
     && prov.reasoningEfforts[0] === "low";
+}
+
+/**
+ * The registry's provider-wide `inputModalities` for a row that still points at that entry's
+ * destination. Runtime-only: callers apply it to a private copy (vision eligibility) or to the
+ * routed provider. Enrichment does not copy it, because init and management writes persist the
+ * enriched object, and a saved copy would follow the row to another URL.
+ */
+export function registryInputModalitiesForDestination(name: string, prov: OcxProviderConfig): string[] | undefined {
+  let entry = PROVIDER_REGISTRY.find(row => row.id === name);
+  if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
+    entry = registryEntryForProviderDestination(prov);
+    // Runtime modality authority follows only the canonical fixed-key destination, not aliases.
+    if (entry && (entry.adapter !== prov.adapter
+      || normalizedProviderEndpoint(entry.baseUrl) !== normalizedProviderEndpoint(prov.baseUrl))) return undefined;
+  }
+  return entry?.inputModalities ? [...entry.inputModalities] : undefined;
 }
 
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
@@ -568,6 +598,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // (mapFill in src/providers/resolved-model-policy-merge.ts), so the wire honored the effort while /v1/models and
   // every client export showed no effort control at all.
   if (resolvedStatic.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(resolvedStatic.modelReasoningEfforts);
+  if (resolvedStatic.modelCapabilities) prov.modelCapabilities = structuredClone(resolvedStatic.modelCapabilities);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
@@ -586,6 +617,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (prov.foldDeveloperRoleToSystem === undefined && seed.foldDeveloperRoleToSystem !== undefined) {
     prov.foldDeveloperRoleToSystem = seed.foldDeveloperRoleToSystem;
+  }
+  if (prov.singleLeadingSystemMessage === undefined && seed.singleLeadingSystemMessage !== undefined) {
+    prov.singleLeadingSystemMessage = seed.singleLeadingSystemMessage;
   }
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.

@@ -41,6 +41,8 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Responses request compatibility
 
+`src/providers/xai-transport.ts` recognizes the exact HTTPS hosts `api.x.ai`, `us.api.x.ai` and `cli-chat-proxy.grok.com` on the standard port as xAI Responses destinations. The Responses passthrough's `stripXaiUnsupportedInclude` removes only the rejected `output.encrypted_content` include entry, omits `include` when nothing remains, and preserves other entries and other destinations. `tests/providers/xai/xai-responses-adjacency.test.ts` covers the global, US regional and non-xAI request bodies; `tests/providers/xai/xai-transport.test.ts` rejects lookalikes, HTTP and nonstandard ports.
+
 ### Reasoning-model sampling parameters
 
 xAI documents that `presencePenalty`, `frequencyPenalty` and `stop` "cannot be used with
@@ -217,7 +219,7 @@ do not alter xAI discovery, model metadata, or transport behavior.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

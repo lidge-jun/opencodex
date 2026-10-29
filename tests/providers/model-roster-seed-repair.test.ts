@@ -72,6 +72,65 @@ function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxCo
 }
 
 describe("stale model roster migration", () => {
+  describe.each(["minimax", "minimax-cn"])("MiniMax destination guard: %s", (provider) => {
+    const savedRow = (baseUrl: string | undefined, models = MINIMAX_MODELS_BEFORE_M31) => ({
+      baseUrl, models: [...models], defaultModel: "MiniMax-M3", liveModels: false,
+      modelContextWindows: { "MiniMax-M3": 123 },
+      modelMaxOutputTokens: { "MiniMax-M3": 456 },
+      modelDefaultReasoningEfforts: { "MiniMax-M3": "low" },
+    });
+
+    test.each([
+      "https://gateway.example/v1",
+      "https://api.minimax.io.gateway.example/v1",
+      "https://api.minimaxi.com.gateway.example/v1",
+      "https://api.minimax.cn.gateway.example/v1",
+      "https://api.minimax.io/other/v1",
+      "https://api.minimaxi.com/other/v1",
+      "https://api.minimax.cn/other/v1",
+      "http://api.minimax.io/v1",
+      "http://api.minimaxi.com/v1",
+      "http://api.minimax.cn/v1",
+      "https://api.minimax.io/anthropic",
+      "https://api.minimaxi.com/anthropic",
+      "https://api.minimax.cn/anthropic",
+    ])("keeps the entire old seed row at %s", (baseUrl) => {
+      const config = minimaxConfig(provider, savedRow(baseUrl));
+      const original = structuredClone(config.providers![provider]!);
+      const result = projectStaleModelRosters(config);
+      expect(result.config.providers![provider]).toEqual(original);
+      expect(result.changed).toBe(false);
+      expect(result.warnings).toEqual([]);
+    });
+
+    test("does not fill a current Custom roster's partial output map", () => {
+      const config = minimaxConfig(provider, savedRow("https://gateway.example/v1", MINIMAX_MODELS));
+      const original = structuredClone(config.providers![provider]!);
+      const result = projectStaleModelRosters(config);
+      expect(result.config.providers![provider]).toEqual(original);
+      expect(result.changed).toBe(false);
+      expect(result.warnings).toEqual([]);
+    });
+
+    test.each([
+      ...["https://api.minimax.io/v1", "https://api.minimaxi.com/v1", "https://api.minimax.cn/v1"]
+        .flatMap(url => [url, `${url}/`, `${url}/chat/completions`, `${url}/chat/completions/`]),
+      undefined, "",
+    ])("refreshes the official or default destination %s", (baseUrl) => {
+      const config = minimaxConfig(provider, savedRow(baseUrl));
+      if (baseUrl === undefined) delete config.providers![provider]!.baseUrl;
+      const result = projectStaleModelRosters(config);
+      const row = result.config.providers![provider]!;
+      expect(result.changed).toBe(true);
+      expect(row.models).toEqual(MINIMAX_MODELS);
+      expect(row.baseUrl).toBe(baseUrl);
+      expect(row.modelContextWindows).toEqual({ "MiniMax-M3": 123, [PREVIEW]: 1_000_000 });
+      expect(row.modelMaxOutputTokens).toEqual({ "MiniMax-M3": 456, [PREVIEW]: 524_288 });
+      expect(row.modelDefaultReasoningEfforts).toEqual({ "MiniMax-M3": "low", [PREVIEW]: "max" });
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+    });
+  });
+
   test("adds Muse Wonder to an untouched saved Meta Model API seed", () => {
     const config = { providers: { "meta-model": {
       adapter: "openai-responses",

@@ -11,7 +11,6 @@ import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaqu
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
-import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
@@ -123,7 +122,10 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
       } else {
         pending.events.push(e);
         pending.closed = true;
-        if (pending.name === WEB_SEARCH_TOOL_NAME) {
+        if (e.incomplete) {
+          hasMalformedToolCall = true;
+          passthrough.push(...pending.events);
+        } else if (pending.name === WEB_SEARCH_TOOL_NAME) {
           calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
         } else {
           passthrough.push(...pending.events);
@@ -309,6 +311,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** Chat delivery only; never copied into parsed generation options. */
+  chatRawReasoningVisible?: boolean;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
@@ -1070,8 +1074,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // text).
           // A refused iteration ends the turn even when it carried a search call: running the
           // search would send the refused context back to the model (#7148).
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall
-            && !split.passthrough.some(isTerminalRefusalIncomplete);
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !split.hasMalformedToolCall
+            && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
+              || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -1209,6 +1214,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),

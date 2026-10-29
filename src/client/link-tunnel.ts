@@ -26,6 +26,7 @@ import type { LinkDiagnosticSink } from "../link/diagnostics";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { clientLinkStatePath, readClientLinkState, type ClientLinkState } from "./link-state";
 import type { LinkTunnelGate, LinkAdmissionResult } from "./link-relay";
+import { nextLinkConnectionGeneration } from "../link/relay-auth";
 
 /**
  * The client-owned `ssh -N -L 127.0.0.1:<tunnelPort>:127.0.0.1:<peerListenerPort> <alias>`
@@ -106,6 +107,8 @@ export interface ClientLinkSupervisor extends LinkTunnelGate {
   /** Stops the tunnel (TERM, up to 5 s, KILL). The runtime calls this before stopping its listener. */
   stop(): Promise<void>;
   status(): ClientLinkSupervisorStatus;
+  /** Changes on every transition into connected, initial or recovery; undefined while not connected. */
+  connectionGeneration(): string | undefined;
 }
 
 /** Read-only status bridge for a client whose persisted sidecar cannot be trusted. */
@@ -601,6 +604,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let adoptedRecord: ClientTunnelPidfile | null = null;
   let tunnelPort: number | null = null;
   let ownerGeneration = 0;
+  /** Minted on every transition into connected from the process-wide sequence (relay-auth.ts). */
+  let connection: string | undefined;
   let state: TunnelState = IDLE;
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
@@ -685,6 +690,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   const setState = (next: TunnelState): void => {
+    if (next.kind === "connected" && state.kind !== "connected") connection = nextLinkConnectionGeneration();
     state = next;
     settleWaiters();
   };
@@ -983,6 +989,10 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       if (tickFlight) await tickFlight;
       await stopTunnel();
       failure = undefined;
+    },
+    connectionGeneration(): string | undefined {
+      if (!started || stopping || failure !== undefined || state.kind !== "connected") return undefined;
+      return connection;
     },
     status(): ClientLinkSupervisorStatus {
       if (failure) return failure;

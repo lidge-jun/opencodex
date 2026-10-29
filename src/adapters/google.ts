@@ -1304,9 +1304,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
+      const appendDecoded = (fragment: string): void => {
+        if (!fragment) return;
+        // TextDecoder emits complete code points, so only new text needs UTF-8 measurement.
+        const nextBytes = bufferBytes + Buffer.byteLength(fragment);
+        const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
+        try {
+          buffer += fragment;
+          reservation.commitRetained();
+        } catch (error) {
+          reservation.release();
+          throw error;
+        }
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        bufferBytes = nextBytes;
+      };
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -1498,13 +1512,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const nextBuffer = buffer + decoder.decode(value, { stream: true });
-          const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
-          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
-          buffer = nextBuffer;
-          appendReservation.commitRetained();
-          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-          bufferBytes = nextBufferBytes;
+          const decoded = decoder.decode(value, { stream: true });
+          appendDecoded(decoded);
           // Cap incomplete frames before waiting for a newline — otherwise a single
           // unterminated data: payload can grow without bound.
           if (buffer.length > MAX_SSE_FRAME_BYTES) {
@@ -1513,9 +1522,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return;
           }
 
+          // The retained suffix contains no newline; an unfinished line needs no rescan.
+          if (!decoded.includes("\n")) continue;
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualBytes = Buffer.byteLength(buffer);
           const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
           residualReservation.commitRetained();
           budget.releaseRetained(bufferBytes, { kind: "live_transient" });
@@ -1536,7 +1547,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           }
           if (sawLiveness && !sawContentEvent) yield { type: "heartbeat" };
         }
-        buffer += decoder.decode();
+        appendDecoded(decoder.decode());
         if (buffer.trim().length > 0) {
           const residual = buffer.trim();
           if (residual.startsWith(":")) {

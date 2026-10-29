@@ -40,6 +40,7 @@ import type { OcxConfig } from "../../src/types";
 import { setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
 import { catalogEntryEfforts } from "../../src/codex/catalog/effort";
 import {
+  loadPersistedCodexRuntime,
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
 } from "../../src/codex/runtime";
@@ -693,6 +694,9 @@ test("retained sync removes a deleted pre-marker custom row while discovery is d
 
 test("retained and convergence writers resolve, clear, reject, and recover auto-review selectors", async () => {
   primeCodexRuntimeFixture();
+  const observedRuntime = loadPersistedCodexRuntime();
+  expect(observedRuntime?.command === process.env.CODEX_CLI_PATH).toBe(true);
+  expect(observedRuntime?.selectedVersion).toBe("0.145.0");
 
   for (const writer of ["retained", "convergence"] as const) {
     const write = async (nextConfig: OcxConfig): Promise<RawCatalog> => {
@@ -703,6 +707,8 @@ test("retained and convergence writers resolve, clear, reject, and recover auto-
         const result = await syncCatalogModels(nextConfig);
         expect(result.catalogWritten).toBe(true);
       } else {
+        // Selector behavior needs the observed persisted runtime, not an incidental 15s process memo.
+        resetCodexRuntimeResolveCacheForTests();
         const disposition = await convergeCatalogDisposition(nextConfig);
         expect(disposition).toMatchObject({ status: "committed" });
       }

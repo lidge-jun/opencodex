@@ -15,6 +15,8 @@ retain their existing behavior.
 
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
+A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).
+
 Final image/video client tool output follows the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), after internal hosted operations and before client delivery or continuation state. Internal media execution retains its existing behavior.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
@@ -136,7 +138,11 @@ For a model explicitly listed in `modelPreferHostedTools`, a non-forward Respons
 to remove colliding client `image_gen` declarations before this normalization and rewrite their
 selectors to hosted `image_generation`, so a provider-reserved hosted tool takes precedence without
 loosening a caller's tool-choice restriction. The opt-in is intentionally model-scoped: the default
-alias path remains safest for ordinary public Responses endpoints.
+alias path remains safest for ordinary public Responses endpoints. Each build records the replaced
+caller identities in `AdapterRequest.hostedToolSubstitutions`, including an empty array when no
+substitution applies. Streaming combo validation consumes the metadata from the actual send under
+the [caller required-tool contract](../transports/responses-combo-boundaries.md#streaming-required-tool-contract),
+so queued rebuilds can add or remove that authority without weakening the caller's requirement.
 
 For OpenAI API virtual `-pro` models, preference lookup checks the selected public ID first and
 uses the resolved base wire-model ID as a fallback. `modelAdapters` resolves the public ID first and
@@ -147,8 +153,10 @@ Client-facing API-key responses perform the inverse mapping: JSON output and SSE
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
 extension. When item-id repair is also enabled, both transforms compose in one SSE parse/stringify
 pass (`src/server/sse-payload-rewrite.ts`) rather than chaining separate JS pull wrappers.
-Inspection and continuation-cache branches keep the raw upstream alias, allowing stored
-replays to return upstream without leaking a client-only namespace shape. The image-gen layer itself
+Ordinary inspection and continuation-cache branches keep the raw upstream alias, allowing stored
+replays to return upstream without leaking a client-only namespace shape. Mandatory combo streams
+share the authorized image restorer across judgment, client delivery and continuation observers;
+the adapter encodes restored calls back to their wire aliases on replay. The image-gen layer itself
 leaves malformed and empty image-gen namespaces untouched, but on a noncanonical route the general
 namespace boundary above runs after it and lowers whatever remains, so no private group reaches the
 wire. ChatGPT forward mode preserves the private namespace and hosted tool because that backend
@@ -193,7 +201,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

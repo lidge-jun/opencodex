@@ -81,6 +81,29 @@ describe("stopProxyGracefully", () => {
     }
   });
 
+  test("not-owned acceptance narrows to callers that opt in, never past a sent deferral", async () => {
+    // A sibling's `not-owned` is a truthful final answer; a Link Child caller refuses it
+    // because an old build says it while preserving the route this stop must restore.
+    // The option only narrows a no-nonce stop — a sent receipt is never confirmed this way.
+    for (const [nonce, accept, expected] of [
+      [undefined, true, true],
+      [undefined, false, "teardown-unconfirmed"],
+      ["receipt-nonce", true, "teardown-unconfirmed"],
+      ["receipt-nonce", false, "teardown-unconfirmed"],
+    ] as const) {
+      const result = await stopProxyGracefully(4242, {
+        readRuntime: () => ({ port: 10199 }),
+        fetchFn: (async () => new Response(JSON.stringify({ success: true, sharedTeardown: "not-owned" }))) as typeof fetch,
+        waitExit: () => true,
+        ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
+        acceptNotOwnedTeardown: accept,
+        exitTimeoutMs: 1,
+        env: {},
+      });
+      expect(result).toBe(expected);
+    }
+  });
+
   test("an unconfirmed response still requires process exit", async () => {
     expect(await stopProxyGracefully(4242, {
       readRuntime: () => ({ port: 10100 }),

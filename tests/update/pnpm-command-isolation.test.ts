@@ -49,7 +49,7 @@ for (const fail of [false,true]) {
           if(args[0]==="list") stdout=JSON.stringify([{path:"/global",dependencies:{ocx_test:{version:versions[Math.min(listCall++,versions.length-1)],path:"/pkg"}}}]);
         }
         return {status,stdout,stderr:"",pid:1,output:[],signal:null};
-      }) as never), verify:()=>({ok:true}),verifyShims:()=>({ok:true}) });
+      }) as never, () => true), verify:()=>({ok:true}),verifyShims:()=>({ok:true}) });
     expect(result.ok).toBe(!fail); expect(spawnCalls).toBeGreaterThan(1);
     expect(mutations).toHaveLength(fail ? 2 : 1);
     for(const cwd of mutations) expect(existsSync(cwd)).toBe(false);

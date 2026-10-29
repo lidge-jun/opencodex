@@ -558,7 +558,7 @@ export async function fetchWithHeaderTimeout(
   _manualRedirect = false,
 ): Promise<Response> {
   const pacing = executor as ProviderFetch;
-  const slot = await pacing.waitForPacing?.(abortSignal);
+  const slot = pacing.waitForPacing ? await pacing.waitForPacing(abortSignal) : undefined;
   const fetchExecutor = pacing.unpacedFetch ?? executor;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -568,6 +568,10 @@ export async function fetchWithHeaderTimeout(
       pause() { if (timer) clearTimeout(timer); timer = undefined; },
       resume() {
         this.pause();
+        // A non-positive budget disables the header deadline: a local upstream (LM Studio, Ollama)
+        // can stay silent for minutes during prompt prefill, so the request is bounded only by the
+        // caller's own abort signal. See resolveConnectTimeoutMs in src/stall-timeout.ts.
+        if (timeoutMs <= 0) return;
         timer = setTimeout(() => {
           if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
         }, timeoutMs);

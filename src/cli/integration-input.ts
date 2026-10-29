@@ -1,5 +1,6 @@
 /** Input shared by integration preview and journal commands; no writer imports. */
 import { CliUsageError, takeOptionWithSyntax } from "./runtime-api";
+import { isExportModelNames, supportsAliasModelNames, type ExportModelNames } from "../clients/config-export/model-names";
 
 export function validateAsideProfile(profile: string | undefined, client: string | undefined, usage: string): void {
   if (profile === undefined) return;
@@ -16,6 +17,17 @@ export function clientIntegrationPath(client: string, profile?: string): string 
 
 export function integrationOption(args: string[], flag: string): string | undefined {
   return takeOptionWithSyntax(args, flag)?.value;
+}
+
+/** Explicit intent only: callers preserve omission instead of inserting a default. */
+export function integrationModelNames(args: string[], client: string | undefined, operation: string, usage: string): ExportModelNames | undefined {
+  const value = integrationOption(args, "--model-names");
+  if (value === undefined) return undefined;
+  if (!isExportModelNames(value)) throw new CliUsageError("--model-names must be alias or routed", usage);
+  if (!supportsAliasModelNames(client ?? "") || !["export", "apply", "overwrite"].includes(operation)) {
+    throw new CliUsageError("--model-names requires Hermes or Command Code export, enable, or apply/overwrite preview", usage);
+  }
+  return value;
 }
 
 export function integrationFlag(args: string[], flag: string): boolean {

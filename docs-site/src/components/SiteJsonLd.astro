@@ -22,14 +22,14 @@ const homeUrl = locale ? `${SITE_URL}/${locale}/` : `${SITE_URL}/`;
 const inLanguage = locale ? langs[locale] : 'en';
 
 const descriptions = {
-	en: 'Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.',
-	fr: 'Proxy universel de fournisseurs pour OpenAI Codex et Claude Code — utilisez n’importe quel LLM avec Codex CLI, App, SDK et Claude Code.',
-	ko: 'OpenAI Codex & Claude Code를 위한 범용 프로바이더 프록시 — Codex CLI, App, SDK와 Claude Code에서 어떤 LLM이든 사용하세요.',
-	'zh-CN': '面向 OpenAI Codex 与 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',
-	'zh-TW': '適用於 OpenAI Codex 與 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',
-	ru: 'Универсальный прокси провайдеров для OpenAI Codex и Claude Code — используйте любую LLM с Codex CLI, App, SDK и Claude Code.',
-	ja: 'OpenAI Codex & Claude Code 向けの汎用プロバイダープロキシ — Codex CLI、App、SDK と Claude Code で任意の LLM を使えます。',
-	tr: 'OpenAI Codex ve Claude Code için evrensel sağlayıcı proxy’si — Codex CLI, App, SDK ve Claude Code ile dilediğiniz LLM’i kullanın.',
+	en: 'One local gateway for your AI coding tools and models: use the providers you choose with Codex, Claude Code, Claude Desktop and Grok Build, and connect more tools through managed configs.',
+	fr: 'Une passerelle locale unique pour vos outils de code IA et vos modèles : utilisez les fournisseurs de votre choix avec Codex, Claude Code, Claude Desktop et Grok Build, et connectez d’autres outils via des configurations gérées.',
+	ko: 'AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨이: Codex, Claude Code, Claude Desktop, Grok Build에서 원하는 프로바이더를 쓰고, 관리형 설정으로 더 많은 도구를 연결하세요.',
+	'zh-CN': '一个本地网关，连接你的 AI 编程工具与模型：在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用你选择的提供商，并通过托管配置连接更多工具。',
+	'zh-TW': '一個本機閘道，連接你的 AI 程式開發工具與模型：在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用你選擇的供應商，並透過代管設定連接更多工具。',
+	ru: 'Единый локальный шлюз для ваших ИИ-инструментов для кода и моделей: используйте выбранных провайдеров в Codex, Claude Code, Claude Desktop и Grok Build и подключайте другие инструменты через управляемые конфигурации.',
+	ja: 'AI コーディングツールとモデルをつなぐ 1 つのローカルゲートウェイ。Codex、Claude Code、Claude Desktop、Grok Build で好きなプロバイダーを使い、管理された設定でほかのツールも接続できます。',
+	tr: 'Yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçidi: Codex, Claude Code, Claude Desktop ve Grok Build ile seçtiğiniz sağlayıcıları kullanın, diğer araçları yönetilen yapılandırmalarla bağlayın.',
 } as const;
 
 type GraphNode = Record<string, unknown>;
@@ -59,14 +59,15 @@ if (!locale) {
 		name: 'opencodex',
 		alternateName: 'ocx',
 		description:
-			'Local LLM proxy that lets OpenAI Codex (CLI, App, SDK) and Claude Code run on any model — Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, Ollama, OpenRouter, and more — with streaming, tool calls, reasoning tokens, and images working in both directions.',
+			'Local gateway that connects AI coding tools — OpenAI Codex (CLI, App, SDK), Claude Code, Claude Desktop, Grok Build and tools with managed configs — to the model providers you choose: Claude, Gemini, Grok, DeepSeek, Kimi, Qwen, Ollama, OpenRouter, and more, with streaming, tool calls, reasoning tokens, and images where the client, model and provider support them.',
 		keywords:
-			'codex, claude code, openai codex proxy, claude code proxy, llm proxy, ai gateway, anthropic, gemini, grok, deepseek, ollama, openrouter, responses api, codex cli',
+			'codex, claude code, claude desktop, grok build, ai coding tools gateway, openai codex proxy, claude code proxy, llm proxy, ai gateway, anthropic, gemini, grok, deepseek, ollama, openrouter, responses api, codex cli',
 		featureList: [
-			'Run Codex CLI/App/SDK on any LLM provider',
-			'Run Claude Code on any LLM via the Anthropic Messages API',
+			'Connect Codex CLI/App/SDK, Claude Code, Claude Desktop and Grok Build to the providers you choose',
+			'Managed config integrations for OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code and more',
+			'Accepts the Responses, Chat Completions and Anthropic Messages APIs',
 			'ChatGPT account pool with quota-aware routing',
-			'Streaming, tool calls, reasoning tokens, and vision in both directions',
+			'Streaming, tool calls, reasoning tokens, and vision where the client, model and provider support them',
 			'Web dashboard on localhost:10100',
 		],
 		applicationCategory: 'DeveloperApplication',

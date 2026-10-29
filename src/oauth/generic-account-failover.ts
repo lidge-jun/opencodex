@@ -309,7 +309,7 @@ export function antigravitySelectedAccountUnlistedMessage(model: string): string
  *
  * `plannedAccountId` is the account the request would otherwise be sent with. It is kept unless
  * its own fresh roster omits the model: absence of a roster is unknown, never a denial, because
- * rosters live in memory, are refreshed only for the account active during discovery, and expire
+ * rosters live in memory, are refreshed for usable accounts during discovery, and expire
  * after six hours, so a restart must not take every account out of service.
  *
  * A planned account with a proven omission is replaced by a usable sibling (not paused, not
@@ -338,8 +338,34 @@ export function routeAntigravityModel(
   }
   const ready = new Set(eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, model)));
   const rank = (id: string) => (ready.has(id) ? 0 : 2) + (accountListsModel(providerName, id, model) === true ? 0 : 1);
-  const best = serving.reduce((left, right) => rank(right) < rank(left) ? right : left);
+  const tier = Math.min(...serving.map(rank));
+  const best = rankAntigravityModelAccounts(config, serving.filter(id => rank(id) === tier), model, now)[0]!;
   return { kind: "reroute", accountId: best };
+}
+
+/** Strategy is applied only after readiness and model-support precedence. */
+function rankAntigravityModelAccounts(config: OcxConfig, ids: string[], model: string, now: number): string[] {
+  const provider = "google-antigravity";
+  const rows = new Map((getAccountSet(provider)?.accounts ?? []).map(row => [row.id, row]));
+  const strategy = activeGenericStrategy(config, provider);
+  if (strategy === "round-robin") {
+    const best = peekRoundRobinAccount(genericPoolKey(provider), ids, genericStickyLimit(config, provider));
+    return best ? [best, ...ids.filter(id => id !== best)] : ids;
+  }
+  if (strategy === "fill-first") return stableGenericRoster(provider).filter(id => ids.includes(id));
+  if (strategy === "reset-first") return rankAccountsByResetFirst(provider, ids, model, now, rows);
+  return rankAccountsByHeadroom(provider, ids, model, rows);
+}
+
+/** Reactive model refusal never changes cooldown or account-wide authentication state. */
+export function rotateAntigravityAccountOnModelNotFound(
+  config: OcxConfig, failedAccountId: string, model: string, attempted: ReadonlySet<string>, now = Date.now(),
+): string | null {
+  const candidates = preferKiroModelSupport("google-antigravity",
+    eligibleFailoverAccounts("google-antigravity", now, classifyModelFamilyForQuota("google-antigravity", model))
+      .filter(id => id !== failedAccountId && !attempted.has(id)), model, config);
+  const positive = candidates.filter(id => accountListsModel("google-antigravity", id, model) === true);
+  return rankAntigravityModelAccounts(config, positive.length ? positive : candidates, model, now)[0] ?? null;
 }
 
 /**
@@ -425,6 +451,7 @@ export function rotateAntigravityAccountOnAuthRefusal(
       cooldownSource: "auth",
       identity: sentGeneration,
     });
+    presence.delete("google-antigravity");
     sweepExpiredOnWrite(now);
   }
   const eligible = new Set(preferKiroModelSupport("google-antigravity",
@@ -757,6 +784,10 @@ export function preferredInitialAccount(
   const activeLacks = (providerName === "kiro" || providerName === "google-antigravity")
     && !!active && !!requestedModelId
     && accountListsModel(providerName, active, requestedModelId) === false;
+  if (providerName === "google-antigravity" && activeLacks) {
+    const route = routeAntigravityModel(config, providerName, active, requestedModelId, now);
+    return route.kind === "reroute" ? route.accountId : null;
+  }
   const listingSibling = activeLacks
     ? modelEligible.find(id => id !== active && (providerName === "kiro"
       ? kiroModelListingHasRoom(config, id, requestedModelId!)

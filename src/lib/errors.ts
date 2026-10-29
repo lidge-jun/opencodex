@@ -500,8 +500,10 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("insufficient_quota") ||
     text.includes("exceeded your current quota") ||
     text.includes("quota exhausted") ||
+    text.includes("quota has been exhausted") ||
     text.includes("account quota exceeded") ||
     text.includes("monthly quota exceeded") ||
+    text.includes("weekly quota exceeded") ||
     text.includes("daily quota exceeded")
   ) {
     return { message, type: "insufficient_quota", code: "insufficient_quota" };
