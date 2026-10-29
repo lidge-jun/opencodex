@@ -105,9 +105,9 @@ describe("CC-Switch keyless provider import", () => {
   test("SQLite preview and apply strip TOML comments, drop free-text names, keep source read-only, and never materialize secrets", async () => {
     const codexToml = [
       `model = "gpt-5.6-sol" # inline_comment_token = "${CANARY_SECRET}" and ${PREFIXLESS_HEX_SECRET}`,
-      `model_provider = "acme.quoted" # ${PREFIXLESS_MIXED_SECRET}`,
+      `model_provider = "acme.\\u0071uoted" # ${PREFIXLESS_MIXED_SECRET}`,
       `experimental_bearer_token = "${CANARY_SECRET}"`,
-      `[ model_providers . "acme.quoted" ] # header_secret = "${CANARY_SECRET}"`,
+      `[ model_providers . "acme.\\u0071uoted" ] # header_secret = "${CANARY_SECRET}"`,
       `base_url = "https://codex.acme.example/v1" # experimental_bearer_token = "${CANARY_SECRET}" ${PREFIXLESS_HEX_SECRET}`,
       `wire_api = "responses" # ${CANARY_SECRET}`,
       `api_key = "${CANARY_SECRET}"`,

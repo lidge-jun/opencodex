@@ -1024,7 +1024,7 @@ WITH RECURSIVE
       sec,
       line,
       instr(line, ']') AS close_b,
-      trim(trim(substr(ltrim(substr(trim(substr(line, 2, instr(line, ']') - 2)), 16)), 2)), ' ''' || char(34)) AS hdr_id,
+      trim(substr(ltrim(substr(trim(substr(line, 2, instr(line, ']') - 2)), 16)), 2)) AS hdr_seg,
       trim(trim(substr(line, 1, instr(line, '=') - 1)), ' ''' || char(34)) AS norm_key,
       ltrim(substr(line, instr(line, '=') + 1)) AS rhs
     FROM lines
@@ -1036,7 +1036,7 @@ WITH RECURSIVE
       sec,
       line,
       close_b,
-      hdr_id,
+      hdr_seg,
       norm_key,
       rhs,
       CASE
@@ -1055,11 +1055,11 @@ WITH RECURSIVE
       sec,
       line,
       close_b,
-      hdr_id,
+      hdr_seg,
       norm_key,
       rhs,
       end_q,
-      substr(rhs, 2, end_q - 1) AS val_body,
+      substr(rhs, 1, end_q + 1) AS rhs_tok,
       ltrim(substr(rhs, end_q + 2)) AS tail
     FROM quoted_lines
   ),
@@ -1073,9 +1073,9 @@ WITH RECURSIVE
           CASE
             WHEN sec = 'mp' AND close_b > 0 AND (ltrim(substr(line, close_b + 1)) = '' OR substr(ltrim(substr(line, close_b + 1)), 1, 1) = '#') THEN
               CASE
-                WHEN ${sqlSafeScalar("hdr_id", "id")} = '${SECRET_REFUSED_SENTINEL}'
-                  THEN '[${SECRET_REFUSED_SENTINEL}]'
-                ELSE substr(line, 1, close_b)
+                WHEN ocx_is_safe_toml_token(CAST(hdr_seg AS BLOB), 'id', 1) = 1
+                  THEN substr(line, 1, close_b)
+                ELSE '[${SECRET_REFUSED_SENTINEL}]'
               END
             WHEN close_b > 0 AND (ltrim(substr(line, close_b + 1)) = '' OR substr(ltrim(substr(line, close_b + 1)), 1, 1) = '#') THEN '[other]'
             ELSE '[__MALFORMED_LINE__]'
@@ -1085,19 +1085,25 @@ WITH RECURSIVE
           OR (sec = 'mp' AND norm_key IN ('base_url', 'wire_api')) THEN
           CASE
             WHEN end_q = 0 OR (tail != '' AND substr(tail, 1, 1) != '#') THEN '[__MALFORMED_LINE__]'
-            WHEN norm_key = 'model' THEN 'model = "' || ${sqlSafeScalar("val_body", "model")} || '"'
-            WHEN norm_key IN ('base_url', 'openai_base_url') THEN norm_key || ' = "' || ${sqlSafeScalar("val_body", "url")} || '"'
+            WHEN norm_key = 'model' THEN
+              CASE
+                WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'model', 0) = 1 THEN 'model = ' || rhs_tok
+                ELSE 'model = "${SECRET_REFUSED_SENTINEL}"'
+              END
+            WHEN norm_key IN ('base_url', 'openai_base_url') THEN
+              CASE
+                WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'url', 0) = 1 THEN norm_key || ' = ' || rhs_tok
+                ELSE norm_key || ' = "${SECRET_REFUSED_SENTINEL}"'
+              END
             WHEN norm_key = 'model_provider' THEN
               CASE
-                WHEN ${sqlSafeScalar("val_body", "id")} = '${SECRET_REFUSED_SENTINEL}'
-                  THEN 'model_provider = "${SECRET_REFUSED_SENTINEL}"'
-                ELSE 'model_provider = ' || substr(rhs, 1, end_q + 1)
+                WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'id', 0) = 1 THEN 'model_provider = ' || rhs_tok
+                ELSE 'model_provider = "${SECRET_REFUSED_SENTINEL}"'
               END
             WHEN norm_key = 'wire_api' THEN
               CASE
-                WHEN ${sqlSafeScalar("val_body", "wire")} = '${SECRET_REFUSED_SENTINEL}'
-                  THEN 'wire_api = "${SECRET_REFUSED_SENTINEL}"'
-                ELSE 'wire_api = "' || val_body || '"'
+                WHEN ocx_is_safe_toml_token(CAST(rhs_tok AS BLOB), 'wire', 0) = 1 THEN 'wire_api = ' || rhs_tok
+                ELSE 'wire_api = "${SECRET_REFUSED_SENTINEL}"'
               END
             ELSE 'ignored_key = "omitted"'
           END
@@ -1150,6 +1156,24 @@ function readSqliteRowsFromBytes(sqliteBytes: Uint8Array): RawExtractedRow[] {
       try {
         return isAllowedMetadataBytes(val, kind as MetadataFieldKind) ? 1 : 0;
       } finally {
+        val.fill(0);
+      }
+    });
+    db.function("ocx_is_safe_toml_token", (val: unknown, kind: unknown, allowBare: unknown) => {
+      if (!(val instanceof Uint8Array) || typeof kind !== "string" || val.length === 0) return 0;
+      let unescaped: Uint8Array | null = null;
+      try {
+        const q = val[0]!;
+        if (q === 0x22 || q === 0x27) {
+          if (val.length < 2 || val[val.length - 1] !== q) return 0;
+          unescaped = unescapeTomlStringBytes(val.subarray(1, val.length - 1), q);
+          if (!unescaped || unescaped.length === 0) return 0;
+          return isAllowedMetadataBytes(unescaped, kind as MetadataFieldKind) ? 1 : 0;
+        }
+        if (!allowBare) return 0;
+        return isAllowedMetadataBytes(val, kind as MetadataFieldKind) ? 1 : 0;
+      } finally {
+        unescaped?.fill(0);
         val.fill(0);
       }
     });
