@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 49.
+Declared capabilities: 50.
 
 ### `ocx models price`
 
@@ -358,6 +358,28 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Without a mutation flag this reads only. --clear sends models:[], not a model named -.
 - Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged.
+
+### `ocx provider import-cc-switch`
+
+Usage: `ocx provider import-cc-switch [--source <cc-switch.db|config.json>] [--provider <id>]... [--apply | --restore] [--allow-private-network] [--json]`
+
+Preview, apply, or restore keyless CC-Switch provider entries locally.
+
+State-changing: yes. JSON mode: `payload`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--source` | string | CC-Switch SQLite database or legacy JSON file; required for preview and apply. |
+| `--provider` | string | Repeatable source ID or target provider name filter. |
+| `--apply` | boolean | Write eligible keyless provider entries and record a rollback journal; requires a stopped proxy. |
+| `--restore` | boolean | Remove unedited keyless providers recorded by the active import journal; requires a stopped proxy. |
+| `--allow-private-network` | boolean | Permit loopback or private-network provider base URLs. |
+| `--json` | boolean | Emit the preview, apply, or restore report as JSON. |
+
+- Reads only provider IDs, names, app types, base URLs, wire dialects and default models; API keys and tokens in CC-Switch are never read, decoded, or written.
+- Source files remain read-only. Apply refuses when an active import journal exists; restore retains any provider that was edited, given credentials, selected as default, or referenced in routing.
 
 ### `ocx models list`
 

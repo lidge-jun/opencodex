@@ -80,6 +80,13 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     details: ["Without a mutation flag this reads only. --clear sends models:[], not a model named -.", "Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged."],
   },
   {
+    command: ["provider", "import-cc-switch"], summary: "Preview, apply, or restore keyless CC-Switch provider entries locally.",
+    usage: "ocx provider import-cc-switch [--source <cc-switch.db|config.json>] [--provider <id>]... [--apply | --restore] [--allow-private-network] [--json]",
+    routes: [], mutates: true, json: "payload",
+    flags: [{ name: "--source", value: "string", summary: "CC-Switch SQLite database or legacy JSON file; required for preview and apply." }, { name: "--provider", value: "string", summary: "Repeatable source ID or target provider name filter." }, { name: "--apply", value: "boolean", summary: "Write eligible keyless provider entries and record a rollback journal; requires a stopped proxy." }, { name: "--restore", value: "boolean", summary: "Remove unedited keyless providers recorded by the active import journal; requires a stopped proxy." }, { name: "--allow-private-network", value: "boolean", summary: "Permit loopback or private-network provider base URLs." }, { name: "--json", value: "boolean", summary: "Emit the preview, apply, or restore report as JSON." }],
+    details: ["Reads only provider IDs, names, app types, base URLs, wire dialects and default models; API keys and tokens in CC-Switch are never read, decoded, or written.", "Source files remain read-only. Apply refuses when an active import journal exists; restore retains any provider that was edited, given credentials, selected as default, or referenced in routing."],
+  },
+  {
     command: ["models", "list"], summary: "List static configured models locally.",
     usage: "ocx models list [--provider <name>] [--json]", routes: [], mutates: false, json: "envelope",
     flags: [{ name: "--provider", value: "string", summary: "Limit to a configured provider." }, { name: "--json", value: "boolean", summary: "Emit models and the static-catalog note." }],
