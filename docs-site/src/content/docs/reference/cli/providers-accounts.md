@@ -228,6 +228,9 @@ ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
 ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
 ocx start
 printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Separate rollback path (stop the proxy first; removes unedited keyless entries only):
+ocx stop
 ocx provider import-cc-switch --restore
 ```
 
@@ -235,7 +238,7 @@ ocx provider import-cc-switch --restore
 
 - **Preview (default):** requires `--source <FILE>`, writes nothing, and reports discovered, eligible, conflicting, and invalid entries.
 - **Apply (`--apply`):** requires a stopped proxy (`ocx stop`) and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Even without a prior preview, `--apply` prints every imported provider ID, default model, and destination URL before writing keyless provider entries and recording a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json`; a second apply is refused while an active journal exists. Verify the printed entries, start the proxy (`ocx start`), and add credentials with `printf '%s\n' "$KEY" | ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
-- **Restore (`--restore`):** requires a stopped proxy and takes no `--source`. It inspects `auth.json` read-only at the byte level (failing closed if unreadable or malformed) and removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
+- **Restore (`--restore`):** separate rollback path (not a continuation of adding credentials) that requires a stopped proxy (`ocx stop`) and takes no `--source`. It inspects `auth.json` read-only at the byte level (failing closed if unreadable or malformed) and removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
 
 ## Authentication
 
