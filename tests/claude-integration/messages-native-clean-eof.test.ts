@@ -49,10 +49,11 @@ async function tap(raw: string | readonly string[], eofTolerant = false) {
 }
 
 // Expected verdict for each clean-EOF shape: "ok" = bytes relayed unchanged and a 200 terminal;
+// "upstream-error" = unchanged upstream error bytes and their failed status, without a synthetic frame.
 // "fail" = an Anthropic error event after the relayed bytes and a failed 502 row.
-const CASES: Array<[string, string, boolean, "ok" | "fail"]> = [
+const CASES: Array<[string, string, boolean, "ok" | "upstream-error" | "fail"]> = [
   ["complete turn", partial + blockStop + md("end_turn") + stop, false, "ok"],
-  ["upstream error event", partial + ev("error", { type: "error", error: { type: "overloaded_error", message: "busy" } }), false, "ok"],
+  ["upstream error event", partial + ev("error", { type: "error", error: { type: "overloaded_error", message: "busy" } }), false, "upstream-error"],
   ["partial content", partial, false, "fail"],
   ["partial content with CRLF", partial.replace(/\n/g, "\r\n"), false, "fail"],
   ["delivered end_turn without message_stop", partial + blockStop + md("end_turn"), false, "ok"],
@@ -97,6 +98,12 @@ describe("clean upstream EOF in the native Messages stream tap", () => {
       if (verdict === "ok") {
         expect(text).toBe(raw);
         expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+        return;
+      }
+      if (verdict === "upstream-error") {
+        expect(text).toBe(raw);
+        expect(calls).toEqual([{ status: 503, terminalStatus: "failed", closeReason: "terminal" }]);
+        expect(logCtx.upstreamError).toBe("Provider stream failed (503)");
         return;
       }
       expect(text.startsWith(raw)).toBe(true);

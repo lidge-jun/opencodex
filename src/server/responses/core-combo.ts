@@ -400,7 +400,7 @@ export async function executeComboResponses(
   // internal request carries the caller's captured scope on options.admissionScope even though
   // its own admission is the host's broad key; recomputing from options.admission would lose it.
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
-  // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
+  // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
     source: options.protocolSource,
@@ -1207,7 +1207,7 @@ export async function executeComboResponses(
 
     // A native Chat child reports a pre-stream failure by status before any byte, so its body
     // is never peeked; a non-OK one takes the ordinary failure path below.
-    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) === undefined) {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
@@ -1413,10 +1413,10 @@ export async function executeComboResponses(
       contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
         failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
     }
-    // A bare status made a revoked credential read as a provider outage. Log only the parsed
-    // code and message, never the raw envelope, as one redacted, bounded line.
+    // Native Messages failures can echo client content; their hop warning uses only status.
+    // Other wires retain their parsed, redacted and bounded code/message diagnostic.
     const failureReason = sanitizeLogMetadataString(
-      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
+      redactSecretString(options.protocolSource?.inbound === "messages" ? `Provider error ${response.status}` : [failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
       200,
     );
     console.warn(

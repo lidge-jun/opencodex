@@ -89,7 +89,9 @@ physical send back through `onSendsConsumed`; that is what `countedExternally: t
 reporter's first send settles only its named pending permit instead of adding a second charge.
 `transientSendReporter` captures that permit before entering a helper; a later handoff cannot
 replace it. `reportDispatchSends` verifies shared-ledger ownership and consumes one receipt only.
-Native Chat combo children carry the same exact permit to their physical-send boundary.
+Native Chat and Messages combo children carry the same exact permit to their physical-send boundary.
+Native Messages inherits the per-target budget and opens no second tracker; enforced starts use
+the shared reporter, and observe-only starts confirm the exact permit at the final HTTP receipt.
 Reset-only generic combo helpers report their named prepaid receipt too, without changing
 the selected retry cap; compaction reconciliation therefore does not count that source again.
 Without enforced spend, numeric `used` updates and unnamed, foreign, released or already-reported permits charge

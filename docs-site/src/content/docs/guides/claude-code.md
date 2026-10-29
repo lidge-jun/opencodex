@@ -144,6 +144,7 @@ thinking fallback. Adaptive thinking without an explicit effort stays blank. The
 request controls; they do not confirm what effort the upstream applied or change the wire body.
 
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
+and canonical Anthropic children of strict failover combos without a default effort
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
 `anthropicAccountPool.nativeMessages` (default true). Turning it off selects the legacy bridge

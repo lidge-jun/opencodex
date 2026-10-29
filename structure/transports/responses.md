@@ -568,8 +568,8 @@ in the Chat shape, blocked trace) with no send. `n > 1` is never emulated with s
 inferences. Policy routes resolve one candidate in `routeModel` and never reach this loop, so they
 are not migrated. `tests/responses/chat-native-combo.test.ts` pins the source body, failover
 within the shared budget, no resend after output, the switch-off path and both reject outcomes.
-Managed native Messages ([Protocol Paths](../data-planes/protocol-paths.md#managed-native-messages))
-reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 key-rotation loop.
+Managed native Messages uses the same seam and shared executor for [eligible canonical failover children](../data-planes/protocol-paths.md#managed-native-messages), with the combo's existing attempt, budget/permit and gated final-row callbacks.
+Messages successes are marked `messages`, bypass Responses inspection/translation and use their own [bounded preflight](responses-combo-boundaries.md); standalone ingress keeps its own attempt/final row.
 
 ## Adapter-to-Responses bridge
 

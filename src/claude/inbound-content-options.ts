@@ -93,6 +93,12 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+/** A declared tool the translated body drops and no out-of-body lane carries (bash_*, text_editor_*, ...). */
+export function hasNativeOnlyTool(raw: Rec): boolean {
+  return Array.isArray(raw.tools)
+    && raw.tools.some(tool => !toolsToResponses([tool]) && !declaredAnthropicServerTools({ tools: [tool] }));
+}
+
 /** Validate original call/result order without inventing inputs or pairing a later call backwards. */
 function replayableServerRun(run: readonly Rec[]): boolean {
   const pending = new Map<string, Rec>();

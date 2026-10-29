@@ -129,10 +129,20 @@ Plain admission leases without controller binding do not register or unregister 
 Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
 also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` include only parsed upstream code/message,
-redacted before whitespace flattening and bounded to 200 characters; unparsed bodies stay out.
+redacted before whitespace flattening and bounded to 200 characters; native Messages source warnings use only status, and unparsed bodies stay out.
 `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
+
+A native Messages child uses `src/server/messages-native-preflight.ts` after the native log tap,
+so the tap retains byte-stall/size/cancellation ownership. Its bounded prelude accepts only an
+empty-content `message_start` and `ping` as replayable. As in the native tap, the last untrimmed SSE event name must match the payload type (or be absent); a mismatch commits conservatively. A structured retryable `error` before
+any other event returns to the ordinary combo failure classifier; any content block (including
+a tool start), unknown/malformed payload, terminal or byte/chunk cap commits conservatively.
+Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable.
+Preflight retention is charged to the translator budget and released on delivery/cancellation.
+Native plans enforce the captured caller model scope, including internal calls with broad host admission. The same native executor binds the accepted stream to the parent's held lease, carries observed
+usage on cancellation, and reports terminal errors without treating them as successful rows.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
