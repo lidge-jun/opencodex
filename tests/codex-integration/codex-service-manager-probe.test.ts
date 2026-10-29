@@ -30,16 +30,24 @@ let previousCodexHome: string | undefined;
 let previousOpencodexHome: string | undefined;
 let trustedSystem32 = "";
 
+/** A minimal ioreg -a Root reply: the console-user array sits at 0.IOConsoleUsers. */
+const IOREG_ROOT_PLIST = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array><dict><key>IOConsoleUsers</key><array/></dict></array></plist>';
+const PLUTIL_EXTRACT_ARGS = ["-extract", "0.IOConsoleUsers", "json", "-o", "-", "-"];
+
 /** Records exactly what production asked for, so the allowlist is observed. */
 function recorder(reply: (file: string, args: readonly string[]) => Partial<ReturnType<ProbeRunner>>, sessions?: string) {
   const calls: { file: string; args: readonly string[]; input?: string }[] = [];
   const run: ProbeRunner = (file, args, options) => {
     calls.push({ file, args, input: options?.input });
     if (sessions !== undefined && file === "/usr/sbin/ioreg") {
-      return { status: 0, stdout: "<plist/>", stderr: "", timedOut: false, spawnFailed: false };
+      return { status: 0, stdout: IOREG_ROOT_PLIST, stderr: "", timedOut: false, spawnFailed: false };
     }
     if (sessions !== undefined && file === "/usr/bin/plutil") {
-      return { status: 0, stdout: sessions, stderr: "", timedOut: false, spawnFailed: false };
+      // Answer only the extraction production performs on the ioreg reply; anything else fails.
+      const extracts = JSON.stringify(args) === JSON.stringify(PLUTIL_EXTRACT_ARGS) && options?.input === IOREG_ROOT_PLIST;
+      return extracts
+        ? { status: 0, stdout: sessions, stderr: "", timedOut: false, spawnFailed: false }
+        : { status: 1, stdout: "", stderr: "Could not extract value", timedOut: false, spawnFailed: false };
     }
     return { status: 0, stdout: "", stderr: "", timedOut: false, spawnFailed: false, ...reply(file, args) };
   };
@@ -271,7 +279,7 @@ describe("could not ask is not an answer", () => {
     expect(result).toEqual({ kind: "absent" });
     expect(calls.filter(c => c.file !== "/bin/launchctl")).toEqual([
       { file: "/usr/sbin/ioreg", args: ["-a", "-r", "-d", "1", "-n", "Root"], input: undefined },
-      { file: "/usr/bin/plutil", args: ["-extract", "0.IOConsoleUsers", "json", "-o", "-", "-"], input: "<plist/>" },
+      { file: "/usr/bin/plutil", args: PLUTIL_EXTRACT_ARGS, input: IOREG_ROOT_PLIST },
     ]);
   });
 
