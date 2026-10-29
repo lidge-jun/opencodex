@@ -1330,6 +1330,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // only (no Responses or Anthropic Messages), so every inbound stays on Chat. Context windows and
     // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
     // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
+    // deepseek-v4-1-flash takes reasoning_effort none, low, high and max, and an omitted effort runs
+    // at high (https://cheapaimodel.ai/blog/deepseek-v4-1-flash-reasoning-effort), so it keeps the
+    // DeepSeek Flash ladder and sends an explicit none instead of dropping it.
     // The env reference derived from the id is ${CHEAPAIMODEL_API_KEY}.
     id: "cheapaimodel",
     label: "cheapaimodel",
@@ -1350,6 +1353,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     },
     noTemperatureModels: ["kimi-k3"],
     noTopPModels: ["kimi-k3"],
+    modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
+    modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
     note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
