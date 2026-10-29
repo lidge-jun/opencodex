@@ -340,7 +340,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI answers 400 for `output.encrypted_content` in `include` instead of ignoring it;
         // Codex Desktop asks for it on every turn (#7878).
-        if (isXaiResponsesDestination(provider)) {
+        // Azure also rejects this exact include entry, including on plain Responses routes.
+        const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
+          || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
+        if (isXaiResponsesDestination(provider) || isAzureResponses) {
           outBody = stripXaiUnsupportedInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search

@@ -21,7 +21,9 @@ const XAI_UNSUPPORTED_RESPONSES_INCLUDE = new Set(["output.encrypted_content"]);
  * "output.encrypted_content" in "include" field`). Codex Desktop always asks for the
  * OpenAI reasoning blob, so without this every xai/grok-4.7 turn sent through the
  * Responses path fails, while the same model works on the openai-chat adapter.
- * Copy on write; other destinations and other include entries are untouched.
+ * Azure also rejects this exact entry with invalid_value on include.
+ * The caller limits this shared normalization to xAI and Azure destinations.
+ * Copy on write; other include entries and the caller-owned body are untouched.
  */
 export function stripXaiUnsupportedInclude(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.include)) return body;
