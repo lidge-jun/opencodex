@@ -60,7 +60,20 @@ ocx models live --provider ark --json
 
 ### 키 없는 CC-Switch 프로바이더 가져오기
 
-`ocx provider import-cc-switch`는 명시적으로 허용된 비비밀 메타데이터 필드(프로바이더 ID, 앱 유형, 기본 URL, 프로토콜 어댑터, 기본 모델)만 읽으며 비밀 필드, 자유 텍스트 이름, TOML 주석은 결코 읽지 않습니다. 로컬 CC-Switch SQLite(`~/.cc-switch/cc-switch.db`)나 JSON 파일은 임시 파일 없이 메모리에서 읽기 전용으로 열리며, 비어 있지 않은 `-wal` 파일이 있으면 거부하므로 먼저 CC-Switch를 종료한 뒤 다시 시도하세요. 좁은 소문자 API 경로 문법(`[a-z0-9._-]`, 예: `/v1`, `/api/v1`, `/compatible-mode/v1`)과 구문 검사는 입력값을 에코하지 않는 심층 방어로 동작하며 임시 바이트 버퍼는 `finally`에서 0으로 지워집니다. 신뢰할 수 있는 로컬 소스만 사용하고, 사전 미리보기 없이 실행하더라도 `--apply`가 파일 기록 전에 출력하는 모든 ID·모델·대상 URL을 확인하세요. 기본 미리보기(`--source <FILE>`)는 아무것도 쓰지 않으며, `--apply`와 `--restore`는 프록시가 멈춘 상태(`ocx stop`)여야 합니다. `--provider <id>`로 대상을 고르고 로컬/사설 주소에는 `--allow-private-network`를 추가해 적용한 뒤, 프록시를 시작(`ocx start`)하고 파이프 표준 입력(`printf '%s\n' "$KEY" | ocx account add-key <provider>`)으로 키를 등록하세요. 별도의 롤백 경로로 되돌리려면 먼저 프록시를 멈춘 뒤(`ocx stop`) `ocx provider import-cc-switch --restore`를 실행하세요: `auth.json`을 바이트 수준에서 읽기 전용으로 검사(읽을 수 없거나 형식이 잘못되면 안전하게 보류)하며 수정되지 않았고 라우팅이나 OAuth 계정에서도 참조되지 않은 항목만 제거합니다.
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 다른 터미널에서 프록시를 시작(또는 ocx ensure 실행)한 뒤 키를 등록:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# 별도의 롤백 경로(먼저 프록시를 중지; 수정되지 않은 키 없는 항목만 제거):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch`는 명시적으로 허용된 비비밀 메타데이터 필드(프로바이더 ID, 앱 유형, 기본 URL, 프로토콜 어댑터, 기본 모델)만 읽으며 비밀 필드, 자유 텍스트 이름, TOML 주석은 결코 읽지 않습니다. 로컬 CC-Switch SQLite(`~/.cc-switch/cc-switch.db`)나 JSON 파일은 임시 파일 없이 메모리에서 읽기 전용으로 열리며, 비어 있지 않은 `-wal` 파일이 있으면 거부하므로 먼저 CC-Switch를 종료한 뒤 다시 시도하세요. 좁은 소문자 API 경로 문법(`[a-z0-9._-]`, 예: `/v1`, `/api/v1`, `/compatible-mode/v1`)과 구문 검사는 입력값을 에코하지 않는 심층 방어로 동작하며 임시 바이트 버퍼는 `finally`에서 0으로 지워집니다. 신뢰할 수 있는 로컬 소스만 사용하고, 사전 미리보기 없이 실행하더라도 `--apply`가 파일 기록 전에 출력하는 모든 ID·모델·대상 URL을 확인하세요. 기본 미리보기(`--source <FILE>`)는 아무것도 쓰지 않으며, `--apply`와 `--restore`는 프록시가 멈춘 상태(`ocx stop`)여야 합니다. 프록시를 멈춘 뒤(`ocx stop`) `--apply`를 실행(`--provider <id>`로 대상을 고르고 로컬/사설 주소에는 `--allow-private-network` 추가)하고, 프록시를 시작(`ocx start`)하고 파이프 표준 입력(`printf '%s\n' "$KEY" | ocx account add-key <provider>`)으로 키를 등록하세요. 별도의 롤백 경로로 되돌리려면 먼저 프록시를 멈춘 뒤(`ocx stop`) `ocx provider import-cc-switch --restore`를 실행하세요: `auth.json`을 바이트 수준에서 읽기 전용으로 검사(읽을 수 없거나 형식이 잘못되면 안전하게 보류)하며 수정되지 않았고 라우팅이나 OAuth 계정에서도 참조되지 않은 항목만 제거합니다.
 
 ## 인증
 

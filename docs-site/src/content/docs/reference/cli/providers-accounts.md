@@ -225,7 +225,9 @@ refused before mutation with exit 2. Input errors never echo the submitted value
 
 ```bash
 ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
 ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Start the proxy in another terminal (or run ocx ensure), then add credentials:
 ocx start
 printf '%s\n' "$API_KEY" | ocx account add-key my-provider
 

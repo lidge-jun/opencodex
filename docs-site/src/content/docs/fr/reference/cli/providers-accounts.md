@@ -63,7 +63,20 @@ Utilisez `--api-key` ou un identifiant OAuth pour tout ce qui est secret.
 
 ### Import de fournisseurs CC-Switch sans clé
 
-`ocx provider import-cc-switch` lit uniquement une liste explicite de champs non secrets (identifiants de fournisseur, types d’application, URL de base, dialectes et modèles par défaut) et ne lit jamais les champs secrets, noms libres ou commentaires TOML depuis un fichier SQLite (`~/.cc-switch/cc-switch.db`) ou JSON CC-Switch ouvert en mémoire sans fichier temporaire (si un fichier `-wal` non vide existe, fermez d’abord CC-Switch et réessayez). Une grammaire stricte de chemin d’URL API (`[a-z0-9._-]`, p. ex. `/v1`, `/api/v1`, `/compatible-mode/v1`) agit comme défense en profondeur sans faire écho aux valeurs rejetées, et les tampons temporaires sont remis à zéro dans `finally`. N’importez que depuis une source locale de confiance : même sans aperçu préalable, `--apply` affiche chaque ID, modèle et URL importés avant d’écrire. L’aperçu (par défaut avec `--source <FILE>`) n’écrit rien ; `--apply` et `--restore` exigent que le proxy soit arrêté (`ocx stop`). Ajoutez `--provider <id>` pour filtrer et `--allow-private-network` pour autoriser une adresse locale/privée, puis démarrez le proxy (`ocx start`) et ajoutez les clés via l’entrée standard (`printf '%s\n' "$KEY" | ocx account add-key <provider>`). Comme chemin d’annulation distinct, arrêtez d’abord le proxy (`ocx stop`) puis exécutez `ocx provider import-cc-switch --restore` : il inspecte `auth.json` en lecture seule au niveau des octets (échec fermé si illisible ou mal formé) et ne supprime que les entrées importées non modifiées et non référencées.
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Démarrez le proxy dans un autre terminal (ou exécutez ocx ensure), puis ajoutez les clés :
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Chemin d’annulation distinct (arrêtez d’abord le proxy ; supprime uniquement les entrées sans clé non modifiées) :
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` lit uniquement une liste explicite de champs non secrets (identifiants de fournisseur, types d’application, URL de base, dialectes et modèles par défaut) et ne lit jamais les champs secrets, noms libres ou commentaires TOML depuis un fichier SQLite (`~/.cc-switch/cc-switch.db`) ou JSON CC-Switch ouvert en mémoire sans fichier temporaire (si un fichier `-wal` non vide existe, fermez d’abord CC-Switch et réessayez). Une grammaire stricte de chemin d’URL API (`[a-z0-9._-]`, p. ex. `/v1`, `/api/v1`, `/compatible-mode/v1`) agit comme défense en profondeur sans faire écho aux valeurs rejetées, et les tampons temporaires sont remis à zéro dans `finally`. N’importez que depuis une source locale de confiance : même sans aperçu préalable, `--apply` affiche chaque ID, modèle et URL importés avant d’écrire. L’aperçu (par défaut avec `--source <FILE>`) n’écrit rien ; `--apply` et `--restore` exigent que le proxy soit arrêté (`ocx stop`). Arrêtez le proxy (`ocx stop`), exécutez `--apply` (ajoutez `--provider <id>` pour filtrer et `--allow-private-network` pour autoriser une adresse locale/privée), puis démarrez le proxy (`ocx start`) et ajoutez les clés via l’entrée standard (`printf '%s\n' "$KEY" | ocx account add-key <provider>`). Comme chemin d’annulation distinct, arrêtez d’abord le proxy (`ocx stop`) puis exécutez `ocx provider import-cc-switch --restore` : il inspecte `auth.json` en lecture seule au niveau des octets (échec fermé si illisible ou mal formé) et ne supprime que les entrées importées non modifiées et non référencées.
 
 ## Authentification
 

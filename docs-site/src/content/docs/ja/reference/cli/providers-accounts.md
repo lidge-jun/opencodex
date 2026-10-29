@@ -60,7 +60,20 @@ ocx models live --provider ark --json
 
 ### キーなしの CC-Switch プロバイダーインポート
 
-`ocx provider import-cc-switch` は非秘密メタデータフィールドの明示的な許可リスト（プロバイダー ID、アプリ種別、ベース URL、アダプター、既定モデル）のみを読み取り、秘密フィールド・自由記述名・TOML コメントは一切読み取りません。SQLite（`~/.cc-switch/cc-switch.db`）および JSON は一時ファイルなしでメモリ上に読み取り専用展開され、空でない `-wal` ファイルがある場合は拒否されるため先に CC-Switch を終了して再試行してください。URL パスの厳格な小文字 API 文法（`[a-z0-9._-]`、例：`/v1`、`/api/v1`、`/compatible-mode/v1`）と構文検査は多層防御として機能し（拒否値をエコーせず）、一時バイトバッファは `finally` でゼロ消去されます。信頼できるローカルソースのみを使用し、`--apply` が書き込み前に出力する各 ID・モデル・接続先 URL を確認してください。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定し、適用後にプロキシを起動（`ocx start`）してからパイプ標準入力（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）でキーを登録します。ロールバック用の別経路として、先にプロキシを停止（`ocx stop`）してから `ocx provider import-cc-switch --restore` を実行してください：`auth.json` をバイト単位で読み取り専用検査（読み取り不能・不正形式時はフェイルクローズ）し、未編集かつルーティングや OAuth アカウントから参照されていない項目のみを削除します。
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 別のターミナルでプロキシを起動（または ocx ensure を実行）してからキーを登録：
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# ロールバック用の別経路（先にプロキシを停止；未編集のキーなし項目のみ削除）：
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` は非秘密メタデータフィールドの明示的な許可リスト（プロバイダー ID、アプリ種別、ベース URL、アダプター、既定モデル）のみを読み取り、秘密フィールド・自由記述名・TOML コメントは一切読み取りません。SQLite（`~/.cc-switch/cc-switch.db`）および JSON は一時ファイルなしでメモリ上に読み取り専用展開され、空でない `-wal` ファイルがある場合は拒否されるため先に CC-Switch を終了して再試行してください。URL パスの厳格な小文字 API 文法（`[a-z0-9._-]`、例：`/v1`、`/api/v1`、`/compatible-mode/v1`）と構文検査は多層防御として機能し（拒否値をエコーせず）、一時バイトバッファは `finally` でゼロ消去されます。信頼できるローカルソースのみを使用し、`--apply` が書き込み前に出力する各 ID・モデル・接続先 URL を確認してください。既定のプレビュー（`--source <FILE>`）は何も書き込まず、`--apply` と `--restore` にはプロキシの停止（`ocx stop`）が必要です。プロキシを停止（`ocx stop`）して `--apply` を実行（`--provider <id>` で対象を絞り込み、ローカル／プライベートアドレスには `--allow-private-network` を指定）し、適用後にプロキシを起動（`ocx start`）してからパイプ標準入力（`printf '%s\n' "$KEY" | ocx account add-key <provider>`）でキーを登録します。ロールバック用の別経路として、先にプロキシを停止（`ocx stop`）してから `ocx provider import-cc-switch --restore` を実行してください：`auth.json` をバイト単位で読み取り専用検査（読み取り不能・不正形式時はフェイルクローズ）し、未編集かつルーティングや OAuth アカウントから参照されていない項目のみを削除します。
 
 ## 認証
 
