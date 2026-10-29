@@ -3,6 +3,8 @@ title: Codex App モデル ピッカー
 description: opencodex モデルが、共有 Codex カタログを通じて Codex App、Codex CLI、Codex TUI にどのように表示されるか。
 ---
 
+既定値は `false` です。`config.json` に `"omitDisabledNativeModels": true` を設定して `ocx sync` を実行すると、無効な native 行を catalog、cache、Codex 形式の HTTP モデル一覧から除外します。除外前に検証した継承テンプレートを保持するため routed 行のメタデータは変わりません。直接リクエストのルーティングも変わりません。以下の hide の説明は既定の設定に適用されます。
+
 opencodex は Codex アプリにパッチを適用しません。Codex CLI/TUI と同じ Codex 設定とモデル
 カタログを書き込みます。app-server はその共有状態を読み取りますが、一部の Codex Desktop
 リリースは renderer 側で追加の remote allowlist を適用し、routed row を picker から除外する
