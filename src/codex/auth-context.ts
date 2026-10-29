@@ -322,8 +322,7 @@ export type CodexAuthContext =
       transientProbe?: TransientProbeGrant;
     }
   | {
-      // Main Codex account participating in rotation: token injected from ~/.codex/auth.json
-      // (Option A). Distinct from "main" (request-owned passthrough or Direct mode).
+      // Main account rotating in the Pool (Option A), token from ~/.codex/auth.json; never request-owned "main".
       kind: "main-pool";
       accountId: string;
       writerGeneration: number;
@@ -336,14 +335,14 @@ export type CodexAuthContext =
       chatgptAccountId: string;
       /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
-      /** See `pool.affinityKey`. */
-      affinityKey?: string;
+      affinityKey?: string; // See `pool.affinityKey`.
       /** See `pool.probeLeaseId`. */
       probeLeaseId?: string;
       quotaScope?: CodexQuotaScope;
       probeQuotaScope?: CodexQuotaScope;
       /** See `pool.transientProbe`. */
       transientProbe?: TransientProbeGrant;
+      affinityDecision?: CodexAffinityDecision;
     };
 
 /** Probe lease carried by this context, when it holds one. */
@@ -1733,6 +1732,7 @@ async function resolveCodexAuthContextUnannotated(
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
+      ...(affinityDecision ? { affinityDecision } : {}),
       ...(transientProbe ? { transientProbe } : {}),
     };
   }

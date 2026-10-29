@@ -19,6 +19,7 @@ import {
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
+import type { CodexAuthContext } from "../codex/auth-context";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
@@ -1264,6 +1265,18 @@ export function noteAffinityMove(
 }
 
 /**
+ * Copy the selection's own affinity decision onto the request log. Both Pool-served kinds carry
+ * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A move
+ * then reads as an event with its cause instead of something inferred from account labels.
+ */
+export function noteCodexSelectionAffinity(logCtx: RequestLogContext, authCtx: CodexAuthContext): void {
+  const decision = authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.affinityDecision : undefined;
+  if (!decision) return;
+  logCtx.affinity = decision.move;
+  logCtx.affinityReason = decision.reason;
+}
+
+/**
  * The affinity scope a released binding belonged to: one thread, one model lane.
  *
  * Both halves are part of the key. A thread holds a separate binding per model lane, so a
@@ -1625,7 +1638,10 @@ function finalizedUsage(
   const usageFallback = !finalUsage && estimate !== undefined
     ? { inputTokens: estimate, outputTokens: 0, estimated: true }
     : undefined;
-  const combinedInputTokens = finalUsage && estimate !== undefined
+  // The estimate is a floor under a count the adapter could only guess. A count the adapter read
+  // off the upstream's own usage frame stays exact: max() against a larger local estimate would
+  // replace it and mark it estimated.
+  const combinedInputTokens = finalUsage && !finalUsage.upstreamReported && estimate !== undefined
     ? Math.max(finalUsage.inputTokens, estimate)
     : undefined;
   const loggedUsage = finalUsage && combinedInputTokens !== undefined
@@ -1907,6 +1923,7 @@ export function aggregateAttemptUsage(
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),
+    ...(usages.every(usage => usage.upstreamReported) ? { upstreamReported: true as const } : {}),
   };
   return { usage: aggregate, status, totalTokens };
 }

@@ -1041,3 +1041,264 @@ describe("claude-cli schema propagation and completion contract (offline)", () =
     expect(promptText).toContain("The MCP process captures call intent only.");
   });
 });
+
+const textDelta = (text: string): string =>
+  JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } }) + "\n";
+
+describe("Issue #6469 — offline fixtures", () => {
+  const systemInit = enc.encode('{"type":"system","subtype":"init","mcp_servers":[{"name":"opencodex","status":"connected"}]}\n');
+
+  test("1. tool-use round trip: tool request, matching result, plain JSON final output", async () => {
+    const firstChild = fakeChild([
+      systemInit,
+      enc.encode(claudeCliToolFrame(0, "tu_1", CLAUDE_CLI_MCP_TOOL, '{"path":"a"}')),
+      enc.encode('{"type":"stream_event","event":{"type":"message_stop"}}\n'),
+    ]);
+    const child = fakeChild([
+      systemInit,
+      enc.encode(textDelta('{"answer":"42"}')),
+      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
+    ]);
+    let spawned = 0;
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: () => (++spawned === 1 ? firstChild : child) as unknown as ChildProcess,
+      which: () => "/opt/homebrew/bin/claude", killGraceMs: 20,
+    });
+    const request = claudeCliToolRequest({ options: { textFormat: {
+      type: "json_schema", name: "answer", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
+    } } });
+    const events = await run(adapter, request);
+    const starts = events.filter(e => e.type === "tool_call_start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "tu_1", name: "read_file" });
+    expect(events.filter(e => e.type === "tool_call_delta").map(e => (e as { arguments: string }).arguments))
+      .toEqual(['{"path":"a"}']);
+    expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
+    expect(events.some(event => event.type === "error")).toBe(false);
+    const call = starts[0]!;
+    const argumentsJson = events.filter(e => e.type === "tool_call_delta").map(e => e.arguments).join("");
+    const continued = await run(adapter, { ...request, context: { ...request.context, messages: [
+      ...request.context.messages,
+      { role: "assistant", content: [{ type: "toolCall", id: call.id, name: call.name, arguments: JSON.parse(argumentsJson) }], timestamp: 1 },
+      { role: "toolResult", toolCallId: call.id, toolName: call.name, content: "fixture contents: 42", isError: false, timestamp: 2 },
+    ] } });
+    const finalText = continued.filter(e => e.type === "text_delta").map(e => e.text).join("");
+    expect(finalText).toBe('{"answer":"42"}');
+    expect(JSON.parse(finalText)).toEqual({ answer: "42" });
+    expect(spawned).toBe(2);
+    expect(child.written.join("")).toContain("TOOL RESULT (call_id: tu_1)");
+    expect(child.written.join("")).toContain("fixture contents: 42");
+    expect(continued.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
+    expect(continued.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("2. tool-free control: normal final output without tool continuation", async () => {
+    const events = await run(adapterWith([
+      enc.encode('{"type":"system","subtype":"init"}\n'),
+      enc.encode(textDelta("hello world")),
+      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2}}\n'),
+    ]), parsed());
+    expect(events.filter(e => e.type === "tool_call_start")).toEqual([]);
+    expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("hello world");
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
+  });
+
+  test("3. refusal: model refusal surfaces as an error, not fabricated output", async () => {
+    const events = await run(adapterWith([
+      enc.encode('{"type":"result","subtype":"success","is_error":true,"message":"refusal","usage":{"input_tokens":2,"output_tokens":0}}\n'),
+    ]), parsed());
+    const err = events.find(e => e.type === "error");
+    expect(err).toBeDefined();
+    expect(err).toMatchObject({ type: "error" });
+    expect(events.filter(e => e.type === "text_delta")).toEqual([]);
+  });
+
+  test("4a. invalid output: malformed JSON line surfaces protocol error", async () => {
+    const events = await run(adapterWith([
+      enc.encode("not-json\n"),
+    ]), parsed());
+    const err = events.find(e => e.type === "error");
+    expect(err).toBeDefined();
+    expect(err).toMatchObject({ code: "protocol_error" });
+  });
+
+  test("4b. truncated output: incomplete final frame reports protocol error", async () => {
+    const events = await run(adapterWith([
+      enc.encode('{"type":"result","subtype":"success"'),
+    ]), parsed());
+    const err = events.find(e => e.type === "error");
+    expect(err).toBeDefined();
+    expect(err).toMatchObject({ code: "protocol_error" });
+  });
+
+  test("5. unsupported schema: schema stays out of CLI inputs, payload surfaced as plain text", async () => {
+    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: { type: "object" } } } });
+    const stdout = [
+      systemInit,
+      enc.encode(textDelta('{"answer":"42"}')),
+      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
+    ];
+    const events = await run(adapterWith(stdout), schemaRequest);
+    expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe('{"answer":"42"}');
+    expect(events.some(e => e.type === "done")).toBe(true);
+  });
+
+  test("5b. invalid model JSON remains plain text for unsupported schema", async () => {
+    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: { type: "object" } } } });
+    const invalidModelText = "not-json";
+    const stdout = [
+      systemInit,
+      enc.encode(textDelta(invalidModelText)),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const events = await run(adapterWith(stdout), schemaRequest);
+    expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe(invalidModelText);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("6a. call-ID negative: orphaned tool-result ID is replayed by adapter", async () => {
+    const child = fakeChild([
+      systemInit,
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ], { exitCode: 0 });
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "/opt/homebrew/bin/claude",
+      killGraceMs: 20,
+    });
+    const events = await run(adapter, claudeCliToolRequest({
+      context: {
+        messages: [
+          { role: "user", content: "Read the fixture", timestamp: 0 },
+          { role: "toolResult", toolCallId: "nonexistent-id", toolName: "read_file", content: "orphan result", isError: false, timestamp: 1 },
+        ],
+        tools: [{ name: "read_file", description: "Read a file", parameters: { type: "object" } }],
+      },
+    }));
+    expect(events.filter(e => e.type === "tool_call_start")).toEqual([]);
+    const writtenText = child.written.map(w => w.toString()).join("");
+    expect(writtenText).toContain("nonexistent-id");
+    expect(events.some(e => e.type === "done")).toBe(true);
+  });
+
+  test("6b. call-ID negative: mismatched tool-result identifier stays intact", async () => {
+    const child = fakeChild([
+      systemInit,
+      enc.encode(claudeCliToolFrame(0, "tu_1", CLAUDE_CLI_MCP_TOOL, '{"path":"a"}')),
+      enc.encode(textDelta('{"answer":"ok"}')),
+      enc.encode('{"type":"stream_event","event":{"type":"message_stop"}}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ]);
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "/opt/homebrew/bin/claude", killGraceMs: 20,
+    });
+    const events = await run(adapter, claudeCliToolRequest({
+      context: {
+        messages: [
+          { role: "user", content: "Read the fixture", timestamp: 0 },
+          { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "fixture.txt" } }], timestamp: 1 },
+          { role: "toolResult", toolCallId: "call_2", toolName: "read_file", content: "mismatched", isError: false, timestamp: 2 },
+        ],
+        tools: [{ name: "read_file", description: "Read a file", parameters: { type: "object" } }],
+      },
+    }));
+    const starts = events.filter(e => e.type === "tool_call_start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "tu_1", name: "read_file" });
+    const written = child.written.join("");
+    expect(written).toContain("call_1");
+    expect(written).toContain("TOOL RESULT (call_id: call_2)");
+    expect(written).toContain("mismatched");
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("7. cancellation: abort terminates CLI and cleans up staged input", async () => {
+    const child = fakeChild([enc.encode(textDelta("partial text"))], { emitClose: false });
+    const abort = new AbortController();
+    let promptFile = "";
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: (_command, args) => {
+        promptFile = args[args.indexOf("--system-prompt-file") + 1]!;
+        expect(existsSync(promptFile)).toBe(true);
+        return child as unknown as ChildProcess;
+      },
+      which: () => "/opt/homebrew/bin/claude",
+      killGraceMs: 20,
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed(), incoming(abort.signal), event => {
+      events.push(event);
+      if (event.type === "text_delta") abort.abort();
+    });
+    expect(child.killed).toBe(true);
+    expect(abort.signal.aborted).toBe(true);
+    expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: "partial text" }]);
+    expect(events.find(event => event.type === "error")).toMatchObject({
+      type: "error", message: "Claude Code turn was aborted.", retryable: false,
+    });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(child.stdin.destroyed).toBe(true);
+    expect(promptFile).not.toBe("");
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
+  test("sub-check: tool-call events emitted immediately, not lost to buffering", async () => {
+    const child = fakeChild([], { emitClose: false });
+    child.stdout = new Readable({ read() {} });
+    child.stdout.push(systemInit);
+    child.stdout.push(enc.encode(claudeCliToolFrame(0, "tu_1", CLAUDE_CLI_MCP_TOOL, '{"path":"a"}')));
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "/opt/homebrew/bin/claude", killGraceMs: 20,
+    });
+    const events: AdapterEvent[] = [];
+    let toolSeen!: () => void;
+    const observed = new Promise<void>(resolve => { toolSeen = resolve; });
+    let completed = false;
+    const turn = adapter.runTurn!(claudeCliToolRequest(), incoming(), event => {
+      events.push(event);
+      if (event.type === "tool_call_end") toolSeen();
+    }).then(() => { completed = true; });
+    try {
+      await Promise.race([observed, turn.then(() => { throw new Error("turn completed before the tool callback"); })]);
+      expect(completed).toBe(false);
+      expect(events.some(event => event.type === "done")).toBe(false);
+    } finally {
+      child.stdout.push(enc.encode('{"type":"stream_event","event":{"type":"message_stop"}}\n'));
+      child.stdout.push(enc.encode('{"type":"result","subtype":"success","is_error":false}\n'));
+      child.stdout.push(null);
+      child.exitCode = 0;
+      child.emit("close", 0);
+      await turn;
+    }
+    const starts = events.filter(e => e.type === "tool_call_start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "tu_1", name: "read_file" });
+    expect(events.filter(e => e.type === "text_delta")).toEqual([]);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
+  test("sub-check: cleanup on success — prompt temp file removed", async () => {
+    let promptFile = "";
+    const child = fakeChild([enc.encode('{"type":"result","subtype":"success","is_error":false}\n')], { exitCode: 0 });
+    const adapter = createClaudeCliAdapter(provider(), {
+      which: () => "/opt/homebrew/bin/claude",
+      spawn: (_cmd, args) => { promptFile = args[args.indexOf("--system-prompt-file") + 1]!; return child as unknown as ChildProcess; },
+      killGraceMs: 20,
+    });
+    await run(adapter, parsed());
+    expect(promptFile).not.toBe("");
+    expect(existsSync(promptFile)).toBe(false);
+  });
+});
+
+function adapterWith(stdout: Uint8Array[], exitCode = 0): ReturnType<typeof createClaudeCliAdapter> {
+  return createClaudeCliAdapter(provider(), {
+    spawn: () => fakeChild(stdout, { exitCode }) as unknown as ChildProcess,
+    which: () => "/opt/homebrew/bin/claude",
+    killGraceMs: 20,
+  });
+}

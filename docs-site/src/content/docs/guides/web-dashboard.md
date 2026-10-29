@@ -487,7 +487,7 @@ Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and L
 shows **No changes** or **Unsaved changes**, with **Revert** to discard edits and **Save** to commit
 them. Both switches apply immediately; **Save** never changes them. When interception is stopped, the page shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. The former Code, Settings, and Account sub-tabs are gone; everything the read-only Settings view showed except the intercept port number is on this page.
 
-**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker and model families. One status row shows whether Claude Desktop runs the profile and whether it is saved, with **Save** and **Save & apply** beside it.
+**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
 

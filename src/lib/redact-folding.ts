@@ -75,6 +75,15 @@ const LETTER_CONFUSABLES = new Map<string, string>([
  * not cover.
  */
 export function foldForMatching(value: string, decodeEscapes = true): { folded: string; map: number[] } {
+  // ASCII has no confusables, invisible format characters or NFKD changes. Without
+  // an escape introducer, decoding cannot change it either. Usage metadata passes
+  // through this fold repeatedly on ledger reads; keep its identity map without
+  // repeating Unicode normalization and escape matching for every character.
+  if (!/[^\x00-\x7f]/.test(value) && (!decodeEscapes || !/[\\%&]/.test(value))) {
+    const map = new Array<number>(value.length + 1);
+    for (let index = 0; index <= value.length; index += 1) map[index] = index;
+    return { folded: value, map };
+  }
   let folded = "";
   const map: number[] = [];
   // Serialization escapes are ALIASES for the label, not decoration: a JSON

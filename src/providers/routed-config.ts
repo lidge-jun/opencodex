@@ -324,6 +324,8 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.foldDeveloperRoleToSystem === undefined && registryEntry.foldDeveloperRoleToSystem !== undefined
       ? { foldDeveloperRoleToSystem: registryEntry.foldDeveloperRoleToSystem }
       : {}),
+    ...(provider.singleLeadingSystemMessage === undefined && registryEntry.singleLeadingSystemMessage !== undefined
+      ? { singleLeadingSystemMessage: registryEntry.singleLeadingSystemMessage } : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
       : {}),
