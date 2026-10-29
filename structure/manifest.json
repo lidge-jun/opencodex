@@ -816,6 +816,7 @@
       "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
       "documents": [
         "src/cli/",
+        "src/providers/cc-switch-import-bytes.ts",
         "src/providers/cc-switch-import-source.ts",
         "src/providers/cc-switch-import.ts",
         "scripts/generate-ocx-skill-surface.ts",

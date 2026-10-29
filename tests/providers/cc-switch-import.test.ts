@@ -154,6 +154,17 @@ describe("CC-Switch keyless provider import", () => {
         }),
         sort_index: 3,
       },
+      {
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        app_type: "openai",
+        name: `UuidSecret ${CANARY_SECRET}`,
+        settings_config: JSON.stringify({
+          baseUrl: "https://api.openai.com/v1",
+          model: "qwen3-235b-a22b",
+          apiKey: CANARY_SECRET,
+        }),
+        sort_index: 4,
+      },
     ]);
     const walDbPath = createSqliteFixture([
       {
@@ -196,8 +207,8 @@ describe("CC-Switch keyless provider import", () => {
 
     expect(preview).toEqual({
       mode: "preview",
-      discovered: 3,
-      eligible: 3,
+      discovered: 4,
+      eligible: 4,
       imported: 0,
       conflicts: 0,
       conflictNames: [],
@@ -228,6 +239,14 @@ describe("CC-Switch keyless provider import", () => {
           baseUrl: "https://subrouter.ai/v1beta",
           defaultModel: "gemini-2.5-pro",
         },
+        {
+          name: "550e8400-e29b-41d4-a716-446655440000",
+          sourceId: "550e8400-e29b-41d4-a716-446655440000",
+          appType: "openai",
+          adapter: "openai-chat",
+          baseUrl: "https://api.openai.com/v1",
+          defaultModel: "qwen3-235b-a22b",
+        },
       ],
     });
     expect(JSON.stringify(preview)).not.toContain(CANARY_SECRET);
@@ -236,7 +255,7 @@ describe("CC-Switch keyless provider import", () => {
     const applied = await runCcSwitchProviderImport({ mode: "apply", sourcePath: dbPath });
     expect(applied.mode).toBe("apply");
     if (applied.mode === "apply") {
-      expect(applied.imported).toBe(3);
+      expect(applied.imported).toBe(4);
     }
 
     const configRaw = readFileSync(getConfigPath(), "utf8");
@@ -263,6 +282,11 @@ describe("CC-Switch keyless provider import", () => {
       defaultModel: "gemini-2.5-pro",
     });
     expect(saved.providers["acme-gemini"]?.apiKey).toBeUndefined();
+    expect(saved.providers["550e8400-e29b-41d4-a716-446655440000"]).toMatchObject({
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      defaultModel: "qwen3-235b-a22b",
+    });
     expect(readFileSync(dbPath).equals(dbBytesBefore)).toBe(true);
   });
 
@@ -286,13 +310,13 @@ describe("CC-Switch keyless provider import", () => {
         },
         gemini: {
           providers: {
-            "gem-json": {
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c8": {
               name: `GemName ${CANARY_SECRET}`,
               settingsConfig: {
                 env: {
                   GOOGLE_GEMINI_BASE_URL: "https://openrouter.ai/api",
                   GEMINI_API_KEY: CANARY_SECRET,
-                  GEMINI_MODEL: "gemini-2.5-flash",
+                  GEMINI_MODEL: "gpt-4o-2024-08-06",
                 },
               },
             },
@@ -384,20 +408,20 @@ describe("CC-Switch keyless provider import", () => {
     const applied = await runCcSwitchProviderImport({
       mode: "apply",
       sourcePath: jsonPath,
-      selectedProviders: ["shared-claude", "gem-json"],
+      selectedProviders: ["shared-claude", "6ba7b810-9dad-11d1-80b4-00c04fd430c8"],
     });
     expect(applied.mode).toBe("apply");
     if (applied.mode === "apply") {
       expect(applied.imported).toBe(2);
-      expect(applied.providers.map(p => p.name)).toEqual(["shared-claude", "gem-json"]);
+      expect(applied.providers.map(p => p.name)).toEqual(["shared-claude", "6ba7b810-9dad-11d1-80b4-00c04fd430c8"]);
     }
     const saved = loadConfig();
     expect(saved.providers["shared-claude"]?.baseUrl).toBe("https://claude.shared.example");
     expect(saved.providers["shared-claude"]?.defaultModel).toBe("claude-sonnet-4-20250514");
-    expect(saved.providers["gem-json"]).toMatchObject({
+    expect(saved.providers["6ba7b810-9dad-11d1-80b4-00c04fd430c8"]).toMatchObject({
       adapter: "google",
       baseUrl: "https://openrouter.ai/api",
-      defaultModel: "gemini-2.5-flash",
+      defaultModel: "gpt-4o-2024-08-06",
     });
     expect(saved.providers["shared-openai"]).toBeUndefined();
   });
@@ -631,6 +655,17 @@ describe("CC-Switch keyless provider import", () => {
           },
         }),
       },
+      {
+        id: "uuid-in-model-rejected",
+        app_type: "claude",
+        name: "UuidModel",
+        settings_config: JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: "https://claude.acme.example",
+            ANTHROPIC_MODEL: "550e8400-e29b-41d4-a716-446655440000",
+          },
+        }),
+      },
     ]);
 
     const decodedDuringSqlite: string[] = [];
@@ -666,12 +701,12 @@ describe("CC-Switch keyless provider import", () => {
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(14);
+      expect(preview.invalid).toBe(15);
       expect(preview.invalidReasons).toEqual({
         malformed_entry: 3,
         missing_base_url: 1,
         invalid_base_url: 2,
-        disallowed_metadata: 6,
+        disallowed_metadata: 7,
         private_network_refused: 1,
         ambiguous_codex_provider: 1,
       });
