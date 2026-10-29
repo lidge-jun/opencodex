@@ -7,7 +7,9 @@
 the managed Pi-based omo block described under
 [omo variants](integrations.md#omo-variants). `"openai-responses"` makes `buildPiClientConfig` write
 `api: "openai-responses"` for omo. An absent, unknown or malformed value degrades to undefined and
-keeps `PI_API_DIALECT` (`openai-completions`), so a bad value never fails the config parse.
+keeps `PI_API_DIALECT` (`openai-completions`), so a bad value never fails the config parse. The
+top-level `omoClientExport` field in `src/config/schema/config-schema.ts` adds the outer fallback: a
+malformed block (not an object) is dropped as a whole with `.optional().catch(undefined)`.
 
 The scope is omo only. Pi, Gentle Shell and the other Pi-format clients keep `PI_EXPORT_OPTIONS`.
 
