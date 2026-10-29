@@ -352,6 +352,7 @@ export const providerConfigSchema = z.object({
   requiresPairedResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
   foldDeveloperRoleToSystem: z.boolean().optional(),
+  singleLeadingSystemMessage: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
   responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),

@@ -15,8 +15,10 @@ import { createCertificateAuthority } from "../../src/claude/intercept/local-ca"
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "../../src/claude/intercept/picker-ca";
 import { memoryPickerCaStore } from "../helpers/picker-ca-store";
 import type { OcxConfig } from "../../src/types";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 
 function config(extra: Partial<OcxConfig> = {}): OcxConfig {
   return {
@@ -136,8 +138,11 @@ function controllerFor(options: {
   });
 }
 
-beforeEach(() => { root = mkdtempSync(join(tmpdir(), "ocx-picker-controller-")); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "ocx-picker-controller-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
+});
+afterEach(() => { lifecycleLock.restore(); rmSync(root, { recursive: true, force: true }); });
 
 test("enable orders trust, fresh recheck, profile, and rearm", async () => {
   const events: string[] = [];

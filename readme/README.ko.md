@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build 등을 위한 하나의 로컬 게이트웨이" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시</b><br>
-명령어 두 줄이면, 그 모두가 지정한 LLM으로 돌아갑니다.</p>
+<h3 align="center">AI 코딩 도구와 모델을 연결하는 하나의 로컬 게이트웨이.</h3>
+<p align="center"><b>Codex, Claude Code, Claude Desktop, Grok Build에서 원하는 모델을 사용하고,<br>관리형 설정으로 OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code 등을 연결하세요.</b><br>
+<a href="https://opencodex.me/ko/reference/client-support/">지원하는 모든 도구 보기 →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
@@ -80,12 +80,7 @@ Sol이 세션을 이끌고 Kimi K3 서브에이전트를 호출합니다.
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ko/"><b>전체 문서 →</b></a>
 </p>
 
-opencodex는 Codex의 Responses API를 프로바이더가 쓰는 프로토콜로 변환하는 가벼운 로컬 프록시입니다.
-streaming, tool 호출, reasoning 토큰, 이미지를 양방향으로 모두 처리합니다. Claude, Gemini, Grok, GLM,
-DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, Claude Desktop, Grok Build에서
-쓸 수 있습니다. Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. 계정을 추가하고 대시보드에서 쿼터를
-갱신하면, 새 세션은 사용량이 가장 적은 정상 계정으로 자동 라우팅되고 기존 스레드는 시작한 계정에
-그대로 고정됩니다.
+opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 로컬 게이트웨이입니다. Responses, Chat Completions, Anthropic Messages API 요청을 받아 프로바이더의 프로토콜로 변환하며, 클라이언트와 모델, 프로바이더가 지원하는 경우 스트리밍, 도구 호출, 추론과 이미지를 전달합니다. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등의 프로바이더를 Codex, Claude Code, Claude Desktop, Grok Build 및 [클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에 나열된 도구와 함께 사용하세요. Codex 인증용 **ChatGPT 계정 풀**도 관리할 수 있습니다. 계정을 추가하고 대시보드에서 쿼터를 갱신하면 새 세션은 사용량이 가장 적은 정상 계정으로 자동 라우팅되고 기존 스레드는 시작한 계정에 고정됩니다.
 
 ## 빠른 시작
 
@@ -100,6 +95,21 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
+
+### 도구 연결
+
+사용 중인 도구를 연결하세요:
+
+| 도구 | 연결 방법 |
+|---|---|
+| Codex | 대시보드 **Connect** 페이지에서 Codex 스위치를 켠 다음 평소처럼 `codex`를 실행하세요. 로컬 리스너에서는 Codex 내장 프로바이더가 프록시를 가리킵니다. 터미널에서는 대시보드에 프로바이더를 추가하기 전에 `ocx init`을 실행하고 Codex 프롬프트를 수락하세요. |
+| Claude Code | `claude` CLI가 설치된 상태에서 `ocx claude`를 실행하세요. 필요하면 프록시를 시작하고 이를 통해 Claude Code를 실행합니다. |
+| Claude Desktop | `ocx claude desktop`을 실행하세요. 새로 설치할 때는 앱 전체에 게이트웨이 프로필을 설정합니다. 기존 first-party 설정은 유지되며, `ocx claude desktop apply --gateway`로 명시적으로 전환할 수 있습니다. [Claude Code 가이드](https://opencodex.me/ko/guides/claude-code/)를 참조하세요. 전환한 뒤에는 Claude Desktop을 완전히 종료했다가 다시 여세요. |
+| Grok Build | 로컬 리스너에서 Grok 통합이 활성화되어 있고 `~/.grok`이 있으면 `ocx start`가 모델을 등록합니다. Grok Build에서 `ocx-*` 모델을 선택하세요. 원격 설정은 [Grok Build 가이드](https://opencodex.me/ko/guides/grok-build/)를 참조하세요. 프로바이더를 추가한 뒤에는 프록시를 재시작해(또는 Codex 자동 시작이 활성화된 경우 `ocx ensure`를 실행해) 목록을 갱신하세요. |
+| 관리형 통합이 있는 도구 | 대시보드의 **Connect** 페이지 또는 `ocx integration client enable --client <id>`를 사용하세요. |
+| 그 밖의 도구 | OpenAI 호환 기본 URL을 `http://localhost:10100/v1`로, 또는 Anthropic 기본 URL을 `http://localhost:10100`으로 설정하세요. |
+
+[클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에서 각 도구의 연결 방식과 프로토콜을 확인할 수 있습니다.
 
 <details>
 <summary><b>데스크톱 앱 (베타)</b></summary>
