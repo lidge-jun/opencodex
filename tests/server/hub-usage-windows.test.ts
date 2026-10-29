@@ -63,10 +63,10 @@ test("authenticated window reads carry percentages and reset times, under either
     expect(response.headers.get("cache-control")).toBe("no-store");
     const body = await response.json();
     expect(body).toMatchObject({ windows: [
-      { label: "Anthropic 5-hour", percent: 42.5, limited: false },
-      { label: "Anthropic Weekly", percent: 18, limited: false },
-      { label: "Cursor Monthly", percent: 1.2, limited: false },
-      { label: "Cursor First-party models", percent: 1.3, limited: false },
+      { label: "Anthropic 5-hour", provider: "Anthropic", percent: 42.5, limited: false },
+      { label: "Anthropic Weekly", provider: "Anthropic", percent: 18, limited: false },
+      { label: "Cursor Monthly", provider: "Cursor", percent: 1.2, limited: false },
+      { label: "Cursor First-party models", provider: "Cursor", percent: 1.3, limited: false },
     ] });
     expect(body.windows.every((row: { resetsAt: number }) => row.resetsAt > Date.now())).toBe(true);
     expect(JSON.stringify(body)).not.toContain("acc-");

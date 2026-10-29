@@ -20,6 +20,8 @@ import { isAllowedRequestOrigin, resolveDataPlaneAdmissionSecret, withCors, type
 /** One window of the public body. `resetsAt` is epoch millis, as the poller contract names it. */
 interface UsageWindow {
   label: string;
+  /** The upstream account's provider, so an aggregating reader can gauge each service apart. */
+  provider: string;
   percent: number;
   limited: boolean;
   resetsAt: number;
@@ -68,7 +70,7 @@ function collectWindow(
   const key = `${provider}\u0000${slot}\u0000${label}`;
   const previous = windows.get(key);
   if (!previous) {
-    windows.set(key, { label: `${displayName(provider)} ${label}`, percent, limited: exhausted, resetsAt: reset });
+    windows.set(key, { label: `${displayName(provider)} ${label}`, provider: displayName(provider), percent, limited: exhausted, resetsAt: reset });
     return;
   }
   if (percent > previous.percent) {
