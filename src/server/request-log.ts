@@ -1387,7 +1387,42 @@ export function recordKeyWireAttemptUsage(logCtx: RequestLogContext, usage: OcxU
   return true;
 }
 
+const innerFinalRequestLogSuppressed = new WeakSet<RequestLogContext>();
+const outerFinalRequestLogFinished = new WeakSet<RequestLogContext>();
+
+/** Keep inner producers from publishing a terminal row while a native outer converter owns it. */
+export function suppressInnerFinalRequestLog(logCtx: RequestLogContext): void {
+  innerFinalRequestLogSuppressed.add(logCtx);
+}
+
+/** Write the native outer row once; permanent inner suppression remains in force afterwards. */
+export function addOuterFinalRequestLog(
+  requestId: string,
+  start: number,
+  logCtx: RequestLogContext,
+  status: number,
+  meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+  addLog: (entry: RequestLogEntry) => void = addRequestLog,
+): boolean {
+  if (outerFinalRequestLogFinished.has(logCtx)) return false;
+  outerFinalRequestLogFinished.add(logCtx);
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
+  return true;
+}
+
 export function addFinalRequestLog(
+  requestId: string,
+  start: number,
+  logCtx: RequestLogContext,
+  status: number,
+  meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+  addLog: (entry: RequestLogEntry) => void = addRequestLog,
+): void {
+  if (innerFinalRequestLogSuppressed.has(logCtx)) return;
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
+}
+
+function writeFinalRequestLog(
   requestId: string,
   start: number,
   logCtx: RequestLogContext,
