@@ -361,6 +361,16 @@ export default function ProviderOverview({
                 {connectionText}
               </span>
             )}
+            {connectionResult && connectionState === "failed" && fixCredentialsAction && (
+              <button
+                type="button"
+                className="link-btn"
+                data-connection-recovery-action="fix-connection"
+                onClick={fixCredentialsAction}
+              >
+                {t(onOpenAccounts ? "pws.completion.recovery.fixAuth" : "pws.completion.recovery.fixSettings")}
+              </button>
+            )}
           </div>
         )}
         {apiBase !== undefined && (

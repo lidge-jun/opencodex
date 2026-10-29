@@ -163,6 +163,50 @@ export default function ProviderDetails({
       : undefined,
     [onUpdateProvider],
   );
+  const wrappedAuthHandlers = useMemo<ProviderAuthHandlers | undefined>(() => {
+    if (!authHandlers) return undefined;
+    const bump = () => setMutationRevision(revision => revision + 1);
+    return {
+      ...authHandlers,
+      async onAddApiKey(provider, key) {
+        const ok = await authHandlers.onAddApiKey(provider, key);
+        if (ok) bump();
+        return ok;
+      },
+      async onSwitchApiKey(provider, entry) {
+        await authHandlers.onSwitchApiKey(provider, entry);
+        bump();
+      },
+      async onRemoveApiKey(provider, entry) {
+        await authHandlers.onRemoveApiKey(provider, entry);
+        bump();
+      },
+      async onSwitchAccount(provider, account) {
+        await authHandlers.onSwitchAccount(provider, account);
+        bump();
+      },
+      async onPauseAccount(provider, account, paused) {
+        await authHandlers.onPauseAccount(provider, account, paused);
+        bump();
+      },
+      async onRemoveAccount(provider, account) {
+        await authHandlers.onRemoveAccount(provider, account);
+        bump();
+      },
+      async onLogout(provider) {
+        await authHandlers.onLogout(provider);
+        bump();
+      },
+      ...(authHandlers.onNativeLoginSettled
+        ? {
+            async onNativeLoginSettled(provider, outcome) {
+              await authHandlers.onNativeLoginSettled?.(provider, outcome);
+              if (outcome === "added") bump();
+            },
+          }
+        : {}),
+    };
+  }, [authHandlers]);
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => [
     { id: "overview", label: t("pws.tab.overview") },
     { id: "models", label: t("pws.tab.models") },
@@ -394,7 +438,7 @@ export default function ProviderDetails({
             pausingAccountId={pausingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
-            authHandlers={authHandlers}
+            authHandlers={wrappedAuthHandlers}
             onUpdateProvider={handleUpdateProvider}
             onCodexActiveNeedsReauthChange={onCodexActiveNeedsReauthChange}
             codexController={codexController}

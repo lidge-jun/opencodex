@@ -197,6 +197,21 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     await runAndConfirm();
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("completion test already running for this provider");
     expect(host.querySelector('[data-failure-recovery="request"]')).not.toBeNull();
+
+    // Failed Test connection renders a direct recovery button beside the failed connection status
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/providers/test?")) {
+        return Response.json({ applicable: true, ok: false, error: "Upstream 401" });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    const testConnBtn = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(b => b.textContent === "Test connection")!;
+    await act(async () => { testConnBtn.click(); });
+    const connRecoveryBtn = host.querySelector<HTMLButtonElement>('[data-connection-recovery-action="fix-connection"]')!;
+    expect(connRecoveryBtn).not.toBeNull();
+    await act(async () => { connRecoveryBtn.click(); });
+    expect(fixedAuth).toBe(2);
   });
 
   test("full ProviderDetails flow: 401 failure -> tab hop retains result -> saving settings latches re-verify -> re-running same preserved model succeeds", async () => {
@@ -270,6 +285,62 @@ describe("failure -> fix -> re-verify -> disconnect linkage", () => {
     await runAndConfirm();
     expect(probeStep.getAttribute("data-step-state")).toBe("ok");
     expect(probeStep.getAttribute("data-reverify-pending")).toBeNull();
+  });
+
+  test("adding an API key through ProviderAuthPanel advances probe revision even when active key ID is unchanged", async () => {
+    let addedKeys = 0;
+    respondCompletion = async () => Response.json(failedResult("http_status", 401));
+    await render(
+      <ProviderDetails
+        item={baseItem}
+        availableModels={["model-a"]}
+        hasLiveModels
+        selectedModels={["model-a"]}
+        modelRows={[{ provider: "my-provider", id: "model-a", namespaced: "my-provider/model-a", disabled: false }]}
+        modelRevision="r1"
+        modelRowsReady
+        onOpenModels={() => {}}
+        onDeselect={() => {}}
+        apiBase=""
+        keys={[{ id: "k1", masked: "sk-...1", active: true }]}
+        authHandlers={{
+          onLogin: () => {},
+          onLogout: () => {},
+          onReauth: () => {},
+          onSwitchAccount: () => {},
+          onPauseAccount: () => {},
+          onRemoveAccount: () => {},
+          onAddApiKey: async () => { addedKeys++; return true; },
+          onSwitchApiKey: () => {},
+          onRemoveApiKey: () => {},
+          onEditAlias: () => {},
+        }}
+      />,
+    );
+
+    await selectModel("model-a");
+    await runAndConfirm();
+    expect(host.querySelector('[data-failure-recovery="auth"]')).not.toBeNull();
+
+    // Click Update credentials -> switches to API Keys tab -> add a key (active key ID remains k1):
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-recovery-action="fix-auth"]')!.click(); });
+    const addKeyToggle = Array.from(host.querySelectorAll<HTMLButtonElement>(".pws-detail-panel button"))
+      .find(b => b.textContent?.includes("Add API key"))!;
+    await act(async () => { addKeyToggle.click(); });
+    const keyInput = host.querySelector<HTMLInputElement>('.pws-detail-panel input[type="password"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(keyInput, "sk-new-key-value");
+      keyInput.dispatchEvent(new win.Event("input", { bubbles: true }));
+    });
+    const saveKeyBtn = host.querySelector<HTMLButtonElement>(".pwi-auth-add-key .btn-primary")!;
+    await act(async () => { saveKeyBtn.click(); await Promise.resolve(); });
+    expect(addedKeys).toBe(1);
+
+    // Return to Overview: re-verify is pending and model-a remains selected!
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-overview")!.click(); });
+    const probeStep = host.querySelector('[data-first-response-step="probe"]')!;
+    expect(probeStep.getAttribute("data-reverify-pending")).toBe("true");
+    expect(host.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Model to test"]')?.textContent).toContain("model-a");
   });
 
   test("K1 -> K2 -> K1 keeps re-verification latched until a new run, and off-tab model removal permanently clears state", async () => {
