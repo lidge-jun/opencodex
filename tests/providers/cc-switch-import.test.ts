@@ -14,6 +14,7 @@ import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src
 import {
   CC_SWITCH_IMPORT_JOURNAL_FILENAME,
   CcSwitchImportError,
+  readSqliteRows,
   runCcSwitchProviderImport,
   scanCcSwitchJsonBytes,
 } from "../../src/providers/cc-switch-import";
@@ -117,12 +118,14 @@ describe("CC-Switch keyless provider import", () => {
         name: "Acme Codex",
         settings_config: JSON.stringify({
           auth: { OPENAI_API_KEY: CANARY_SECRET },
-          config: codexToml,
+          config: codexToml + `\n[unrelated_section]\nbase_url = "${CANARY_SECRET}"\nmodel = "${CANARY_SECRET}"\n`,
         }),
         sort_index: 2,
       },
     ]);
     const dbBytesBefore = readFileSync(dbPath);
+    // White-box check: SQLite projection itself never returns values from [unrelated_section] or secret keys.
+    expect(JSON.stringify(readSqliteRows(dbPath))).not.toContain(CANARY_SECRET);
 
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview).toEqual({
@@ -214,12 +217,34 @@ describe("CC-Switch keyless provider import", () => {
             },
           },
         },
+        codex: {
+          providers: {
+            "codex-json": {
+              name: "Codex JSON",
+              settingsConfig: {
+                auth: { OPENAI_API_KEY: CANARY_SECRET },
+                config: [
+                  'model = "gpt-5.6-sol"',
+                  'model_provider = "cjson"',
+                  `experimental_bearer_token = "${CANARY_SECRET}"`,
+                  '[model_providers.cjson]',
+                  'base_url = "https://codex.json.example/v1"',
+                  'wire_api = "responses"',
+                  `api_key = "${CANARY_SECRET}"`,
+                  '[unrelated]',
+                  `base_url = "${CANARY_SECRET}"`,
+                ].join("\n"),
+              },
+            },
+          },
+        },
       },
     };
     writeFileSync(jsonPath, "\uFEFF" + JSON.stringify(doc, null, 2));
     const rawBytes = new Uint8Array(readFileSync(jsonPath));
     const scanned = scanCcSwitchJsonBytes(rawBytes);
     expect(JSON.stringify(scanned)).not.toContain(CANARY_SECRET);
+    expect(scanned.find(r => r.id === "codex-json")?.codexTomlLines).toBeNull();
 
     const applied = await runCcSwitchProviderImport({
       mode: "apply",
@@ -316,7 +341,7 @@ describe("CC-Switch keyless provider import", () => {
         }),
       },
       {
-        id: "private-loopback",
+        id: "ollama",
         app_type: "openai",
         name: "Loopback",
         settings_config: JSON.stringify({
@@ -331,15 +356,23 @@ describe("CC-Switch keyless provider import", () => {
           config: '[model_providers.one]\nbase_url = "https://one.example.com/v1"\n[model_providers.two]\nbase_url = "https://two.example.com/v1"\n',
         }),
       },
+      {
+        id: "overlong-toml",
+        app_type: "codex",
+        name: "Overlong",
+        settings_config: JSON.stringify({
+          config: Array.from({ length: 505 }, (_, i) => `# comment ${i}`).concat(['base_url = "https://late.example.com/v1"']).join("\n"),
+        }),
+      },
     ]);
 
     const preview = await runCcSwitchProviderImport({ mode: "preview", sourcePath: dbPath });
     expect(preview.mode).toBe("preview");
     if (preview.mode === "preview") {
       expect(preview.eligible).toBe(0);
-      expect(preview.invalid).toBe(5);
+      expect(preview.invalid).toBe(6);
       expect(preview.invalidReasons).toEqual({
-        malformed_entry: 1,
+        malformed_entry: 2,
         missing_base_url: 1,
         secret_in_nonsecret_field: 1,
         private_network_refused: 1,
@@ -350,7 +383,7 @@ describe("CC-Switch keyless provider import", () => {
     const withPrivate = await runCcSwitchProviderImport({
       mode: "preview",
       sourcePath: dbPath,
-      selectedProviders: ["private-loopback"],
+      selectedProviders: ["ollama"],
       allowPrivateNetwork: true,
     });
     if (withPrivate.mode === "preview") {
@@ -385,5 +418,40 @@ describe("CC-Switch keyless provider import", () => {
     // and cannot delete the other writer's provider on restore!
     expect(existsSync(join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME))).toBe(false);
     expect(loadConfig().providers["raced-prov"]?.baseUrl).toBe("https://other-writer.example.com/v1");
+  });
+
+  test("prepared journal left behind after config publication still blocks re-apply and restores cleanly", async () => {
+    const dbPath = createSqliteFixture([
+      {
+        id: "crash-prov",
+        app_type: "openai",
+        name: "Crash Prov",
+        settings_config: JSON.stringify({ baseUrl: "https://crash.example.com/v1" }),
+      },
+    ]);
+
+    await runCcSwitchProviderImport({ mode: "apply", sourcePath: dbPath });
+    const journalPath = join(targetHome, CC_SWITCH_IMPORT_JOURNAL_FILENAME);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    // Simulate a crash right after config publication before the journal state transitioned from prepared to committed.
+    writeFileSync(journalPath, JSON.stringify({ ...journal, state: "prepared" }, null, 2) + "\n");
+
+    // Because crash-prov in config.providers carries journal.importId in its note, apply must refuse!
+    await expect(runCcSwitchProviderImport({ mode: "apply", sourcePath: dbPath })).rejects.toThrow(
+      /active CC-Switch import journal already exists/,
+    );
+
+    // And restore must still roll back crash-prov and remove the journal.
+    const restored = await runCcSwitchProviderImport({ mode: "restore" });
+    expect(restored).toEqual({
+      mode: "restore",
+      restored: 1,
+      restoredNames: ["crash-prov"],
+      alreadyAbsent: 0,
+      retainedEdited: 0,
+      retainedNames: [],
+    });
+    expect(loadConfig().providers["crash-prov"]).toBeUndefined();
+    expect(existsSync(journalPath)).toBe(false);
   });
 });

@@ -121,6 +121,7 @@ interface RawExtractedRow {
   genericModel: string | null;
   genericWireApi: string | null;
   codexTomlLines: string | null;
+  codexProjection?: { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason };
 }
 
 // Token-like prefixes or bearer markers that must never appear inside extracted non-secret fields.
@@ -540,21 +541,56 @@ WITH RECURSIVE
       END AS raw_cfg
     FROM providers
   ),
-  lines(rid, line, rest, idx) AS (
-    SELECT rid, substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), substr(raw_cfg, instr(raw_cfg, char(10)) + 1), 1
+  lines(rid, line, rest, idx, sec) AS (
+    SELECT
+      rid,
+      trim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')),
+      substr(raw_cfg, instr(raw_cfg, char(10)) + 1),
+      1,
+      CASE
+        WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+          CASE
+            WHEN substr(ltrim(replace(substr(raw_cfg, 1, instr(raw_cfg, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
+              THEN 'mp'
+            ELSE 'other'
+          END
+        ELSE 'root'
+      END
     FROM base WHERE raw_cfg IS NOT NULL AND instr(raw_cfg, char(10)) > 0
     UNION ALL
-    SELECT rid, substr(rest, 1, instr(rest, char(10)) - 1), substr(rest, instr(rest, char(10)) + 1), idx + 1
-    FROM lines WHERE instr(rest, char(10)) > 0 AND idx < 500
+    SELECT
+      rid,
+      trim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')),
+      substr(rest, instr(rest, char(10)) + 1),
+      idx + 1,
+      CASE
+        WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 1) = '[' THEN
+          CASE
+            WHEN substr(ltrim(replace(substr(rest, 1, instr(rest, char(10)) - 1), char(13), '')), 1, 17) = '[model_providers.'
+              THEN 'mp'
+            ELSE 'other'
+          END
+        ELSE sec
+      END
+    FROM lines WHERE instr(rest, char(10)) > 0 AND idx <= 500
   ),
   projected_lines AS (
     SELECT rid, idx,
       CASE
-        WHEN ltrim(replace(line, char(13), '')) = '' OR substr(ltrim(replace(line, char(13), '')), 1, 1) = '#' THEN NULL
-        WHEN substr(ltrim(replace(line, char(13), '')), 1, 1) = '[' THEN ltrim(replace(line, char(13), ''))
+        WHEN idx > 500 THEN '[__MALFORMED_LINE__]'
+        WHEN line = '' OR substr(line, 1, 1) = '#' THEN NULL
+        WHEN line = '[__MULTILINE_REFUSED__]' THEN '[__MULTILINE_REFUSED__]'
+        WHEN substr(line, 1, 1) = '[' THEN
+          CASE
+            WHEN sec = 'mp' AND instr(line, ']') > 0 THEN substr(line, 1, instr(line, ']'))
+            WHEN instr(line, ']') > 0 THEN '[other]'
+            ELSE '[__MALFORMED_LINE__]'
+          END
         WHEN instr(line, '=') = 0 THEN '[__MALFORMED_LINE__]'
-        WHEN trim(trim(substr(line, 1, instr(line, '=') - 1)), ' "''') IN ('model', 'model_provider', 'base_url', 'openai_base_url', 'wire_api')
-          THEN ltrim(replace(line, char(13), ''))
+        WHEN sec = 'root' AND trim(trim(substr(line, 1, instr(line, '=') - 1)), ' "''') IN ('model', 'model_provider', 'base_url', 'openai_base_url', 'wire_api')
+          THEN line
+        WHEN sec = 'mp' AND trim(trim(substr(line, 1, instr(line, '=') - 1)), ' "''') IN ('base_url', 'wire_api')
+          THEN line
         ELSE 'ignored_key = "omitted"'
       END AS safe_line
     FROM lines
@@ -580,7 +616,7 @@ LEFT JOIN safe_toml s ON b.rid = s.rid
 ORDER BY b.sort_ord ASC, b.id ASC, b.app_type ASC
 `;
 
-function readSqliteRows(sourcePath: string): RawExtractedRow[] {
+export function readSqliteRows(sourcePath: string): RawExtractedRow[] {
   let db: Database | undefined;
   try {
     db = new Database(sourcePath, { readonly: true, create: false });
@@ -657,6 +693,61 @@ export function scanCcSwitchJsonBytes(bytes: Uint8Array): RawExtractedRow[] {
       return JSON.parse(`"${raw}"`) as string;
     } catch {
       throw new CcSwitchImportError("Malformed CC-Switch JSON source.");
+    }
+  }
+
+  function parseJsonEscapedTomlInPlace(bounds: { start: number; end: number }): { ok: true; value: CodexTomlProjection } | { ok: false; reason: CcSwitchInvalidReason } {
+    const out = new Uint8Array(bounds.end - bounds.start);
+    const encodeInto = new TextEncoder();
+    let readIdx = bounds.start;
+    let writeIdx = 0;
+    try {
+      while (readIdx < bounds.end) {
+        const b = bytes[readIdx]!;
+        if (b !== 0x5c) {
+          out[writeIdx++] = b;
+          readIdx++;
+          continue;
+        }
+        readIdx++;
+        if (readIdx >= bounds.end) return { ok: false, reason: "malformed_entry" };
+        const esc = bytes[readIdx]!;
+        readIdx++;
+        if (esc === 0x22 || esc === 0x5c || esc === 0x2f) out[writeIdx++] = esc;
+        else if (esc === 0x6e) out[writeIdx++] = 0x0a;
+        else if (esc === 0x72) out[writeIdx++] = 0x0d;
+        else if (esc === 0x74) out[writeIdx++] = 0x09;
+        else if (esc === 0x62) out[writeIdx++] = 0x08;
+        else if (esc === 0x66) out[writeIdx++] = 0x0c;
+        else if (esc === 0x75) {
+          if (readIdx + 4 > bounds.end) return { ok: false, reason: "malformed_entry" };
+          const hex = decoder.decode(bytes.subarray(readIdx, readIdx + 4));
+          if (!/^[0-9A-Fa-f]{4}$/.test(hex)) return { ok: false, reason: "malformed_entry" };
+          readIdx += 4;
+          let codePoint = parseInt(hex, 16);
+          if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+            if (readIdx + 6 > bounds.end || bytes[readIdx] !== 0x5c || bytes[readIdx + 1] !== 0x75) {
+              return { ok: false, reason: "malformed_entry" };
+            }
+            const lowHex = decoder.decode(bytes.subarray(readIdx + 2, readIdx + 6));
+            if (!/^[0-9A-Fa-f]{4}$/.test(lowHex)) return { ok: false, reason: "malformed_entry" };
+            const low = parseInt(lowHex, 16);
+            if (low < 0xdc00 || low > 0xdfff) return { ok: false, reason: "malformed_entry" };
+            readIdx += 6;
+            codePoint = ((codePoint - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+          } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
+            return { ok: false, reason: "malformed_entry" };
+          }
+          const encoded = encodeInto.encode(String.fromCodePoint(codePoint));
+          out.set(encoded, writeIdx);
+          writeIdx += encoded.length;
+        } else {
+          return { ok: false, reason: "malformed_entry" };
+        }
+      }
+      return parseCodexTomlBytes(out.subarray(0, writeIdx));
+    } finally {
+      out.fill(0);
     }
   }
 
@@ -783,7 +874,7 @@ export function scanCcSwitchJsonBytes(bytes: Uint8Array): RawExtractedRow[] {
       } else if (key === "config") {
         skipWs();
         if (bytes[pos] === 0x22) {
-          row.codexTomlLines = decodeBoundedString(scanStringBounds());
+          row.codexProjection = parseJsonEscapedTomlInPlace(scanStringBounds());
         } else {
           skipValue();
         }
@@ -971,6 +1062,7 @@ function readSourceRows(sourcePath: string): RawExtractedRow[] {
   let fd: number | undefined;
   let isSqlite = false;
   let size = 0;
+  let jsonBuf: Buffer | undefined;
   try {
     fd = openSync(resolved, "r");
     const st = statSync(resolved);
@@ -982,6 +1074,21 @@ function readSourceRows(sourcePath: string): RawExtractedRow[] {
       isSqlite = true;
     } else if (/\.(?:db|sqlite|sqlite3)$/i.test(resolved)) {
       throw new CcSwitchImportError("CC-Switch SQLite source is not a valid SQLite 3 file.");
+    } else {
+      if (size === 0 || size > MAX_JSON_BYTES) {
+        throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
+      }
+      jsonBuf = Buffer.allocUnsafe(size);
+      let offset = 0;
+      while (offset < size) {
+        const got = readSync(fd, jsonBuf, offset, size - offset, offset);
+        if (got <= 0) break;
+        offset += got;
+      }
+      if (offset !== size) {
+        jsonBuf.fill(0);
+        throw new CcSwitchImportError("CC-Switch JSON source changed while reading.");
+      }
     }
   } catch (error) {
     if (error instanceof CcSwitchImportError) throw error;
@@ -998,14 +1105,10 @@ function readSourceRows(sourcePath: string): RawExtractedRow[] {
     }
     return readSqliteRows(resolved);
   }
-  if (size === 0 || size > MAX_JSON_BYTES) {
-    throw new CcSwitchImportError("CC-Switch JSON source is empty or exceeds the maximum supported size.");
-  }
-  const bytes = new Uint8Array(readFileSync(resolved));
   try {
-    return scanCcSwitchJsonBytes(bytes);
+    return scanCcSwitchJsonBytes(jsonBuf!);
   } finally {
-    bytes.fill(0);
+    jsonBuf?.fill(0);
   }
 }
 
@@ -1033,7 +1136,17 @@ function evaluateExtractedRow(
     baseUrl = (row.claudeBaseUrl ?? row.genericBaseUrl ?? "").trim() || undefined;
     defaultModel = (row.claudeModel ?? row.genericModel ?? "").trim() || undefined;
   } else if (appType === "codex") {
-    if (row.codexTomlLines !== null) {
+    if (row.codexProjection !== undefined) {
+      if (!row.codexProjection.ok) return row.codexProjection;
+      const resolved = resolveCodexProjection(row.codexProjection.value);
+      if (!resolved.ok) return resolved;
+      baseUrl = resolved.baseUrl.trim();
+      defaultModel = resolved.defaultModel?.trim() || (row.genericModel ?? "").trim() || undefined;
+      const wire = resolved.wireApi.trim().toLowerCase();
+      if (wire === "responses" || wire === "openai-responses") adapter = "openai-responses";
+      else if (wire === "chat" || wire === "chat_completions" || wire === "openai-completions" || wire === "openai-chat") adapter = "openai-chat";
+      else return { ok: false, reason: "malformed_entry" };
+    } else if (row.codexTomlLines !== null) {
       const encoder = new TextEncoder();
       const tomlBytes = encoder.encode(row.codexTomlLines);
       try {
@@ -1077,10 +1190,12 @@ function evaluateExtractedRow(
   if (providerBaseUrlConfigError(baseUrl) !== null) {
     return { ok: false, reason: "invalid_base_url" };
   }
-  const strictDestErr = providerDestinationConfigError(targetName, { baseUrl, allowPrivateNetwork: false });
+  // Classify against a synthetic non-registry name so local registry names (like "ollama")
+  // still require explicit --allow-private-network opt-in when imported from CC-Switch.
+  const strictDestErr = providerDestinationConfigError("__cc_switch_imported__", { baseUrl, allowPrivateNetwork: false });
   if (strictDestErr !== null) {
-    const permissiveDestErr = providerDestinationConfigError(targetName, { baseUrl, allowPrivateNetwork: true });
-    if (permissiveDestErr !== null) {
+    const permissiveDestErr = providerDestinationConfigError("__cc_switch_imported__", { baseUrl, allowPrivateNetwork: true });
+    if (permissiveDestErr !== null || providerDestinationConfigError(targetName, { baseUrl, allowPrivateNetwork: true }) !== null) {
       return { ok: false, reason: "invalid_base_url" };
     }
     if (!allowPrivateNetwork) {
