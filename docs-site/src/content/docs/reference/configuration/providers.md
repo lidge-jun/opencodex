@@ -102,7 +102,7 @@ quota consumption between adapters. Existing BigModel CN monitor selection remai
 separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
 
 ## Provider-related top-level fields
-
+[Codex upload reduction options](/reference/configuration/codex-upload-reduction/) are documented separately.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `providers` | `Record<string, OcxProviderConfig>` | — | Map of provider name to provider config. |

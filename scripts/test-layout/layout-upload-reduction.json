@@ -1,0 +1,8 @@
+{
+  "codex-ws-recovery-budget.test.ts": "responses",
+  "responses-spill-compression.test.ts": "responses",
+  "codex-ws-cache-miss.test.ts": "responses",
+  "codex-ws-incremental.test.ts": "responses",
+  "upstream-history-slim.test.ts": "responses",
+  "codex-ws-live-bind.test.ts": "config"
+}

@@ -8,6 +8,7 @@ import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { warnDegradedTopLevelOptIns } from "../../src/config/load-degrade";
 import { codexWsReuseAcrossTurnsEnabled, setCodexWsReuseAcrossTurns } from "../../src/config/codex-ws-reuse-setting";
+import { bindCodexWsIncrementalConfig, codexWsIncrementalUploadEnabled, setCodexWsIncrementalUpload } from "../../src/config/codex-ws-incremental-setting";
 function harness(failSave = false) {
   const config = getDefaultConfig();
   let saves = 0;
@@ -103,8 +104,9 @@ test("reasoning retention failed initial save restores key omission", async () =
 });
 
 for (const enabled of [false, true]) {
-  test(`malformed reasoning retention warns while WebSocket reuse stays ${enabled}`, () => {
+  test(`malformed reasoning retention warns; only the live bind sets WebSocket reuse ${enabled}`, () => {
     const priorReuse = codexWsReuseAcrossTurnsEnabled();
+    const priorIncremental = codexWsIncrementalUploadEnabled();
     const priorWarn = console.warn;
     const warnings: string[] = [];
     console.warn = (value: unknown) => { warnings.push(String(value)); };
@@ -113,12 +115,15 @@ for (const enabled of [false, true]) {
       const validated = { ...getDefaultConfig(), codexWsReuseAcrossTurns: enabled };
       const raw = { ...validated, reasoningRetention: { maxTokens: "private-fixture-value" } };
       warnDegradedTopLevelOptIns(raw, validated);
+      expect(codexWsReuseAcrossTurnsEnabled()).toBe(!enabled);
+      bindCodexWsIncrementalConfig(validated);
       expect(codexWsReuseAcrossTurnsEnabled()).toBe(enabled);
       expect(warnings.filter(value => value.includes("reasoningRetention"))).toHaveLength(1);
       expect(warnings.join("\n")).not.toContain("private-fixture-value");
       expect(validated.reasoningRetention).toBeUndefined();
     } finally {
       console.warn = priorWarn;
+      setCodexWsIncrementalUpload(priorIncremental);
       setCodexWsReuseAcrossTurns(priorReuse);
     }
   });

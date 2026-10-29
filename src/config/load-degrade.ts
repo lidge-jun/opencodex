@@ -1,4 +1,3 @@
-import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -137,7 +136,6 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
   if (nativeReasoningRetentionConfigError(rawParsed)) console.warn("⚠️  invalid nativeReasoningRetention disabled; model and account switch allowances remain off");
-  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");

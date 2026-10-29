@@ -280,6 +280,14 @@ function upstreamRequestCompressionError(value: unknown): string | null {
   return "schema_invalid: upstreamRequestCompression: must be \"off\", \"gzip\" or \"zstd\"";
 }
 
+function upstreamHistorySlimConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamHistorySlim")) return null;
+  const mode = raw.upstreamHistorySlim;
+  if (mode === undefined || mode === "off" || mode === "codex") return null;
+  return "schema_invalid: upstreamHistorySlim: must be \"off\" or \"codex\"";
+}
+
 function plaintextV2AgentMessagesError(value: unknown): string | null {
   return malformedPlaintextV2AgentMessagesWarning(value)
     ? "schema_invalid: plaintextV2AgentMessages: must be a boolean or omitted"
@@ -743,6 +751,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
     ?? upstreamRequestCompressionError(value)
+    ?? upstreamHistorySlimConfigError(value)
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
