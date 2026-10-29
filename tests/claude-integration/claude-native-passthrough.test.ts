@@ -67,7 +67,9 @@ function cfg(anthropicBaseUrl: string, extraClaude?: Record<string, unknown>): O
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
-    connectTimeoutMs: 250,
+    // Success paths wait for a loaded local fixture. The header-timeout case asks for its short
+    // deadline explicitly; a fixed 250ms here turned slow fixture answers into 504s (#7884 CI).
+    connectTimeoutMs: INTERNAL_DEADLINE_MS,
     claudeCode: { anthropicBaseUrl, ...extraClaude },
   } as OcxConfig;
 }
@@ -1136,7 +1138,7 @@ test.each([
 
 test("an unreachable upstream logs the fetch failure as the reason", async () => {
   // Stubbed like the reject-path activation test in claude-messages-endpoint.test.ts: a real
-  // refusal can take longer than cfg()'s 250 ms header deadline on some platforms.
+  // refusal can be slower than a short header deadline on some platforms.
   const refusedOrigin = "http://127.0.0.1:1";
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1189,7 +1191,7 @@ test("a credential in a local failure message is redacted for the client as well
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
   const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
   try {
-    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`);
+    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
     expect(res.status).toBe(504);
     expect(row.status).toBe(504);
     expect(row.upstreamError).toBe("anthropic passthrough timed out waiting for response headers");
@@ -1319,9 +1321,6 @@ async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<stri
   const { clearRequestLogsForTests } = await import("../../src/server/request-log");
   clearRequestLogsForTests();
   const config = cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude);
-  // These cases assert body failures, not the fixture's 250ms header deadline.
-  // Hosted Windows reached the wrong header-timeout branch in run 40796504652.
-  if (process.platform === "win32") config.connectTimeoutMs = INTERNAL_DEADLINE_MS;
   saveConfig(config);
   const server = startServer(0);
   try {
