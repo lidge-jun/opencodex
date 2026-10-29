@@ -154,6 +154,7 @@ export default defineConfig({
               items: [
                 { label: "Overview", translations: { fr: "Vue d’ensemble", ko: "개요", "zh-CN": "概览", "zh-TW": "概覽", ru: "Обзор", ja: "概要", tr: "Genel Bakış" }, slug: "reference/configuration" },
                 { label: "Providers", translations: { fr: "Fournisseurs", ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "reference/configuration/providers" },
+                { label: "Catalog", translations: { fr: "Catalogue", ko: "카탈로그", "zh-CN": "目录", "zh-TW": "目錄", ru: "Каталог", ja: "カタログ", tr: "Katalog" }, slug: "reference/configuration/catalog" },
                 { label: "Routing", translations: { fr: "Routage", ko: "라우팅", "zh-CN": "路由", "zh-TW": "路由", ru: "Маршрутизация", ja: "ルーティング", tr: "Yönlendirme" }, slug: "reference/configuration/routing" },
                 { label: "Agents", translations: { fr: "Agents", ko: "에이전트", "zh-CN": "代理", "zh-TW": "代理", ru: "Агенты", ja: "エージェント", tr: "Ajanlar" }, slug: "reference/configuration/agents" },
                 { label: "Advisor", translations: { fr: "Conseiller", ko: "어드바이저", "zh-CN": "顾问", "zh-TW": "顧問", ru: "Консультант", ja: "アドバイザー", tr: "Danışman" }, slug: "reference/configuration/advisor" },

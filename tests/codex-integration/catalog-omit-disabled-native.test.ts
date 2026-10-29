@@ -152,6 +152,16 @@ test("exact selector disables omit only their native row and do not consume a co
   expect(omitDisabledNativeCatalogEntries(entries, { ...next, omitDisabledNativeModels: false })).toBe(entries);
 });
 
+test("an omission pass that drops nothing leaves control-plane rows in place", () => {
+  const entries = [
+    { ...native(), slug: "gpt-5.6-sol", opencodex_catalog_kind: "combo-native-alias-v1" },
+    { ...native(), slug: "codex-auto-review" },
+  ];
+  const next = { omitDisabledNativeModels: true, disabledModels: ["gpt-5.5"] };
+  expect(omitDisabledNativeCatalogEntries(entries, next).map(row => row.slug))
+    .toEqual(["gpt-5.6-sol", "codex-auto-review"]);
+});
+
 test("no supported native source keeps the existing null-template behavior", async () => {
   const unknown = { ...native(), slug: "gpt-unknown-fixture" };
   writeFileSync(path, JSON.stringify({ models: [unknown] }), "utf8");

@@ -21,6 +21,8 @@ export function omitDisabledNativeCatalogEntries(
     if (accountNative) return !disabled.has(slug) && !disabled.has(accountNative);
     return !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) || hasOcxRoutedAuthorship(entry) || !disabled.has(slug);
   });
+  // Nothing omitted: the flag must not change the catalog, control-plane rows included.
+  if (visible.length === entries.length) return entries;
   return hasOrdinaryNativeOpenAiRow(visible)
     ? visible : visible.filter(entry => !isCodexControlPlaneModel(entry.slug));
 }
