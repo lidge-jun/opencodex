@@ -145,7 +145,7 @@ export async function withRaisedInboundBodyAdmission(
   configuredLimit: number | undefined,
   work: () => Promise<Response>,
   onRefusal: (response: Response) => Response = response => response,
-  options?: { budget?: InboundBodyBudget; maxWaitMs?: number },
+  options?: { budget?: InboundBodyBudget; maxWaitMs?: number; onAdmissionError?: (error: unknown) => Response },
 ): Promise<Response> {
   const maxBytes = resolveInboundBodyLimitBytes(configuredLimit);
   if (req.method !== "POST" || !CONFIGURABLE_JSON_BODY_ROUTES.has(pathname)
@@ -164,6 +164,7 @@ export async function withRaisedInboundBodyAdmission(
     lease = await (options?.budget ?? inboundBodyBudget).acquire(maxBytes, req.signal, options?.maxWaitMs);
   } catch (error) {
     cancelUnreadBody(req, error);
+    if (options?.onAdmissionError) return options.onAdmissionError(error);
     throw error;
   }
   if (!lease) {
@@ -175,6 +176,7 @@ export async function withRaisedInboundBodyAdmission(
   if (req.signal.aborted) {
     lease.release();
     cancelUnreadBody(req, req.signal.reason);
+    if (options?.onAdmissionError) return options.onAdmissionError(req.signal.reason);
     throw req.signal.reason;
   }
   const unbind = bindInboundBodyLease(req, lease);
@@ -198,6 +200,8 @@ export function runAdmittedBodyWork(
   configuredLimit: number | undefined,
   work: () => Promise<Response>,
   refusalLog?: WorkflowRefusalLog,
+  mapRefusal?: (response: Response) => Response,
+  onAdmissionError?: (error: unknown) => Response,
 ): Promise<Response> {
   return withRaisedInboundBodyAdmission(req, codexCompatibleUrl(req.url).pathname, configuredLimit, work, refused => {
     if (refusalLog) {
@@ -208,6 +212,6 @@ export function runAdmittedBodyWork(
       });
       refusalLog.onLogged?.();
     }
-    return withCors(refused, req, policy);
-  });
+    return withCors(mapRefusal ? mapRefusal(refused) : refused, req, policy);
+  }, onAdmissionError ? { onAdmissionError } : undefined);
 }
