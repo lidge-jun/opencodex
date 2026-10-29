@@ -453,7 +453,8 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
         paused = true; real.writeFileSync(${JSON.stringify(ready)}, 'ready');
         const until = Date.now() + 20000;
         while (!real.existsSync(${JSON.stringify(release)})) {
-          if (Date.now() >= until) throw new Error('publisher release timed out');
+          // Exit, not throw: backupOriginal would catch a throw from linkSync and let the case pass.
+          if (Date.now() >= until) process.exit(2);
           Bun.sleepSync(5);
         }
         // The long case publishes only once the overlapping load has spent its whole recheck budget.
@@ -461,7 +462,7 @@ test.each([5, 500])("overlapping loads preserve protected originals with a %i ms
         if (${delay} === 500) {
           const spent = Date.now() + 20000;
           while (!real.existsSync(${JSON.stringify(exhausted)})) {
-            if (Date.now() >= spent) throw new Error("recheck budget never spent");
+            if (Date.now() >= spent) process.exit(3);
             Bun.sleepSync(5);
           }
         } else Bun.sleepSync(${delay});
