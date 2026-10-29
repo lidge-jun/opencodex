@@ -85,6 +85,27 @@ describe("cheapaimodel provider", () => {
     expect(wire("deepseek-v4-1-flash")).toMatchObject({ temperature: 0.5, top_p: 0.9 });
   });
 
+  test("sends deepseek-v4-1-flash an explicit none and its documented effort ladder", () => {
+    const provider = config().providers.cheapaimodel!;
+    const effort = (reasoning: string | undefined): unknown => {
+      const parsed: OcxParsedRequest = {
+        modelId: "deepseek-v4-1-flash",
+        context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        stream: false,
+        options: reasoning === undefined ? {} : { reasoning },
+      };
+      return JSON.parse(createOpenAIChatAdapter(provider).buildRequest(parsed).body as string).reasoning_effort;
+    };
+    // Omitting the field means high upstream, so none must reach the wire to turn reasoning off.
+    expect(effort("none")).toBe("none");
+    expect(effort("low")).toBe("low");
+    expect(effort("medium")).toBe("high");
+    expect(effort("high")).toBe("high");
+    expect(effort("xhigh")).toBe("high");
+    expect(effort("max")).toBe("max");
+    expect(effort(undefined)).toBeUndefined();
+  });
+
   test("keeps a same-named custom destination instead of retargeting it", () => {
     const custom = config({ baseUrl: "https://relay.example.test/v1" });
     expect(routeModel(custom, "cheapaimodel/custom-model").provider.baseUrl).toBe("https://relay.example.test/v1");
