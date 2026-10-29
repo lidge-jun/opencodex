@@ -607,10 +607,12 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
     if (isDigitByte(b)) totalDigits++;
   }
   if (sepCount === 0 && len >= 16) return false;
-  if (totalDigits > (kind === "id" ? 5 : 8)) return false;
+  if (kind === "id" && totalDigits > 5) return false;
 
   let segStart = 0;
   let mixedDigitsTotal = 0;
+  let nonDateDigits = totalDigits;
+  let usedDateExemption = false;
   for (let i = 0; i <= len; i++) {
     const b = i < len ? slice[i]! : 0x2d;
     const isSep = i === len || b === 0x2d || b === 0x5f || b === 0x2e || b === 0x2f || b === 0x3a;
@@ -631,7 +633,22 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
         if (isLowerByte(cb)) hasLower = true;
         if (isUpperByte(cb)) hasUpper = true;
       }
-      if (!segAllDigits) {
+      if (segAllDigits) {
+        const isDate8 =
+          kind === "model" && !usedDateExemption && segLen === 8
+          && slice[segStart] === 0x32 && slice[segStart + 1] === 0x30
+          && ((slice[segStart + 4]! - 0x30) * 10 + (slice[segStart + 5]! - 0x30)) >= 1
+          && ((slice[segStart + 4]! - 0x30) * 10 + (slice[segStart + 5]! - 0x30)) <= 12
+          && ((slice[segStart + 6]! - 0x30) * 10 + (slice[segStart + 7]! - 0x30)) >= 1
+          && ((slice[segStart + 6]! - 0x30) * 10 + (slice[segStart + 7]! - 0x30)) <= 31;
+        const isYear4 = kind === "model" && !usedDateExemption && segLen === 4 && slice[segStart] === 0x32 && slice[segStart + 1] === 0x30;
+        if (isDate8 || isYear4) {
+          usedDateExemption = true;
+          nonDateDigits -= segLen;
+        } else if (segLen > 4) {
+          return false;
+        }
+      } else {
         if (segHex && segLen >= 10) return false;
         if (segDigits >= 4) return false;
         if (segLen >= 10 && hasLower && hasUpper && segDigits >= 1) return false;
@@ -640,6 +657,7 @@ export function isAllowedMetadataBytes(slice: Uint8Array, kind: MetadataFieldKin
     }
     segStart = i + 1;
   }
+  if (kind === "model" && nonDateDigits > 8) return false;
   if (mixedDigitsTotal >= 5) return false;
   return true;
 }
@@ -1090,6 +1108,7 @@ WITH RECURSIVE
         WHEN json_valid(settings_config) AND json_type(settings_config, ?4) = 'text' THEN json_extract(settings_config, ?4)
         WHEN json_valid(settings_config) AND json_type(settings_config, ?5) = 'text' THEN json_extract(settings_config, ?5)
         WHEN json_valid(settings_config) AND json_type(settings_config, ?6) = 'text' THEN json_extract(settings_config, ?6)
+        WHEN json_valid(settings_config) AND json_type(settings_config, ?14) = 'text' THEN json_extract(settings_config, ?14)
         WHEN json_valid(settings_config) AND json_type(settings_config, ?7) = 'text' THEN json_extract(settings_config, ?7)
         ELSE NULL
       END AS raw_generic_url,
@@ -1336,6 +1355,7 @@ function readSqliteRowsFromBytes(sqliteBytes: Uint8Array): RawExtractedRow[] {
       "$.env.GEMINI_MODEL",
       "$.wire_api",
       "$.config",
+      "$.env.GOOGLE_GEMINI_BASE_URL",
     ) as Array<{
       rid: number;
       idBlob: Uint8Array | null;
@@ -1636,6 +1656,7 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
               "ANTHROPIC_MODEL",
               "ANTHROPIC_DEFAULT_SONNET_MODEL",
               "OPENAI_BASE_URL",
+              "GOOGLE_GEMINI_BASE_URL",
               "GEMINI_BASE_URL",
               "OPENAI_MODEL",
               "GEMINI_MODEL",
@@ -1650,7 +1671,7 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
             } else if (envKey === "ANTHROPIC_DEFAULT_SONNET_MODEL") {
               const v = readOptionalScalarString("model");
               if (v && !row.claudeModel) row.claudeModel = v;
-            } else if (envKey === "OPENAI_BASE_URL" || envKey === "GEMINI_BASE_URL") {
+            } else if (envKey === "OPENAI_BASE_URL" || envKey === "GOOGLE_GEMINI_BASE_URL" || envKey === "GEMINI_BASE_URL") {
               const v = readOptionalScalarString("url");
               if (v && !row.genericBaseUrl) row.genericBaseUrl = v;
             } else if (envKey === "OPENAI_MODEL" || envKey === "GEMINI_MODEL") {
