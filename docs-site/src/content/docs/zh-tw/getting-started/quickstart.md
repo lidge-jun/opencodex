@@ -1,9 +1,9 @@
 ---
 title: 快速入門
-description: 設定你的第一個 provider,用三條命令讓 OpenAI Codex 透過 opencodex 進行路由。
+description: "安裝 opencodex、新增第一個供應商，再連接你使用的程式開發工具：Codex、Claude Code、Claude Desktop、Grok Build 或其他支援的工具。"
 ---
 
-本指南將帶你從全新安裝,一路走到用一個非 OpenAI 模型執行 Codex。
+本指南帶你從全新安裝到在現有程式開發工具中送出第一個請求。步驟 1 和 2 適用所有工具；步驟 3 依工具分成簡短分支。[用戶端支援頁面](/zh-tw/reference/client-support/)列出各工具及連接方式。
 
 ## 1. 執行設定嚮導
 
@@ -56,9 +56,13 @@ ocx status
 ocx gui       # 在實際監聽埠開啟儀表板
 ```
 
-## 3. 使用 Codex
+## 3. 連接你的工具
 
-Codex 現在會透明地與 opencodex 通訊:
+選擇你使用的工具對應的分支。你可以連接多個工具，它們共用供應商與模型。
+
+### Codex
+
+如果你在步驟 1 接受了 Codex 提示，Codex 現在會透明地透過 opencodex 通訊。如果你拒絕了該提示，或設定因已有設定檔而結束，請在執行 Codex 之前開啟儀表板 **Connect** 頁面的 Codex 開關；[Codex 整合](/zh-tw/guides/codex-integration/)說明修改內容與還原方式。
 
 ```bash
 codex "Refactor this function for readability"
@@ -70,6 +74,42 @@ codex "Refactor this function for readability"
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
+
+### Claude Code
+
+安裝 `claude` CLI 後：
+
+```bash
+ocx claude
+```
+
+`ocx claude` 會在代理未執行時啟動它，並以指向 opencodex 的環境啟動 Claude Code。額外參數會原樣傳遞。層級預設值、其他啟動器和停用方式請參閱 [Claude Code](/zh-tw/guides/claude-code/)。
+
+### Claude Desktop
+
+```bash
+ocx claude desktop
+```
+
+全新安裝時會為整個應用程式設定閘道設定檔；已經使用 first-party 模式的安裝會保持原模式，可執行 `ocx claude desktop apply --gateway` 明確切換。first-party 模式讓 Desktop 繼續使用 claude.ai，只路由其 Code 分頁；詳見 [Claude Code](/zh-tw/guides/claude-code/) 的 Claude Desktop 模式一節。
+
+切換模式後，請完全結束並重新開啟 Claude Desktop。
+
+### Grok Build
+
+在本機監聽時，若 `~/.grok` 存在，`ocx start` 會將可見模型註冊至 `~/.grok/config.toml`。在 Grok Build 選擇 `ocx-*` 模型。遠端設定和受管理區塊請參閱 [Grok Build](/zh-tw/guides/grok-build/)。
+
+新增供應商或模型後，執行 `ocx ensure` 或重新啟動代理，Grok Build 才能看到它們。
+
+### 其他工具
+
+具備受管理整合的工具（OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code 等）可從儀表板的 **Connect** 頁面連接，或使用：
+
+```bash
+ocx integration client enable --client <id>
+```
+
+各工具的設定檔及生效時間請參閱[整合](/zh-tw/guides/integrations/)。其他接受自訂端點的工具可使用 OpenAI 相容基本 URL `http://localhost:10100/v1` 或 Anthropic 基本 URL `http://localhost:10100`。
 
 ## 選擇 sub-agent 模型（可選）
 

@@ -278,6 +278,11 @@ item/metadata limits and lifecycle behavior; raw continuation replay stays upstr
 
 ## Response-log inspection
 
+`src/lib/redact-folding.ts` uses an identity fold and UTF-16 offset map for ASCII
+strings without escape introducers when decoding is enabled, and all ASCII strings
+when it is disabled. Other strings keep the general Unicode/escape fold; all
+credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
+
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
 searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
 so `>` inside a single- or double-quoted attribute cannot hide later credential attributes.

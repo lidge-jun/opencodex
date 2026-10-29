@@ -479,7 +479,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "moonshot", label: "Moonshot (Kimi API)", baseUrl: MOONSHOT_INTL_BASE_URL, adapter: "openai-chat", authKind: "key",
     allowBaseUrlOverride: true,
     baseUrlChoices: MOONSHOT_BASE_URL_CHOICES,
-    dashboardUrl: "https://platform.moonshot.ai/console/api-keys", defaultModel: "kimi-k2.7-code", jawcodeBundle: "moonshot",
+    dashboardUrl: "https://platform.moonshot.ai/console/api-keys", defaultModel: "kimi-k3.1-pro", jawcodeBundle: "moonshot",
     models: KIMI_API_MODELS,
     modelContextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_API_MODEL_INPUT_MODALITIES,

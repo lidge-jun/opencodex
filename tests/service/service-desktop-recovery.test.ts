@@ -9,6 +9,7 @@ import { inspectDesktopRecovery, parseRecoveryAnswer, recoveryHomeIdentity,
 import { linuxRecoveryBirth, linuxRecoveryListeners, linuxRecoverySocket, macRecoveryPaths, macRecoveryRequirement,
   parseMacRecoveryPath, recoveryImageCandidate, recoverySibling, verifyMacRecoveryImage } from "../../src/service/desktop-recovery-process";
 import { repoPath } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const instance = "a".repeat(32);
 const endpoint = { pid: 123, port: 12345 };
@@ -311,17 +312,6 @@ describe("native Desktop recovery evidence", () => {
 
 // The Rust unit tests run in the native CI job. This Linux integration additionally executes
 // the same producer and an actually compiled Bun consumer, without injecting any process proof.
-//
-// rustc is usually a rustup proxy, which finds its toolchain through $HOME when RUSTUP_HOME and
-// CARGO_HOME are unset. The test preload points HOME at a sandbox, where the proxy finds no default
-// toolchain and exits 1 ("rustup could not choose a version of rustc to run"). Resolve both the way
-// rustup would under the real home, which the harness captures as OCX_REAL_HOME before rewriting HOME.
-const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
-const rustEnv = {
-  ...process.env,
-  RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
-  CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
-};
 test.skipIf(process.platform !== "linux" || !Bun.which("rustc"))("compiled bundled CLI verifies real native recovery and ignores a protocol-speaking renamed outsider", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-recovery-native-"));
   const appConfig = join(root, "xdg", "com.opencodex.desktop"), config = join(root, "config");
@@ -340,14 +330,18 @@ std::thread::park(); }`;
 import { runDesktopColdStart, productionDesktopColdStartDeps } from ${JSON.stringify(repoPath("src", "cli", "ensure-desktop-cold-start.ts"))};
 const evidence = await inspectDesktopRecovery(); const result = await runDesktopColdStart({ ...productionDesktopColdStartDeps(async () => ({ fixture: true })), desktopRecovery: async () => evidence, info: () => {} });
 console.log(JSON.stringify({ evidence, result }));`);
-  const rustBuild = Bun.spawnSync([Bun.which("rustc")!, "--edition=2021", nativeSource, "-o", app], { env: rustEnv, stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  // The compiler's own words travel with a failure: a bare "Received: 1" in 52ms left nothing to
-  // tell a compile error from a toolchain that never started.
-  expect({ exitCode: rustBuild.exitCode, stderr: rustBuild.stderr.toString().slice(-2_000) })
-    .toEqual({ exitCode: 0, stderr: expect.any(String) });
+  // The preload sandboxes HOME; rustup must still find the installed toolchain (#7884).
+  const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
+  const rustEnv = { ...process.env,
+    RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
+    CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
+  };
+  // Hosted runs killed rustc at 30s while other heads passed. Keep a bounded
+  // real-child budget and report the compiler's output rather than only a null/1 exit.
+  const rustBuild = Bun.spawnSync([Bun.which("rustc")!, "--edition=2021", nativeSource, "-o", app], { env: rustEnv, stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS });
+  expect(rustBuild.exitCode, `rustc (signal=${rustBuild.signal}):\n${rustBuild.stderr.toString()}${rustBuild.stdout.toString()}`).toBe(0);
   const build = Bun.spawnSync([process.execPath, "build", "--compile", entry, "--outfile", cli], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect({ exitCode: build.exitCode, stderr: build.stderr.toString().slice(-2_000) })
-    .toEqual({ exitCode: 0, stderr: expect.any(String) });
+  expect(build.exitCode, `bun build (signal=${build.signal}):\n${build.stderr.toString()}${build.stdout.toString()}`).toBe(0);
   const env = { ...process.env, XDG_CONFIG_HOME: join(root, "xdg"), OPENCODEX_HOME: config };
   let child: ReturnType<typeof Bun.spawn> | undefined;
   const foreignSockets: Socket[] = [];
@@ -418,4 +412,4 @@ console.log(JSON.stringify({ evidence, result }));`);
     await new Promise<void>(resolve => foreign.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
-}, 60_000);
+}, SPAWN_BUDGET_MS + 30_000);
