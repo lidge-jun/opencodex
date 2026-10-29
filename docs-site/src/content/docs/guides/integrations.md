@@ -78,8 +78,7 @@ your opencodex config:
 { "omoClientExport": { "api": "openai-responses" } }
 ```
 
-Restart the proxy to load the edited config (`ocx service restart` for a service install, or stop
-and start `ocx start`), then refresh the omo integration from **Connect → omo** in the dashboard.
+Restart the proxy to load the edited config (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh the omo integration from **Connect → omo** in the dashboard.
 Refreshing alone uses the running proxy's config and does not reload the config file.
 
 The setting applies only to omo; Pi, Gentle Shell and the other Pi-format clients keep
