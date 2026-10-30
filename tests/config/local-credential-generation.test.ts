@@ -449,7 +449,9 @@ test("a direct target replacing itself with identical bytes still advances the g
     const auth = join(f.codex, "auth.json");
     const shadow = join(f.codex, "auth-shadow.tmp");
     f.put(auth, { OPENAI_API_KEY: "fixture-native-key" });
-    const settled = await waitForNewGeneration(f.inventory, before);
+    const writeObserved = await waitForNewGeneration(f.inventory, before);
+    expect(writeObserved).toBeDefined();
+    const settled = await settleGeneration(f.inventory);
     expect(settled).toBeDefined();
     // Rebind the directory entry to the same inode: the bytes stay identical, so
     // only the observed event itself -- never content -- may advance coverage.
