@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
-// NTFS file IDs exceed 2^53; these modules compare file identity, which must come from
-// stat calls made with { bigint: true }. Each scope names the declaration that observes it.
+// NTFS file IDs exceed 2^53; these modules compare file identity, which must come from stat
+// calls made with { bigint: true }. A lexical tripwire over the named declarations, not a
+// full parser: it catches the regression forms below and fails closed on scopes it cannot find.
 const scopes: Record<string, string[]> = {
   "src/config/initialize.ts": ["identifiesDescriptor"],
   "src/service/state-lock.ts": ["readLockSnapshot"],
@@ -20,20 +21,58 @@ const scopes: Record<string, string[]> = {
   "src/codex/catalog/write-audit.ts": ["appendCatalogWriteAudit"],
 };
 
-/** Blank string, template and comment contents (offsets kept) so only code is balanced or matched. */
+const REGEX_PRECEDES = new Set(["", "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "<", ">", "~", "^"]);
+
+/**
+ * Blank literal text (strings, template text, regex literals, comments) keeping offsets, so only
+ * code is balanced or matched. Template ${...} expressions stay code.
+ */
 function maskNonCode(source: string): string {
   const out = source.split("");
-  let index = 0;
   const blank = (from: number, to: number) => { for (let at = from; at < to; at++) if (out[at] !== "\n") out[at] = " "; };
+  const previousToken = (at: number): string => { let back = at - 1; while (back >= 0 && /\s/.test(out[back]!)) back--; return back < 0 ? "" : out[back]!; };
+  const templateDepths: number[] = [];
+  let braces = 0;
+  let index = 0;
+  const scanTemplate = (from: number): number => {
+    let at = from;
+    while (at < source.length) {
+      if (source[at] === "\\") { at += 2; continue; }
+      if (source[at] === "`") { blank(from, at); return at + 1; }
+      if (source[at] === "$" && source[at + 1] === "{") { blank(from, at); templateDepths.push(braces); braces++; return at + 2; }
+      at++;
+    }
+    blank(from, at);
+    return at;
+  };
   while (index < source.length) {
     const char = source[index]!;
     const next = source[index + 1];
     if (char === "/" && next === "/") { const end = source.indexOf("\n", index); const stop = end < 0 ? source.length : end; blank(index, stop); index = stop; continue; }
     if (char === "/" && next === "*") { const end = source.indexOf("*/", index + 2); const stop = end < 0 ? source.length : end + 2; blank(index, stop); index = stop; continue; }
-    if (char === "'" || char === '"' || char === "`") {
+    if (char === "'" || char === '"') {
       let at = index + 1;
-      while (at < source.length && source[at] !== char) at += source[at] === "\\" ? 2 : 1;
+      while (at < source.length && source[at] !== char && source[at] !== "\n") at += source[at] === "\\" ? 2 : 1;
       blank(index + 1, at); index = at + 1; continue;
+    }
+    if (char === "`") { index = scanTemplate(index + 1); continue; }
+    if (char === "/" && REGEX_PRECEDES.has(previousToken(index))) {
+      let at = index + 1;
+      let inClass = false;
+      while (at < source.length && source[at] !== "\n" && (inClass || source[at] !== "/")) {
+        if (source[at] === "\\") { at += 2; continue; }
+        if (source[at] === "[") inClass = true;
+        else if (source[at] === "]") inClass = false;
+        at++;
+      }
+      blank(index + 1, at); index = at + 1; continue;
+    }
+    if (char === "{") braces++;
+    if (char === "}") {
+      braces--;
+      if (templateDepths.length > 0 && braces === templateDepths[templateDepths.length - 1]) {
+        templateDepths.pop(); index = scanTemplate(index + 1); continue;
+      }
     }
     index++;
   }
@@ -49,18 +88,19 @@ function matching(code: string, open: number, left: string, right: string): numb
   return -1;
 }
 
-/** The body of NAME's declaration (function or method), never of a call to it. */
+/** The body of NAME's declaration: a function, or a method head whose body opens on the same line. */
 function declarationBody(code: string, name: string): [number, number] | null {
-  for (const match of code.matchAll(new RegExp(`(?:\\bfunction\\s+|^[ \\t]*(?:export\\s+)?(?:async\\s+)?)${name}\\s*\\(`, "gm"))) {
+  const head = new RegExp(`(?:\\bfunction\\s+|^[ \\t]*(?:(?:export|async|public|private|protected|static|override)\\s+)*)${name}\\s*\\(`, "gm");
+  for (const match of code.matchAll(head)) {
     const close = matching(code, match.index! + match[0].length - 1, "(", ")");
     if (close < 0) continue;
     let at = close + 1;
-    while (/\s/.test(code[at] ?? "")) at++;
+    while (code[at] === " " || code[at] === "\t") at++;
     if (code[at] === ":") {
       at++;
       while (/\s/.test(code[at] ?? "")) at++;
       if (code[at] === "{") at = matching(code, at, "{", "}") + 1;
-      while (at < code.length && code[at] !== "{" && code[at] !== ";") at++;
+      while (at < code.length && code[at] !== "{" && code[at] !== ";" && code[at] !== "\n") at++;
     }
     if (code[at] !== "{") continue;
     const end = matching(code, at, "{", "}");
@@ -69,17 +109,17 @@ function declarationBody(code: string, name: string): [number, number] | null {
   return null;
 }
 
-/** Every stat call in a masked body with its full argument text, nested parentheses included. */
-function statCalls(code: string, source: string, [from, to]: [number, number]): Array<{ call: string; args: string }> {
-  const body = code.slice(from, to);
-  const calls: Array<{ call: string; args: string }> = [];
-  for (const match of body.matchAll(/\b(?:lstatSync|fstatSync|statSync|lstat|stat|handle\.stat)\s*\(/g)) {
-    const start = from + match.index!;
-    const close = matching(code, start + match[0].length - 1, "(", ")");
-    if (close < 0) continue;
-    calls.push({ call: source.slice(start, close + 1), args: code.slice(start + match[0].length, close) });
+/** The last top-level argument of a call's masked argument text. */
+function lastArgument(args: string): string {
+  let depth = 0;
+  let start = 0;
+  for (let at = 0; at < args.length; at++) {
+    const char = args[at]!;
+    if ("([{".includes(char)) depth++;
+    else if (")]}".includes(char)) depth--;
+    else if (char === "," && depth === 0) start = at + 1;
   }
-  return calls;
+  return args.slice(start).trim();
 }
 
 function inspect(source: string, names: string[], droid = false): string[] {
@@ -88,12 +128,17 @@ function inspect(source: string, names: string[], droid = false): string[] {
   for (const name of names) {
     const range = declarationBody(code, name);
     if (!range) { problems.push(`missing declaration: ${name}`); continue; }
-    const calls = statCalls(code, source, range);
-    if (calls.length === 0) problems.push(`no stat call in: ${name}`);
-    for (const { call, args } of calls) {
+    let observed = 0;
+    for (const match of code.slice(range[0], range[1]).matchAll(/\b(?:lstatSync|fstatSync|statSync|lstat|stat|handle\.stat)\s*\(/g)) {
+      const start = range[0] + match.index!;
+      const close = matching(code, start + match[0].length - 1, "(", ")");
+      if (close < 0) { problems.push(`unbalanced stat call in: ${name}`); continue; }
+      const call = source.slice(start, close + 1);
       if (droid && /^lstatSync\(root\)$/.test(call)) continue;
-      if (!/\{\s*bigint\s*:\s*true\s*\}/.test(args)) problems.push(`numeric stat: ${call}`);
+      observed++;
+      if (!/^\{\s*bigint\s*:\s*true\s*\}$/.test(lastArgument(code.slice(start + match[0].length, close)))) problems.push(`numeric stat: ${call}`);
     }
+    if (observed === 0) problems.push(`no stat call in: ${name}`);
   }
   if (/\bNumber\s*\([^)]*\.(?:ino|dev)\b/.test(code)) problems.push("numeric identity");
   return problems;
@@ -106,20 +151,29 @@ describe("file identity caller stats", () => {
     expect(inspect("function check() { const s = lstatSync(join(root, name)); return s.ino === 1; }", ["check"]))
       .toEqual(["numeric stat: lstatSync(join(root, name))"]);
     expect(inspect("function check() { return lstatSync(join(root, name), { bigint: true }).ino; }", ["check"])).toEqual([]);
+    expect(inspect("function check() { return lstatSync(p, convert({ bigint: true })).ino; }", ["check"]))
+      .toEqual(["numeric stat: lstatSync(p, convert({ bigint: true }))"]);
     expect(inspect("function check() { const s = lstatSync(path, { bigint: true }); return Number(s.ino); }", ["check"]))
       .toEqual(["numeric identity"]);
   });
 
-  test("strings and comments cannot hide or invent a call", () => {
+  test("strings, templates, regexes and comments cannot hide or invent a call", () => {
     expect(inspect('function check() { const a = lstatSync(join(root, "(")); const b = lstatSync(p, { bigint: true }); }', ["check"]))
       .toEqual(['numeric stat: lstatSync(join(root, "("))']);
     expect(inspect('function check() { const b = lstatSync(join(root, ")"), { bigint: true }); /* lstatSync(x) */ }', ["check"])).toEqual([]);
+    expect(inspect("function check() { const b = lstatSync(p, { bigint: true }); return `${lstatSync(q).ino}`; }", ["check"]))
+      .toEqual(["numeric stat: lstatSync(q)"]);
+    expect(inspect("function check() { const r = /'(/; const a = lstatSync(p); // '\n}", ["check"]))
+      .toEqual(["numeric stat: lstatSync(p)"]);
   });
 
-  test("resolves the declaration, not an earlier call", () => {
-    const source = "function caller() { return check(); }\nfunction check() { return lstatSync(path).ino; }";
-    expect(inspect(source, ["check"])).toEqual(["numeric stat: lstatSync(path)"]);
+  test("resolves the declaration, not an earlier call, and needs a real observation", () => {
+    expect(inspect("function caller() { return check(); }\nfunction check() { return lstatSync(path).ino; }", ["check"]))
+      .toEqual(["numeric stat: lstatSync(path)"]);
+    expect(inspect("check()\n{ lstatSync(p, { bigint: true }); }\nfunction check() { return lstatSync(path).ino; }", ["check"]))
+      .toEqual(["numeric stat: lstatSync(path)"]);
     expect(inspect("function check() { return 1; }", ["check"])).toEqual(["no stat call in: check"]);
+    expect(inspect("function check() { lstatSync(root); }", ["check"], true)).toEqual(["no stat call in: check"]);
   });
 
   for (const [path, names] of Object.entries(scopes)) {
