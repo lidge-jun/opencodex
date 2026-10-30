@@ -583,6 +583,8 @@ export interface OcxConfig {
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
   dropCodexSafetyBuffering?: boolean;
+  /** Opt in to completing truncated plain-text translated Responses turns; default off. */
+  completeOnMaxOutputTokens?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *
@@ -714,6 +716,8 @@ export interface OcxConfig {
    * See {@link OcxOpencodeClientExportConfig}.
    */
   opencodeClientExport?: OcxOpencodeClientExportConfig;
+  /** Opt-in dialect for the managed Pi-based omo block; omitted keeps `openai-completions` (#7431). */
+  omoClientExport?: { api?: "openai-completions" | "openai-responses" };
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;
@@ -766,6 +770,11 @@ export interface OcxConfig {
    * classification. Models no list names and no price covers are never proposed.
    */
   codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
+  /**
+   * Measured-capability source for Codex role auto-assign. With an Artificial Analysis API key
+   * (a literal, ${ENV} or keychain reference) its indexes inform measured tiers.
+   */
+  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string } };
   /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
@@ -871,6 +880,8 @@ export interface OcxConfig {
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
   /** Canonical ChatGPT reasoning replay allowances; both default off. */
   nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
+  workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**

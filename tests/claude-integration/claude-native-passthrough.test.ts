@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -67,7 +67,9 @@ function cfg(anthropicBaseUrl: string, extraClaude?: Record<string, unknown>): O
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
-    connectTimeoutMs: 250,
+    // Success paths wait for a loaded local fixture. The header-timeout case asks for its short
+    // deadline explicitly; a fixed 250ms here turned slow fixture answers into 504s (#7884 CI).
+    connectTimeoutMs: INTERNAL_DEADLINE_MS,
     claudeCode: { anthropicBaseUrl, ...extraClaude },
   } as OcxConfig;
 }
@@ -1136,7 +1138,7 @@ test.each([
 
 test("an unreachable upstream logs the fetch failure as the reason", async () => {
   // Stubbed like the reject-path activation test in claude-messages-endpoint.test.ts: a real
-  // refusal can take longer than cfg()'s 250 ms header deadline on some platforms.
+  // refusal can be slower than a short header deadline on some platforms.
   const refusedOrigin = "http://127.0.0.1:1";
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1189,7 +1191,7 @@ test("a credential in a local failure message is redacted for the client as well
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
   const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
   try {
-    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`);
+    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
     expect(res.status).toBe(504);
     expect(row.status).toBe(504);
     expect(row.upstreamError).toBe("anthropic passthrough timed out waiting for response headers");
@@ -1318,7 +1320,8 @@ test("a client that leaves while a non-stream body is pending logs the cancel as
 async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<string, unknown>) {
   const { clearRequestLogsForTests } = await import("../../src/server/request-log");
   clearRequestLogsForTests();
-  saveConfig(cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude));
+  const config = cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude);
+  saveConfig(config);
   const server = startServer(0);
   try {
     const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
@@ -1353,7 +1356,7 @@ test("a stalled native stream logs a 502 incomplete row and keeps its diagnostic
   } finally {
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("a native stream over the byte cap logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
   const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
@@ -1366,7 +1369,7 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
   } finally {
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("a turn that sent message_stop and then stalls is finished: 200 terminal, no error frame", async () => {
   const source = new ReadableStream<Uint8Array>({

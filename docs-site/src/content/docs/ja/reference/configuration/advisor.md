@@ -60,6 +60,10 @@ description: manual、preflight、証拠に基づく adaptive ポリシーによ
 
 設定されたアドバイザーのプロバイダーは、ワーカーのプロバイダーと異なる場合があります。
 
+相談は、呼び出し元の取得済み API キーのモデル範囲・有料 combo への同意・デバイス別 fallback 制限と、Advisor 自身の受付キーのホスト制限の両方に従います。受付キーは、設定されていれば `OPENCODEX_API_AUTH_TOKEN` またはこのプロキシが受け付けるサービストークンファイル、なければ最初に設定された API キーです。キーの順序が意味を持つのはこの最後の場合だけです。Advisor モデルに届くキーを先頭に置かないと、すべての相談が利用できません。環境トークンまたはサービストークンが設定されているときは、そのトークンが相談を決めます。これらの規則は combo の選択、入れ子の判定モデル、再試行にも適用されます。満たせない相談は worker に利用不可の通知を返します。
+
+たとえば `allowMeteredComboTargets: false` の `laptop` キーは Advisor 経由で従量課金の combo ターゲットに費用を使えず、`fallback.devices.laptop.provider: false` は Advisor のプロバイダー fallback ホップも止めます。キーのない loopback 呼び出し元には、引き続き combo の `allowMeteredTargets: true` のオプトインが必要です。両方のキーが `allowMeteredComboTargets: true` を設定し、combo が `allowMeteredTargets: true` を設定していれば、公開バインドの loopback リスナー経由でも Advisor は従量課金ターゲットを使えます。サーバーは本文の容量待ちや本文の読み取りより前、リクエストを認証した時点で呼び出し元のポリシーを取得します。その後のキーや fallback の編集でその相談の範囲が広がることはありません。これはルーティングされた画像補助、compact リクエストとその判定モデル、WebSocket ターン内のすべての候補再試行にも適用されます。新しい WebSocket ターンはそれぞれ自分のポリシーを取得します。
+
 OpenCodex はプロバイダー API キー、Authorization ヘッダー、OAuth トークン、バックエンド専用の設定秘密、プロセス環境、隠された思考連鎖をそのプロンプトへ入れません。暗号化されたプロバイダー私有の推論を復号して転送することもしません。**タスク内容は一般には秘密除去されません。** タスクへ貼られた鍵、ツールが読んだファイル内の秘密、ツールやログが出力したトークンは送られることがあります。OpenCodex は汎用の DLP を実行しません。
 
 ## 権威

@@ -118,6 +118,21 @@ A consultation may send:
 
 The configured Advisor provider may differ from the worker provider.
 
+Consultations obey both the caller's captured API-key model scope, paid-combo consent and device
+fallback limits, and the host limits of Advisor's own admission key: `OPENCODEX_API_AUTH_TOKEN` or the service token file when set and accepted by this proxy, otherwise the first configured API key. Only in that last case does key
+order matter: put a key that can reach the Advisor model first, or every consultation is unavailable.
+When an environment or service token is set, that token controls the consultation instead. These rules also apply to combo choices, nested
+decision models and retries. A consultation that cannot satisfy them returns an unavailable
+notice to the worker.
+
+For example, a `laptop` key with `allowMeteredComboTargets: false` cannot spend on
+metered combo targets through Advisor, and `fallback.devices.laptop.provider: false`
+also blocks Advisor's provider fallback hops. An unkeyed loopback caller still needs
+the combo's `allowMeteredTargets: true` opt-in. When both keys set `allowMeteredComboTargets: true` and the combo sets `allowMeteredTargets: true`, Advisor can use its metered targets, also through the loopback listener of a public bind. The server captures caller policy when it
+authenticates the request, before waiting for body capacity or reading the body; later key or fallback edits cannot broaden that consultation.
+This also covers routed vision helpers, compact requests and their decision models, and every
+candidate retry within a WebSocket turn. Each new WebSocket turn captures its own policy.
+
 OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend-only
 config secrets, process environment, or hidden chain-of-thought into that prompt. It does not
 decrypt or forward encrypted provider-private reasoning. **Task content is not secret-redacted.**

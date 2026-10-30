@@ -53,6 +53,7 @@ import {
 import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { terminalRefusalFailure } from "./terminal-refusal";
+import { createMaxOutputCompletion, type MaxOutputCompletionOptions } from "./max-output-completion";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -73,7 +74,7 @@ export function bridgeToResponsesSSE(
   toolSearchToolNames?: Set<string>,
   onCancel?: () => void,
   heartbeatMs = 2_000,
-  options?: {
+  options?: MaxOutputCompletionOptions & {
     responseId?: string;
     /** Trusted structural grouping only; never provider state or execution authority. */
     outputItemIds?: { next(kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call"): string };
@@ -165,6 +166,7 @@ export function bridgeToResponsesSSE(
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope;
+  const maxOutputCompletion = createMaxOutputCompletion(options);
   const outputItemId = (kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call", prefix: string): string =>
     options?.outputItemIds?.next(kind) ?? `${prefix}_${uuid()}`;
 
@@ -852,6 +854,7 @@ export function bridgeToResponsesSSE(
           }
           if (next.done) { upstreamDone = true; break; }
           const event = next.value;
+          maxOutputCompletion.observe(event);
           let terminalEvent = false;
           // Invisible adapter heartbeats (and buffered web-search progress) count as upstream
           // liveness only — they must not suppress wire keepalives that re-arm Codex idle timers.
@@ -1293,7 +1296,7 @@ export function bridgeToResponsesSSE(
               // Suppression and terminal status must agree: withholding the compaction item while
               // still reporting success hands codex-rs a completed response with zero compaction
               // items, which it treats as fatal.
-              if (truncationReasonFor(event.stopReason)) {
+              if (truncationReasonFor(event.stopReason) && !maxOutputCompletion.completed) {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
                 // #1926 gap 2: bound the window in which a handed-out thought signature is
@@ -1337,6 +1340,14 @@ export function bridgeToResponsesSSE(
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
+              if (maxOutputCompletion.completed) {
+                const response = { ...responseSnapshot("completed", finishedItems, event.endTurn), usage: responsesUsage(event.usage) };
+                options?.onCompletedResponse?.(response, event.providerState);
+                emit("response.completed", { response });
+                reportTerminal("completed");
+                terminalEvent = true;
+                break;
+              }
               const refusal = options?.terminalRefusalAsFailed ? terminalRefusalFailure(event) : undefined;
               if (refusal) {
                 emit("response.failed", {
