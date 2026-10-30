@@ -31,7 +31,9 @@ export async function discoverAntigravitySiblings(
     if (sibling.id === activeAccountId || sibling.paused || sibling.needsReauth) continue;
     try {
       if (getConfigDir() !== root || !authorityCurrent()) break;
-      const snapshot = await getValidAccessSnapshotForAccount(name, sibling.id, { requireUsableAccount: true });
+      const snapshot = await getValidAccessSnapshotForAccount(name, sibling.id, {
+        requireUsableAccount: true, authorityCurrent: () => getConfigDir() === root && authorityCurrent(),
+      });
       const project = provider.project ?? snapshot.projectId;
       if (!project || !current(snapshot)) continue;
       const observation = captureAntigravityModelObservation();

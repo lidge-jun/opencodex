@@ -26,6 +26,11 @@ are excluded. `tests/oauth/generic-session-affinity.test.ts` and
 
 ## Combo sibling probes
 
+Antigravity sibling discovery passes its root/cache authority through `src/oauth/index.ts` to
+generic refresh dispatch. After the account lock is acquired and newer credentials are adopted,
+stale discovery stops before the token request without marking the account for reauthentication.
+A rotation already dispatched still persists its result under the existing credential CAS.
+
 Antigravity model routing in `src/oauth/generic-account-failover.ts` ranks siblings by configured strategy or family headroom only within the best readiness/model-support tier. A known omission stays excluded, and unknown support stays usable. Reactive model-404 rotation excludes accounts already attempted in the request and prefers positive support before unknown support without changing account-wide auth or cooldown state.
 
 `src/server/responses/core-combo.ts` asks `src/oauth/generic-account-failover.ts` whether a refused

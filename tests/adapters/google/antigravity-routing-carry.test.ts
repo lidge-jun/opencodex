@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { gatherRoutedModels } from "../../../src/codex/catalog";
 import { clearModelCache } from "../../../src/codex/model-cache";
 import * as outbound from "../../../src/lib/provider-outbound";
-import { credentialGeneration, getAccountCredentialWithStatus } from "../../../src/oauth/store";
+import * as oauth from "../../../src/oauth";
+import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredentialWithStatus } from "../../../src/oauth/store";
 import { preferredInitialAccount, routeAntigravityModel, clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import {
   ANTIGRAVITY_MODEL_DENIAL_TTL_MS, antigravityAccountSupportsModel, antigravityAccountRosterModelIds,
@@ -80,6 +81,7 @@ test("a root change during active discovery cannot start sibling probes in the n
 
 test("revoking discovery authority stops later sibling bearer sends", async () => {
   const { cfg } = setup();
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount");
   let releaseSibling!: () => void;
   let siblingSent!: () => void;
   const atSibling = new Promise<void>(resolve => { siblingSent = resolve; });
@@ -92,12 +94,61 @@ test("revoking discovery authority stops later sibling bearer sends", async () =
     return Response.json(payload("model-before-revocation"));
   }) as typeof fetch;
   const pending = gatherRoutedModels(cfg);
-  await atSibling;
-  clearModelCache(provider);
-  releaseSibling();
-  await pending;
-  expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
-  expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
+  try {
+    await atSibling;
+    clearModelCache(provider);
+    releaseSibling();
+    await pending;
+    expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
+    expect(resolver.mock.calls.some(([, accountId]) => accountId === "c")).toBe(false);
+    expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
+  } finally { releaseSibling(); await pending; resolver.mockRestore(); }
+});
+
+for (const revoke of [true, false]) test(`sibling refresh rechecks discovery authority after waiting for its lock (revoke=${revoke})`, async () => {
+  const { cfg, store, home } = setup();
+  store[provider].accounts[2]!.credential.expires = Date.now() - 1;
+  writeFileSync(join(home, "auth.json"), JSON.stringify(store));
+  const before = getAccountCredentialWithStatus(provider, "c")!;
+  const guard = await createOAuthRefreshIntentLock(provider, "c").acquire();
+  let entered!: () => void;
+  const atResolver = new Promise<void>(resolve => { entered = resolve; });
+  const originalResolver = oauth.getValidAccessSnapshotForAccount;
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation((...args) => {
+    const pending = originalResolver(...args);
+    if (args[1] === "c") entered();
+    return pending;
+  });
+  let refreshes = 0;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url === "https://oauth2.googleapis.com/token") {
+      refreshes++;
+      return Response.json({ access_token: "synthetic-c-new", refresh_token: "synthetic-refresh-c-new", expires_in: 3600 });
+    }
+    if (url.includes("/userinfo")) return Response.json({ email: "fixture@example.test" });
+    if (url.includes("loadCodeAssist")) return Response.json({ cloudaicompanionProject: "project-c" });
+    return Response.json(payload("model-after-lock"));
+  }) as typeof fetch;
+  const pending = gatherRoutedModels(cfg);
+  try {
+    await atResolver;
+    expect(refreshes).toBe(0);
+    if (revoke) clearModelCache(provider);
+    guard.release();
+    await pending;
+    expect(refreshes).toBe(revoke ? 0 : 1);
+    const after = getAccountCredentialWithStatus(provider, "c")!;
+    expect(after.needsReauth).toBe(false);
+    if (revoke) {
+      expect(after.credential).toEqual(before.credential);
+      expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
+    } else {
+      expect(after.credential.access).toBe("synthetic-c-new");
+      expect(after.credential.refresh).toBe("synthetic-refresh-c-new");
+      expect(antigravityAccountRosterModelIds(provider, "c")).toEqual(["model-after-lock"]);
+    }
+  } finally { guard.release(); await pending; resolver.mockRestore(); }
 });
 
 test("active discovery held by a sibling cannot erase a newer inference denial", async () => {
