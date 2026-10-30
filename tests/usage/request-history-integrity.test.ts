@@ -423,6 +423,11 @@ describe("request-history integrity lifecycle (#7966)", () => {
     const input = { provider: "a", model: "m1", now };
     expect(healthEvidenceForCandidate(input).sampleCount).toBe(1);
     clearHealthHistoryCacheForTests();
+    // The read above left this index's pages in the connection's page cache, and PRAGMA
+    // shrink_memory does not evict them on every SQLite build (macOS links the system library).
+    // Corrupt through a fresh connection, as the other corruption cases do.
+    closeRequestHistoryIndex();
+    await openRequestHistoryIndex();
     const handle = requestHistoryDb();
     const canonical = readFileSync(usageLogPath());
     corruptModelIndex(handle, path, healthQueryIndex(handle));
