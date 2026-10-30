@@ -44,14 +44,18 @@ async function imageData(url: string, signal: AbortSignal): Promise<{ dataUrl: s
   return { dataUrl: "data:image/" + mime + ";base64," + Buffer.from(bytes).toString("base64"), fileType, bytes: bytes.byteLength };
 }
 
-export async function uploadM365Images(urls: string[], token: string, model: string, conversationId: string, provider: OcxProviderConfig, signal?: AbortSignal, budget?: TranslatorBudget, beforeUpload?: () => void): Promise<M365ImageAnnotation[]> {
+export async function uploadM365Images(urls: string[], token: string, model: string, conversationId: string, provider: OcxProviderConfig, signal?: AbortSignal, budget?: TranslatorBudget, beforeUpload?: () => void, uploadTimeoutMs = 30_000): Promise<M365ImageAnnotation[]> {
   if (provider.baseUrl.replace(/\/+$/, "") !== M365_COPILOT_BASE_URL) throw new M365CopilotTurnError("Microsoft 365 Copilot image uploads require the fixed Microsoft endpoint", 400);
   if (urls.length > MAX_IMAGES) throw new M365CopilotTurnError("Microsoft 365 Copilot supports at most four new images per turn", 413);
   const annotations: M365ImageAnnotation[] = [];
   let total = 0;
   for (const url of urls) {
-    const uploadSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
-    uploadSignal.throwIfAborted();
+    const uploadSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(uploadTimeoutMs)]) : AbortSignal.timeout(uploadTimeoutMs);
+    // A caller abort keeps its own error; this turn's deadline becomes a structured turn error.
+    if (uploadSignal.aborted) {
+      if (signal?.aborted) uploadSignal.throwIfAborted();
+      throw new M365CopilotTurnError("Microsoft 365 Copilot image upload timed out", 504);
+    }
     beforeUpload?.();
     try {
       const image = await imageData(url, uploadSignal);
@@ -75,7 +79,9 @@ export async function uploadM365Images(urls: string[], token: string, model: str
         } });
       } finally { release?.(); }
     } catch (error) {
-      if (error instanceof M365CopilotTurnError || uploadSignal.aborted) throw error;
+      if (error instanceof M365CopilotTurnError) throw error;
+      if (signal?.aborted) throw error;
+      if (uploadSignal.aborted) throw new M365CopilotTurnError("Microsoft 365 Copilot image upload timed out", 504);
       throw new M365CopilotTurnError("Microsoft 365 Copilot could not read or upload the image", 502);
     }
   }

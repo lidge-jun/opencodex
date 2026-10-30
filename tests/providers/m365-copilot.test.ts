@@ -173,6 +173,15 @@ describe("Microsoft 365 Copilot native transport", () => {
       expect(thinking).toEqual(["Step one", " and two"]);
     } finally { server.stop(true); }
   });
+  test("caps keyed reasoning rows instead of retaining an unbounded map", async () => {
+    const server = chatLoopback(send => {
+      for (let index = 0; index < 257; index++) send({ type: 1, target: "update", arguments: [{ messages: [{ author: "bot", messageType: "ChainOfThoughtSummary", messageId: "think-" + index, text: "step " + index }] }] });
+    });
+    try {
+      await expect(runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {}, onThinking() {}, createSocket: () => new WebSocket("ws://127.0.0.1:" + server.port) }))
+        .rejects.toThrow("too many messages");
+    } finally { server.stop(true); }
+  });
 });
 
 describe("Microsoft 365 Copilot adapter", () => {
@@ -199,6 +208,19 @@ describe("Microsoft 365 Copilot adapter", () => {
     try {
       await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: budget }, event => events.push(event));
       expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+    } finally { budget.dispose(); }
+  });
+  test("validates every returned call before emitting partial output", async () => {
+    const fence = String.fromCharCode(96).repeat(3);
+    // A fenced call may carry a non-JSON arguments string; nothing may be emitted before it is validated.
+    const adapter = createM365CopilotAdapter(provider(), { turn: async () => ["Here you go", fence + "tool_call", JSON.stringify({ tool: "read_file", arguments: "{not-json" }), fence].join("\n") });
+    const events: AdapterEvent[] = [];
+    const budget = createTranslatorBudget();
+    try {
+      await adapter.runTurn!(request(), { headers: new Headers(), translatorBudget: budget }, event => events.push(event));
+      expect(events.some(event => event.type === "text_delta")).toBe(false);
+      expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+      expect(events.find(event => event.type === "error")).toMatchObject({ type: "error", message: "Microsoft 365 Copilot returned invalid tool arguments" });
     } finally { budget.dispose(); }
   });
   test("preserves client tool calls and uses the returned tool result on the same conversation", async () => {
@@ -261,13 +283,17 @@ describe("Microsoft 365 Copilot socket egress", () => {
     expect(m365SocketDialOptions(undefined, socketUrl, headers).proxy).toBeUndefined();
   });
   test("inherit adopts the global proxy decision Bun's WebSocket would otherwise ignore", () => {
-    const previous = process.env.HTTPS_PROXY;
+    const previous = process.env.HTTPS_PROXY, previousNoProxy = process.env.NO_PROXY, previousLowerNoProxy = process.env.no_proxy;
     process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    // An inherited bypass entry would select a direct connection and fail this assertion for the wrong reason.
+    delete process.env.NO_PROXY; delete process.env.no_proxy;
     try {
       expect(m365SocketDialOptions({}, socketUrl, headers).proxy).toBe("http://127.0.0.1:9");
       expect(m365SocketDialOptions({ noProxy: ["substrate.office.com"] }, socketUrl, headers).proxy).toBeUndefined();
     } finally {
       if (previous === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previous;
+      if (previousNoProxy === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = previousNoProxy;
+      if (previousLowerNoProxy === undefined) delete process.env.no_proxy; else process.env.no_proxy = previousLowerNoProxy;
     }
   });
   test("refuses a custom fetch executor and a malformed route before dialing", () => {

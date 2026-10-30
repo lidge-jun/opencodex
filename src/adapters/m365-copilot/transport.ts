@@ -10,6 +10,7 @@ import type { M365ImageAnnotation } from "./images";
 const RS = "\x1e";
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 const MAX_ANSWER_LENGTH = 8 * 1024 * 1024;
+const MAX_THINKING_ENTRIES = 256;
 export class M365CopilotTurnError extends Error {
   constructor(message: string, public status = 502) { super(message); }
 }
@@ -154,6 +155,13 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
       const delta = text.slice(emitted.length); emitted = text; if (delta) options.onText(delta);
     };
     const thinkingById = new Map<string, string>();
+    // Reasoning bypasses the chat-message cap, so bound the keyed rows and the emitted total here.
+    let thinkingTotal = 0;
+    const emitThinking = (text: string) => {
+      thinkingTotal += text.length;
+      if (thinkingTotal > MAX_ANSWER_LENGTH) throw new M365CopilotTurnError("Microsoft 365 Copilot reasoning exceeded the buffer limit", 413);
+      options.onThinking?.(text);
+    };
     const messages = (rows: any[]) => {
       for (const row of rows) {
         if (row?.author !== "bot") continue;
@@ -162,11 +170,12 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
         if (row.messageType === "ChainOfThoughtSummary") {
           // Terminal frames replay summary rows; emit only the unseen suffix per messageId instead of duplicating reasoning.
           const id = typeof row.messageId === "string" && row.messageId.length <= 256 ? row.messageId : undefined;
-          if (id === undefined) options.onThinking?.(row.text);
+          if (id === undefined) emitThinking(row.text);
           else {
             const seen = thinkingById.get(id);
+            if (seen === undefined && thinkingById.size >= MAX_THINKING_ENTRIES) throw new M365CopilotTurnError("Microsoft 365 Copilot returned too many messages", 413);
             if (seen === undefined || row.text.length > seen.length) {
-              options.onThinking?.(seen !== undefined && row.text.startsWith(seen) ? row.text.slice(seen.length) : row.text);
+              emitThinking(seen !== undefined && row.text.startsWith(seen) ? row.text.slice(seen.length) : row.text);
               thinkingById.set(id, row.text);
             }
           }

@@ -93,15 +93,21 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
           const result = parseToolCalls(cleaned, tools);
           if (isProseDocument(result, cleaned, tools)) emit({ type: "text_delta", text: cleaned });
           else {
-            if (result.textContent) emit({ type: "text_delta", text: result.textContent });
-            for (const call of result.toolCalls) {
+            // Validate every call before emitting anything: a malformed or undeclared call must not leave the client with partial output.
+            const calls = result.toolCalls.map(call => {
               if (!tools!.some(tool => tool.function.name === call.function.name)) throw new M365CopilotTurnError("Microsoft 365 Copilot returned an undeclared tool");
+              let args: Record<string, unknown> | undefined;
+              try { const value = JSON.parse(call.function.arguments); if (value && typeof value === "object") args = value; }
+              catch { throw new M365CopilotTurnError("Microsoft 365 Copilot returned invalid tool arguments"); }
               const alias = request.convertedRoutedNamespaceToolAliases?.get(call.function.name);
               const name = alias ? namespacedToolName(alias.namespace, alias.name) : call.function.name;
               const original = parsed.context.tools?.find(tool => namespacedToolName(tool.namespace, tool.name) === name);
-              const args = JSON.parse(call.function.arguments);
+              return { call, name, freeform: original?.freeform === true && typeof args?.input === "string" ? args.input : undefined };
+            });
+            if (result.textContent) emit({ type: "text_delta", text: result.textContent });
+            for (const { call, name, freeform } of calls) {
               emit({ type: "tool_call_start", id: call.id, name });
-              emit({ type: "tool_call_delta", arguments: original?.freeform && typeof args.input === "string" ? args.input : call.function.arguments });
+              emit({ type: "tool_call_delta", arguments: freeform ?? call.function.arguments });
               emit({ type: "tool_call_end" });
               emittedToolCalls++;
             }

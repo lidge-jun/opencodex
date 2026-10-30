@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { m365ImageUrls, uploadM365Images } from "../../src/adapters/m365-copilot/images";
 import { createM365CopilotAdapter, clearM365CopilotConversations } from "../../src/adapters/m365-copilot";
-import { createM365Conversation, m365ChatFrame } from "../../src/adapters/m365-copilot/transport";
+import { createM365Conversation, m365ChatFrame, M365CopilotTurnError } from "../../src/adapters/m365-copilot/transport";
 import { M365_COPILOT_BASE_URL } from "../../src/providers/m365-copilot-models";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
@@ -105,4 +105,13 @@ test("a rebuilt conversation with more history images than the cap uploads only 
     await adapter.runTurn!(fresh, { headers: new Headers(), translatorBudget: budget }, event => { if (event.type === "error") errors.push(event); });
     expect(errors).toContainEqual(expect.objectContaining({ type: "error", status: 413, message: expect.stringContaining("four") }));
   } finally { budget.dispose(); }
+});
+test("maps the per-image upload deadline to a structured turn error", async () => {
+  const p = provider((async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    (init?.signal as AbortSignal | undefined)?.addEventListener("abort", () => reject((init!.signal as AbortSignal).reason));
+  })) as typeof fetch);
+  const failure = await uploadM365Images([png], token, "Magic", "fixture", p, undefined, undefined, undefined, 20).catch(error => error);
+  expect(failure).toBeInstanceOf(M365CopilotTurnError);
+  expect(failure.message).toContain("timed out");
+  expect(failure.status).toBe(504);
 });
