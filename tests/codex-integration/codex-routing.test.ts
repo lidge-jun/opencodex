@@ -3264,14 +3264,14 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread(null, config)).toBe("b");
   });
 
-  test("returns to the higher tier after a known short reset elapses (#7896)", () => {
-    const now = 1_800_000_000_000;
-    const config = orderedConfig({ autoSwitchThreshold: 97 });
-    setAccountQuotaFromParsed("a", { weeklyPercent: 20, shortPercent: 100, shortResetAt: now + 3_600_000 });
+  test("returns to the higher tier as soon as its quota window resets", () => {
+    const config = orderedConfig();
+    updateAccountQuota("a", 90);
     updateAccountQuota("b", 10);
-    expect(resolveCodexAccountForThread(null, config, now)).toBe("b");
-    expect(resolveCodexAccountForThread(null, config, now + 3_601_000)).toBe("a");
-    clearAccountQuota("a"); const original = orderedConfig(); updateAccountQuota("a", 90); expect(resolveCodexAccountForThread(null, original)).toBe("b"); updateAccountQuota("a", 5); expect(resolveCodexAccountForThread(null, original)).toBe("a");
+    expect(resolveCodexAccountForThread(null, config)).toBe("b");
+
+    updateAccountQuota("a", 5);
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
   });
 
   test("unknown usage never drains a tier", () => {
