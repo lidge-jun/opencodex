@@ -351,13 +351,13 @@ describe("main policy quota durability and lifecycle", () => {
 
   for (const scenario of [
     { name: "verified replacement", account: "fixture-main-b", tag: "known", selected: true },
-    { name: "same account", account: "fixture-main-a", tag: "known", selected: false },
-    { name: "untagged quota", account: "fixture-main-b", tag: "missing", selected: false },
-    { name: "invalid quota tag", account: "fixture-main-b", tag: "invalid", selected: false },
-    { name: "unknown RPC identity", account: "", tag: "known", selected: false },
-    { name: "manually paused", account: "fixture-main-b", tag: "known", selected: false, paused: true },
+    { name: "same account", account: "fixture-main-a", tag: "known", selected: false, refusal: "CodexMainAccountHardLockError" },
+    { name: "untagged quota", account: "fixture-main-b", tag: "missing", selected: false, refusal: "CodexPoolAuthenticationError" },
+    { name: "invalid quota tag", account: "fixture-main-b", tag: "invalid", selected: false, refusal: "CodexPoolAuthenticationError" },
+    { name: "unknown RPC identity", account: "", tag: "known", selected: false, refusal: "CodexPoolAuthenticationError" },
+    { name: "manually paused", account: "fixture-main-b", tag: "known", selected: false, paused: true, refusal: "CodexPoolAuthenticationError" },
     { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
-    { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file" },
+    { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file", refusal: "CodexMainAccountHardLockError" },
   ]) {
     test(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, () => {
       const writer = writerFor("fixture-main-a");
@@ -387,7 +387,7 @@ describe("main policy quota durability and lifecycle", () => {
           pausedCodexAccountIds: ${JSON.stringify(scenario.paused ? [MAIN] : [])},
           providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } } };
         let selected = false;
-        let failure;
+        let failure, failureDetail;
         try {
           const result = await resolveCodexAuthContext(new Headers(), config, "pool", {
             nativeMainRefreshDependencies: { codexAuthStatus: async () => { reads++; return { authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true }; } },
@@ -395,8 +395,11 @@ describe("main policy quota durability and lifecycle", () => {
             beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
           });
           selected = result.kind === "main-pool" && result.chatgptAccountId === account;
-        } catch (error) { failure = error.name; }
-        console.log(JSON.stringify({ fixture: "cold-keyring-quota", before, selected, failure, reads, initialized,
+        } catch (error) {
+          failure = error.name;
+          failureDetail = { message: String(error.message).slice(0, 200), cause: error.cause?.name, code: error.cause?.code ?? error.code };
+        }
+        console.log(JSON.stringify({ fixture: "cold-keyring-quota", before, selected, failure, failureDetail, reads, initialized,
           legacy: getAccountQuota("__main__"), policy: getMainPolicyQuota(), stored: getAccountQuota("fixture-stored"),
           paused: config.pausedCodexAccountIds }));
       `;
@@ -416,8 +419,11 @@ describe("main policy quota durability and lifecycle", () => {
         expect(result.legacy).toBeNull();
         expect(result.policy).toBeNull();
       } else {
-        expect(result.failure).toBeDefined();
-        expect(result.reads).toBe(scenario.paused || scenario.source === "file" ? 0 : 1);
+        // The refusal must be the policy decision itself; any earlier setup failure (with no read)
+        // fails here with its message and cause instead of passing as a refusal.
+        expect({ failure: result.failure, reads: result.reads, detail: result.failureDetail }).toMatchObject({
+          failure: scenario.refusal, reads: scenario.paused || scenario.source === "file" ? 0 : 1,
+        });
         expect(result.legacy.weeklyPercent).toBe(100);
         if (scenario.account === "fixture-main-a") expect(result.policy.weeklyPercent).toBe(100);
       }
