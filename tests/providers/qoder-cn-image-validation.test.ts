@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { deflateSync } from "node:zlib";
 import { createQoderAdapter } from "../../src/adapters/qoder/adapter";
 import { qoderCnImageInputSupported } from "../../src/adapters/qoder/image-input";
 import { clearQoderBinaryCache } from "../../src/adapters/qoder/profiles";
@@ -27,19 +28,38 @@ function changedDimensions(width: number, height: number): Buffer {
   return bytes;
 }
 
-// Insert a valid ancillary tEXt chunk before IEND to exercise exact decoded sizes.
-function sizedPng(size: number): Buffer {
-  const chunk = Buffer.alloc(size - png.length, 0x20);
-  chunk.writeUInt32BE(chunk.length - 12, 0);
-  chunk.write("tEXt", 4, "ascii");
-  chunk.write("Note\0", 8, "ascii");
+function pngChunk(type: string, data: Buffer): Buffer {
+  const chunk = Buffer.alloc(data.length + 12);
+  chunk.writeUInt32BE(data.length, 0);
+  chunk.write(type, 4, "ascii");
+  data.copy(chunk, 8);
   let crc = 0xffffffff;
   for (const byte of chunk.subarray(4, -4)) {
     crc ^= byte;
     for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
   }
   chunk.writeUInt32BE((crc ^ 0xffffffff) >>> 0, chunk.length - 4);
-  return Buffer.concat([png.subarray(0, -12), chunk, png.subarray(-12)]);
+  return chunk;
+}
+
+// Insert a valid ancillary tEXt chunk before IEND to exercise exact decoded sizes.
+function sizedPng(size: number): Buffer {
+  const text = Buffer.alloc(size - png.length - 12, 0x20);
+  text.write("Note\0", 0, "ascii");
+  return Buffer.concat([png.subarray(0, -12), pngChunk("tEXt", text), png.subarray(-12)]);
+}
+
+function rasterPng(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8; // 8-bit grayscale; no interlace.
+  // Every scanline includes filter 0 followed by width black pixels.
+  const raster = Buffer.alloc((width + 1) * height);
+  return Buffer.concat([
+    png.subarray(0, 8), pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(raster)), pngChunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
 beforeEach(() => clearQoderBinaryCache());
@@ -95,6 +115,15 @@ describe("Qoder CN decoded PNG admission", () => {
     expect(qoderCnImageInputSupported(request(dataUrl(png)))).toBe(true);
     expect(qoderCnImageInputSupported(request(dataUrl(sizedPng(ceiling))))).toBe(true);
     expect(qoderCnImageInputSupported(request(dataUrl(sizedPng(ceiling - 1))))).toBe(true);
-    expect(qoderCnImageInputSupported(request(dataUrl(changedDimensions(8000, 2000))))).toBe(true);
+  });
+
+  test.each([
+    ["pixel ceiling", 8000, 2000],
+    ["width ceiling", 8192, 1],
+    ["height ceiling", 1, 8192],
+  ] as const)("admits a complete PNG at the %s raster boundary", (_name, width, height) => {
+    const bytes = rasterPng(width, height);
+    expect(bytes.byteLength).toBeLessThanOrEqual(ceiling);
+    expect(qoderCnImageInputSupported(request(dataUrl(bytes)))).toBe(true);
   });
 });
