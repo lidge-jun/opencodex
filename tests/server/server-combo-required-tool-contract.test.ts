@@ -165,9 +165,11 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
-  for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }]) {
+  for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" },
+    { type: "tool_search" }, { type: "computer_use" }, { type: "image_gen" },
+    { type: "mcp", server_label: "docs", name: null }]) {
     for (const stream of [false, true]) {
-      test(`direct hosted choice skips Meta before send (${choice.type}, stream=${stream})`, async () => {
+      test(`direct hosted choice skips Meta before send (${JSON.stringify(choice)}, stream=${stream})`, async () => {
         const bodies: unknown[] = []; let metaSends = 0;
         const upstream = serve(async request => {
           bodies.push(await request.json());
@@ -184,10 +186,12 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
         expect(response.status).toBe(200);
         expect(await response.text()).toContain("hosted terminal owner");
         expect(metaSends).toBe(0); expect(bodies).toHaveLength(1);
-        expect(bodies[0]).toMatchObject({ tool_choice: choice });
+        // Noncanonical Responses targets retain the existing private tool-search lowering.
+        const upstreamChoice = choice.type === "tool_search" ? { type: "function", name: "tool_search" } : choice;
+        expect(bodies[0]).toMatchObject({ tool_choice: upstreamChoice });
       });
     }
-    test(`direct hosted choice reports all-Meta exhaustion (${choice.type})`, async () => {
+    test(`direct hosted choice reports all-Meta exhaustion (${JSON.stringify(choice)})`, async () => {
       let sends = 0;
       const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
         fetch: (async () => { sends++; throw new Error("unexpected Meta send"); }) as typeof fetch });
@@ -200,7 +204,8 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
   test("direct hosted selectors keep their terminal owner and reject malformed selector shapes", async () => {
     const { hasMandatoryToolChoice, requiredToolContractOf } = await import("../../src/server/responses/combo-required-tool-contract");
     const { createComboRequiredToolStreamGuard } = await import("../../src/server/responses/combo-required-tool-stream");
-    for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }, { type: "tool_search" }]) {
+    for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }, { type: "tool_search" },
+      { type: "mcp", server_label: "docs", name: null }, { type: "computer_use" }, { type: "image_gen" }]) {
       const body = { tools: [choice], tool_choice: choice };
       expect(hasMandatoryToolChoice(body)).toBe(true);
       expect(requiredToolContractOf(body)).toBeUndefined();
@@ -208,7 +213,8 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
     }
     for (const choice of [{ type: "web_search", name: 5 }, { type: "web_search", name: " " },
       { type: "mcp" }, { type: "mcp", server_label: 5 }, { type: "mcp", server_label: " " },
-      { type: "mcp", server_label: "docs", name: " " }, { type: "unknown_hosted" }]) {
+      { type: "mcp", server_label: "docs", name: " " }, { type: "mcp", server_label: "docs", name: 123 },
+      { type: "function", name: null }, { type: "custom", name: null }, { type: "unknown_hosted" }]) {
       expect(hasMandatoryToolChoice({ tool_choice: choice })).toBe(false);
     }
   });

@@ -18,9 +18,10 @@ const allowedHostedSelectors = new Set([
 function knownToolSelector(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
+  if (entry.type === "mcp") return typeof entry.server_label === "string" && !!entry.server_label.trim()
+    && (entry.name === undefined || entry.name === null || (typeof entry.name === "string" && !!entry.name.trim()));
   if (entry.name !== undefined && (typeof entry.name !== "string" || !entry.name.trim())) return false;
   if (entry.type === "function" || entry.type === "custom") return typeof entry.name === "string";
-  if (entry.type === "mcp") return typeof entry.server_label === "string" && !!entry.server_label.trim();
   return typeof entry.type === "string" && allowedHostedSelectors.has(entry.type);
 }
 

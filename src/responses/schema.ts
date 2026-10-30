@@ -162,7 +162,7 @@ const builtinToolSchema = z.object({ type: z.string() }).loose();
  */
 export const HOSTED_TOOL_TYPES = [
   "web_search", "web_search_preview", "file_search", "computer_use_preview",
-  "code_interpreter", "image_generation", "mcp",
+  "code_interpreter", "image_generation", "mcp", "tool_search", "computer_use", "image_gen",
 ] as const;
 
 const hostedToolType = z.enum(HOSTED_TOOL_TYPES);

@@ -10,6 +10,12 @@ import { repoPath } from "../helpers/repo-root";
 import { normalizeThinkingOptions, resolveThinkingEnabled } from "../../src/clients/reasoning-controls";
 import type { OcxProviderConfig } from "../../src/types";
 
+test.each(["tool_search", "computer_use", "image_gen", "mcp"])("preserves direct hosted selector %s in the raw Responses body", type => {
+  const choice = type === "mcp" ? { type, server_label: "docs", name: null } : { type };
+  const raw = { model: "fixture", input: "hello", tool_choice: choice };
+  expect(parseRequest(raw)._rawBody?.tool_choice).toEqual(choice);
+});
+
 describe("generic effort-only client compatibility", () => {
   const provider: OcxProviderConfig = {
     adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1",

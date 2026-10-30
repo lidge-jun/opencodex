@@ -154,8 +154,9 @@ native routing and catalog identity on the next sync.
 
 For Responses requests that require a tool, Meta Responses targets are skipped before sending
 because Meta does not support mandatory `tool_choice`. An eligible later target receives the
-original choice. This includes hosted choices such as `{ "type": "web_search" }` and
-MCP choices with a nonempty `server_label`. If every target is incompatible for this reason,
+original choice, subject to its existing adapter compatibility rules. This includes hosted choices
+such as `web_search`, `tool_search`, `computer_use` and `image_gen`, and MCP choices with a
+nonempty `server_label` and an omitted, null or nonempty name. If every target is incompatible for this reason,
 the combo reports the constraint. Malformed or unknown choices retain the provider's ordinary error path.
 
 `failover` selects the first eligible target in configuration order. A target is eligible when its
