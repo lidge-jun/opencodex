@@ -200,6 +200,17 @@ export function knownModelIdsForProvider(
  * (never a caller-supplied string), so the log carries no request content.
  */
 const compactionFallbackWarnings = new Set<string>();
+/**
+ * Last-resort decode for a direct provider-qualified slug the live roster cannot resolve yet.
+ * Retained ids win (an encoded slash-valued retained id included), then the operator-declared
+ * modelDisplayNames keys. Neither list feeds alias generation.
+ */
+function decodeDisplayNameFallback(prov: OcxProviderConfig, decoded: string): string {
+  const retained = decodeRoutedModelId(decoded, prov.retainModels ?? []);
+  if (retained !== decoded || prov.retainModels?.includes(decoded)) return retained;
+  return decodeRoutedModelId(decoded, Object.keys(prov.modelDisplayNames ?? {}));
+}
+
 function warnCompactionDefaultProviderFallbackOnce(providerName: string): void {
   if (compactionFallbackWarnings.has(providerName)) return;
   compactionFallbackWarnings.add(providerName);
@@ -588,9 +599,7 @@ function routeModelInternal(
           // operator-declared native ids, consulted only here so they never claim aliases or shadow
           // known or retained ids. Concrete policy/combo/redirect targets (bypassCombos) keep the
           // exact model their evaluator selected, so evidence and eligibility describe what is sent.
-          ?? (bypassCombos || prov.retainModels?.includes(decoded)
-            ? decoded
-            : decodeRoutedModelId(decoded, Object.keys(prov.modelDisplayNames ?? {})));
+          ?? (bypassCombos ? decoded : decodeDisplayNameFallback(prov, decoded));
       return routeResult(
         config,
         provName,

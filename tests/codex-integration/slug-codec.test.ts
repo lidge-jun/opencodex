@@ -353,6 +353,23 @@ describe("routeModel decode (proxy layer)", () => {
     expect(routeModel(config, "other/a-b").modelId).toBe("a-b");
   });
 
+  test("an encoded slash-valued retained id wins over a stale display-name key", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "other",
+      providers: {
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.com/v1",
+          apiKey: "k",
+          retainModels: ["a/b"],
+          modelDisplayNames: { "a-b": "Stale A-B" },
+        },
+      },
+    };
+    expect(routeModel(config, "other/a-b").modelId).toBe("a/b");
+  });
+
   test("a stale modelDisplayNames key does not break an existing default alias", () => {
     const config: OcxConfig = {
       port: 10100,
