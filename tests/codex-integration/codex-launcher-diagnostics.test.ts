@@ -41,7 +41,7 @@ describe("Codex credential withholding diagnostics", () => {
     [{ CODEX_HOME: "" }, {}, "Codex home cannot be resolved unambiguously"],
   ] as const) test(reason, () => {
     let reads = 0;
-    const result = capture(base, { routingKind: "opencodex-local", ...deps, serviceToken: () => { reads++; return secret; } });
+    const result = capture(base, { routingKind: "opencodex-local", runtimeAttested: true, ...deps, serviceToken: () => { reads++; return secret; } });
     diagnostic(result.notes, reason);
     expect(reads).toBe(0);
     expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();

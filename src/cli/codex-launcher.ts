@@ -33,7 +33,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { commandInvocation } from "../lib/win-exec";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
-import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import { findLiveProxy, proveLiveProxyOwnedByHome, type LiveProxy } from "../server/proxy-liveness";
 import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
@@ -159,6 +159,8 @@ export type CodexLaunchEnvDeps = {
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
   credentialDestination?: (home: string, report?: CodexTokenRefusalReporter) => boolean;
+  /** True only after the ensured listener proved this home's runtime-record secret. */
+  runtimeAttested?: boolean;
 };
 
 /** Read the client admission credential from this installation's service-token file. */
@@ -186,6 +188,7 @@ export function buildCodexLaunchEnv(
     };
     if (!codexTokenArgsAreSafe(deps.args ?? [])) return withhold("args");
     if (!codexTokenEnvironmentIsSafe(env)) return withhold("environment");
+    if (deps.routingKind === "opencodex-local" && deps.runtimeAttested !== true) return withhold("destination");
     // NO_PROXY parsing and precedence vary across native HTTP/WebSocket transports.
     // Without proving bypass, preserve the user's transport but never load a secret.
     const home = resolveCodexLaunchHome(env);
@@ -306,5 +309,9 @@ export async function cmdCodex(args: string[]): Promise<number> {
     // what the session does next; `ocx doctor` names the autostart failure.
     console.error(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC);
   }
-  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args }));
+  // A public health marker proves liveness, not ownership of the listener. Never read the
+  // persisted service token until the exact runtime-record endpoint answers a fresh challenge.
+  const runtimeAttested = plan.kind === "routed" && live !== null
+    && await proveLiveProxyOwnedByHome(live) === "proven";
+  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args, runtimeAttested }));
 }
