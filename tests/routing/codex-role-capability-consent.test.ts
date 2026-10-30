@@ -38,3 +38,22 @@ test("retired source key is ignored without dropping the Artificial Analysis key
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("any other malformed capability block is dropped whole and reported as no configured key", async () => {
+  // Same convention as the other strict optional blocks: a malformed block is never partially
+  // trusted. The proposal then reports the missing key instead of reading with a guessed one.
+  const parse = (value: unknown) => configSchema.shape.codexRoleCapability.parse(value);
+  expect(parse({ artificialAnalysis: { apiKey: "aa-fixture" }, unknownSource: { enabled: true } })).toBeUndefined();
+  expect(parse({ artificialAnalysis: { apiKey: "aa-fixture", extra: 1 } })).toBeUndefined();
+  expect(parse({ artificialAnalysis: { apiKey: 42 } })).toBeUndefined();
+  expect(parse({ artificialAnalysis: { apiKey: "   " } })).toBeUndefined();
+  expect(parse("aa-fixture")).toBeUndefined();
+  const requests: string[] = [];
+  globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return Response.json({ data: [] });
+  }, { preconnect: originalFetch.preconnect }) as typeof fetch;
+  const table = await loadCapabilityTable(config({ artificialAnalysis: { apiKey: "aa-fixture" }, unknownSource: {} }));
+  expect(table).toMatchObject({ source: null, fallbackReason: "benchmark data was unavailable: no Artificial Analysis key is configured" });
+  expect(requests).toEqual([]);
+});
