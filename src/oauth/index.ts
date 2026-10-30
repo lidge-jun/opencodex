@@ -155,6 +155,8 @@ export class OAuthTokenRefreshStaleError extends Error {
   readonly retryable = true;
   constructor() { super("OAuth token refresh owner became stale"); this.name = "OAuthTokenRefreshStaleError"; }
 }
+/** Known pre-dispatch cancellation; independent waiters may acquire a new owner. */
+class OAuthDiscoveryRefreshCancelledError extends OAuthTokenRefreshStaleError {}
 
 /** Focused owner-identity tests only. Synthetic owners retain no account data. */
 export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; startedAt?: number; flightId?: string; dispatched?: boolean }>): {
@@ -632,6 +634,7 @@ async function resolveAccessSnapshotForAccount(
   requireUsableAccount = false,
   oauthProvider = provider,
   authorityCurrent?: () => boolean,
+  retryCancelledDiscovery = true,
 ): Promise<OAuthAccessSnapshot> {
   const def = OAUTH_PROVIDERS[oauthProvider];
   if (!def) throw new UnsupportedOAuthProviderError(oauthProvider);
@@ -715,7 +718,10 @@ async function resolveAccessSnapshotForAccount(
     flight.promise = refresh;
     tokenRefreshes.set(key, flight);
     return await refresh;
+  } catch (error) {
+    if (authorityCurrent || !retryCancelledDiscovery || !(error instanceof OAuthDiscoveryRefreshCancelledError)) throw error;
   } finally { waiter.release(); }
+  return resolveAccessSnapshotForAccount(provider, accountId, rejectedGeneration, requireUsableAccount, oauthProvider, undefined, false);
 }
 
 export async function getValidAccessTokenSnapshot(
@@ -1040,7 +1046,7 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
-      if (deps.authorityCurrent && !deps.authorityCurrent()) throw new OAuthTokenRefreshStaleError();
+      if (deps.authorityCurrent && !deps.authorityCurrent()) throw new OAuthDiscoveryRefreshCancelledError();
       const refreshed = await def.refresh(stored.refresh, deps.signal, stored, accountId);
       const fresh = merged(refreshed, stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
