@@ -20,6 +20,13 @@ function changedHeader(offset: number, value: number): Buffer {
   return bytes;
 }
 
+function changedDimensions(width: number, height: number): Buffer {
+  const bytes = Buffer.from(png);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
 // Insert a valid ancillary tEXt chunk before IEND to exercise exact decoded sizes.
 function sizedPng(size: number): Buffer {
   const chunk = Buffer.alloc(size - png.length, 0x20);
@@ -57,6 +64,9 @@ describe("Qoder CN decoded PNG admission", () => {
     ["zero height", dataUrl(changedHeader(23, 0))],
     ["width beyond PNG range", dataUrl(changedHeader(16, 0x80))],
     ["height beyond PNG range", dataUrl(changedHeader(20, 0x80))],
+    ["width above edge ceiling", dataUrl(changedDimensions(8193, 1))],
+    ["height above edge ceiling", dataUrl(changedDimensions(1, 8193))],
+    ["pixel count above ceiling", dataUrl(changedDimensions(4001, 4000))],
     ["invalid bit depth", dataUrl(changedHeader(24, 3))],
     ["invalid colour type", dataUrl(changedHeader(25, 1))],
     ["invalid compression", dataUrl(changedHeader(26, 1))],
@@ -85,5 +95,6 @@ describe("Qoder CN decoded PNG admission", () => {
     expect(qoderCnImageInputSupported(request(dataUrl(png)))).toBe(true);
     expect(qoderCnImageInputSupported(request(dataUrl(sizedPng(ceiling))))).toBe(true);
     expect(qoderCnImageInputSupported(request(dataUrl(sizedPng(ceiling - 1))))).toBe(true);
+    expect(qoderCnImageInputSupported(request(dataUrl(changedDimensions(8000, 2000))))).toBe(true);
   });
 });
