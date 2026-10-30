@@ -21,6 +21,7 @@ import type { OcxConfig } from "../../src/types";
 import { item as hostedImage } from "../fixtures/hosted-image-display";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
+import { encryptedInput } from "../helpers/agent-task-recovery";
 
 /**
  * #7456: a Responses combo child that answers a `tool_choice`-required request with a buffered
@@ -164,6 +165,146 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
+  for (const choice of ["required", { type: "function", name: "shell" },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "shell" }] }]) {
+  test(`Meta mandatory tool choice selects the next target before send (#7964): ${JSON.stringify(choice)}`, async () => {
+    const bodies: unknown[] = [];
+    let metaSends = 0;
+    const b = serve(async request => {
+      bodies.push(await request.json());
+      return Response.json(completedWithCall("m2", "shell"));
+    });
+    const response = await handleResponsesWith(comboConfig({
+      a: provider("openai-responses", "https://api.meta.ai/v1", "key-a", { fetch: (async () => { metaSends++; throw new Error("unexpected Meta send"); }) as typeof fetch }),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    }), requiredRequest({ tool_choice: choice }));
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(metaSends).toBe(0);
+    expect(bodies[0]).toMatchObject({ tool_choice: choice });
+  });
+  }
+  for (const choice of ["auto", "none"]) {
+    test(`Meta accepts ${choice} without a hop`, async () => {
+      let sends = 0;
+      const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+        fetch: (async () => { sends++; return Response.json(completedNoCall("m1", "meta")); }) as typeof fetch,
+      });
+      const response = await handleResponsesWith(comboConfig({ a: meta }), requiredRequest({ tool_choice: choice }));
+      expect(response.status).toBe(200);
+      expect(sends).toBe(1);
+    });
+  }
+  test("malformed choice remains a local Meta 400", async () => {
+    let sends = 0;
+    const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+      fetch: (async () => { sends++; throw new Error("unexpected send"); }) as typeof fetch,
+    });
+    const response = await handleResponsesWith(comboConfig({ a: meta }), requiredRequest({ tool_choice: { type: "function" } }));
+    expect(response.status).toBe(400);
+    expect(sends).toBe(0);
+  });
+  test("#7982 chat configuration with Responses override skips Meta", async () => {
+    const bodies: unknown[] = [];
+    const next = serve(async request => { bodies.push(await request.json()); return Response.json(completedWithCall("m2", "shell")); });
+    const response = await handleResponsesWith(comboConfig({
+      a: provider("openai-chat", "https://api.meta.ai/v1", "key-a", { modelAdapters: { m1: "openai-responses" } }),
+      b: provider("openai-responses", baseUrl(next), "key-b"),
+    }), requiredRequest({ tool_choice: "required" }));
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ tool_choice: "required" });
+  });
+  test("#7982 Responses configuration with Chat override sends to Meta Chat", async () => {
+    let sends = 0;
+    const response = await handleResponsesWith(comboConfig({
+      a: provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+        modelAdapters: { m1: "openai-chat" },
+        fetch: (async () => { sends++; return Response.json({ id: "chat-1", object: "chat.completion", model: "m1", choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "call_a", type: "function", function: { name: "shell", arguments: "{}" } }] } }] }); }) as typeof fetch,
+      }),
+    }), requiredRequest({ tool_choice: "required" }));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(sends).toBe(1);
+  });
+  test("#7982 unknown and malformed hosted selectors do not exclude Meta", async () => {
+    const { hasMandatoryToolChoice } = await import("../../src/server/responses/combo-required-tool-contract");
+    for (const entry of [{ type: "not_a_tool" }, { type: "web_search", name: 5 }, { type: "mcp" }, { type: "mcp", server_label: 5 }]) {
+      const choice = { type: "allowed_tools", mode: "required", tools: [entry] };
+      expect(hasMandatoryToolChoice({ tool_choice: choice })).toBe(false);
+      const response = await handleResponsesWith(comboConfig({ a: provider("openai-responses", "https://api.meta.ai/v1", "key-a") }), requiredRequest({ tool_choice: choice }));
+      expect(response.status).toBe(400);
+    }
+    for (const entry of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }]) {
+      expect(hasMandatoryToolChoice({ tool_choice: { type: "allowed_tools", mode: "required", tools: [entry] } })).toBe(true);
+    }
+  });
+  test("#7982 encrypted recovery selection cannot pick a Meta target", async () => {
+    const response = await handleResponsesWith(comboConfig({ a: provider("openai-responses", "https://api.meta.ai/v1", "key-a") }),
+      requiredRequest({ input: encryptedInput(), tool_choice: "required" }));
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("mandatory tool_choice");
+  });
+  for (const [extra, expectedUrl] of [
+    [{ responsesPath: "/other/responses" }, "https://api.meta.ai/other/responses"],
+    [{ authMode: "forward" as const, responsesPath: "/ignored" }, "https://api.meta.ai/responses"],
+  ] as const) {
+    test(`#7982 resolved Meta URL excludes mandatory choice: ${JSON.stringify(extra)}`, async () => {
+      const response = await handleResponsesWith(comboConfig({ a: provider("openai-responses", "https://api.meta.ai", "key-a", extra) }), requiredRequest({ tool_choice: "required" }));
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("mandatory tool_choice");
+      let sentUrl = "";
+      const auto = await handleResponsesWith(comboConfig({ a: provider("openai-responses", "https://api.meta.ai", "key-a", {
+        ...extra, fetch: (async input => { sentUrl = String(input); return Response.json(completedNoCall("m1", "meta")); }) as typeof fetch,
+      }) }), requiredRequest({ tool_choice: "auto" }));
+      expect(auto.status).toBe(200);
+      expect(sentUrl).toBe(expectedUrl);
+    });
+  }
+  test("selector eligibility recognizes custom choices and abstains on malformed allowed lists", async () => {
+    const { hasMandatoryToolChoice } = await import("../../src/server/responses/combo-required-tool-contract");
+    expect(hasMandatoryToolChoice({ tool_choice: { type: "custom", name: "shell" } })).toBe(true);
+    for (const choice of [
+      { type: "function", name: "" },
+      { type: "allowed_tools", mode: "required", tools: [] },
+      { type: "allowed_tools", mode: "required", tools: [{ type: "function" }] },
+      { type: "allowed_tools", mode: "required", tools: [{ type: 5 }] },
+      { type: "allowed_tools", mode: "auto", tools: [{ type: "function", name: "shell" }] },
+    ]) expect(hasMandatoryToolChoice({ tool_choice: choice })).toBe(false);
+  });
+  test("all Meta targets report the mandatory choice constraint", async () => {
+    const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a");
+    const response = await handleResponsesWith(comboConfig({ a: meta, b: meta }), requiredRequest({ tool_choice: "required" }));
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("mandatory tool_choice");
+  });
+  test("a non-Meta first target remains eligible for mandatory tools", async () => {
+    let sends = 0;
+    const upstream = serve(() => { sends++; return Response.json(completedWithCall("m1", "shell")); });
+    const response = await handleResponsesWith(comboConfig({
+      a: provider("openai-responses", baseUrl(upstream), "key-a"),
+      b: provider("openai-responses", "https://api.meta.ai/v1", "key-b"),
+    }), requiredRequest({ tool_choice: "required" }));
+    expect(response.status).toBe(200);
+    expect(sends).toBe(1);
+  });
+  test("streaming mandatory choice skips Meta before the first send", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const upstream = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      const payload = completedWithCall("m2", "shell");
+      return new Response(`data: ${JSON.stringify({ type: "response.completed", response: payload })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } });
+    });
+    const response = await handleResponsesWith(comboConfig({
+      a: provider("openai-responses", "https://api.meta.ai/v1", "key-a"),
+      b: provider("openai-responses", baseUrl(upstream), "key-b"),
+    }), requiredRequest({ stream: true, tool_choice: "required" }));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.tool_choice).toBe("required");
+  });
   test("a folded-SSE contract failure settles reported usage without completion effects", async () => {
     let effects = 0;
     let settled: unknown;

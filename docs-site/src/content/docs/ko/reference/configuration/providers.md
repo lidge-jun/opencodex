@@ -118,7 +118,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `models?` | `string[]` | 초기/폴백 모델 목록입니다. `liveModels: false`에서 `models`가 비어 있지 않으면 `models`, `retainModels` 순으로 구성합니다. `models`가 비어 있거나 생략되면 설정된 `defaultModel`, `retainModels` 순으로 구성하고, 중복 ID는 처음 나온 항목만 남깁니다. |
 | `liveModels?` | `boolean` | 시작 또는 동기화 시 라이브 카탈로그를 가져옵니다. 기본값은 `true`입니다. 사용자 지정 공급자는 `${baseUrl}/models`를 사용하고, 내장은 레지스트리 URL을 사용한 뒤 필터링할 수 있습니다. |
 | `selectedModels?` | `string[]` | 발견 후 카탈로그 허용 목록입니다. 값이 비어 있지 않으면 그 id만 노출하고, 비어 있거나 생략하면 발견된 모델을 모두 노출합니다. |
-| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
+| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 단, 직접 `provider/model` 선택자가 알려진 id, 별칭, `retainModels` 어디에도 맞지 않으면(예: 라이브 목록을 아직 받지 못한 동안) 인코딩 형태가 같은 키를 네이티브 id로 보냅니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
 | `contextWindow?` | `number` | 업스트림 메타데이터가 없을 때 쓰이는 공급자 전반의 컨텍스트 값입니다. 메타데이터가 있으면 상한으로 동작해 더 작은 라이브 값을 그대로 둡니다. Models 대시보드에서 `providerContextCaps`와 별도로 설정합니다. |
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
 | `inferContextWindow?` | `boolean` | 사용자 지정 공급자 전용이며 기본값은 꺼짐입니다. `true`이면 빠진 창을 번들 모델 메타데이터로 채웁니다. 추정값이며 중계의 실제 용량을 검증하지 않습니다. |
@@ -189,9 +189,9 @@ API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAu
 
 ### 프로바이더 저장이 유지하는 것
 
-기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열한 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| 저장 | 열 가지 설정 | 저장된 `apiKeyPool` |
+| 저장 | 열한 가지 설정 | 저장된 `apiKeyPool` |
 | --- | --- | --- |
 | 같은 목적지, 필드 생략 | 저장된 값 유지(명시적인 `[]`나 `false` 포함) | 유지 |
 | 새 목적지, 필드 생략 | 유지하지 않음. 새 목적지의 레지스트리 기본값이 적용될 수 있음 | 유지하지 않음 |

@@ -647,8 +647,35 @@ describe("registry-owned provider model discovery", () => {
     });
     for (const id of [" padded/model", "model\nwith-control"]) {
       expect(extractProviderModelItems({ data: [{ id }] }, discovery))
-        .toEqual({ ok: false, reason: "invalid_shape" });
+        .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an invalid id" });
     }
+  });
+
+  test("rejects an invalid row with a safe index and reason (#7910)", () => {
+    const discovery = resolveProviderModelDiscovery("unknown-provider", {
+      adapter: "openai-chat", baseUrl: "https://example.test/v1",
+    });
+    expect(extractProviderModelItems({ data: [{ id: "", secret: "do-not-log" }, { id: "valid" }] }, discovery))
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 0 has an empty id" });
+    expect(extractProviderModelItems({ data: [{ id: "valid" }, null] }, discovery))
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 is not an object" });
+    expect(extractProviderModelItems({ data: [{ id: "valid" }, { id: 7 }] }, discovery))
+      .toEqual({ ok: false, reason: "invalid_shape", diagnostic: "row 1 has a non-string id" });
+  });
+
+  test("catalog warns safely and retains configured fallback for invalid rows (#7910)", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => Response.json({ data: [{ id: "", secret: "private-row-value" }, { id: "valid" }] })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels(togetherConfig({ models: ["fallback-model"], liveModels: true }));
+      expect(models.some(model => model.provider === "together" && model.id === "fallback-model")).toBe(true);
+      expect(models.some(model => model.provider === "together" && model.id === "valid")).toBe(false);
+      const message = warning.mock.calls.flat().join(" ");
+      expect(message).toContain("row 0 has an empty id");
+      expect(message).toContain("pending");
+      expect(message).toContain("liveModels: false");
+      expect(message).not.toContain("private-row-value");
+    } finally { warning.mockRestore(); }
   });
 
   test("cloudflare-workers-ai resolves official search from the /ai/v1 base", () => {
