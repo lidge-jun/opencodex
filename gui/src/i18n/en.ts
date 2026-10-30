@@ -315,6 +315,7 @@ export const en = {
   "common.remove": "Remove",
   "common.loading": "Loading…",
   "common.retry": "Retry",
+  "prov.affinityResetPending": "The account change was saved, but conversation routing could not finish updating. Retry to finish.",
   "common.undo": "Undo",
   "auth.adminTokenTitle": "OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Account",

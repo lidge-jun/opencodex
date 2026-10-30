@@ -286,6 +286,7 @@ export const zhTW: Record<TKey, string> = {
   "common.remove": "移除",
   "common.loading": "載入中…",
   "common.retry": "重試",
+  "prov.affinityResetPending": "帳戶變更已儲存，但對話路由更新尚未完成。請重試以完成更新。",
   "common.undo": "復原",
   "app.logoAria": "opencodex 徽標",
   "app.claudeOn": "Claude 開",

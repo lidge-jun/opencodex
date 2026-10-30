@@ -14,6 +14,8 @@ export interface Config {
 }
 
 export interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
+type AffinityResetRetry = { apiBase: string; accountId: string; kind: "active" }
+  | { apiBase: string; accountId: string; kind: "pause"; paused: boolean };
 export interface OAuthAccount extends AccountQuotaReading {
   id: string;
   alias?: string;
@@ -131,6 +133,7 @@ export function useProviderAccountPools(deps: {
   const switchingAccount = Object.values(switchingAccounts)[0] ?? null;
   const setSwitchingAccount = (target: { provider: string; accountId: string } | null) => setSwitchingAccounts(target ? { [target.provider]: target } : {});
   const [pausingAccounts, setPausingAccounts] = useState<Record<string, { provider: string; accountId: string; paused: boolean }>>({});
+  const [pendingAffinityResets, setPendingAffinityResets] = useState<Record<string, AffinityResetRetry>>({});
   const pausingAccount = Object.values(pausingAccounts)[0] ?? null;
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
@@ -161,6 +164,7 @@ export function useProviderAccountPools(deps: {
       setAccountSets({});
       setPausingAccounts({});
       setSwitchingAccounts({});
+      setPendingAffinityResets({});
       setKeyPools({});
       setAccountLoadStates({});
     });
@@ -405,8 +409,13 @@ export function useProviderAccountPools(deps: {
     return fetchAccountSets([provider]);
   };
 
-  const switchAccount = async (provider: string, account: OAuthAccount) => {
-    if (account.active || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
+  const clearPendingAffinityReset = (provider: string) => setPendingAffinityResets(current => {
+    if (!current[provider]) return current;
+    const next = { ...current }; delete next[provider]; return next;
+  });
+
+  const switchAccount = async (provider: string, account: OAuthAccount, retryPending = false) => {
+    if (account.active && !retryPending || account.needsReauth || account.paused || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current.set(provider, target);
     setSwitchingAccounts(current => ({ ...current, [provider]: target }));
@@ -418,9 +427,21 @@ export function useProviderAccountPools(deps: {
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
       if (!currentMutation()) return;
-      if (!res.ok) { notify(t("prov.accountSwitchFail"), false); return; }
-      const result = await res.json().catch(() => ({})) as { activeAccountId?: string | null };
+      const result = await res.json().catch(() => ({})) as { activeAccountId?: string | null;
+        code?: string; retryable?: boolean; selectionCommitted?: boolean };
       if (!currentMutation()) return;
+      if (!res.ok) {
+        if (result.code === "affinity_reset_not_persisted" && result.retryable === true && result.selectionCommitted === true) {
+          setPendingAffinityResets(current => ({ ...current, [provider]: { apiBase, kind: "active", accountId: account.id } }));
+          const selected = result.activeAccountId ?? account.id;
+          setAccountSets(current => current[provider] ? { ...current, [provider]: {
+            ...current[provider], activeAccountId: selected, accounts: selectionRows(current[provider].accounts, selected),
+          } } : current);
+          notify(t("prov.affinityResetPending"), false);
+        } else notify(t("prov.accountSwitchFail"), false);
+        return;
+      }
+      clearPendingAffinityReset(provider);
       invalidateSelectionReads(provider, "oauth");
       const selected = result.activeAccountId === undefined ? account.id : result.activeAccountId;
       setAccountSets(current => current[provider] ? { ...current, [provider]: {
@@ -507,7 +528,8 @@ export function useProviderAccountPools(deps: {
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(key) === mutation;
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
-    let result: { activeAccountId?: string | null; activeAccountChanged?: boolean };
+    let result: { activeAccountId?: string | null; activeAccountChanged?: boolean;
+      code?: string; retryable?: boolean; pauseCommitted?: boolean };
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
         method: "PUT",
@@ -515,12 +537,14 @@ export function useProviderAccountPools(deps: {
         body: JSON.stringify({ provider, accountId: account.id, paused }),
       });
       if (!currentMutation()) return;
-      if (!res.ok) {
+      result = await res.json().catch(() => ({})) as typeof result;
+      if (!currentMutation()) return;
+      const committedResetFailure = !res.ok && result.code === "affinity_reset_not_persisted"
+        && result.retryable === true && result.pauseCommitted === true;
+      if (!res.ok && !committedResetFailure) {
         notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
         return;
       }
-      result = await res.json().catch(() => ({})) as { activeAccountId?: string | null; activeAccountChanged?: boolean };
-      if (!currentMutation()) return;
       invalidateSelectionReads(provider, "oauth");
       const selected = result.activeAccountId === undefined
         ? accountSets[provider]?.activeAccountId ?? null
@@ -531,6 +555,12 @@ export function useProviderAccountPools(deps: {
         const accounts = existing.accounts.map(row => row.id === account.id ? { ...row, paused } : row);
         return { ...current, [provider]: { activeAccountId: selected, accounts: selectionRows(accounts, selected) } };
       });
+      if (committedResetFailure) {
+        setPendingAffinityResets(current => ({ ...current, [provider]: { apiBase, kind: "pause", accountId: account.id, paused } }));
+        notify(t("prov.affinityResetPending"), false);
+        return;
+      }
+      clearPendingAffinityReset(provider);
       selectionMutationsRef.current.delete(key);
     } catch {
       if (currentMutation()) notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
@@ -558,6 +588,14 @@ export function useProviderAccountPools(deps: {
     } catch {
       if (aliveRef.current && mountedRef.current) notify(t("pws.accountsLoadFailed"), false);
     }
+  };
+
+  const retryAffinityReset = async (provider: string) => {
+    const pending = pendingAffinityResets[provider];
+    const account = accountSets[provider]?.accounts.find(row => row.id === pending?.accountId);
+    if (!pending || pending.apiBase !== apiBase || !account) return;
+    if (pending.kind === "active") await switchAccount(provider, account, true);
+    else await pauseAccount(provider, account, pending.paused);
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
@@ -721,7 +759,7 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, openAccounts, keyPools, addingKeyFor, newKeyValue,
+    accountSets, accountLoadStates, switchingAccount, pausingAccount, switchingAccounts, pausingAccounts, pendingAffinityResets, retryAffinityReset, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
     fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,

@@ -312,6 +312,7 @@ export const fr: Record<TKey, string> = {
   "common.remove": "Supprimer",
   "common.loading": "Chargement…",
   "common.retry": "Réessayer",
+  "prov.affinityResetPending": "Le changement de compte a été enregistré, mais la mise à jour du routage des conversations n’a pas abouti. Réessayez pour terminer.",
   "common.undo": "Annuler",
   "auth.adminTokenTitle": "Jeton d’administration OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Compte",

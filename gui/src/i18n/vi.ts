@@ -312,6 +312,7 @@ export const vi: Record<TKey, string> = {
   "common.remove": "Xóa",
   "common.loading": "Đang tải…",
   "common.retry": "Thử lại",
+  "prov.affinityResetPending": "Thay đổi tài khoản đã được lưu nhưng chưa cập nhật xong định tuyến cuộc trò chuyện. Hãy thử lại để hoàn tất.",
   "common.undo": "Hoàn tác",
   "auth.adminTokenTitle": "Token quản trị OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Tài khoản",

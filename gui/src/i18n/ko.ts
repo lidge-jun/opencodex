@@ -380,6 +380,7 @@ export const ko: Record<TKey, string> = {
   "common.remove": "삭제",
   "common.loading": "불러오는 중…",
   "common.retry": "재시도",
+  "prov.affinityResetPending": "계정 변경은 저장됐지만 대화 연결 정보 갱신이 끝나지 않았습니다. 다시 시도해 완료하세요.",
   "common.undo": "실행 취소",
   "auth.adminTokenTitle": "OpenCodex 관리자 토큰 (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "계정",

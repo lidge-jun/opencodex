@@ -337,6 +337,7 @@ export const pt: Record<TKey, string> = {
   "common.remove": "Remover",
   "common.loading": "Carregando…",
   "common.retry": "Tentar novamente",
+  "prov.affinityResetPending": "A alteração da conta foi salva, mas a atualização do roteamento das conversas não terminou. Tente novamente para concluir.",
   "common.undo": "Desfazer",
   "auth.adminTokenTitle": "Token de administrador do OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Conta",

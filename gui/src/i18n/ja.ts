@@ -382,6 +382,7 @@ export const ja: Record<TKey, string> = {
   "common.remove": "削除",
   "common.loading": "読み込み中…",
   "common.retry": "再試行",
+  "prov.affinityResetPending": "アカウントの変更は保存されましたが、会話の接続情報の更新が完了していません。再試行して完了してください。",
   "common.undo": "元に戻す",
   "auth.adminTokenTitle": "OpenCodex 管理者トークン (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "アカウント",

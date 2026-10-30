@@ -237,11 +237,11 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET /api/oauth/status` | 轮询某个 provider 的 OAuth 流程 | 400 provider 未知 |
 | `POST /api/oauth/logout` | 移除选定的 provider 凭证 | 400 provider 未知；`oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 列出已脱敏账户或移除一个账户 Kiro 行包含自动选择状态 `autoSelectable`，被排除时还包含封闭集合的 `skipReason`。唯一的活动账户仍可发送请求，配额查询仍为可选。 | 400 provider/id 无效；404 账户缺失；`oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | 选择当前活跃的 OAuth 账户 | 400 provider/账户无效；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | 选择当前活跃的 OAuth 账户 | 400 provider/账户无效；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; 账户选择已保存；即使已激活，也请重新发送相同请求) |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 读取或更新 Anthropic OAuth 池策略 | 400 非 Anthropic provider 或策略无效 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一个 OAuth 账户的运行时冷却 | 400 provider/账户无效 |
 | `PUT /api/oauth/accounts/alias` | 设置或清除 OAuth 账户别名 | 400 provider/账户/别名无效 |
-| `PUT /api/oauth/accounts/pause` | 暂停或恢复 Anthropic 或通用 OAuth 账户。Body `{ provider, accountId, paused }`；暂停活跃账户时，如有其他可用账户则切换过去。 | 400 不支持的 provider 或无效 body；404 账户不存在；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | 暂停或恢复 Anthropic 或通用 OAuth 账户。Body `{ provider, accountId, paused }`；暂停活跃账户时，如有其他可用账户则切换过去。 | 400 不支持的 provider 或无效 body；404 账户不存在；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 暂停状态已保存；请重新发送相同请求，不要反转暂停状态) |
 | `GET, POST, DELETE /api/providers/keys` | 列出已脱敏的 provider 密钥，添加/激活一个，或移除一个 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |

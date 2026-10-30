@@ -314,6 +314,7 @@ export const tr: Record<TKey, string> = {
   "common.remove": "Kaldır",
   "common.loading": "Yükleniyor…",
   "common.retry": "Tekrar Dene",
+  "prov.affinityResetPending": "Hesap değişikliği kaydedildi, ancak konuşma yönlendirmesi güncellenemedi. Tamamlamak için yeniden deneyin.",
   "common.undo": "Geri al",
   "auth.adminTokenTitle": "OpenCodex yönetici jetonu (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Hesap",

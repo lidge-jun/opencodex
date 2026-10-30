@@ -380,6 +380,7 @@ export const de: Record<TKey, string> = {
   "common.remove": "Entfernen",
   "common.loading": "Lädt…",
   "common.retry": "Wiederholen",
+  "prov.affinityResetPending": "Die Kontoänderung wurde gespeichert, aber die Aktualisierung der Gesprächszuordnung ist noch nicht abgeschlossen. Versuchen Sie es erneut.",
   "common.undo": "Rückgängig",
   "auth.adminTokenTitle": "OpenCodex-Admin-Token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Konto",

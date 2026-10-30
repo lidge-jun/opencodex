@@ -382,6 +382,7 @@ export const ru: Record<TKey, string> = {
   "common.remove": "Удалить",
   "common.loading": "Загрузка…",
   "common.retry": "Повторить",
+  "prov.affinityResetPending": "Изменение аккаунта сохранено, но обновление маршрутизации разговоров не завершено. Повторите попытку.",
   "common.undo": "Отменить",
   "auth.adminTokenTitle": "Токен администратора OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Учётная запись",

@@ -296,11 +296,11 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `GET /api/oauth/status` | Bir sağlayıcının OAuth akışını yoklayın | 400 bilinmeyen sağlayıcı |
 | `POST /api/oauth/logout` | Seçilen sağlayıcı kimlik bilgisini kaldırın | 400 bilinmeyen sağlayıcı; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın Kiro satırları otomatik seçimden dışlandığında `autoSelectable` ve kapalı bir `skipReason` taşır; tek etkin hesap yine istek gönderebilir. Kota isteğe bağlıdır. | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; hesap seçimi kaydedildi; hesap etkin olsa bile aynı isteği yeniden gönderin) |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth havuz politikasını okuyun veya güncelleyin | 400 Anthropic olmayan sağlayıcı veya geçersiz politika |
 | `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğuma süresini temizleyin | 400 geçersiz sağlayıcı/hesap |
 | `PUT /api/oauth/accounts/alias` | Bir OAuth hesap takma adını ayarlayın veya temizleyin | 400 geçersiz sağlayıcı/hesap/takma ad |
-| `PUT /api/oauth/accounts/pause` | Anthropic veya genel OAuth hesabını duraklatın/sürdürün. Body `{ provider, accountId, paused }`; etkin hesap duraklatıldığında varsa kullanılabilir başka hesaba geçilir. | 400 desteklenmeyen sağlayıcı veya geçersiz body; 404 hesap yok; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Anthropic veya genel OAuth hesabını duraklatın/sürdürün. Body `{ provider, accountId, paused }`; etkin hesap duraklatıldığında varsa kullanılabilir başka hesaba geçilir. | 400 desteklenmeyen sağlayıcı veya geçersiz body; 404 hesap yok; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; duraklatma durumu kaydedildi; durumu tersine çevirmeden aynı isteği yeniden gönderin) |
 | `GET, POST, DELETE /api/providers/keys` | Maskelenmiş sağlayıcı anahtarlarını listeleyin, bir tane ekleyin/etkinleştirin veya kaldırın | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/active` | Bir sağlayıcının etkin anahtarını seçin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |

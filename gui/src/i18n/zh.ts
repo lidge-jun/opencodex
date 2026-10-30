@@ -380,6 +380,7 @@ export const zh: Record<TKey, string> = {
   "common.remove": "移除",
   "common.loading": "加载中…",
   "common.retry": "重试",
+  "prov.affinityResetPending": "账户更改已保存，但对话路由更新尚未完成。请重试以完成更新。",
   "common.undo": "撤销",
   "auth.adminTokenTitle": "OpenCodex 管理员令牌 (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "账户",

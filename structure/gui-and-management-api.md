@@ -392,7 +392,7 @@ OAuth manual and automatic selection share `commitOAuthAccountSelection`; dispat
 Opaque revisions protect manual reselection and A→B→A changes; credential-only refresh preserves the revision.
 Anthropic manual selection and pause-induced selection changes also await confirmed affinity-reset publication before success.
 A failure returns 503 `affinity_reset_not_persisted`, `retryable: true` and `selectionCommitted` or `pauseCommitted`; the account mutation stays applied.
-An unchanged pause retry completes a pending reset. Ordinary request-driven affinity writes remain batched.
+An unchanged pause retry completes a pending reset. The dashboard retains saved state and an exact-request retry until confirmed; ordinary request-driven affinity writes remain batched.
 Generic proactive routing is opt-in and retains a healthy selected account; reactive 429 recovery remains available even when the pool is off.
 API-key manual selection and failover similarly share `commitProviderApiKeySelection`, carrying
 stable entry identity and selection revision instead of comparing a resolved secret with an env reference.

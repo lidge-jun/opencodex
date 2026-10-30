@@ -37,7 +37,8 @@ const ACCOUNTS = [
   { id: "account-2", label: "b@example.com", email: "b@example.com", active: true },
 ];
 
-async function mountPanel(onRefreshQuota?: (name: string) => Promise<boolean>): Promise<HTMLElement> {
+async function mountPanel(onRefreshQuota?: (name: string) => Promise<boolean>,
+  retryReset?: (name: string) => Promise<void>): Promise<HTMLElement> {
   const host = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(host as never);
   const { createRoot } = await import("react-dom/client");
@@ -52,6 +53,7 @@ async function mountPanel(onRefreshQuota?: (name: string) => Promise<boolean>): 
     onAddApiKey: async () => {},
     onEditAlias: async () => {},
     ...(onRefreshQuota ? { onRefreshQuota } : {}),
+    ...(retryReset ? { pendingAffinityResets: { anthropic: { accountId: "account-2" } }, onRetryAffinityReset: retryReset } : {}),
   } as unknown as Parameters<typeof ProviderAuthPanel>[0]["authHandlers"];
   await act(async () => {
     const root = createRoot(host);
@@ -114,6 +116,18 @@ test("the refresh control renders above the account list", async () => {
   // order, instead of sitting after every account's stacked windows.
   const position = button.compareDocumentPosition(list!);
   expect(position & 0x04 /* DOCUMENT_POSITION_FOLLOWING */).toBeTruthy();
+});
+
+test("an affinity-reset retry remains actionable when the account is already active", async () => {
+  const calls: string[] = [];
+  const host = await mountPanel(undefined, async provider => { calls.push(provider); });
+  const alert = host.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("The account change was saved");
+  const retry = alert?.querySelector<HTMLButtonElement>("button");
+  expect(retry?.textContent).toBe("Retry");
+  expect(retry?.disabled).toBe(false);
+  await act(async () => { retry!.click(); await flush(); });
+  expect(calls).toEqual(["anthropic"]);
 });
 
 test("it is hidden when the page cannot drive a refresh", async () => {

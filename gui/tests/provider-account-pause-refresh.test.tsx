@@ -70,6 +70,37 @@ test("confirmed threshold persists in UI when follow-up read fails; failed write
   expect(notices.some(notice => notice.key === "accountPool.autoSwitchUpdateFailed")).toBe(true);
 });
 
+test.each(["active", "pause"] as const)("committed %s failure retains an exact retry after roster refresh", async action => {
+  const writes: unknown[] = [];
+  let confirmed = false;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") {
+      writes.push(JSON.parse(String(init.body)));
+      return confirmed ? Response.json({ ok: true, activeAccountId: "b", activeAccountChanged: false })
+        : Response.json({ code: "affinity_reset_not_persisted", retryable: true, activeAccountId: "b",
+          ...(action === "active" ? { selectionCommitted: true } : { pauseCommitted: true }) }, { status: 503 });
+    }
+    return Response.json({ activeAccountId: "b", accounts: [row("a", false, action === "pause"), row("b", true)] });
+  };
+  await act(async () => {
+    if (action === "active") await pools.switchAccount("fixture", row("b", false));
+    else await pools.pauseAccount("fixture", row("a", true), true);
+  });
+  expect(pools.accountSets.fixture.activeAccountId).toBe("b");
+  expect(pools.pendingAffinityResets.fixture).toBeDefined();
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.pendingAffinityResets.fixture).toBeDefined();
+  // An unsuccessful retry keeps the actionable error, even after the row became active/paused.
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(pools.pendingAffinityResets.fixture).toBeDefined();
+  confirmed = true;
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(writes).toEqual(Array.from({ length: 3 }, () => action === "active"
+    ? { provider: "fixture", accountId: "b" } : { provider: "fixture", accountId: "a", paused: true }));
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  expect(notices).toContainEqual({ key: "prov.affinityResetPending", ok: false });
+});
+
 test("equal account IDs in two pools have independent pending mutation ownership", async () => {
   const mutations: Array<{ provider: string; accountId: string }> = [];
   const releases: Array<() => void> = [];
