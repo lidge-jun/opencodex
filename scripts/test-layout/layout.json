@@ -499,7 +499,7 @@
     "cli-dto-fidelity.test.ts": "cli",
     "cli-export-command.test.ts": "cli",
     "cli-head.test.ts": "cli",
-    "cli-headless-parity.test.ts": "cli",
+    "cli-headless-parity.test.ts": "cli", "cli-role-suggestion-history.test.ts": "cli",
     "cli-help.test.ts": "cli",
     "cli-help-paths.test.ts": "cli",
     "cli-help-navigation.test.ts": "cli",
