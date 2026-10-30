@@ -28,7 +28,7 @@ receives the original selector, and an all-Meta exhaustion names the constraint 
 The child parser accepts `tool_search`, `computer_use` and `image_gen` as recognized hosted choices.
 Its raw body preserves the selector; existing destination compatibility, including routed private
 tool-search lowering, still applies after parsing. Chat translation maps a direct `tool_search`
-choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none; exhaustion reports the tool-choice constraint.
+choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
 Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`

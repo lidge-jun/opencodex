@@ -1,5 +1,6 @@
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { mapToolChoice } from "../../responses/parser-tools";
+import { modelInList, type OcxProviderConfig } from "../../types";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { applyReplayRefusalClientHeaders, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientWireOf } from "../inference/client-wire";
@@ -41,8 +42,9 @@ export function hasMandatoryToolChoice(rawBody: unknown): boolean {
 }
 
 /** A translated Chat target must not turn a mandatory selector into auto or none. */
-export function chatCanPreserveMandatoryToolChoice(rawBody: unknown): boolean {
+export function chatCanPreserveMandatoryToolChoice(rawBody: unknown, provider: OcxProviderConfig, modelId: string): boolean {
   if (!hasMandatoryToolChoice(rawBody)) return true;
+  if (modelInList(provider.autoToolChoiceOnlyModels, modelId)) return false;
   const mapped = mapToolChoice((rawBody as Record<string, unknown>).tool_choice);
   return mapped === "required" || (!!mapped && typeof mapped === "object");
 }
