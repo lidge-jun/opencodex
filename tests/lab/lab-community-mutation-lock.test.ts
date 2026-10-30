@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
@@ -49,7 +50,7 @@ describe("community mutation lock", () => {
     let observations = 0;
     const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
-      if (path !== lockPath) return stats;
+      if (!samePath(path, lockPath)) return stats;
       const ino = 9_007_199_254_740_992n + BigInt(Math.min(observations++, 1));
       return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
         { ino: options?.bigint ? ino : Number(ino) });

@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { linkSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
@@ -30,7 +31,7 @@ test("private reads reject adjacent NTFS-sized descriptor identities", () => {
   const originalLstat = fs.lstatSync;
   const pathSpy = spyOn(fs, "lstatSync").mockImplementation(((p, options) => {
     const stats = options?.bigint ? originalLstat(p, { bigint: true }) : originalLstat(p);
-    return p === path ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+    return samePath(p, path) ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
       { ino: options?.bigint ? 9_007_199_254_740_992n : Number(9_007_199_254_740_992n) }) : stats;
   }) as typeof fs.lstatSync);
   try {

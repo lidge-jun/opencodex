@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import {
@@ -82,8 +83,8 @@ test("scratch directory rejects an adjacent NTFS-sized identity", () => {
   }) as typeof nodeFs.fstatSync);
   const pathSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((path, options) => {
     const stats = options?.bigint ? originalLstat(path, { bigint: true }) : originalLstat(path);
-    return path === root && options?.bigint ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
-      { ino: 9_007_199_254_740_993n }) : path === root ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+    return samePath(path, root) && options?.bigint ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: 9_007_199_254_740_993n }) : samePath(path, root) ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
       { ino: Number(9_007_199_254_740_993n) }) : stats;
   }) as typeof nodeFs.lstatSync);
   try { expect(() => readScratchFileUtf8(root, "value", 1024)).toThrow("scratch directory identity changed"); }

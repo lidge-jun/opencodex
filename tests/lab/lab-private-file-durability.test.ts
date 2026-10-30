@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, utimesSync } from "node:fs";
@@ -36,8 +37,8 @@ describe("CL-10 private-file durability", () => {
     const original = fs.lstatSync;
     const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
-      if (path !== finalPath && path !== stagePath) return stats;
-      const ino = 9_007_199_254_740_992n + (path === stagePath ? 1n : 0n);
+      if (!samePath(path, finalPath) && !samePath(path, stagePath)) return stats;
+      const ino = 9_007_199_254_740_992n + (samePath(path, stagePath) ? 1n : 0n);
       return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
         { ino: options?.bigint ? ino : Number(ino) });
     }) as typeof fs.lstatSync);
