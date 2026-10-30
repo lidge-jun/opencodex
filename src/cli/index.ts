@@ -69,6 +69,7 @@ import {
   writePid,
   writeRuntimePort,
 } from "../config/process-state";
+import { describeTrackedRuntimeTarget } from "../config/tracked-runtime-inspection";
 import {
   claimPendingTeardown,
   isPendingTeardownAbandoned,
@@ -1023,13 +1024,7 @@ async function handleStop(approval?: StopApproval) {
         try { return JSON.parse(lines[0]!) as ResolveJson; }
         catch { return null; }
       },
-      () => {
-        const pid = readPid();
-        const runtime = pid === null ? null : readRuntimePort(pid);
-        return pid && runtime?.port ? {
-          pid, port: runtime.port, hostname: runtime.hostname ?? "",
-        } : null;
-      },
+      describeTrackedRuntimeTarget,
       () => inspectGuardedManagerTarget(approval.pid, approval.port),
       snapshot => handleStopUnlocked(snapshot),
     );
@@ -1682,8 +1677,8 @@ async function handleUninstall() {
   });
 
   try {
-    const { uninstallCodexShim } = await import("../codex/shim");
-    const r = uninstallCodexShim();
+    const { uninstallCodexShimAsync } = await import("../codex/shim");
+    const r = await uninstallCodexShimAsync();
     console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");
