@@ -164,7 +164,7 @@ const TRACKED_REFUSAL_CAUSES: Record<TrackedRecordRefusal, string> = {
   "pid-record-unreadable": "the recorded PID file could not be read",
   "pid-record-invalid": "the recorded PID file is not a valid record",
   "process-not-running": "the recorded process is no longer running",
-  "process-identity-mismatch": "the recorded PID now belongs to a different process",
+  "process-identity-mismatch": "the recorded process does not match the expected start command",
   "process-unverifiable": "the recorded process identity could not be verified",
   "runtime-record-absent": "the tracked runtime record is absent",
   "runtime-record-permission-denied": "reading the tracked runtime record was denied",

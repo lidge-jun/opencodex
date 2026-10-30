@@ -482,7 +482,7 @@ describe("tracked runtime record inspection", () => {
     });
     expect(readPid()).toBeNull();
     expect(describeTrackedRuntimeTarget()).toEqual(
-      { untracked: "the recorded PID now belongs to a different process" });
+      { untracked: "the recorded process does not match the expected start command" });
     expect(calls).toEqual([]);
   });
 

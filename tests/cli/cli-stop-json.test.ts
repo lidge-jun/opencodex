@@ -473,10 +473,10 @@ describe("approval-bound stop", () => {
     expect(absentRecord.summary.message).toContain("the recorded PID file is absent");
 
     const foreignPid = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
-      () => ({ untracked: "the recorded PID now belongs to a different process" }),
+      () => ({ untracked: "the recorded process does not match the expected start command" }),
       BOUND_STOP_MANAGER, stop);
     expect(foreignPid.summary.detail)
-      .toBe("the tracked runtime record could not be verified (the recorded PID now belongs to a different process)");
+      .toBe("the tracked runtime record could not be verified (the recorded process does not match the expected start command)");
 
     const managerGone = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
       TRACKED_STOP_TARGET, () => ({ kind: "unknown" as const, reason: "CIM read failed" }), stop);
