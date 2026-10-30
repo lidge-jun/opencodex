@@ -59,7 +59,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
-import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
+import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
@@ -540,8 +540,12 @@ export async function executeComboResponses(
     if (!hasMandatoryToolChoice(body)) return true;
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
-      return route.provider.adapter !== "openai-responses"
-        || !isMetaAiResponsesDestination(buildResponsesTransport(route.provider, { headers: req.headers }).url);
+      const inboundWire = options.inboundWire ?? "responses";
+      const policy = captureRouteStaticPolicy(route.providerName, route.modelId, route.provider,
+        route.staticPolicy.effectiveAlias, inboundWire);
+      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, policy);
+      return provider.adapter !== "openai-responses"
+        || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
     } catch {
       return true;
     }
