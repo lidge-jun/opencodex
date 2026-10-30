@@ -433,6 +433,7 @@ function isProviderScopedQuotaCap(
   message: string,
   code?: string | null,
 ): boolean {
+  if (status === 400 || status === 422) return false; // Validation prose may reflect the caller's input.
   const normalizedCode = normalizedFailureCode(code);
   const text = message.toLowerCase();
   if (
@@ -463,7 +464,7 @@ function isRequestLocalFreePromptCap(
   message: string,
   code?: string | null,
 ): boolean {
-  if (status !== 400) return false;
+  if (status !== 400 && status !== 422) return false;
   const text = message.toLowerCase();
   if (normalizedFailureCode(code) === "free_rate_limited") return true;
   if (text.includes("err_free_prompt_cap")) return true;

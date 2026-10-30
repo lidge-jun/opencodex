@@ -1048,6 +1048,8 @@ when it is unset (5 seconds for request-rate codes `1302`/`1305`, 10 minutes for
 window or a credential/billing failure, otherwise 60 seconds). Explicit
 `Retry-After` delays are capped at 24 hours; the other cooldowns are capped at 10 minutes.
 
+Validation errors (HTTP 400/422) that quote quota or free-tier cap text do not trigger fallback by that text alone. A structured `free_rate_limited` refusal still tries the next eligible target without cooling the healthy provider or target.
+
 ### Why was my alias rejected?
 
 Check the alias grammar and reserved names first. A duplicate alias or invalid shape is rejected as

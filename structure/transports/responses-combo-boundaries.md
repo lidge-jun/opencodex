@@ -150,6 +150,8 @@ not retried.
 
 ## Upstream account quota exhaustion failover
 
+Free-tier `single request` / `err_free_prompt_cap` prose also cannot authorize a hop or provider cooldown on 400/422. The structured `free_rate_limited` code still hops on both statuses, with no cooldown because the cap is request-local.
+
 A structured account-window exhaustion code (`usage_limit_exceeded`, `usage_limit_reached`, `1308`, `insufficient_quota`) makes `comboFailureDecision` hop even inside a 400 / `invalid_request_error` envelope, ahead of that terminal stop. Exhaustion prose alone never reaches that arm, and quota prose inside a 400 or 422 response stops instead of hopping: a request-validation body can quote prompt or parameter text back. `ACCOUNT_EXHAUSTION_TEXT` (`usage limit reached`, `token-plan ... quota has been exhausted`, and account/weekly/monthly/daily quota exhausted or exceeded wording) only lengthens a target's cooldown to `MAX_COOLDOWN_MS` on other statuses.
 
 `src/server/responses/run-turn-execution.ts` passes the original adapter event code separately

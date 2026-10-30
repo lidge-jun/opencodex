@@ -95,7 +95,8 @@ describe("quota evidence through child formatting and combo consumption", () => 
   }
 
   for (const status of [400, 422]) {
-    for (const phrase of ["weekly usage quota exceeded", "quota exhausted", "quota has been exhausted", "insufficient_quota"]) {
+    for (const phrase of ["weekly usage quota exceeded", "quota exhausted", "quota has been exhausted", "insufficient_quota",
+      "free tier allows a single request", "err_free_prompt_cap"]) {
       test(`R2: HTTP ${status} reflected '${phrase}' never supplies structured exhaustion`, async () => {
         const failure = await consumeAdapterError({
           type: "error", status, message: `Invalid parameter: value quotes '${phrase}'`,

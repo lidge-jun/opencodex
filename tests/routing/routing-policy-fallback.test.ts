@@ -61,6 +61,23 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([400, 422])("HTTP %s reflected free-tier prose does not authorize a policy fallback", async status => {
+    let calls = 0;
+    const failure = formatErrorResponse(status, "invalid_request_error", "Invalid value: free tier allows a single request", {
+      classified: true, upstreamCode: null,
+    });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? failure : Response.json({ status: "completed" });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(response).toBe(failure);
+  });
+
   test("reflected quota prose does not authorize a policy fallback", async () => {
     let calls = 0;
     const failure = formatErrorResponse(400, "invalid_request_error", "Invalid value: weekly quota exceeded", {

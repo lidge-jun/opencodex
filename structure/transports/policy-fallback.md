@@ -29,7 +29,7 @@ Cancellation, non-replayable responses and committed output keep the
 in-process response identity; matching upstream prose or error codes cannot authorize another attempt.
 Formatted quota errors retain [their upstream-code provenance](responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover)
 through lifecycle wrappers; a reflected quota message on a 400/422 response does not authorize a
-candidate hop merely because formatting serialized it as `insufficient_quota`.
+candidate hop merely because formatting serialized it as `insufficient_quota` or its text mentions a free-tier single-request cap.
 
 Coverage: `tests/routing/routing-policy-dispatch-scope.test.ts` exercises real request preparation,
 normalization and configured subagent selection with synthetic dispatch. It also covers recovery,
