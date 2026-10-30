@@ -232,4 +232,16 @@ describe("pool WHAM short-window retirement", () => {
     expect(result.quota?.monthlyPercent).toBe(14);
   });
 
+  test("a probe without a live writer for this account retains the carried tuple", async () => {
+    savePool();
+    await commitPoolQuotaResponse(observe(short(), weekly()), poolContext());
+    const missing = await commitPoolQuotaResponse(observe(weekly(), null), { ...poolContext(), poolWriter: undefined });
+    expect(missing.quota?.shortPercent).toBe(100);
+    const live = poolContext().poolWriter!;
+    const stale = { ...live, historyIdentity: "00000000-0000-4000-8000-000000000000" };
+    expect((await commitPoolQuotaResponse(observe(weekly(), null), { ...poolContext(), poolWriter: stale })).quota?.shortPercent).toBe(100);
+    const other = { ...live, accountId: "other-pool" };
+    expect((await commitPoolQuotaResponse(observe(weekly(), null), { ...poolContext(), poolWriter: other })).quota?.shortPercent).toBe(100);
+    expect((await commitPoolQuotaResponse(observe(weekly(), null), poolContext())).quota?.shortPercent).toBeUndefined();
+  });
 });

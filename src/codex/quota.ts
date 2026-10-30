@@ -333,7 +333,10 @@ export function setAccountQuotaFromParsed(
   const mainDecisionGeneration = mainWriter && mainDecisionQuotaWriterGeneration(mainWriter);
   if (isMain && mainDecisionGeneration !== undefined && decisionRaw)
     publishCodexDecisionQuota(accountId, mainDecisionGeneration, decisionRaw, updatedAt, "codex-main", decisionObservationPartial);
-  const displayQuota: MainPolicyQuotaObservation = (!isMain || mainWriter) && policyQuota?.shortWindowAbsent === true
+  // Retiring a short tuple releases a routing block, so it needs the same writer proof as
+  // history: a live main writer for main, a live captured pool writer for pool requests.
+  const mayRetireShort = isMain ? mainWriter !== undefined : livePoolEvidence;
+  const displayQuota: MainPolicyQuotaObservation = mayRetireShort && policyQuota?.shortWindowAbsent === true
     ? { ...quota, shortWindowAbsent: true }
     : quota;
   const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
