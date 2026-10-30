@@ -16,7 +16,7 @@ import { createTempHome } from "../helpers/temp-home";
 
 type Rec = Record<string, unknown>;
 type Lane = "adapter" | "runTurn";
-type Wire = "chat" | "anthropic";
+type Wire = "chat" | "anthropic" | undefined;
 const REFUSAL_CODE = "undeclared_tool_call";
 const userInput = { role: "user", content: [{ type: "input_text", text: "fixture request" }] };
 const tool = (name: string) => ({ type: "function", name, parameters: { type: "object", properties: {} } });
@@ -143,6 +143,22 @@ function assertAllowed(response: Rec, name: string): void {
 }
 
 describe("explicit empty catalog current-turn and continuation boundaries", () => {
+  test("Responses continuation rejects a tool declared only in replayed history", async () => {
+    const config = setup("adapter");
+    const prior = await post(config, undefined, false, { input: [additional(["shell"]), userInput] });
+    expect(prior.status).toBe("completed");
+
+    nextCall = "shell";
+    const response = await post(config, undefined, false, {
+      previous_response_id: prior.id,
+      input: [additional(["benign_tool"]), userInput],
+    });
+
+    expect(dispatched[1]!.replayPrefix).toBeGreaterThan(0);
+    expect(dispatched[1]!.tools).toEqual(expect.arrayContaining(["shell", "benign_tool"]));
+    assertRefusedAndUncached(response);
+  });
+
   for (const lane of ["adapter", "runTurn"] as const) for (const wire of ["chat", "anthropic"] as const) {
     for (const stream of [false, true]) {
       const label = `${lane}, ${wire}, ${stream ? "SSE" : "JSON"}`;
@@ -164,7 +180,7 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         });
       }
 
-      test(`${label}: historical additional_tools:[] does not restrict a current partial catalog`, async () => {
+      test(`${label}: current partial catalog rejects an undeclared tool`, async () => {
         const config = setup(lane);
         const prior = await post(config, wire, stream, { input: [additional([]), userInput] });
         expect(prior.status).toBe("completed");
@@ -173,7 +189,7 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         expect(dispatched).toHaveLength(2);
         expect(dispatched[1]!.replayPrefix).toBeGreaterThan(0);
         expect(dispatched[1]!.tools).toContain("Read");
-        assertAllowed(response, "Write");
+        assertRefusedAndUncached(response);
       });
 
       test(`${label}: current declaration controls output normalization after historical default.Read`, async () => {

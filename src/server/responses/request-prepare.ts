@@ -150,7 +150,6 @@ import { nativeContextLimits } from "../../codex/catalog";
 import type { ClientToolCatalogRestriction } from "../../lib/empty-tool-catalog";
 import {
   currentTurnWireToolCatalogBody,
-  hasExplicitEmptyToolCatalog,
   collectDeclaredWireToolNames,
   collectDeclaredBareCustomWireToolNames,
 } from "../responses-undeclared-tool-guard";
@@ -483,16 +482,14 @@ export async function prepareResponsesRequest(
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // The direct settings body omits tools, including current legacy Chat functions. Recover
-    // their wire names only when this restriction needs a non-empty decoded catalog.
-    const catalogBody = options.directRequest && options.clientDeclaredEmptyToolCatalog === true && parsed.context.tools?.length
+    // their wire names from the decoded conversation before restricting delivery authority.
+    const catalogBody = options.directRequest && parsed.context.tools?.length
       ? options.directRequest.bridgeConversation() : parsed._rawBody;
     const currentCatalog = currentTurnWireToolCatalogBody(catalogBody, parsed._replayPrefixLen);
-    if (options.clientDeclaredEmptyToolCatalog === true || hasExplicitEmptyToolCatalog(currentCatalog)) {
-      clientToolCatalogRestriction = {
-        declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
-        bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
-      };
-    }
+    clientToolCatalogRestriction = {
+      declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
+      bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
+    };
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;

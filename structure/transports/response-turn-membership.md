@@ -19,6 +19,10 @@ so clearing a caller-owned Buffer does not mutate the signing key. No key is gen
 The absent/malformed-key default changes no input. The pass uses bounded linear
 indexing with at most 65,536 input items and retains existing item references.
 
+Independently of structural normalization, request preparation derives downstream
+tool-call authority from the current-turn wire catalog. Declarations prepended while
+expanding `previous_response_id` remain history and cannot authorize a new call.
+
 `tests/responses/turn-membership.test.ts` covers token and scope controls;
 `tests/responses/turn-membership-ingress.test.ts` proves actual ingress-to-supplier
 request equality against the buffered reference and refusal of keyless ownership.
