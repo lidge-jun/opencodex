@@ -369,8 +369,9 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   through `capability.error`, and returns null source attribution. The source refuses redirects and
   retains a 30-second timeout and a 16 MiB body bound.
   The response's `capability` block attributes the source; Artificial Analysis terms forbid
-  redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
-  and unmeasured ones are not proposed; otherwise price rank decides. `capability.error` carries the
+  redistribution, so its scores are dropped from that block. Models mapped in `codexRoleTiers` keep their
+  mapped tier either way. With two or more measured unmapped candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
+  and unmeasured unmapped ones are not proposed; otherwise price rank decides. `capability.error` carries the
   reason only when no key is configured or the source cannot be read; a source that answered but matched
   fewer than two candidates leaves it null, and the per-proposal `tierSource: "price"` shows the
   fallback. Each proposal names its `tierSource`. Three or more priced models
