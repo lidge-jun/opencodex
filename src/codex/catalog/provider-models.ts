@@ -89,6 +89,7 @@ import {
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
+import { invalidModelDiscoveryHint } from "../../providers/model-discovery-diagnostic";
 import {
   extractProviderModelItems,
   isRegistryModelDiscoveryUrl,
@@ -857,7 +858,7 @@ export async function fetchProviderModelsWithAuth(
       };
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}]${extracted.reason === "invalid_shape" ? invalidModelDiscoveryHint("diagnostic" in extracted ? extracted.diagnostic : undefined) : "."}`,
         );
       }
       return observed(models, "degraded");

@@ -199,9 +199,9 @@ configuré sous [`claudeCode.authMode`](/fr/reference/configuration/server/#clau
 
 ### Ce qu'une sauvegarde de fournisseur conserve
 
-`POST /api/providers` avec le nom d'un fournisseur existant remplace la ligne enregistrée par une ligne construite à partir de la requête. Le formulaire d'ajout/modification du tableau de bord ne peut pas envoyer tous les champs ; la sauvegarde conserve donc certains champs enregistrés que la requête omet. Dix d'entre eux décrivent le comportement d'un amont précis : `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+`POST /api/providers` avec le nom d'un fournisseur existant remplace la ligne enregistrée par une ligne construite à partir de la requête. Le formulaire d'ajout/modification du tableau de bord ne peut pas envoyer tous les champs ; la sauvegarde conserve donc certains champs enregistrés que la requête omet. Onze d'entre eux décrivent le comportement d'un amont précis : `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| Sauvegarde | Les dix réglages | `apiKeyPool` enregistré |
+| Sauvegarde | Les onze réglages | `apiKeyPool` enregistré |
 | --- | --- | --- |
 | Même destination, champ omis | Valeur enregistrée conservée, y compris un `[]` ou un `false` explicite | Conservé |
 | Nouvelle destination, champ omis | Non conservée ; les valeurs par défaut du registre pour la nouvelle destination peuvent s'appliquer | Non conservé |
