@@ -1258,6 +1258,7 @@
   "responses-send-budget-errors.test.ts": "responses", "responses-memory-models.test.ts": "responses",
   "responses-shadow-intercept.test.ts": "responses", "responses-show-thinking-summary.test.ts": "responses",
   "responses-snapshot-repair-server.test.ts": "responses", "responses-snapshot-repair.test.ts": "responses",
+  "responses-snapshot-scaling.test.ts": "responses",
   "responses-sparse-terminal-tool-scope.test.ts": "responses", "responses-spend-ledger-wiring.test.ts": "responses", "responses-spend-contract-c.test.ts": "responses", "responses-spend-anchor.test.ts": "responses",
   "responses-spend-capacity-guard.test.ts": "responses", "responses-spill-acl-recovery.test.ts": "responses",
   "responses-spill-admission-headroom.test.ts": "responses",

@@ -1594,6 +1594,7 @@
     "responses-show-thinking-summary.test.ts": "responses",
     "responses-snapshot-repair-server.test.ts": "responses",
     "responses-snapshot-repair.test.ts": "responses",
+    "responses-snapshot-scaling.test.ts": "responses",
     "responses-sparse-terminal-tool-scope.test.ts": "responses",
     "responses-spend-ledger-wiring.test.ts": "responses",
     "responses-spend-contract-c.test.ts": "responses",
