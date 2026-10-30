@@ -380,7 +380,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (mayNormalize && mayBecomePatchEnvelope(fullInput)) {
         const stablePrefix = stableCanonicalPatchPrefix(
           fullInput,
-          fullInput === open.argumentsText ? open.argumentsTail : fullInput,
+          fullInput === open.argumentsText ? open.argumentsTail : fullInput.slice(-64),
           open.canonicalPatchProgress,
         );
         if (stablePrefix === null) return [];

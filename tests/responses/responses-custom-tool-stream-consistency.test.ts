@@ -186,6 +186,19 @@ describe("routed Responses custom-tool stream consistency", () => {
     ]);
   });
 
+  test("preserves a fragmented long wrapped patch through the decoded tail", () => {
+    const opening = "*** Begin Patch\n*** Add File: long.txt\n";
+    const body = `+${"x".repeat(65_536)}\n+last line\n`;
+    const wrapped = JSON.stringify({ input: `${opening}${body}*** End Patch ***\n` });
+    const normalized = `${opening}${body}*** End Patch\n`;
+    const result = restoreExecStream(wrapped, wrapped.match(/[\s\S]{1,37}/g)!, "apply_patch");
+    for (const preview of result.previews) expect(normalized.startsWith(preview)).toBe(true);
+    expect(result.preview).toBe(normalized.slice(0, -1));
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
+  });
+
   test.each([
     ["LF operation", "*** Begin Patch\n*** Update File: a.txt\n+one\n*** End Patch"],
     ["CRLF operation", "*** Begin Patch\r\n*** Add File: a.txt\r\n+one\r\n*** End Patch\r\n"],
