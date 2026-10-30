@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as patchEnvelope from "../../src/responses/apply-patch-envelope";
 import {
   createRoutedCustomToolRestoreBlockRewrite,
   RoutedCustomToolProgressError,
@@ -191,7 +192,17 @@ describe("routed Responses custom-tool stream consistency", () => {
     const body = `+${"x".repeat(65_536)}\n+last line\n`;
     const wrapped = JSON.stringify({ input: `${opening}${body}*** End Patch ***\n` });
     const normalized = `${opening}${body}*** End Patch\n`;
-    const result = restoreExecStream(wrapped, wrapped.match(/[\s\S]{1,37}/g)!, "apply_patch");
+    const original = patchEnvelope.stableCanonicalPatchPrefix;
+    let longChecks = 0;
+    const spy = spyOn(patchEnvelope, "stableCanonicalPatchPrefix").mockImplementation((...args) => {
+      expect(args[1]).toBe(args[0].slice(-64));
+      if (args[0].length > 64) longChecks++;
+      return original(...args);
+    });
+    let result: ReturnType<typeof restoreExecStream>;
+    try { result = restoreExecStream(wrapped, wrapped.match(/[\s\S]{1,37}/g)!, "apply_patch"); }
+    finally { spy.mockRestore(); }
+    expect(longChecks).toBeGreaterThan(0);
     for (const preview of result.previews) expect(normalized.startsWith(preview)).toBe(true);
     expect(result.preview).toBe(normalized.slice(0, -1));
     expect(result.doneInput).toBe(normalized);
