@@ -477,8 +477,11 @@ async function startSibling(
     const sockets = port === undefined ? "" : pinnedPortSockets(port, child.pid);
     if (child.exitCode === null) child.kill("SIGKILL");
     // Bounded like tail() below: the diagnostic must never outlast the original failure.
-    if (port !== undefined) await Promise.race([child.exited, Bun.sleep(5_000)]);
-    const holders = port === undefined ? "not pinned" : `${pinnedPortBindable(port)}${sockets}`;
+    const exited = port === undefined
+      || await Promise.race([child.exited.then(() => true), Bun.sleep(5_000).then(() => false)]);
+    // A bind probe while the child may still be alive would only find the child itself.
+    const holders = port === undefined ? "not pinned"
+      : `${exited ? pinnedPortBindable(port) : "child alive 5s after kill; bind probe skipped"}${sockets}`;
     const tail = async (stream: unknown): Promise<string> => {
       try {
         return await Promise.race([
