@@ -334,7 +334,7 @@ export async function readBoundedJsonRequestBody(
     }
     const parsed = JSON.parse(text);
     // Keep the serialized-size contract: normalization can expand numeric literals.
-    const parsedBytes = budget ? Buffer.byteLength(JSON.stringify(parsed), "utf8") : decoded.byteLength;
+    const parsedBytes = Buffer.byteLength(JSON.stringify(parsed), "utf8");
     budget?.observeAcceptedRequestCopy(parsedBytes);
     updateInboundBodyReservation(req, Math.max(raw.byteLength, decoded.byteLength, parsedBytes));
     return parsed;

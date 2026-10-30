@@ -105,7 +105,7 @@ discarding active leases or FIFO waiters; lowering capacity cannot erase outstan
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
 Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
 After successful bounded JSON parsing, the reader reduces it to the largest observed wire/decoded
-size, including normalized JSON bytes when the existing translator measurement is enabled.
+size, including normalized JSON bytes whether or not the route uses a translator budget.
 This reduction never exceeds the original allowance. The measured charge remains live;
 parsing never frees the whole lease.
 An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
