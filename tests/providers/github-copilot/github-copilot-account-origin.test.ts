@@ -40,15 +40,30 @@ function createCaseLifetime(cleanup: () => void) {
       return closing ??= (async () => {
         controller.abort();
         while (pending.size) await Promise.allSettled([...pending]);
+        const failures: unknown[] = [];
         for (const response of responses) {
-          if (!response.bodyUsed) await response.body?.cancel();
+          try {
+            if (!response.bodyUsed) await response.body?.cancel();
+            responses.delete(response);
+          } catch (error) { failures.push(error); }
         }
-        responses.clear();
+        // A failed cancellation may still own a reader/producer. Keep its home and fence;
+        // nevertheless attempt the other bodies so one failure does not strand all of them.
+        if (failures.length) throw failures[0];
         cleanup();
         closed = true;
       })();
     },
   };
+}
+function restoreCaseState(release: () => void, restore: Array<() => void>, removeHome: () => void): void {
+  const failures: unknown[] = [];
+  for (const step of [release, ...restore]) {
+    try { step(); } catch (error) { failures.push(error); }
+  }
+  // Restore independent globals after release failure, but never remove an uncertain live home.
+  if (failures.length) throw failures[0];
+  removeHome();
 }
 function handleResponses(...args: Parameters<typeof dispatchResponses>): Promise<Response> {
   const owner = currentCase;
@@ -251,14 +266,13 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-copilot-origin-"));
   const ownedHome = home;
   let releaseSpendHome: (() => void) | undefined;
-  currentCase = createCaseLifetime(() => {
-    releaseSpendHome?.();
-    globalThis.fetch = originalFetch;
-    clearGenericFailoverHealth();
-    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = originalHome;
-    removeTreeWithRetry(ownedHome);
-  });
+  currentCase = createCaseLifetime(() => restoreCaseState(
+    () => { releaseSpendHome?.(); },
+    [() => { globalThis.fetch = originalFetch; }, clearGenericFailoverHealth,
+      () => { if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = originalHome; }],
+    () => removeTreeWithRetry(ownedHome),
+  ));
   process.env.OPENCODEX_HOME = home;
   clearGenericFailoverHealth();
   // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
@@ -269,6 +283,45 @@ beforeEach(() => {
 afterEach(async () => { await currentCase?.close(); });
 
 describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
+  test.each(["locked", "reject"] as const)("teardown attempts all bodies and retains the fence after %s cancellation", async mode => {
+    const firstError = new Error("fixture cancel failed");
+    let cleanupCalls = 0, otherCancels = 0;
+    const owner = createCaseLifetime(() => { cleanupCalls++; });
+    const first = new Response(new ReadableStream({ cancel() { if (mode === "reject") throw firstError; } }));
+    const reader = mode === "locked" ? first.body!.getReader() : undefined;
+    const second = new Response(new ReadableStream({ cancel() { otherCancels++; } }));
+    owner.responses.add(first); owner.responses.add(second);
+    try {
+      const closing = owner.close();
+      const failure = await closing.then(() => undefined, error => error);
+      if (mode === "reject") expect(failure).toBe(firstError);
+      else expect(failure).toBeInstanceOf(TypeError);
+      expect(owner.close()).toBe(closing);
+      expect(otherCancels).toBe(1);
+      expect(owner.responses.has(first)).toBe(true);
+      expect(owner.responses.has(second)).toBe(false);
+      expect(cleanupCalls).toBe(0);
+      expect(owner.closed).toBe(false);
+      expect(() => owner.assertClosed()).toThrow("did not settle");
+    } finally { if (reader) { await reader.cancel(); reader.releaseLock(); } }
+  });
+
+  test("release failure restores every independent global but preserves the home and first error", async () => {
+    const firstError = new Error("fixture release failed"), calls: string[] = [];
+    const owner = createCaseLifetime(() => restoreCaseState(
+      () => { calls.push("release"); throw firstError; },
+      [() => { calls.push("fetch"); }, () => { calls.push("health"); throw new Error("later failure"); },
+        () => { calls.push("home-env"); }],
+      () => { calls.push("remove-home"); },
+    ));
+    const closing = owner.close();
+    expect(await closing.then(() => undefined, error => error)).toBe(firstError);
+    expect(calls).toEqual(["release", "fetch", "health", "home-env"]);
+    expect(owner.close()).toBe(closing);
+    expect(owner.closed).toBe(false);
+    expect(() => owner.assertClosed()).toThrow("did not settle");
+  });
+
   test.each(["pacing", "build"] as const)("teardown joins a held %s gate before replacing the case fetch", async phase => {
     await seedAccounts();
     const entered = Promise.withResolvers<void>();
