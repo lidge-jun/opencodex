@@ -1,0 +1,316 @@
+---
+// Animated WebGL2 cloud sky (Cloudlight hero grammar). Renders into an
+// absolutely positioned host that fills its nearest positioned ancestor.
+// Without WebGL2 the host keeps its CSS sky colour, so the section still reads.
+// Under reduced motion one still frame is drawn and re-drawn on theme change.
+interface Props {
+	class?: string;
+	/** `sky` paints the full Cloudlight sky; `overlay` draws only the clouds,
+	 *  dusk-lit and translucent, over whatever sits behind the canvas. */
+	variant?: 'sky' | 'overlay';
+}
+const { class: className, variant = 'sky' } = Astro.props;
+---
+
+<div class:list={['lp-cloud', `lp-cloud-${variant}`, className]} data-cloud={variant} aria-hidden="true"></div>
+
+<script>
+	const FRAG = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec2 uRes;
+uniform float uTime;
+uniform float uTheme;
+const float PI = 3.14159265359;
+const float TAU = 6.28318530718;
+const vec3 SKY_L = vec3(0.655, 0.937, 0.996);
+const vec3 SKY_D = vec3(0.055, 0.071, 0.098);
+#ifdef OVERLAY
+// dusk-lit clouds: warm sunset rims over cool shadowed cores
+const vec3 RIM_L = vec3(1.0, 0.74, 0.58);
+const vec3 CORE_L = vec3(0.34, 0.36, 0.50);
+const vec3 RIM_D = vec3(0.46, 0.38, 0.42);
+const vec3 CORE_D = vec3(0.07, 0.09, 0.15);
+#else
+const vec3 RIM_L = vec3(1.0);
+const vec3 CORE_L = vec3(0.905, 0.945, 0.985);
+const vec3 RIM_D = vec3(0.150, 0.170, 0.210);
+const vec3 CORE_D = vec3(0.095, 0.110, 0.140);
+#endif
+const float SCALE = 8.0;
+const float BASE_DENSITY = 0.55;
+const float COVERAGE = 0.45;
+const float FADE_START = 0.5;
+const float CEILING = 0.9;
+const float SKYLINE_DIP = 0.1;
+const float SKYLINE_RISE = 0.5;
+const float OPACITY_L = 0.9;
+const float OPACITY_D = 0.6;
+const float WARP = 0.025;
+const mat2 SPIN_A = mat2(0.80, 0.60, -0.60, 0.80);
+const mat2 SPIN_B = mat2(1.60, 1.20, -1.20, 1.60);
+const float PUFF_RATE[3] = float[3](0.1, 0.2, 0.5);
+const float PUFF_ZOOM[3] = float[3](2.02, 2.03, 2.01);
+const float FLOW_RATE[5] = float[5](0.1, 0.4, 0.7, 0.3, 0.3);
+const float FLOW_GAIN[5] = float[5](0.5, 0.25, 0.125, 0.0625, 0.0325);
+vec2 hash22(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.xx + q.yz) * q.zy) * 2.0 - 1.0;
+}
+mat2 rot(float a) { float c = cos(a); float s = sin(a); return mat2(c, s, -s, c); }
+float cellular(vec2 x, float phase) {
+  vec2 cell = floor(x);
+  vec2 f = fract(x);
+  float inv = 0.0;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 site = 0.5 + 0.5 * sin(phase + TAU * hash22(cell + g));
+      vec2 r = g + site - f;
+      float d2 = dot(r, r);
+      float d4 = d2 * d2;
+      float d8 = d4 * d4;
+      inv += 1.0 / (d8 * d8);
+    }
+  }
+  return 1.0 - pow(inv, -0.125);
+}
+float lobe(vec2 cell, vec2 offset, vec2 f, mat2 R) {
+  float sgn = 1.0 - 2.0 * mod(offset.x + offset.y, 2.0);
+  return sgn * dot(hash22(cell + offset), R * (f - offset));
+}
+float curl(vec2 p, float ang) {
+  vec2 cell = floor(p);
+  vec2 f = fract(p);
+  vec2 w = f * f * (3.0 - 2.0 * f);
+  mat2 R = rot(ang + PI * (1.0 - mod(cell.x + cell.y, 2.0)));
+  float n = mix(
+    mix(lobe(cell, vec2(0.0, 0.0), f, R), lobe(cell, vec2(1.0, 0.0), f, R), w.x),
+    mix(lobe(cell, vec2(0.0, 1.0), f, R), lobe(cell, vec2(1.0, 1.0), f, R), w.x),
+    w.y
+  );
+  return 0.5 + n;
+}
+float puffField(vec2 p, float t) {
+  float amp = 0.5;
+  float sum = 0.0;
+  for (int k = 0; k < 3; k++) {
+    sum += amp * cellular(p, t * PUFF_RATE[k]);
+    p = SPIN_A * p * PUFF_ZOOM[k];
+    amp *= 0.5;
+  }
+  return (sum + 0.0625) / 0.9375;
+}
+float flowField(vec2 p, float t) {
+  float sum = 0.0;
+  for (int k = 0; k < 5; k++) {
+    sum += FLOW_GAIN[k] * curl(p, t * FLOW_RATE[k]);
+    p = SPIN_B * p;
+  }
+  return sum * 1.2;
+}
+float flowWarp(vec2 p, float t) {
+  float sum = FLOW_GAIN[0] * curl(p, t * FLOW_RATE[0]);
+  p = SPIN_B * p;
+  sum += FLOW_GAIN[1] * curl(p, t * FLOW_RATE[1]);
+  return sum * 1.2;
+}
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  float h = px.y / uRes.y;
+  vec3 sky = mix(SKY_L, SKY_D, uTheme);
+  float t = uTime;
+  float sx = px.x / uRes.y;
+  float ridge = curl(vec2(sx * 0.6 + t * 0.01, 4.7), 0.0);
+  ridge = 0.7 * ridge + 0.3 * curl(vec2(sx * 1.5 - t * 0.006, 8.3), 0.0);
+  ridge = 0.5 + (ridge - 0.5) * 2.0;
+  float tower = smoothstep(0.4, 0.85, ridge);
+  float lift = mix(-SKYLINE_DIP, SKYLINE_RISE, tower);
+#ifdef OVERLAY
+  if (h > CEILING + lift) { fragColor = vec4(0.0); return; }
+#else
+  if (h > CEILING + lift) { fragColor = vec4(sky, 1.0); return; }
+#endif
+  float churn = t * 0.5;
+  float drift = t * 0.15;
+  float unit = max(uRes.x, uRes.y);
+  vec2 uv = vec2(px.x, -px.y) / unit;
+  uv += flowWarp(uv * SCALE + vec2(0.0, churn * 0.5), churn) * WARP;
+  vec2 q = uv * SCALE + vec2(0.0, drift);
+  float shape = puffField(q, churn * 10.0);
+  float detail = flowField(q, churn * 10.0);
+  float band = COVERAGE * clamp(1.0 - h + lift * 0.9, 0.0, 1.0);
+  shape = smoothstep(0.0, 1.0, shape) * band + BASE_DENSITY;
+  detail = smoothstep(0.0, 1.0, detail) * band + BASE_DENSITY;
+  float dens = shape * detail;
+  dens *= smoothstep(0.0, 1.0, dens);
+  vec3 rim = mix(RIM_L, RIM_D, uTheme);
+  vec3 core = mix(CORE_L, CORE_D, uTheme);
+  vec3 cloud = mix(rim, core, smoothstep(0.5, 0.99, dens));
+  float cover = smoothstep(0.2, 0.5, dens);
+  float fade = 1.0 - smoothstep(FADE_START + lift, CEILING + lift, h);
+  float opacity = mix(OPACITY_L, OPACITY_D, uTheme);
+#ifdef OVERLAY
+  // premultiplied: the photo shows through thin cloud and clear sky
+  float a = cover * fade * mix(0.82, 0.9, uTheme);
+  fragColor = vec4(cloud * a, a);
+#else
+  fragColor = vec4(mix(sky, cloud, cover * fade * opacity), 1.0);
+#endif
+}`;
+
+	const VERT = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+	// Low internal resolution keeps the fill cheap; the clouds are soft anyway.
+	const RES_SCALE = 0.36;
+	const STILL_TIME = 12;
+	const FRAME_MS = 1000 / 60;
+
+	const root = document.documentElement;
+	const readTheme = () => (root.dataset.theme === 'light' ? 0 : 1);
+	const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+
+	const mount = (host: HTMLElement) => {
+		const overlay = host.dataset.cloud === 'overlay';
+		const canvas = document.createElement('canvas');
+		const gl = canvas.getContext('webgl2', {
+			alpha: overlay,
+			antialias: false,
+			depth: false,
+			stencil: false,
+			premultipliedAlpha: overlay,
+			powerPreference: 'low-power',
+		});
+		if (!gl) return;
+
+		const compile = (type: number, src: string) => {
+			const sh = gl.createShader(type);
+			if (!sh) return null;
+			gl.shaderSource(sh, src);
+			gl.compileShader(sh);
+			if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+				gl.deleteShader(sh);
+				return null;
+			}
+			return sh;
+		};
+		const vs = compile(gl.VERTEX_SHADER, VERT);
+		const fs = compile(
+			gl.FRAGMENT_SHADER,
+			overlay ? FRAG.replace('precision highp float;', '#define OVERLAY\nprecision highp float;') : FRAG,
+		);
+		const program = gl.createProgram();
+		if (!vs || !fs || !program) return;
+		gl.attachShader(program, vs);
+		gl.attachShader(program, fs);
+		gl.linkProgram(program);
+		gl.deleteShader(vs);
+		gl.deleteShader(fs);
+		if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return;
+		gl.useProgram(program);
+
+		const buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+		const aPos = gl.getAttribLocation(program, 'aPos');
+		gl.enableVertexAttribArray(aPos);
+		gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+		const uRes = gl.getUniformLocation(program, 'uRes');
+		const uTime = gl.getUniformLocation(program, 'uTime');
+		const uTheme = gl.getUniformLocation(program, 'uTheme');
+
+		host.appendChild(canvas);
+		host.dataset.cloudReady = '';
+
+		let targetTheme = readTheme();
+		let theme = targetTheme;
+		let tAccum = 0;
+		let raf = 0;
+		let last = 0;
+		let visible = true;
+
+		const draw = (time: number) => {
+			gl.uniform1f(uTime, time);
+			gl.uniform1f(uTheme, theme);
+			gl.drawArrays(gl.TRIANGLES, 0, 3);
+		};
+		const renderStill = () => {
+			theme = targetTheme;
+			draw(STILL_TIME);
+		};
+
+		let lastW = 0;
+		let lastH = 0;
+		const resize = () => {
+			const rect = host.getBoundingClientRect();
+			const w = Math.max(1, Math.round(rect.width * RES_SCALE));
+			const h = Math.max(1, Math.round(rect.height * RES_SCALE));
+			if (w === lastW && h === lastH) return;
+			lastW = w;
+			lastH = h;
+			canvas.width = w;
+			canvas.height = h;
+			gl.viewport(0, 0, w, h);
+			gl.uniform2f(uRes, w, h);
+			draw(reduce.matches ? STILL_TIME : tAccum);
+		};
+
+		const loop = () => {
+			raf = requestAnimationFrame(loop);
+			const now = performance.now();
+			const dt = now - last;
+			if (dt < FRAME_MS - 1) return;
+			last = now - (dt % FRAME_MS);
+			tAccum += Math.min(dt, 50) * 0.001;
+			// ease the sky between themes instead of snapping
+			const k = 1 - Math.pow(1 - 0.08, dt / FRAME_MS);
+			theme += (targetTheme - theme) * k;
+			draw(tAccum);
+		};
+		const stop = () => {
+			if (raf) cancelAnimationFrame(raf);
+			raf = 0;
+		};
+		const start = () => {
+			if (raf || !visible || document.hidden || reduce.matches) return;
+			last = performance.now();
+			loop();
+		};
+
+		resize();
+		new ResizeObserver(() => requestAnimationFrame(resize)).observe(host);
+		new IntersectionObserver(
+			(entries) => {
+				visible = entries[0]?.isIntersecting ?? true;
+				if (visible) start();
+				else stop();
+			},
+			{ rootMargin: '160px' },
+		).observe(host);
+		document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
+		new MutationObserver(() => {
+			targetTheme = readTheme();
+			if (reduce.matches) renderStill();
+			// during the header's circle reveal the new snapshot must already
+			// show the final sky, so skip the easing and paint it now
+			else if (root.dataset.themeVt !== undefined) {
+				theme = targetTheme;
+				draw(tAccum);
+			}
+		}).observe(root, { attributeFilter: ['data-theme'] });
+		reduce.addEventListener('change', () => {
+			if (reduce.matches) {
+				stop();
+				renderStill();
+			} else start();
+		});
+
+		if (reduce.matches) renderStill();
+		else start();
+	};
+
+	document.querySelectorAll<HTMLElement>('[data-cloud]').forEach(mount);
+</script>

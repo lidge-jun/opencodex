@@ -20,6 +20,7 @@ import dashboard from '../assets/dashboard.png';
 import picker from '../assets/codex-app-picker.png';
 import heroFieldLight from '../assets/hero-route-light.png';
 import heroFieldDark from '../assets/hero-route-dark.png';
+import CloudCanvas from './CloudCanvas.astro';
 import SiteJsonLd from './SiteJsonLd.astro';
 import { GITHUB_URL, getStarCount, formatStarCount } from '../data/github-stars';
 
@@ -38,7 +39,7 @@ const fr = {
 	'In another terminal: launch Claude Code through ocx': 'Dans un autre terminal : lancer Claude Code via ocx',
 	'Codex now routes through ocx': 'Codex passe maintenant par ocx',
 	'See supported tools': 'Voir les outils pris en charge',
-	'Getting Started': 'Démarrage',
+	'Getting Started': 'Premiers pas',
 	'Installation': 'Installation',
 	'Quickstart': 'Démarrage rapide',
 	'How It Works': 'Fonctionnement',
@@ -62,7 +63,7 @@ const fr = {
 	'Management API': 'API de gestion',
 	'Project': 'Projet',
 	'Contributing': 'Contribuer',
-	'Run ': 'Exécutez ',
+	'Run ': 'Faites tourner ',
 	' on the models you choose.': ' sur les modèles de votre choix.',
 	'opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.': 'opencodex est une passerelle locale unique pour vos outils de code IA et vos modèles. Il sert Codex, Claude Code, Claude Desktop et Grok Build sur un même port et connecte d’autres outils via des configurations gérées, en traduisant chaque format de protocole vers le fournisseur de votre choix, avec la diffusion en continu, les appels d’outils, le raisonnement et les images lorsque le modèle les prend en charge. Aucune modification des clients.',
 	'Get Started': 'Commencer',
@@ -74,7 +75,7 @@ const fr = {
 	'Start.': 'Démarrez.',
 	'Connect your tool.': 'Connectez votre outil.',
 	'Full quickstart': 'Démarrage rapide complet',
-	'Watch Codex run on a routed model.': 'Regardez Codex exécuter une tâche sur un modèle routé.',
+	'Watch Codex run on a routed model.': 'Regardez Codex tourner sur un modèle routé.',
 	'Codex App running a task on a routed non-OpenAI model': 'Codex App exécutant une tâche sur un modèle routé autre qu’OpenAI',
 	'One task, streamed end to end through opencodex.': 'Une tâche diffusée de bout en bout par opencodex.',
 	'One proxy, the whole surface.': 'Un seul proxy pour toute la plateforme.',
@@ -116,8 +117,8 @@ const fr = {
 	'Code signing policy': 'Politique de signature du code',
 	'Desktop App': 'App de bureau',
 	'Latest release': 'Dernière version',
-	'Star on GitHub': 'Ajouter une étoile sur GitHub',
-	'Star on GitHub, {count} stars': 'Ajouter une étoile sur GitHub, {count} étoiles',
+	'Star on GitHub': 'Mettre une étoile sur GitHub',
+	'Star on GitHub, {count} stars': 'Mettre une étoile sur GitHub, {count} étoiles',
 } as const;
 
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
@@ -125,8 +126,8 @@ const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string,
 
 const starCount = await getStarCount();
 const starLocale = locale || 'en';
-const githubCta = t('Star on GitHub', 'GitHub에서 별 주기', '在 GitHub 上加星', 'Поставить звезду на GitHub', 'GitHub でスターを付ける', '在 GitHub 上加星', 'GitHub’da yıldız verin');
-const starLabel = t('Star on GitHub, {count} stars', 'GitHub에서 별 주기, 별 {count}개', '在 GitHub 上加星，{count} 个星标', 'Поставить звезду на GitHub, {count} звёзд', 'GitHub でスターを付ける、{count} スター', '在 GitHub 上加星，{count} 個星標', 'GitHub’da yıldız verin, {count} yıldız');
+const githubCta = t('Star on GitHub', 'GitHub 스타 누르기', '在 GitHub 上点 Star', 'Поставить звезду на GitHub', 'GitHub でスター', '在 GitHub 上按 Star', 'GitHub’da yıldızlayın');
+const starLabel = t('Star on GitHub, {count} stars', 'GitHub 스타 누르기, 스타 {count}개', '在 GitHub 上点 Star，{count} 个 Star', 'Поставить звезду на GitHub. Звёзд: {count}', 'GitHub でスター（{count} スター）', '在 GitHub 上按 Star，{count} 個 Star', 'GitHub’da yıldızlayın, {count} yıldız');
 const githubAccessibleName = starCount === null ? githubCta
 	: starLabel.replace('{count}', new Intl.NumberFormat(starLocale).format(starCount));
 
@@ -175,7 +176,7 @@ const quickstart = [
 	{ cmd: 'npm install -g @bitkyc08/opencodex', note: t('Install', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum') },
 	{ cmd: 'ocx init', note: t('Add a provider and connect Codex', '프로바이더 추가 후 Codex 연결', '添加提供商并连接 Codex', 'Добавьте провайдера и подключите Codex', 'プロバイダーを追加して Codex を接続', '新增供應商並連接 Codex', 'Sağlayıcı ekleyip Codex’i bağlayın') },
 	{ cmd: 'ocx start', note: t('Start the proxy', '프록시 시작', '启动代理', 'Запуск прокси', 'プロキシを起動', '啟動代理', "Proxy'yi başlatın") },
-	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', 'Codex가 ocx를 경유', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex は ocx 経由に', 'Codex 現在經由 ocx 路由', 'Codex artık ocx üzerinden yönlendirilir') },
+	{ cmd: 'codex "Write a hello world in Rust"', note: t('Codex now routes through ocx', '이제 Codex가 ocx를 거쳐 실행됨', 'Codex 现在经由 ocx 路由', 'Codex теперь работает через ocx', 'Codex が ocx 経由で動作', 'Codex 現在經由 ocx 路由', 'Codex artık ocx üzerinden yönlendirilir') },
 ];
 
 // full docs map for the closing sitemap band (also the mobile path to every section)
@@ -188,7 +189,7 @@ const docsMap = [
 			{ label: t('Desktop App', '데스크톱 앱', '桌面应用', 'Десктопное приложение', 'デスクトップアプリ', '桌面應用程式', 'Masaüstü Uygulaması'), href: `${prefix}guides/desktop-app/` },
 			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門', 'Hızlı Başlangıç'), href: `${prefix}getting-started/quickstart/` },
 			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает', '仕組み', '運作原理', 'Nasıl Çalışır'), href: `${prefix}getting-started/how-it-works/` },
-			{ label: t('Agent Quickstart', '에이전트 퀵스타트', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート', 'Agent 快速上手', 'Ajanlar İçin Hızlı Başlangıç'), href: `${prefix}getting-started/for-agents/` },
+			{ label: t('Agent Quickstart', '에이전트용 빠른 시작', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート', 'Agent 快速上手', 'Ajanlar İçin Hızlı Başlangıç'), href: `${prefix}getting-started/for-agents/` },
 		],
 	},
 	{
@@ -224,7 +225,7 @@ const docsMap = [
 		label: t('Project', '프로젝트', '项目', 'Проект', 'プロジェクト', '專案', 'Proje'),
 		icon: 'folder',
 		links: [
-			{ label: t('Contributing', '기여하기', '贡献', 'Участие в проекте', 'コントリビュート', '貢獻', 'Katkıda Bulunma'), href: `${prefix}contributing/` },
+			{ label: t('Contributing', '기여하기', '贡献指南', 'Участие в проекте', 'コントリビュート', '貢獻指南', 'Katkıda Bulunma'), href: `${prefix}contributing/` },
 			{ label: 'GitHub', href: 'https://github.com/lidge-jun/opencodex' },
 			{ label: 'npm', href: 'https://www.npmjs.com/package/@bitkyc08/opencodex' },
 		],
@@ -245,8 +246,14 @@ const docsMap = [
 	<section class="lp-scene lp-scene-hero">
 	<div class="lp-scene-inner lp-hero-field">
 		<div class="lp-field-bg" aria-hidden="true">
-			<Image src={heroFieldLight} alt="" class="lp-field-light" loading="eager" widths={[1024, 2048]} sizes="100vw" />
-			<Image src={heroFieldDark} alt="" class="lp-field-dark" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
+			<div class="lp-field-photo" data-depth="1">
+				<Image src={heroFieldLight} alt="" class="lp-field-light" loading="eager" widths={[1024, 2048]} sizes="100vw" />
+				<Image src={heroFieldDark} alt="" class="lp-field-dark" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
+			</div>
+			<div class="lp-field-clouds" data-depth="-1.6">
+				<CloudCanvas variant="overlay" />
+			</div>
+			<div class="lp-field-scrim"></div>
 		</div>
 		<div class="lp-hero-copy">
 			<a class="lp-announce" href="#download">
@@ -257,7 +264,7 @@ const docsMap = [
 			    Codex and Claude Code. 4-face rotateX cylinder, fixed slot width via
 			    inline-grid stacking; reduced-motion collapses to a static pairing. */}
 			<h1 id="_top">
-				{t('Run ', '', '让 ', 'Запускайте ', '実行 ', '讓 ', '')}<span class="lp-drum" aria-label="Codex and Claude">
+				{t('Run ', '', '让 ', 'Запускайте ', '', '讓 ', '')}<span class="lp-drum" aria-label="Codex and Claude">
 					<span class="lp-drum-spin" aria-hidden="true">
 						<span class="lp-drum-face lp-drum-codex">Codex</span>
 						<span class="lp-drum-face lp-drum-claude">Claude</span>
@@ -265,10 +272,10 @@ const docsMap = [
 						<span class="lp-drum-face lp-drum-claude">Claude</span>
 					</span>
 					<span class="lp-drum-static" aria-hidden="true">Codex<span class="lp-drum-dot"> · </span>Claude</span>
-				</span>{t(' on the models you choose.', '를 원하는 모델로.', ' 跑在你选择的模型上。', ' на выбранных вами моделях.', ' を好きなモデルで。', ' 跑在你選擇的模型上。', ' seçtiğiniz modellerle çalıştırın.')}
+				</span>{t(' on the models you choose.', '를 원하는 모델로.', ' 跑在你选择的模型上。', ' на выбранных вами моделях.', ' を、好きなモデルで。', ' 跑在你選擇的模型上。', ', seçtiğiniz modellerle çalışsın.')}
 			</h1>
 			<p class="lp-sub">
-				{t('opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.', 'opencodex는 AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨이입니다. 포트 하나로 Codex, Claude Code, Claude Desktop, Grok Build를 서빙하고 관리형 설정으로 더 많은 도구를 연결하며, 각 wire 포맷을 원하는 프로바이더로 변환합니다. 모델이 지원하면 스트리밍·tool call·reasoning·이미지도 그대로 통과합니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地网关，连接你的 AI 编程工具与模型。它用同一个端口服务 Codex、Claude Code、Claude Desktop 和 Grok Build，并通过托管配置连接更多工具，把各自的线路格式翻译为你选择的提供商；在模型支持时，流式、工具调用、推理与图像都会保留。无需修补客户端。', 'opencodex — единый локальный шлюз для ваших ИИ-инструментов для кода и моделей. Он обслуживает Codex, Claude Code, Claude Desktop и Grok Build через один порт и подключает другие инструменты через управляемые конфигурации, транслируя каждый wire-формат для выбранного провайдера; стриминг, вызовы инструментов, рассуждения и изображения проходят, если их поддерживает модель. Никаких патчей на стороне клиента.', 'opencodex は、AI コーディングツールとモデルをつなぐ 1 つのローカルゲートウェイです。1 つのポートで Codex、Claude Code、Claude Desktop、Grok Build を提供し、管理された設定でほかのツールも接続します。各 wire フォーマットを選んだプロバイダーへ変換し、モデルが対応していればストリーミング・ツール呼び出し・推論・画像もそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機閘道，連接你的 AI 程式開發工具與模型。它用同一個連接埠服務 Codex、Claude Code、Claude Desktop 和 Grok Build，並透過代管設定連接更多工具，把各自的線路格式翻譯為你選擇的供應商；在模型支援時，串流、工具呼叫、推理與圖像都會保留。無需修補用戶端。', 'opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçididir. Codex, Claude Code, Claude Desktop ve Grok Build’i tek bir port üzerinden sunar, diğer araçları yönetilen yapılandırmalarla bağlar ve her hat formatını seçtiğiniz sağlayıcıya dönüştürür; model destekliyorsa akış, araç çağrıları, akıl yürütme ve görseller korunur. İstemci tarafında sıfır yama.')}
+				{t('opencodex is one local gateway for your AI coding tools and models. It serves Codex, Claude Code, Claude Desktop and Grok Build from one port and connects more tools through managed configs, translating each wire format to the provider you choose, with streaming, tool calls, reasoning and images where the model supports them. Zero client patches.', 'opencodex는 AI 코딩 도구와 모델을 하나로 잇는 로컬 게이트웨이입니다. 포트 하나로 Codex, Claude Code, Claude Desktop, Grok Build를 연결하고, 관리형 설정으로 다른 도구도 붙일 수 있으며, 각 요청 형식을 원하는 프로바이더에 맞게 변환합니다. 모델이 지원하면 스트리밍, 도구 호출, 추론, 이미지도 그대로 전달됩니다. 클라이언트는 고칠 필요가 없습니다.', 'opencodex 是一个本地网关，连接你的 AI 编程工具与模型。它用同一个端口服务 Codex、Claude Code、Claude Desktop 和 Grok Build，并通过托管配置连接更多工具，把各自的线路格式翻译为你选择的提供商；在模型支持时，流式、工具调用、推理与图像都会保留。无需修补客户端。', 'opencodex — единый локальный шлюз для ваших ИИ-инструментов для кода и моделей. Он обслуживает Codex, Claude Code, Claude Desktop и Grok Build через один порт и подключает другие инструменты через управляемые конфигурации, транслируя каждый wire-формат для выбранного провайдера; стриминг, вызовы инструментов, рассуждения и изображения проходят, если их поддерживает модель. Никаких патчей на стороне клиента.', 'opencodex は、AI コーディングツールとモデルをつなぐ 1 つのローカルゲートウェイです。1 つのポートで Codex、Claude Code、Claude Desktop、Grok Build を提供し、管理された設定でほかのツールも接続します。各 wire フォーマットを選んだプロバイダーへ変換し、モデルが対応していればストリーミング・ツール呼び出し・推論・画像もそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機閘道，連接你的 AI 程式開發工具與模型。它用同一個連接埠服務 Codex、Claude Code、Claude Desktop 和 Grok Build，並透過代管設定連接更多工具，把各自的線路格式翻譯為你選擇的供應商；在模型支援時，串流、工具呼叫、推理與圖像都會保留。無需修補用戶端。', 'opencodex, yapay zekâ kodlama araçlarınız ve modelleriniz için tek bir yerel ağ geçididir. Codex, Claude Code, Claude Desktop ve Grok Build’i tek bir port üzerinden sunar, diğer araçları yönetilen yapılandırmalarla bağlar ve her hat formatını seçtiğiniz sağlayıcıya dönüştürür; model destekliyorsa akış, araç çağrıları, akıl yürütme ve görseller korunur. İstemci tarafında sıfır yama.')}
 			</p>
 			<div class="lp-cta">
 				<a class="lp-btn-primary" id="lp-hero-download" href="#download"
@@ -278,9 +285,9 @@ const docsMap = [
 					<span id="lp-hero-download-label">{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}</span>
 					<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 				</a>
-				<a class="lp-btn-ghost" href={`${prefix}getting-started/installation/`}>{t('Get Started', '시작하기', '快速开始', 'Начать', 'はじめに', '快速入門', 'Başlarken')}</a>
+				<a class="lp-btn-ghost" href={`${prefix}getting-started/installation/`}>{t('Get Started', '시작하기', '快速开始', 'Начать', 'はじめる', '快速入門', 'Başlayın')}</a>
 			</div>
-		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商', 'Desteklenen sağlayıcılar')}>
+		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的提供商', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商', 'Desteklenen sağlayıcılar')}>
 				{providers.map((p) => (
 					<li>
 						{p.path && (
@@ -291,11 +298,11 @@ const docsMap = [
 						{p.label}
 					</li>
 				))}
-				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40+', '40+ providers', '40+ провайдеров', '40+ プロバイダー', '40+ 供應商', '40+ sağlayıcı')}</a></li>
+				<li class="lp-chip-more"><a href={`${prefix}guides/providers/`}>{t('40+ providers', '프로바이더 40개 이상', '40+ 提供商', '40+ провайдеров', '40+ プロバイダー', '40+ 供應商', '40+ sağlayıcı')}</a></li>
 			</ul>
 		</div>
 		<div class="lp-stage-in">
-			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的供應商與可用模型', 'opencodex kontrol paneli — canlı proxy durumu, yönlendirilen sağlayıcılar ve kullanılabilir modeller')} loading="eager" />
+			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的提供商与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的供應商與可用模型', 'opencodex kontrol paneli — canlı proxy durumu, yönlendirilen sağlayıcılar ve kullanılabilir modeller')} loading="eager" />
 		</div>
 	</div>
 	</section>
@@ -305,7 +312,7 @@ const docsMap = [
 	     section stays useful with JS off or the API rate-limited. -->
 	<section class="lp-download" id="download">
 		<h2 class="lp-download-title">{t('Download OpenCodex', 'OpenCodex 다운로드', '下载 OpenCodex', 'Скачать OpenCodex', 'OpenCodex をダウンロード', '下載 OpenCodex', 'OpenCodex’u İndirin')}</h2>
-		<p class="lp-download-sub">{t('The desktop app bundles the proxy, the dashboard and a tray. Beta.', '데스크톱 앱 하나에 프록시, 대시보드, 트레이까지. 베타입니다.', '桌面应用集成了代理、控制台与托盘。Beta 版。', 'Десктопное приложение объединяет прокси, дашборд и трей. Бета.', 'デスクトップアプリにはプロキシ、ダッシュボード、トレイが同梱されています。ベータ版です。', '桌面應用整合了代理、儀表板與系統匣。Beta 版。', 'Masaüstü uygulaması proxy’yi, kontrol panelini ve tepsi simgesini bir araya getirir. Beta.')}</p>
+		<p class="lp-download-sub">{t('The desktop app bundles the proxy, the dashboard and a tray. Beta.', '데스크톱 앱에 프록시, 대시보드, 트레이가 모두 들어 있습니다. 베타 버전입니다.', '桌面应用集成了代理、控制台与托盘。Beta 版。', 'Десктопное приложение объединяет прокси, дашборд и трей. Бета.', 'デスクトップアプリにはプロキシ、ダッシュボード、トレイが同梱されています。ベータ版です。', '桌面應用整合了代理、儀表板與系統匣。Beta 版。', 'Masaüstü uygulaması proxy’yi, kontrol panelini ve tepsi simgesini bir araya getirir. Beta.')}</p>
 		<p class="lp-download-version"><span data-lp-version-wrap hidden>{t('Latest release', '최신 릴리스', '最新版本', 'Последний релиз', '最新リリース', '最新版本', 'Son sürüm')} <span data-lp-version></span></span></p>
 		<div class="lp-dl-grid">
 			<article class="lp-dl-card" data-platform="macos">
@@ -315,17 +322,17 @@ const docsMap = [
 				<div class="lp-dl-actions">
 					<a class="lp-dl-btn" data-lp-asset="dmg" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.dmg</span></a>
 				</div>
-				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 맞는 버전', '为你的系统推荐', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '為你的系統推薦', 'Sisteminiz için önerilir')}</p>
 			</article>
 			<article class="lp-dl-card" data-platform="windows">
 				<svg class="lp-dl-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={icons.windows} /></svg>
 				<h3>Windows</h3>
 				<p class="lp-dl-meta">x64 · .msi</p>
-				<p class="lp-dl-note">{t('Installer not code-signed yet', '아직 코드 서명되지 않은 설치 프로그램', '安装程序尚未进行代码签名', 'Установщик пока не имеет цифровой подписи', 'インストーラーはまだコード署名されていません', '安裝程式尚未進行程式碼簽署', 'Yükleyici henüz kod imzalı değil')}</p>
+				<p class="lp-dl-note">{t('Installer not code-signed yet', '설치 파일은 아직 코드 서명 전입니다', '安装程序尚未进行代码签名', 'Установщик пока не имеет цифровой подписи', 'インストーラーはまだコード署名されていません', '安裝程式尚未進行程式碼簽署', 'Yükleyici henüz kod imzalı değil')}</p>
 				<div class="lp-dl-actions">
 					<a class="lp-dl-btn" data-lp-asset="msi" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.msi</span></a>
 				</div>
-				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 맞는 버전', '为你的系统推荐', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '為你的系統推薦', 'Sisteminiz için önerilir')}</p>
 			</article>
 			<article class="lp-dl-card" data-platform="linux">
 				<svg class="lp-dl-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={siLinux.path} /></svg>
@@ -335,7 +342,7 @@ const docsMap = [
 					<a class="lp-dl-btn" data-lp-asset="appimage" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.AppImage</span></a>
 					<a class="lp-dl-alt" data-lp-asset="deb" href="https://github.com/lidge-jun/opencodex/releases/latest">{t('.deb package', '.deb 패키지', '.deb 软件包', 'Пакет .deb', '.deb パッケージ', '.deb 套件', '.deb paketi')}</a>
 				</div>
-				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 맞는 버전', '为你的系统推荐', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '為你的系統推薦', 'Sisteminiz için önerilir')}</p>
 			</article>
 		</div>
 		<details class="lp-dl-more" hidden>
@@ -343,11 +350,11 @@ const docsMap = [
 			<div class="lp-dl-more-grid"></div>
 		</details>
 		<p class="lp-dl-foot">
-			{t('Prefer the terminal?', '터미널이 더 편하다면', '更喜欢终端？', 'Предпочитаете терминал?', 'ターミナル派ですか？', '偏好終端機？', 'Terminali mi tercih edersiniz?')}
+			{t('Prefer the terminal?', '터미널이 더 편하다면', '更喜欢终端？', 'Предпочитаете терминал?', 'ターミナル派ですか？', '更喜歡用終端機？', 'Terminali mi tercih edersiniz?')}
 			<code>npm install -g @bitkyc08/opencodex</code>
 			<a href={`${prefix}getting-started/installation/`}>{t('Installation guide', '설치 가이드', '安装指南', 'Руководство по установке', 'インストールガイド', '安裝指南', 'Kurulum kılavuzu')}</a>
 			<a href="https://github.com/lidge-jun/opencodex/releases/latest">{t('All releases and checksums', '전체 릴리스와 체크섬', '所有版本与校验和', 'Все релизы и контрольные суммы', 'すべてのリリースとチェックサム', '所有版本與校驗碼', 'Tüm sürümler ve sağlama toplamları')}</a>
-			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>
+			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по десктопному приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>
 		</p>
 		<!-- SignPath Foundation's terms require this attribution, verbatim, and the code signing
 		     policy link on the download page; the policy page exists in English only. -->
@@ -360,17 +367,17 @@ const docsMap = [
 	<!-- quickstart sheet scene -->
 	<section class="lp-scene lp-scene-quick">
 	<div class="lp-scene-inner lp-quick">
-		<div class="lp-kinetic" aria-label={t('Install. Start. Connect your tool.', '설치. 시작. 도구 연결.', '安装。启动。连接你的工具。', 'Установите. Запустите. Подключите свой инструмент.', 'インストール。起動。ツールを接続。', '安裝。啟動。連接你的工具。', 'Kurun. Başlatın. Aracınızı bağlayın.')}>
-			<p class="lp-kline">{t('Install.', '설치.', '安装。', 'Установите.', 'インストール。', '安裝。', 'Kurun.')}</p>
-			<p class="lp-kline">{t('Start.', '시작.', '启动。', 'Запустите.', '起動。', '啟動。', 'Başlatın.')}</p>
-			<p class="lp-kline lp-kline-accent">{t('Connect your tool.', '도구 연결.', '连接你的工具。', 'Подключите свой инструмент.', 'ツールを接続。', '連接你的工具。', 'Aracınızı bağlayın.')}</p>
+		<div class="lp-kinetic" aria-label={t('Install. Start. Connect your tool.', '설치하고, 실행하고, 도구를 연결하세요.', '安装。启动。连接你的工具。', 'Установите. Запустите. Подключите свой инструмент.', 'インストール。起動。ツールを接続。', '安裝。啟動。連接你的工具。', 'Kurun. Başlatın. Aracınızı bağlayın.')}>
+			<p class="lp-kline">{t('Install.', '설치하고,', '安装。', 'Установите.', 'インストール。', '安裝。', 'Kurun.')}</p>
+			<p class="lp-kline">{t('Start.', '실행하고,', '启动。', 'Запустите.', '起動。', '啟動。', 'Başlatın.')}</p>
+			<p class="lp-kline lp-kline-accent">{t('Connect your tool.', '도구를 연결하세요.', '连接你的工具。', 'Подключите свой инструмент.', 'ツールを接続。', '連接你的工具。', 'Aracınızı bağlayın.')}</p>
 		</div>
 		<div class="lp-quick-side">
 			<div class="lp-terminal">
 				<div class="lp-terminal-bar"><span>zsh</span></div>
 				<pre>{quickstartMini.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
 			</div>
-			<a class="lp-inline-link" href={`${prefix}getting-started/quickstart/`}>{t('Full quickstart', '전체 퀵스타트', '完整快速开始', 'Полный быстрый старт', '完全なクイックスタート', '完整快速入門', 'Tam hızlı başlangıç')} →</a>
+			<a class="lp-inline-link" href={`${prefix}getting-started/quickstart/`}>{t('Full quickstart', '빠른 시작 전체 보기', '完整快速开始', 'Полный быстрый старт', '完全なクイックスタート', '完整快速入門', 'Tam hızlı başlangıç')} →</a>
 			<a class="lp-inline-link" href={`${prefix}reference/client-support/`}>{t('See supported tools', '지원 도구 보기', '查看支持的工具', 'Поддерживаемые инструменты', '対応ツールを見る', '查看支援的工具', 'Desteklenen araçları görün')} →</a>
 		</div>
 	</div>
@@ -379,55 +386,55 @@ const docsMap = [
 	<!-- demo scrub: the capture plays through, driven by scroll -->
 	<section class="lp-scene lp-scene-scrub">
 	<div class="lp-scene-inner lp-scrub">
-		<h2 class="lp-scrub-title">{t('Watch Codex run on a routed model.', '라우팅된 모델 위의 Codex를 그대로.', '看 Codex 跑在路由模型上。', 'Смотрите, как Codex работает на маршрутизированной модели.', 'ルーティングされたモデルで動く Codex を見る。', '看 Codex 跑在路由模型上。', 'Codex’in yönlendirilen bir model üzerinde çalışmasını izleyin.')}</h2>
+		<h2 class="lp-scrub-title">{t('Watch Codex run on a routed model.', '라우팅된 모델에서 돌아가는 Codex를 직접 보세요.', '看 Codex 在路由模型上运行。', 'Смотрите, как Codex работает на маршрутизированной модели.', 'ルーティング先のモデルで Codex が動く様子をご覧ください。', '看 Codex 在路由模型上執行。', 'Codex’in yönlendirilen bir model üzerinde çalışmasını izleyin.')}</h2>
 		<div class="lp-scrub-stage">
 			<canvas class="lp-scrub-canvas" data-base={base} data-count="158" width="900" height="802" aria-label={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')}></canvas>
 			<Image src={demo} alt={t('Codex App running a task on a routed non-OpenAI model', '라우팅된 비 OpenAI 모델에서 작업 중인 Codex App', 'Codex App 在路由的非 OpenAI 模型上执行任务', 'Codex App выполняет задачу на маршрутизированной модели не от OpenAI', 'ルーティングされた非 OpenAI モデルでタスクを実行する Codex App', 'Codex App 在路由的非 OpenAI 模型上執行任務', 'Codex App’in yönlendirilen OpenAI harici bir model üzerinde görev çalıştırması')} loading="lazy" class="lp-scrub-poster" />
 		</div>
-		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '작업 하나가 opencodex를 관통해 끝까지 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。', '一個任務，經 opencodex 全程流式完成。', 'Tek bir görev, opencodex üzerinden uçtan uca canlı akışla tamamlanır.')}</p>
+		<p class="lp-scrub-caption">{t('One task, streamed end to end through opencodex.', '하나의 작업이 처음부터 끝까지 opencodex를 거쳐 스트리밍됩니다.', '一个任务，经 opencodex 全程流式完成。', 'Одна задача — стриминг через opencodex от начала до конца.', '1 つのタスクが opencodex を経てエンドツーエンドでストリーミングされます。', '一個任務，經 opencodex 全程流式完成。', 'Tek bir görev, opencodex üzerinden uçtan uca canlı akışla tamamlanır.')}</p>
 	</div>
 	</section>
 	</div>
 
 	<!-- feature bento: dominant cell + content-weighted spans -->
 	<section class="lp-bento">
-		<h2 class="lp-bento-title">{t('One proxy, the whole surface.', '프록시 하나로 전체 서피스를.', '一个代理，覆盖全部能力。', 'Один прокси — все возможности.', '1 つのプロキシでサーフェス全体を。', '一個代理，覆蓋全部能力。', 'Tek bir proxy, tüm yetenekler.')}</h2>
+		<h2 class="lp-bento-title">{t('One proxy, the whole surface.', '프록시 하나로 모든 기능을.', '一个代理，覆盖全部能力。', 'Один прокси — все возможности.', 'プロキシ 1 つで、すべてをカバー。', '一個代理，覆蓋全部能力。', 'Tek bir proxy, tüm yetenekler.')}</h2>
 		<div class="lp-grid">
 			<article class="lp-cell lp-cell-providers">
-				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '모든 프로바이더', '任意 provider', 'Любой провайдер', '任意のプロバイダー', '任意供應商', 'Dilediğiniz sağlayıcı')}</h3>
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.plug} /></svg>{t('Any provider', '어떤 프로바이더든', '任意提供商', 'Любой провайдер', '任意のプロバイダー', '任意供應商', 'Dilediğiniz sağlayıcı')}</h3>
 				<p>
-					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 다섯 개가 Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 커버합니다 — 내장 프로바이더 40+.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ provider。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ 供應商。', 'Beş adaptör; Anthropic Messages, Google Gemini, Azure, OpenAI Responses doğrudan geçişi ve tüm OpenAI uyumlu Chat Completions uç noktalarını kapsar — 40+ dahili sağlayıcı.')}
+					{t('Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.', '어댑터 5종이 Anthropic Messages, Google Gemini, Azure, OpenAI Responses 패스스루, 그리고 모든 OpenAI 호환 Chat Completions 엔드포인트를 지원합니다. 기본 내장 프로바이더만 40개가 넘습니다.', '五个适配器覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 兼容的 Chat Completions 端点 —— 内置 40+ 提供商。', 'Пять адаптеров покрывают Anthropic Messages, Google Gemini, Azure, OpenAI Responses passthrough и любую OpenAI-совместимую конечную точку Chat Completions — 40+ встроенных провайдеров.', '5 つのアダプターが Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough、そしてすべての OpenAI 互換 Chat Completions エンドポイントをカバーします — 組み込みプロバイダー 40+。', '五個適配器覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses passthrough，以及所有 OpenAI 相容的 Chat Completions 端點 —— 內建 40+ 供應商。', 'Beş adaptör; Anthropic Messages, Google Gemini, Azure, OpenAI Responses doğrudan geçişi ve tüm OpenAI uyumlu Chat Completions uç noktalarını kapsar — 40+ dahili sağlayıcı.')}
 				</p>
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.key} /></svg>{t('OAuth or API key', 'OAuth 또는 API 키', 'OAuth 或 API key', 'OAuth или API-ключ', 'OAuth または API キー', 'OAuth 或 API key', 'OAuth veya API anahtarı')}</h3>
-				<p>{t('Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.', 'xAI, Anthropic, Kimi 계정으로 로그인(자동 갱신)하거나, ChatGPT 로그인을 포워딩하거나, 키를 붙여넣으세요.', '使用 xAI、Anthropic 或 Kimi 账号登录（自动刷新），转发 ChatGPT 登录，或粘贴 API key。', 'Войдите через аккаунт xAI, Anthropic или Kimi — с автообновлением, — пробросьте свой вход ChatGPT или просто вставьте ключ.', 'xAI、Anthropic、Kimi アカウントでログイン（自動更新）、ChatGPT ログインを転送、またはキーを貼り付け。', '使用 xAI、Anthropic 或 Kimi 帳號登入（自動重新整理），轉發 ChatGPT 登入，或貼上 API key。', 'xAI, Anthropic veya Kimi hesabınızla giriş yapın (otomatik yenilenir), ChatGPT oturumunuzu yönlendirin veya doğrudan bir API anahtarı yapıştırın.')}</p>
+				<p>{t('Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.', 'xAI, Anthropic, Kimi 계정으로 로그인하면 토큰이 자동으로 갱신됩니다. ChatGPT 로그인을 그대로 넘기거나 API 키를 붙여넣어도 됩니다.', '使用 xAI、Anthropic 或 Kimi 账号登录（自动刷新），转发 ChatGPT 登录，或粘贴 API key。', 'Войдите через аккаунт xAI, Anthropic или Kimi — с автообновлением, — пробросьте свой вход ChatGPT или просто вставьте ключ.', 'xAI、Anthropic、Kimi アカウントでログイン（自動更新）、ChatGPT ログインを転送、またはキーを貼り付け。', '使用 xAI、Anthropic 或 Kimi 帳號登入（自動重新整理），轉發 ChatGPT 登入，或貼上 API key。', 'xAI, Anthropic veya Kimi hesabınızla giriş yapın (otomatik yenilenir), ChatGPT oturumunuzu yönlendirin veya doğrudan bir API anahtarı yapıştırın.')}</p>
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.users} /></svg>{t('ChatGPT account pool', 'ChatGPT 계정 풀', 'ChatGPT 账号池', 'Пул аккаунтов ChatGPT', 'ChatGPT アカウントプール', 'ChatGPT 帳號池', 'ChatGPT hesap havuzu')}</h3>
-				<p>{t('Existing threads keep their account; new sessions auto-route to the lowest-usage healthy one after quota refresh.', '기존 thread는 계정을 유지하고, 새 세션은 할당량 갱신 후 사용량이 가장 낮은 정상 계정으로 자동 라우팅됩니다.', '已有 thread 保持原账号；新会话在刷新额度后自动路由到用量最低的健康账号。', 'Существующие треды сохраняют свой аккаунт; новые сессии после обновления квоты автоматически направляются на наименее загруженный работоспособный аккаунт.', '既存の thread はアカウントを維持し、新しいセッションは quota 更新後に使用量が最も低い健全なアカウントへ自動ルーティングされます。', '已有 thread 保持原帳號；新會話在重新整理額度後自動路由到用量最低的健康帳號。', 'Mevcut iş parçacıkları kendi hesaplarını korur; yeni oturumlar kota yenilenmesinden sonra en az kullanılan sağlıklı hesaba otomatik olarak yönlendirilir.')}</p>
+				<p>{t('Existing threads keep their account; new sessions auto-route to the lowest-usage healthy one after quota refresh.', '기존 스레드는 쓰던 계정을 그대로 유지하고, 새 세션은 할당량이 갱신되면 사용량이 가장 적은 정상 계정으로 자동 연결됩니다.', '已有 thread 保持原账号；新会话在刷新额度后自动路由到用量最低的健康账号。', 'Существующие треды сохраняют свой аккаунт; новые сессии после обновления квоты автоматически направляются на наименее загруженный работоспособный аккаунт.', '既存のスレッドはアカウントを維持し、新しいセッションはクォータ更新後に使用量が最も少ない正常なアカウントへ自動ルーティングされます。', '已有 thread 保持原帳號；新會話在重新整理額度後自動路由到用量最低的健康帳號。', 'Mevcut iş parçacıkları kendi hesaplarını korur; yeni oturumlar kota yenilenmesinden sonra en az kullanılan sağlıklı hesaba otomatik olarak yönlendirilir.')}</p>
 			</article>
 			<article class="lp-cell lp-cell-picker">
-				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.picker} /></svg>{t('Native in the model picker', '모델 선택기에 그대로', '原生出现在模型选择器', 'Нативно в селекторе моделей', 'モデルピッカーにネイティブ表示', '原生出現在模型選擇器', 'Model seçicide yerel olarak')}</h3>
-				<p>{t('Routed models show up in Codex App with reasoning effort levels, next to the native ones.', '라우팅된 모델이 추론 강도 레벨과 함께 Codex App 선택기에 네이티브 모델과 나란히 표시됩니다.', '路由模型带推理强度等级出现在 Codex App 中，与原生模型并列。', 'Маршрутизированные модели появляются в Codex App с уровнями рассуждений — рядом с нативными.', 'ルーティングされたモデルは推論 effort レベルとともに Codex App のピッカーにネイティブモデルの隣に表示されます。', '路由模型帶推理強度等級出現在 Codex App 中，與原生模型並列。', 'Yönlendirilen modeller, yerel modellerin yanında akıl yürütme seviyeleriyle birlikte Codex App seçicisinde görüntülenir.')}</p>
-				<Image src={picker} alt={t('Codex App model picker with reasoning effort levels', '추론 강도 레벨이 있는 Codex App 모델 선택기', '带推理强度等级的 Codex App 模型选择器', 'Селектор моделей Codex App с уровнями рассуждений', '推論 effort レベル付きの Codex App モデルピッカー', '帶推理強度等級的 Codex App 模型選擇器', 'Akıl yürütme seviyelerine sahip Codex App model seçicisi')} loading="lazy" />
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.picker} /></svg>{t('Native in the model picker', '모델 선택기에 기본 모델처럼', '原生显示在模型选择器中', 'Нативно в селекторе моделей', 'モデルピッカーにネイティブ表示', '原生顯示在模型選擇器中', 'Model seçicide yerel olarak')}</h3>
+				<p>{t('Routed models show up in Codex App with reasoning effort levels, next to the native ones.', '라우팅된 모델도 추론 강도 옵션과 함께 Codex App 모델 선택기에 기본 모델과 나란히 표시됩니다.', '路由模型带推理强度等级出现在 Codex App 中，与原生模型并列。', 'Маршрутизированные модели появляются в Codex App с уровнями рассуждений — рядом с нативными.', 'ルーティングされたモデルも推論 effort レベル付きで、ネイティブモデルと並んで Codex App のピッカーに表示されます。', '路由模型帶推理強度等級出現在 Codex App 中，與原生模型並列。', 'Yönlendirilen modeller, yerel modellerin yanında akıl yürütme seviyeleriyle birlikte Codex App seçicisinde görüntülenir.')}</p>
+				<Image src={picker} alt={t('Codex App model picker with reasoning effort levels', '추론 강도 옵션이 표시된 Codex App 모델 선택기', '带推理强度等级的 Codex App 模型选择器', 'Селектор моделей Codex App с уровнями рассуждений', '推論 effort レベル付きの Codex App モデルピッカー', '帶推理強度等級的 Codex App 模型選擇器', 'Akıl yürütme seviyelerine sahip Codex App model seçicisi')} loading="lazy" />
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.bot} /></svg>{t('Sub-agents', '서브에이전트', '子代理', 'Подагенты', 'サブエージェント', '子代理', 'Alt ajanlar')}</h3>
-				<p>{t('Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.', 'Codex spawn_agent용으로 라우팅·네이티브 모델을 최대 5개 고정하고, v1 / base / v2 서피스를 전역으로 전환합니다.', '为 Codex spawn_agent 固定最多五个路由或原生模型，并全局切换 v1 / base / v2 界面。', 'Закрепите до пяти маршрутизированных или нативных моделей для Codex spawn_agent и глобально переключайте интерфейс v1 / base / v2.', 'Codex spawn_agent 用にルーティング済み/ネイティブモデルを最大 5 つ固定し、v1 / base / v2 サーフェスをグローバルに切り替えます。', '為 Codex spawn_agent 固定最多五個路由或原生模型，並全域切換 v1 / base / v2 介面。', 'Codex spawn_agent için en fazla beş yönlendirilmiş veya yerel model sabitleyin ve v1 / base / v2 arayüzünü genel olarak değiştirin.')}</p>
+				<p>{t('Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.', 'Codex spawn_agent에 쓸 라우팅 모델이나 기본 모델을 최대 5개까지 고정하고, v1 / base / v2 서피스를 한 번에 전환합니다.', '为 Codex spawn_agent 固定最多五个路由或原生模型，并全局切换 v1 / base / v2 界面。', 'Закрепите до пяти маршрутизированных или нативных моделей для Codex spawn_agent и глобально переключайте интерфейс v1 / base / v2.', 'Codex spawn_agent 用にルーティング済み/ネイティブモデルを最大 5 つ固定し、v1 / base / v2 サーフェスをグローバルに切り替えます。', '為 Codex spawn_agent 固定最多五個路由或原生模型，並全域切換 v1 / base / v2 介面。', 'Codex spawn_agent için en fazla beş yönlendirilmiş veya yerel model sabitleyin ve v1 / base / v2 arayüzünü genel olarak değiştirin.')}</p>
 			</article>
 			<article class="lp-cell lp-cell-claude">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.terminal} /></svg>Claude Code</h3>
-				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude가 같은 포트로 Claude Code를 띄웁니다 — 라우팅된 모든 모델이 /model 선택기에 뜨고, 최대 1M auto-context, 로스터 서브에이전트, claude.ai 로그인은 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。', 'ocx claude 讓 Claude Code 連線同一連接埠 —— 所有路由模型出現在 /model 選擇器中，auto-context 最高 1M，roster 子代理，claude.ai 登入保持不變。', 'ocx claude, Claude Code’u aynı port üzerinden başlatır — /model seçicisindeki tüm yönlendirilmiş modeller, 1M’a kadar otomatik bağlam, alt ajanlar ve claude.ai oturumunuz aktif kalır.')}</p>
+				<p>{t('ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.', 'ocx claude로 같은 포트에서 Claude Code를 실행합니다. 라우팅된 모든 모델이 /model 선택기에 나타나고, 최대 1M 자동 컨텍스트와 로스터 서브에이전트를 쓸 수 있으며, claude.ai 로그인도 그대로 유지됩니다.', 'ocx claude 让 Claude Code 连接同一端口 —— 所有路由模型出现在 /model 选择器中，auto-context 最高 1M，roster 子代理，claude.ai 登录保持不变。', 'ocx claude запускает Claude Code на том же порту — все маршрутизированные модели в селекторе /model, auto-context до 1M, подагенты из ростера, а ваш вход в claude.ai остаётся активным.', 'ocx claude が同じポートで Claude Code を起動します — ルーティングされたすべてのモデルが /model ピッカーに表示され、最大 1M の auto-context、ロスターのサブエージェント、claude.ai ログインはそのまま維持されます。', 'ocx claude 讓 Claude Code 連線同一連接埠 —— 所有路由模型出現在 /model 選擇器中，auto-context 最高 1M，roster 子代理，claude.ai 登入保持不變。', 'ocx claude, Claude Code’u aynı port üzerinden başlatır — /model seçicisindeki tüm yönlendirilmiş modeller, 1M’a kadar otomatik bağlam, alt ajanlar ve claude.ai oturumunuz aktif kalır.')}</p>
 				<img width="960" height="874" src={`${base}claude-code-models.gif`} alt={t('Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar', 'opencodex로 라우팅된 모델에서 돌아가는 Claude Code — 상태 표시줄에 gpt-5.6-luna-medium 활성', '通过 opencodex 运行路由模型的 Claude Code —— 状态栏显示 gpt-5.6-luna-medium 为当前模型', 'Claude Code на маршрутизированной модели через opencodex — gpt-5.6-luna-medium активна в строке состояния', 'opencodex でルーティングされたモデルで動作する Claude Code — ステータスバーに gpt-5.6-luna-medium が有効なモデルとして表示', '透過 opencodex 執行路由模型的 Claude Code —— 狀態列顯示 gpt-5.6-luna-medium 為目前模型', 'opencodex üzerinden yönlendirilen modeli çalıştıran Claude Code — durum çubuğunda gpt-5.6-luna-medium aktif')} loading="lazy" />
 			</article>
 			<article class="lp-cell">
 				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.search} /></svg>{t('Search & vision sidecars', '검색 & 비전 사이드카', '搜索与视觉边车', 'Сайдкары поиска и зрения', '検索 & ビジョンサイドカー', '搜尋與視覺邊車', 'Arama & görme sidecar’ları')}</h3>
-				<p>{t('Give non-OpenAI models real web search and image understanding through a gpt-5.6-luna sidecar.', 'gpt-5.6-luna 사이드카로 비 OpenAI 모델에 실제 웹 검색과 이미지 이해를 붙입니다.', '通过 gpt-5.6-luna 边车，让非 OpenAI 模型获得真实的网页搜索与图像理解能力。', 'Дайте моделям не от OpenAI настоящий веб-поиск и понимание изображений через сайдкар gpt-5.6-luna.', 'gpt-5.6-luna サイドカーで非 OpenAI モデルに本物のウェブ検索と画像理解を提供します。', '透過 gpt-5.6-luna 邊車，讓非 OpenAI 模型獲得真實的網頁搜尋與圖像理解能力。', 'gpt-5.6-luna sidecar’ı sayesinde OpenAI harici modellere gerçek web araması ve görsel anlama yeteneği kazandırın.')}</p>
+				<p>{t('Give non-OpenAI models real web search and image understanding through a gpt-5.6-luna sidecar.', 'gpt-5.6-luna 사이드카를 붙여 OpenAI 외 모델에서도 실제 웹 검색과 이미지 인식을 쓸 수 있습니다.', '通过 gpt-5.6-luna 边车，让非 OpenAI 模型获得真实的网页搜索与图像理解能力。', 'Дайте моделям не от OpenAI настоящий веб-поиск и понимание изображений через сайдкар gpt-5.6-luna.', 'gpt-5.6-luna サイドカーで非 OpenAI モデルに本格的なウェブ検索と画像理解を提供します。', '透過 gpt-5.6-luna 邊車，讓非 OpenAI 模型獲得真實的網頁搜尋與圖像理解能力。', 'gpt-5.6-luna sidecar’ı sayesinde OpenAI harici modellere gerçek web araması ve görsel anlama yeteneği kazandırın.')}</p>
 			</article>
 			<article class="lp-cell lp-cell-terminal">
-				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.code} /></svg>{t('Quickstart', '퀵스타트', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門', 'Hızlı Başlangıç')}</h3>
-				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 기록하고 CLI, TUI, App, SDK가 같은 모델 카탈로그를 공유합니다. ocx stop이면 네이티브 Codex로 깔끔하게 복원됩니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、CLI、TUI、App、SDK と同じモデルカタログを共有します。ocx stop でネイティブ Codex に綺麗に復元します。', 'ocx init 將供應商寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。', 'ocx init, Codex yapılandırmanıza bir sağlayıcı yazar; Codex CLI, TUI, App ve SDK aynı model kataloğunu paylaşır. ocx stop ile yerel Codex’e temiz bir şekilde geri dönebilirsiniz.')}</p>
+				<h3><svg class="lp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.code} /></svg>{t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門', 'Hızlı Başlangıç')}</h3>
+				<p>{t('ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.', 'ocx init이 Codex 설정에 프로바이더를 추가하고, Codex CLI·TUI·App·SDK가 하나의 모델 카탈로그를 함께 씁니다. ocx stop을 실행하면 원래 Codex로 깔끔하게 돌아갑니다.', 'ocx init 将 provider 写入 Codex 配置，CLI、TUI、App 与 SDK 共享同一模型目录。ocx stop 可干净地恢复原生 Codex。', 'ocx init записывает провайдера в конфигурацию Codex, а Codex CLI, TUI, App и SDK используют общий каталог моделей. ocx stop чисто восстанавливает нативный Codex.', 'ocx init が Codex 設定にプロバイダーを書き込み、Codex CLI・TUI・App・SDK で 1 つのモデルカタログを共有します。ocx stop でネイティブの Codex にクリーンに戻せます。', 'ocx init 將供應商寫入 Codex 設定，CLI、TUI、App 與 SDK 共享同一模型目錄。ocx stop 可乾淨地恢復原生 Codex。', 'ocx init, Codex yapılandırmanıza bir sağlayıcı yazar; Codex CLI, TUI, App ve SDK aynı model kataloğunu paylaşır. ocx stop ile yerel Codex’e temiz bir şekilde geri dönebilirsiniz.')}</p>
 				<div class="lp-terminal">
 					<div class="lp-terminal-bar"><span>zsh</span></div>
 					<pre>{quickstart.map((line) => (<code><span class="lp-prompt">$ </span>{line.cmd}<span class="lp-note">  # {line.note}</span>{'\n'}</code>))}</pre>
@@ -437,6 +444,11 @@ const docsMap = [
 	</section>
 
 	<div class="lp-github-row">
+		<div class="lp-cloud-cta">
+			<Image src={heroFieldLight} alt="" class="lp-field-light" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
+			<Image src={heroFieldDark} alt="" class="lp-field-dark" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
+			<CloudCanvas variant="overlay" />
+		</div>
 		<a class="lp-github-cta" href={GITHUB_URL} aria-label={githubAccessibleName}
 			data-gh-stars-label={starLabel} data-gh-stars-locale={starLocale}>
 			<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d={siGithub.path} /></svg>
@@ -446,7 +458,7 @@ const docsMap = [
 	</div>
 
 	<!-- full docs sitemap band: every section reachable from the landing -->
-	<section class="lp-next" aria-label={t('Documentation map', '문서 맵', '文档地图', 'Карта документации', 'ドキュメントマップ', '文件地圖', 'Dokümantasyon haritası')}>
+	<section class="lp-next" id="docs-map" aria-label={t('Documentation map', '문서 맵', '文档地图', 'Карта документации', 'ドキュメントマップ', '文件地圖', 'Dokümantasyon haritası')}>
 		<h2>{t('Explore the docs', '문서 살펴보기', '浏览文档', 'Изучите документацию', 'ドキュメントを探る', '瀏覽文件', 'Dokümantasyonu Keşfedin')}</h2>
 		<div class="lp-next-grid">
 			{docsMap.map((group) => (
@@ -465,8 +477,8 @@ const docsMap = [
 	<p class="lp-disclaimer">
 		{t(
 			'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider\u2019s Terms of Service before connecting.',
-			'opencodex는 독립 커뮤니티 프로젝트이며 OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증받지 않습니다. 일부 프로바이더는 서드파티 프록시 경유 트래픽 계정을 제한할 수 있으니 연결 전 각 프로바이더의 이용약관을 확인하세요.',
-			'opencodex 是独立的社区项目，与 OpenAI、Anthropic 或任何其他 provider 均无关联或背书。部分 provider 可能限制经第三方代理路由流量的账号 —— 连接前请查阅各 provider 的服务条款。',
+			'opencodex는 독립 커뮤니티 프로젝트로, OpenAI, Anthropic 등 어떤 프로바이더와도 제휴 관계가 없고 보증을 받지 않습니다. 일부 프로바이더는 서드파티 프록시를 거친 트래픽이 있는 계정을 제한할 수 있으니, 연결하기 전에 각 프로바이더의 이용약관을 확인하세요.',
+			'opencodex 是独立的社区项目，与 OpenAI、Anthropic 或任何其他提供商均无关联或背书。部分提供商可能限制经第三方代理路由流量的账号 —— 连接前请查阅各提供商的服务条款。',
 			'opencodex — независимый проект сообщества, никак не связанный с OpenAI, Anthropic или любым другим провайдером и не одобренный ими. Некоторые провайдеры могут ограничивать аккаунты, направляющие трафик через сторонние прокси, — перед подключением ознакомьтесь с условиями обслуживания каждого провайдера.',
 			'opencodex は独立したコミュニティプロジェクトであり、OpenAI、Anthropic などいかなるプロバイダーとも提携・推奨されるものではありません。一部のプロバイダーはサードパーティプロキシ経由のトラフィックを使用するアカウントを制限する可能性があります — 接続前に各プロバイダーの利用規約を確認してください。',
 			'opencodex 是獨立的社群專案，與 OpenAI、Anthropic 或任何其他供應商均無關聯或背書。部分供應商可能限制經第三方代理路由流量的帳號 —— 連線前請查閱各供應商的服務條款。',
@@ -474,6 +486,230 @@ const docsMap = [
 		)}
 	</p>
 </div>
+
+<script>
+	// Cloudlight motion layer. Everything here is decoration on top of content
+	// that is already fully visible: nothing is hidden until `cl-motion` lands
+	// on <html>, and reduced motion never gets the class.
+	//  - reveal: fade + 16px rise on the soft ease, staggered, once in view
+	//  - split headings: section titles rise word by word out of a blur
+	//  - hero depth: photo and clouds drift apart with pointer and scroll
+	//  - cards: cursor spotlight + spring-smoothed tilt
+	//  - magnetic CTAs and a counting star total
+	const root = document.documentElement;
+	const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const finePointer = matchMedia('(hover: hover) and (pointer: fine)').matches;
+	const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+
+	if (!reduceMotion) {
+		root.classList.add('cl-motion');
+
+		const revealGroups: [string, number][] = [
+			['.lp-download-sub, .lp-download-version, .lp-dl-more, .lp-dl-foot', 0.08],
+			['.lp-dl-grid > .lp-dl-card', 0.08],
+			['.lp-scrub-stage, .lp-scrub-caption', 0.1],
+			['.lp-grid > .lp-cell', 0.07],
+			['.lp-github-row', 0],
+			['.lp-next-grid > .lp-next-col', 0.07],
+			['.lp-disclaimer', 0],
+		];
+		for (const [selector, step] of revealGroups) {
+			document.querySelectorAll<HTMLElement>(selector).forEach((el, i) => {
+				el.dataset.reveal = '';
+				el.style.setProperty('--rd', `${(i * step).toFixed(2)}s`);
+			});
+		}
+
+		document
+			.querySelectorAll<HTMLElement>('.lp-download-title, .lp-bento-title, .lp-scrub-title, .lp-next h2')
+			.forEach((heading) => {
+				const text = heading.textContent ?? '';
+				heading.setAttribute('aria-label', text);
+				heading.textContent = '';
+				text.split(/(\s+)/).forEach((part, i) => {
+					if (/^\s+$/.test(part)) {
+						heading.append(part);
+						return;
+					}
+					const word = document.createElement('span');
+					word.className = 'cl-word';
+					word.setAttribute('aria-hidden', 'true');
+					word.style.setProperty('--wd', `${(i / 2) * 0.045}s`);
+					word.textContent = part;
+					heading.append(word);
+				});
+				heading.dataset.reveal = '';
+			});
+
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (!entry.isIntersecting) continue;
+					entry.target.classList.add('is-in');
+					io.unobserve(entry.target);
+				}
+			},
+			{ rootMargin: '0px 0px -80px 0px' },
+		);
+		document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el));
+	}
+
+	// One shared animation loop; it sleeps whenever nothing is still settling.
+	type Tick = () => boolean;
+	const ticks = new Set<Tick>();
+	let loopId = 0;
+	const frame = () => {
+		loopId = 0;
+		for (const tick of ticks) if (!tick()) ticks.delete(tick);
+		if (ticks.size) loopId = requestAnimationFrame(frame);
+	};
+	const wake = (tick: Tick) => {
+		ticks.add(tick);
+		loopId ||= requestAnimationFrame(frame);
+	};
+
+	// Hero depth: pointer parallax (fine pointers) + scroll drift.
+	const hero = document.querySelector<HTMLElement>('.lp-hero-field');
+	if (hero && !reduceMotion) {
+		const target = { x: 0, y: 0, s: 0 };
+		const cur = { x: 0, y: 0, s: 0 };
+		const tick: Tick = () => {
+			cur.x = lerp(cur.x, target.x, 0.06);
+			cur.y = lerp(cur.y, target.y, 0.06);
+			cur.s = lerp(cur.s, target.s, 0.12);
+			hero.style.setProperty('--px', cur.x.toFixed(4));
+			hero.style.setProperty('--py', cur.y.toFixed(4));
+			hero.style.setProperty('--sy', cur.s.toFixed(4));
+			return Math.abs(cur.x - target.x) + Math.abs(cur.y - target.y) + Math.abs(cur.s - target.s) > 0.0005;
+		};
+		if (finePointer) {
+			hero.addEventListener('pointermove', (e) => {
+				const r = hero.getBoundingClientRect();
+				target.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+				target.y = ((e.clientY - r.top) / r.height) * 2 - 1;
+				wake(tick);
+			});
+			hero.addEventListener('pointerleave', () => {
+				target.x = 0;
+				target.y = 0;
+				wake(tick);
+			});
+		}
+		const onScroll = () => {
+			const r = hero.getBoundingClientRect();
+			target.s = Math.min(1, Math.max(0, -r.top / Math.max(1, r.height)));
+			wake(tick);
+		};
+		addEventListener('scroll', onScroll, { passive: true });
+		onScroll();
+	}
+
+	// Cards: the hover glow drifts along the bottom edge under the cursor
+	// (CSS eases `left`, so raw pointer positions are enough).
+	if (finePointer && !reduceMotion) {
+		document.querySelectorAll<HTMLElement>('.lp-cell').forEach((card) => {
+			card.addEventListener('pointermove', (e) => {
+				const r = card.getBoundingClientRect();
+				card.style.setProperty('--mx', `${(((e.clientX - r.left) / r.width) * 100).toFixed(1)}%`);
+			});
+			card.addEventListener('pointerleave', () => card.style.removeProperty('--mx'));
+		});
+
+		// Magnetic CTAs drift a few pixels toward the cursor.
+		document.querySelectorAll<HTMLElement>('.lp-btn-primary, .lp-btn-ghost, .lp-github-cta').forEach((btn) => {
+			const target = { x: 0, y: 0 };
+			const cur = { x: 0, y: 0 };
+			const tick: Tick = () => {
+				cur.x = lerp(cur.x, target.x, 0.18);
+				cur.y = lerp(cur.y, target.y, 0.18);
+				btn.style.setProperty('--mgx', `${cur.x.toFixed(2)}px`);
+				btn.style.setProperty('--mgy', `${cur.y.toFixed(2)}px`);
+				return Math.abs(cur.x - target.x) + Math.abs(cur.y - target.y) > 0.05;
+			};
+			btn.addEventListener('pointermove', (e) => {
+				const r = btn.getBoundingClientRect();
+				target.x = (e.clientX - (r.left + r.width / 2)) * 0.18;
+				target.y = (e.clientY - (r.top + r.height / 2)) * 0.3;
+				wake(tick);
+			});
+			btn.addEventListener('pointerleave', () => {
+				target.x = 0;
+				target.y = 0;
+				wake(tick);
+			});
+		});
+	}
+
+	// Hero word roll. The CSS drum sizes its slot to the widest word, so the
+	// shorter word left a gap or crowded the particle after it (worst in
+	// Korean: "Codex를"). Here the slot takes each word's measured width and
+	// eases between them while the words roll through a blur.
+	const drum = document.querySelector<HTMLElement>('.lp-drum');
+	if (drum && !reduceMotion) {
+		const faces = Array.from(drum.querySelectorAll<HTMLElement>('.lp-drum-spin .lp-drum-face')).slice(0, 2);
+		const roll = document.createElement('span');
+		roll.className = 'lp-roll';
+		roll.setAttribute('aria-hidden', 'true');
+		const words = faces.map((face, i) => {
+			const word = document.createElement('span');
+			word.className = `lp-roll-word ${face.className.replace('lp-drum-face', '').trim()}`;
+			word.textContent = face.textContent;
+			if (i === 0) word.classList.add('is-on');
+			roll.append(word);
+			return word;
+		});
+		drum.replaceChildren(roll);
+		drum.classList.add('lp-drum-js');
+		let index = 0;
+		const fit = () => {
+			roll.style.width = `${words[index].getBoundingClientRect().width}px`;
+		};
+		// fonts swap in late; measure again once they have
+		fit();
+		document.fonts?.ready.then(fit);
+		addEventListener('resize', fit, { passive: true });
+		const HOLD_MS = 2600;
+		setInterval(() => {
+			if (document.hidden) return;
+			const prev = words[index];
+			index = (index + 1) % words.length;
+			const next = words[index];
+			prev.classList.remove('is-on');
+			prev.classList.add('is-out');
+			next.classList.remove('is-out');
+			next.classList.add('is-on');
+			fit();
+			setTimeout(() => prev.classList.remove('is-out'), 700);
+		}, HOLD_MS);
+	}
+
+	// The star total counts up once the closing panel comes into view, using
+	// the same compact format the build renders (src/data/github-stars.ts).
+	const stars = document.querySelector<HTMLElement>('.lp-github-cta [data-gh-stars]');
+	const total = Number(stars?.dataset.ghStars);
+	if (stars && Number.isFinite(total) && total > 0 && !reduceMotion) {
+		const trim = (n: number) => String(n).replace(/\.0$/, '');
+		const format = (n: number) =>
+			n < 1000 ? String(n)
+			: n < 100_000 ? `${trim(Math.floor(n / 100) / 10)}k`
+			: n < 1_000_000 ? `${Math.floor(n / 1000)}k`
+			: `${trim(Math.floor(n / 100_000) / 10)}m`;
+		const final = stars.textContent;
+		new IntersectionObserver((entries, obs) => {
+			if (!entries.some((e) => e.isIntersecting)) return;
+			obs.disconnect();
+			const start = performance.now();
+			const DURATION = 1600;
+			const step = (now: number) => {
+				const t = Math.min(1, (now - start) / DURATION);
+				const eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+				stars.textContent = t === 1 ? final : format(Math.round(total * eased));
+				if (t < 1) requestAnimationFrame(step);
+			};
+			requestAnimationFrame(step);
+		}, { threshold: 0.6 }).observe(stars);
+	}
+</script>
 
 <script>
 	// Frame-sequence scrub (motion.md): the demo capture plays through as the

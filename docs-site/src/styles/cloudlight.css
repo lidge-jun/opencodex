@@ -1,0 +1,867 @@
+/* ============================================================================
+   Cloudlight skin — loaded after custom.css and only overrides its look.
+   Grammar: white / near-black neutrals, one blue ring accent, hairline
+   borders, normal-weight display type, a WebGL cloud sky on the hero card,
+   framed content rails, and grain-tinted feature cards. Every class and
+   behaviour from custom.css stays; this file only restyles them.
+   ============================================================================ */
+
+/* ---- tokens: dark ------------------------------------------------------- */
+:root {
+  --cl-bg: #0a0a0a;
+  --cl-fg: #fafafa;
+  --cl-muted: #171717;
+  --cl-muted-fg: #a3a3a3;
+  --cl-border: #262626;
+  --cl-ring: #3b82f6;
+  --cl-hair: rgba(255, 255, 255, 0.1);
+  --cl-hair-strong: rgba(255, 255, 255, 0.12);
+  --cl-sky: #0e1219;
+  --cl-card-shadow: 0 40px 80px -32px rgba(0, 0, 0, 0.6);
+  --cl-panel-shadow: 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  --cl-rail: calc(1200px + 6rem);
+  /* Geist for Latin, Wanted Sans for Hangul (and as the display fallback) */
+  --sl-font: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", system-ui, sans-serif;
+  /* every face is self-hosted, so Windows never falls back to Malgun Gothic
+     or Consolas; Hangul inside code still lands on Wanted Sans */
+  --sl-font-mono: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
+  --ec-codeFontFml: var(--sl-font-mono);
+  --cl-display-weight: 600;
+  --cl-display-tracking: -0.035em;
+
+  --sl-color-white: #fafafa;
+  --sl-color-gray-1: #e5e5e5;
+  --sl-color-gray-2: #d4d4d4;
+  --sl-color-gray-3: #a3a3a3;
+  --sl-color-gray-4: #737373;
+  --sl-color-gray-5: #262626;
+  --sl-color-gray-6: #171717;
+  --sl-color-black: #0a0a0a;
+
+  --sl-color-accent-low: #0b1d3a;
+  --sl-color-accent: #3b82f6;
+  --sl-color-accent-high: #bfdbfe;
+  --sl-color-text-accent: #60a5fa;
+  --sl-color-text-invert: #0a0a0a;
+
+  --sl-color-bg-inline-code: #171717;
+  --sl-color-hairline-light: #262626;
+  --sl-color-hairline: #1f1f1f;
+  --sl-color-backdrop-overlay: rgba(10, 10, 10, 0.6);
+
+  --ocx-glass-rail: rgba(10, 10, 10, 0.7);
+  --ocx-glass-panel: rgba(10, 10, 10, 0.92);
+  --ocx-glass-blur: saturate(1.4) blur(24px);
+  --ocx-surface: #0a0a0a;
+  --ocx-raised: #121212;
+  --ocx-hover: rgba(255, 255, 255, 0.06);
+  --ocx-shadow: 0 12px 40px -16px rgba(0, 0, 0, 0.6);
+  --ocx-radius: 1rem;
+  --ocx-radius-sm: 0.75rem;
+
+  /* card tints (Cloudlight lib/tints.ts, dark values) */
+  --cl-tint-sky: radial-gradient(140% 120% at 10% 0%, #0d1c26 0%, #10283a 60%, #133447 100%);
+  --cl-tint-peach: radial-gradient(140% 120% at 10% 0%, #241912 0%, #33231a 60%, #402c1f 100%);
+  --cl-tint-mint: radial-gradient(140% 120% at 10% 0%, #0e2119 0%, #133226 60%, #183f30 100%);
+  --cl-tint-sand: radial-gradient(140% 120% at 90% 0%, #231f12 0%, #332c18 60%, #40371d 100%);
+  --cl-tint-rose: radial-gradient(140% 120% at 10% 0%, #261417 0%, #361c22 60%, #45232b 100%);
+  --cl-tint-cyan: radial-gradient(140% 120% at 10% 0%, #0c2024 0%, #0f2f36 60%, #123c45 100%);
+  --cl-tint-stone: radial-gradient(140% 120% at 10% 0%, #1b1b1a 0%, #262523 60%, #302e2b 100%);
+  --cl-grain-opacity: 0.25;
+  --cl-surface: #141414;
+  --cl-inv-bg: #fafafa;
+  --cl-inv-fg: #0a0a0a;
+  --cl-inv-muted: #737373;
+}
+
+/* ---- tokens: light ------------------------------------------------------ */
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+  --cl-bg: #ffffff;
+  --cl-fg: #0a0a0a;
+  --cl-muted: #f5f5f5;
+  --cl-muted-fg: #737373;
+  --cl-border: #e5e5e5;
+  --cl-ring: #0066ff;
+  --cl-hair: rgba(0, 0, 0, 0.08);
+  --cl-hair-strong: rgba(0, 0, 0, 0.12);
+  --cl-sky: #a7effe;
+  --cl-card-shadow: 0 1px 2px rgba(16, 42, 67, 0.04), 0 12px 32px -12px rgba(16, 42, 67, 0.14),
+    0 40px 80px -32px rgba(16, 42, 67, 0.18);
+  --cl-panel-shadow: 0 12px 32px -16px rgba(16, 42, 67, 0.25);
+
+  --sl-color-white: #0a0a0a;
+  --sl-color-gray-1: #171717;
+  --sl-color-gray-2: #262626;
+  --sl-color-gray-3: #737373;
+  --sl-color-gray-4: #a3a3a3;
+  --sl-color-gray-5: #e5e5e5;
+  --sl-color-gray-6: #f5f5f5;
+  --sl-color-gray-7: #fafafa;
+  --sl-color-black: #ffffff;
+
+  --sl-color-accent-low: #e6f0ff;
+  --sl-color-accent: #0066ff;
+  --sl-color-accent-high: #003d99;
+  --sl-color-text-accent: #0066ff;
+  --sl-color-text-invert: #ffffff;
+
+  --sl-color-bg-inline-code: #f5f5f5;
+  --sl-color-hairline-light: #e5e5e5;
+  --sl-color-hairline: #f0f0f0;
+  --sl-color-backdrop-overlay: rgba(255, 255, 255, 0.6);
+
+  --ocx-glass-rail: rgba(255, 255, 255, 0.7);
+  --ocx-glass-panel: rgba(255, 255, 255, 0.95);
+  --ocx-surface: #ffffff;
+  --ocx-raised: #fafafa;
+  --ocx-hover: rgba(10, 10, 10, 0.04);
+  --ocx-shadow: 0 12px 40px -16px rgba(16, 42, 67, 0.28);
+
+  --cl-tint-sky: radial-gradient(140% 120% at 10% 0%, #eefaff 0%, #c6f0fc 55%, #a3e4f6 100%);
+  --cl-tint-peach: radial-gradient(140% 120% at 10% 0%, #fff6ec 0%, #ffdfc2 55%, #fbc9a0 100%);
+  --cl-tint-mint: radial-gradient(140% 120% at 10% 0%, #eefbf3 0%, #c9efd9 55%, #a6e2c2 100%);
+  --cl-tint-sand: radial-gradient(140% 120% at 90% 0%, #fffaea 0%, #fbeec0 55%, #f3df9c 100%);
+  --cl-tint-rose: radial-gradient(140% 120% at 10% 0%, #fff1f3 0%, #ffd3da 55%, #f9b8c3 100%);
+  --cl-tint-cyan: radial-gradient(140% 120% at 10% 0%, #ecfeff 0%, #c0f3f9 55%, #9ae6f1 100%);
+  --cl-tint-stone: radial-gradient(140% 120% at 10% 0%, #f9f8f6 0%, #e9e6e1 55%, #d9d4cc 100%);
+  --cl-grain-opacity: 0.35;
+  --cl-surface: #f4f4f5;
+  --cl-inv-bg: #0a0a0a;
+  --cl-inv-fg: #fafafa;
+  --cl-inv-muted: #a3a3a3;
+}
+
+/* ---- page: flat neutral canvas (no ambient wash) ------------------------ */
+html { background-color: var(--cl-bg); font-synthesis: none; }
+
+/* theme switch: the new theme opens as a circle from the click point
+   (teamwicked AnimatedThemeToggler); the header script drives the clip */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html[data-theme-vt]::view-transition-group(root) {
+  animation-duration: var(--theme-vt-duration, 520ms);
+}
+/* While the circle runs, both snapshots must be final, flat pictures:
+   Chrome captures backdrop-filter layers out of step with the rest of the
+   page (the nav bar flipped ahead of the circle), and colour transitions
+   would still be easing inside the new snapshot. */
+html[data-theme-vt] *,
+html[data-theme-vt] *::before,
+html[data-theme-vt] *::after {
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-theme-vt] header.header > .header::before { background: var(--cl-bg); }
+body::before { display: none; }
+
+/* ---- header: Cloudlight docking nav, React Bits navbar-12 float -----------
+   Docked (every docs page, and the landing once the hero is gone): a
+   rounded glass bar floating a few pixels inside the viewport edges.
+   Landing at the top: the same row sits transparent inside the hero card
+   and scrolls away with it; the floating bar then drops in from the top. */
+:root { --sl-nav-height: 4.25rem; }
+header.header {
+  padding: 0.5rem clamp(0.5rem, 1.5vw, 1rem) 0;
+  background: transparent;
+  border-bottom: 0;
+}
+header.header > .header {
+  position: relative;
+  isolation: isolate;
+  max-width: var(--cl-rail);
+  margin-inline: auto;
+  padding-inline: clamp(0.75rem, 2vw, 1.25rem);
+  border: 0;
+  border-radius: 1.125rem;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* the glass lives on a pseudo-element: backdrop-filter on the bar itself
+   would become the containing block of the fixed full-screen menu */
+header.header > .header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  border: 1px solid var(--cl-hair);
+  background: color-mix(in srgb, var(--cl-bg) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    0 1px 2px rgba(16, 42, 67, 0.05),
+    0 12px 32px -14px rgba(16, 42, 67, 0.22);
+}
+:root:not([data-theme='light']) header.header > .header::before {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 40px -16px rgba(0, 0, 0, 0.75);
+}
+:root[data-nav-splash]:not([data-nav-docked]) header.header > .header::before { display: none; }
+header.header .site-title,
+header.header .github-link { color: var(--cl-fg); }
+header.header .site-title { font-weight: 600; letter-spacing: -0.01em; }
+header.header .preference-control,
+header.header .lp-menu-btn { border-radius: 0.75rem; }
+header.header .language-menu {
+  border-radius: 0.75rem;
+  border-color: var(--cl-hair);
+  box-shadow: 0 12px 40px -16px rgba(16, 42, 67, 0.28);
+}
+
+:root[data-nav-splash]:not([data-nav-docked]) header.header {
+  position: absolute;
+  height: calc(var(--sl-nav-height) + 1rem);
+  padding: 1rem 1rem 0;
+  background: transparent;
+  border-bottom-color: transparent;
+  /* the bar reads light-on-dusk over the hero photo in both themes */
+  color-scheme: dark;
+  --cl-fg: #f7f5f2;
+  --cl-bg: rgba(255, 255, 255, 0.1);
+  --cl-border: rgba(255, 255, 255, 0.2);
+  --cl-hair: rgba(255, 255, 255, 0.16);
+  --sl-color-white: #f7f5f2;
+  --sl-color-gray-1: #ececec;
+  --sl-color-gray-2: #e5e5e5;
+  --sl-color-gray-3: rgba(247, 245, 242, 0.7);
+  --sl-color-gray-4: rgba(247, 245, 242, 0.55);
+  --sl-color-gray-5: rgba(255, 255, 255, 0.18);
+  --sl-color-gray-6: rgba(255, 255, 255, 0.08);
+  --sl-color-black: #0b0f1a;
+  --ocx-glass-panel: rgba(12, 16, 28, 0.78);
+}
+:root[data-nav-splash]:not([data-nav-docked]) header.header > .header {
+  max-width: calc(var(--cl-rail) - 2rem);
+  padding-inline: clamp(0.75rem, 2vw, 1.5rem);
+}
+/* over the dusk photo the bar always wears the white (dark-mode) mark */
+:root[data-nav-splash]:not([data-nav-docked]) header.header .site-title img.light\:sl-hidden { display: block; }
+:root[data-nav-splash]:not([data-nav-docked]) header.header .site-title img.dark\:sl-hidden { display: none; }
+:root[data-nav-splash]:not([data-nav-docked]) header.header button[data-open-modal] {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+/* no fill mode: a lingering transform would make the header the containing
+   block of the fixed full-screen menu and clip it to the bar */
+:root[data-nav-splash][data-nav-docked] header.header {
+  animation: cl-dock-in 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+:root:has(.lp-menu-btn[aria-expanded='true']) header.header { animation: none; }
+@keyframes cl-dock-in {
+  from { transform: translateY(-110%) scale(0.98); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-nav-splash][data-nav-docked] header.header { animation: cl-fade-in 0.15s both; }
+  @keyframes cl-fade-in { from { opacity: 0; } }
+}
+
+/* ---- docs chrome --------------------------------------------------------- */
+#starlight__sidebar {
+  background-color: var(--cl-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-inline-end: 1px dashed var(--cl-border);
+}
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus-visible {
+  background-color: var(--cl-fg);
+  color: var(--cl-bg);
+  font-weight: 500;
+}
+.right-sidebar { border-inline-start: 1px dashed var(--cl-border); }
+button[data-open-modal] {
+  border-radius: 0.75rem;
+  background-color: var(--cl-bg);
+  border-color: var(--cl-border);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+dialog[aria-label] { border-radius: 1rem; border-color: var(--cl-hair); }
+
+/* content headings: Cloudlight display weight */
+.sl-markdown-content :is(h1, h2, h3) { font-weight: 600; letter-spacing: -0.025em; }
+:where(.content-panel) h1#_top { font-weight: var(--cl-display-weight); letter-spacing: var(--cl-display-tracking); }
+/* Hangul reads crowded at Latin tracking; ease it back and keep words whole */
+:lang(ko) { --cl-display-tracking: -0.02em; }
+:lang(ko) :is(h1, h2, h3, .lp-kline, .lp-sub, .lp-cell p) { word-break: keep-all; }
+article.card,
+.sl-link-card { border-color: var(--cl-border); background-color: var(--cl-bg); }
+.sl-link-card:hover { border-color: var(--cl-muted-fg); }
+
+/* ---- landing frame -------------------------------------------------------
+   The page sits in one 1200px rail (Cloudlight <Rail>): hairline side rules
+   run beside every section below the hero, sections split on dashed rules. */
+.lp {
+  max-width: var(--cl-rail);
+  padding-inline: 0;
+}
+.lp :focus-visible { outline: 2px solid var(--cl-ring); outline-offset: 2px; }
+.lp-download,
+.lp-bento,
+.lp-next,
+.lp-github-row,
+.lp-disclaimer,
+.lp-scenes > .lp-scene:not(.lp-scene-hero) {
+  margin-inline: clamp(1rem, 3vw, 3rem);
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+  background:
+    linear-gradient(var(--cl-border), var(--cl-border)) left top / 1px 100% no-repeat,
+    linear-gradient(var(--cl-border), var(--cl-border)) right top / 1px 100% no-repeat;
+}
+.lp-download,
+.lp-bento,
+.lp-next { border-top: 1px dashed var(--cl-border); }
+
+/* section titles: Cloudlight SectionHeading */
+.lp-download-title,
+.lp-bento-title,
+.lp-scrub-title,
+.lp-next h2 {
+  font-size: clamp(2rem, 4vw, 3rem) !important;
+  font-weight: var(--cl-display-weight) !important;
+  line-height: 1.1 !important;
+  letter-spacing: var(--cl-display-tracking) !important;
+  color: var(--cl-fg) !important;
+  text-wrap: balance;
+}
+.lp-download-sub,
+.lp-scrub-caption { color: var(--cl-muted-fg); font-size: 1.125rem; line-height: 1.75rem; }
+
+/* ---- hero: dusk photo + drifting cloud layer, Cloudlight card ------------
+   The hero card starts under the transparent nav (pulled up by one nav
+   height) and is no longer pinned, so the nav can live inside it. Its photo
+   and cloud layers drift apart with the pointer (--px/--py) and scroll (--sy). */
+.main-frame:has(.lp) { padding-top: 0; }
+main:has(.lp) .content-panel { padding-top: 0; padding-inline: 0; }
+main:has(.lp) .sl-container { max-width: none; }
+.sl-markdown-content > .lp { margin-top: 0; }
+.lp-hero-field {
+  /* light-on-dusk palette inside the card, in both themes */
+  --cl-fg: #f7f5f2;
+  --cl-bg: #0d0d0d;
+  --px: 0;
+  --py: 0;
+  --sy: 0;
+  margin: 1rem;
+  min-height: calc(100dvh - 2rem);
+  display: flex;
+  flex-direction: column;
+  border-radius: 1.5rem;
+  border: 1px solid var(--cl-hair-strong);
+  background: #17223d;
+  box-shadow: var(--cl-card-shadow);
+  isolation: isolate;
+}
+:root[data-theme='dark'] .lp-hero-field,
+:root:not([data-theme='light']) .lp-hero-field,
+:root[data-theme='light'] .lp-hero-field { background: #0b1222; }
+.lp-hero-copy { flex: none; }
+.lp-stage-in { margin-top: auto; }
+.lp-field-bg { border-radius: inherit; overflow: hidden; }
+.lp-field-photo,
+.lp-field-clouds {
+  position: absolute;
+  inset: -3%;
+  will-change: transform;
+}
+.lp-field-photo {
+  transform:
+    translate3d(calc(var(--px) * -10px), calc(var(--py) * -8px + var(--sy) * 12%), 0)
+    scale(calc(1.04 + var(--sy) * 0.06));
+}
+/* the cloud band rolls along the bottom of the first viewport, around the
+   CTAs and the rising dashboard, not below the fold */
+.lp-field-clouds {
+  inset: 0 -3% auto;
+  height: calc(100dvh + 2rem);
+  transform: translate3d(calc(var(--px) * 16px), calc(var(--py) * 10px - var(--sy) * 6%), 0);
+}
+.lp-field-bg .lp-field-photo img { animation: none !important; }
+.lp-field-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(70% 55% at 50% 30%, rgba(6, 10, 22, 0.42), transparent 75%),
+    linear-gradient(180deg, rgba(6, 10, 22, 0.35) 0%, transparent 30%);
+}
+.lp-cloud {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--cl-sky);
+}
+.lp-cloud-overlay { background: transparent; }
+.lp-cloud > canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+
+.lp-hero-copy { padding-top: calc(var(--sl-nav-height) + clamp(2.5rem, 8vh, 5.5rem)); }
+.lp-announce {
+  height: 1.5rem;
+  padding: 0 0.375rem 0 0.625rem;
+  gap: 0.125rem;
+  margin-bottom: 1rem;
+  border: 1px solid color-mix(in srgb, var(--cl-fg) 20%, transparent);
+  border-radius: 0.375rem;
+  background-color: transparent;
+  box-shadow: none;
+  color: color-mix(in srgb, var(--cl-fg) 70%, transparent);
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+}
+:root[data-theme='dark'] .lp-announce,
+:root:not([data-theme='light']) .lp-announce { background-color: transparent; }
+.lp-announce:hover { color: var(--cl-fg); }
+
+.lp-hero-copy h1,
+:root[data-theme='dark'] .lp-hero-copy h1,
+:root:not([data-theme='light']) .lp-hero-copy h1,
+:root[data-theme='light'] .lp-hero-copy h1 {
+  color: var(--cl-fg);
+  font-weight: var(--cl-display-weight);
+  font-size: clamp(2.125rem, 4.6vw, 3.5rem);
+  line-height: 1.08;
+  letter-spacing: var(--cl-display-tracking);
+  max-width: 20ch;
+}
+.lp-sub,
+:root[data-theme='dark'] .lp-sub,
+:root:not([data-theme='light']) .lp-sub,
+:root[data-theme='light'] .lp-sub {
+  color: color-mix(in srgb, var(--cl-fg) 68%, transparent);
+  font-size: 1.0625rem;
+  line-height: 1.7;
+  max-width: 58ch;
+}
+.lp-drum-claude,
+:root[data-theme='light'] .lp-drum-claude { color: #d9653b; }
+:root:not([data-theme='light']) .lp-drum-claude { color: #f0a284; }
+
+.lp-cta { gap: 0.625rem; margin-top: 2rem; }
+.lp-btn-primary,
+.lp-btn-ghost,
+:root[data-theme='dark'] .lp-btn-primary,
+:root:not([data-theme='light']) .lp-btn-primary,
+:root[data-theme='light'] .lp-btn-primary {
+  height: 2.5rem;
+  padding: 0 0.875rem 0 1rem;
+  border-radius: 0.75rem;
+  background-color: var(--cl-fg);
+  color: var(--cl-bg);
+  font-size: 1rem;
+  line-height: 1;
+}
+.lp-btn-primary:hover { opacity: 0.85; }
+.lp-btn-ghost,
+:root[data-theme='dark'] .lp-btn-ghost,
+:root:not([data-theme='light']) .lp-btn-ghost,
+:root[data-theme='light'] .lp-btn-ghost {
+  padding-inline: 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--cl-fg) 15%, transparent);
+  background-color: rgba(255, 255, 255, 0.45);
+  color: var(--cl-fg);
+  box-shadow: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+:root .lp-hero-field .lp-btn-ghost,
+:root[data-theme] .lp-hero-field .lp-btn-ghost {
+  border-color: rgba(255, 255, 255, 0.24);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+:root .lp-hero-field .lp-btn-ghost:hover,
+:root[data-theme] .lp-hero-field .lp-btn-ghost:hover { background-color: rgba(255, 255, 255, 0.18); }
+/* magnetic drift is written by the motion script */
+.lp-btn-primary,
+.lp-btn-ghost,
+.lp-github-cta { translate: var(--mgx, 0) var(--mgy, 0); }
+
+/* provider chips: glass tags on the sky */
+.lp-chips { gap: 0.375rem; margin-top: 2rem; }
+.lp-chips li,
+:root[data-theme='dark'] .lp-chips li,
+:root:not([data-theme='light']) .lp-chips li {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.625rem;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--cl-fg);
+  font-size: 0.8125rem;
+  box-shadow: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.lp-chip-more,
+:root:not([data-theme='light']) .lp-chip-more { background-color: transparent !important; border-style: dashed !important; }
+.lp-chip-more a { padding: 0.3rem 0.7rem; color: #9cc3ff; }
+.lp-chip-more a:hover { color: #c4dcff; text-decoration: underline; text-underline-offset: 3px; }
+
+/* product stage: Cloudlight app mockup window */
+.lp-stage-in { padding-top: clamp(2.5rem, 7vh, 4rem); }
+.lp-stage-in img {
+  border-radius: 0.875rem 0.875rem 0 0;
+  border: 1px solid var(--cl-hair-strong);
+  border-bottom: 0;
+  box-shadow: 0 -12px 48px -12px rgba(16, 42, 67, 0.28);
+}
+
+/* ---- scene sheets --------------------------------------------------------- */
+.lp-scenes > .lp-scene:not(.lp-scene-hero) { padding-block: 1rem; }
+.lp-quick,
+.lp-scrub {
+  border: 1px solid var(--cl-hair);
+  border-radius: 1.5rem;
+  box-shadow: var(--cl-panel-shadow);
+}
+.lp-quick { background: var(--cl-surface); border-color: transparent; box-shadow: none; position: relative; isolation: isolate; }
+.lp-kline {
+  font-weight: var(--cl-display-weight);
+  line-height: 1.08;
+  letter-spacing: var(--cl-display-tracking);
+  color: var(--cl-fg);
+}
+.lp-kline-accent { color: var(--cl-ring); }
+.lp-inline-link { color: var(--cl-ring); font-size: 0.9375rem; }
+.lp-inline-link:hover { text-decoration: none; opacity: 0.8; }
+.lp-terminal {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-radius: 0.75rem;
+  background-color: #0e1116;
+  box-shadow: var(--cl-panel-shadow);
+}
+:root[data-theme='light'] .lp-terminal { background-color: #0e1116; }
+.lp-terminal-bar { border-bottom-color: rgba(255, 255, 255, 0.08); color: #8b93a1; }
+.lp-terminal-bar::before {
+  content: '';
+  display: inline-block;
+  width: 2.25rem;
+  height: 0.5rem;
+  margin-inline-end: 0.75rem;
+  vertical-align: middle;
+  background:
+    radial-gradient(circle at 4px 4px, #ff5f57 3.5px, transparent 4px),
+    radial-gradient(circle at 18px 4px, #febc2e 3.5px, transparent 4px),
+    radial-gradient(circle at 32px 4px, #28c840 3.5px, transparent 4px);
+}
+.lp-scrub-stage canvas,
+.lp-scrub-poster {
+  border-radius: 0.875rem;
+  border: 1px solid var(--cl-hair);
+  box-shadow: var(--cl-panel-shadow);
+}
+
+/* ---- download -------------------------------------------------------------- */
+.lp-download { padding-block: clamp(4rem, 10vh, 6rem); }
+.lp-download-version { color: var(--cl-ring); }
+.lp-dl-card {
+  isolation: isolate;
+  overflow: hidden;
+  padding: 1.75rem;
+  border: 0;
+  border-radius: 1.5rem;
+  background: var(--cl-surface);
+}
+/* the detected platform becomes the inverted focal card (features-12) */
+.lp-dl-card[data-recommended] {
+  --cl-fg: var(--cl-inv-fg);
+  --cl-bg: var(--cl-inv-bg);
+  --cl-muted-fg: var(--cl-inv-muted);
+  --sl-color-white: var(--cl-inv-fg);
+  --sl-color-gray-2: var(--cl-inv-fg);
+  --sl-color-gray-3: var(--cl-inv-muted);
+  --sl-color-gray-4: var(--cl-inv-muted);
+  background: var(--cl-inv-bg);
+  color: var(--cl-inv-fg);
+}
+.lp-dl-card[data-recommended] .lp-dl-reco { color: var(--cl-inv-muted); }
+.lp-dl-card h3 { font-weight: 600; font-size: 1.25rem; letter-spacing: -0.02em; }
+.lp-dl-meta { color: var(--cl-muted-fg); }
+.lp-dl-btn {
+  height: 2.5rem;
+  border-radius: 0.75rem !important;
+  background-color: var(--cl-fg) !important;
+  color: var(--cl-bg) !important;
+  border: 0 !important;
+}
+.lp-download:has(.lp-dl-card[data-recommended]) .lp-dl-card:not([data-recommended]) .lp-dl-btn {
+  background-color: transparent !important;
+  color: var(--cl-fg) !important;
+  border: 1px solid var(--cl-border) !important;
+}
+.lp-dl-reco { color: var(--cl-ring); }
+.lp-dl-alt,
+.lp-dl-foot a { color: var(--cl-ring); }
+.lp-dl-foot { color: var(--cl-muted-fg); }
+.lp-dl-foot code { border-radius: 0.5rem; background-color: var(--cl-muted); }
+.lp-dl-more > summary { border-radius: 0.75rem; }
+
+/* ---- feature bento (React Bits features-6 + features-12) ----------------
+   Borderless soft surfaces with a large radius, a bare stroke icon above a
+   bold statement, one inverted focal card, and a per-card colour glow that
+   blooms up from the bottom edge on hover and follows the cursor. */
+.lp-bento { padding-block: clamp(4rem, 10vh, 6rem); }
+.lp-grid { gap: 1rem; }
+.lp-cell {
+  --glow: 56, 189, 248;
+  position: relative;
+  isolation: isolate;
+  gap: 0.625rem;
+  padding: 1.75rem;
+  border: 0;
+  border-radius: 1.5rem;
+  background: var(--cl-surface);
+}
+.lp-grid > .lp-cell:nth-child(2) { --glow: 251, 146, 60; }
+.lp-grid > .lp-cell:nth-child(3) { --glow: 52, 211, 153; }
+.lp-grid > .lp-cell:nth-child(4) { --glow: 168, 139, 250; }
+.lp-grid > .lp-cell:nth-child(5) { --glow: 244, 114, 182; }
+.lp-grid > .lp-cell:nth-child(6) { --glow: 217, 119, 87; }
+.lp-grid > .lp-cell:nth-child(7) { --glow: 251, 191, 36; }
+.lp-grid > .lp-cell:nth-child(8) { --glow: 96, 165, 250; }
+.lp-cell-providers {
+  --cl-fg: var(--cl-inv-fg);
+  --cl-bg: var(--cl-inv-bg);
+  --sl-color-white: var(--cl-inv-fg);
+  background: var(--cl-inv-bg);
+  color: var(--cl-inv-fg);
+}
+.lp-cell h3 {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  color: var(--cl-fg);
+}
+.lp-cell-providers h3 { font-size: clamp(1.375rem, 2.2vw, 1.75rem); }
+.lp-cell p { color: color-mix(in srgb, var(--cl-fg) 62%, transparent); font-size: 0.9375rem; line-height: 1.6; }
+.lp-cell .lp-ico { width: 1.625rem; height: 1.625rem; stroke-width: 1.5; color: var(--cl-fg); opacity: 1; }
+.lp-cell img {
+  margin-top: 1rem;
+  border-radius: 1rem;
+  border: 0;
+  box-shadow: 0 0 0 1px var(--cl-hair), var(--cl-panel-shadow);
+}
+.lp-cell .lp-terminal { margin-top: 1rem; }
+.lp-cell::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: var(--mx, 50%);
+  bottom: -9rem;
+  width: 22rem;
+  height: 22rem;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(var(--glow), 0.75) 0%, rgba(var(--glow), 0) 70%);
+  filter: blur(14px);
+  opacity: 0;
+  transform: translateX(-50%) scale(0.7);
+  transition:
+    opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    left 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lp-cell:hover::before { opacity: 0.55; transform: translateX(-50%) scale(1); }
+:root[data-theme='light'] .lp-cell:not(.lp-cell-providers):hover::before { opacity: 0.45; }
+
+/* ---- closing CTA: GitHub star on a cloud panel (Cloudlight FinalCta) ----- */
+.lp-github-row {
+  position: relative;
+  display: block;
+  padding-block: 1rem 2rem;
+}
+.lp-github-row .lp-cloud-cta {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: clamp(16rem, 34vh, 22rem);
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 1.5rem;
+  border: 1px solid var(--cl-hair-strong);
+  background: #0b1222;
+}
+.lp-cloud-cta img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 70%;
+}
+.lp-github-cta {
+  position: absolute;
+  top: calc(1rem + clamp(16rem, 34vh, 22rem) / 2);
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: 3rem;
+  padding: 0 1.25rem;
+  border: 0;
+  border-radius: 0.875rem;
+  background: var(--cl-fg);
+  color: var(--cl-bg);
+  font-weight: 500;
+  box-shadow: 0 12px 32px -12px rgba(16, 42, 67, 0.45);
+}
+.lp-github-cta:hover { border-color: transparent; opacity: 0.88; }
+
+/* ---- docs map + disclaimer ------------------------------------------------ */
+.lp-next { padding-block: clamp(3.5rem, 9vh, 5rem) 2rem; }
+.lp-next-col h3 { font-weight: 500; color: var(--cl-fg); }
+.lp-next-col a { color: var(--cl-muted-fg); }
+.lp-next-col a:hover { color: var(--cl-fg); text-decoration: none; }
+.lp-disclaimer { max-width: none; padding-block: 1rem 3rem; color: var(--cl-muted-fg); }
+.lp-disclaimer::first-line { color: inherit; }
+
+/* ---- footer ---------------------------------------------------------------- */
+footer.sl-flex { border-top: 1px dashed var(--cl-border); }
+
+@media (max-width: 48rem) {
+  .lp-hero-field { margin: 0.5rem; border-radius: 1.25rem; }
+  .lp-download,
+  .lp-bento,
+  .lp-next,
+  .lp-github-row,
+  .lp-disclaimer,
+  .lp-scenes > .lp-scene:not(.lp-scene-hero) { margin-inline: 0.5rem; padding-inline: 1rem; }
+  .lp-github-cta { width: max-content; max-width: calc(100% - 3rem); }
+}
+
+/* ============================================================================
+   Motion (Cloudlight grammar: soft ease cubic-bezier(0.22, 1, 0.36, 1))
+   ============================================================================ */
+@media (prefers-reduced-motion: no-preference) {
+  /* the hero card is no longer pinned: it stays in flow so the nav can live
+     inside it, and only sinks away as it leaves the viewport */
+  @media (min-width: 48rem) {
+    @supports (animation-timeline: view()) {
+      .lp-scenes > .lp-scene-hero { height: auto; }
+      .lp-scene-hero .lp-scene-inner {
+        position: relative;
+        top: auto;
+        height: auto;
+        min-height: calc(100dvh - 2rem);
+        box-shadow: var(--cl-card-shadow);
+        animation-range: exit 20% exit 100%;
+      }
+    }
+  }
+
+  /* hero entrance: rise out of a soft blur (custom.css staggers the delays) */
+  @keyframes ocx-fade-up {
+    from { opacity: 0; transform: translateY(16px); filter: blur(8px); }
+    to { opacity: 1; transform: none; filter: none; }
+  }
+  .lp-hero-copy h1,
+  .lp-sub,
+  .lp-cta,
+  .lp-chips,
+  .lp-announce { animation-duration: 0.9s !important; animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1) !important; }
+  .lp-announce { animation: ocx-fade-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .lp-hero-copy h1 { animation-delay: 0.08s; }
+  .lp-sub { animation-delay: 0.16s; }
+  .lp-cta { animation-delay: 0.24s; }
+  .lp-chips { animation-delay: 0.32s; }
+  @keyframes cl-stage-rise {
+    from { opacity: 0; transform: translateY(40px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  .lp-stage-in img { animation: cl-stage-rise 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.36s both !important; }
+
+  /* scroll reveal: fade + 16px rise, staggered via --rd */
+  .cl-motion [data-reveal] {
+    opacity: 0;
+    translate: 0 16px;
+    transition:
+      opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--rd, 0s),
+      translate 0.8s cubic-bezier(0.22, 1, 0.36, 1) var(--rd, 0s);
+  }
+  .cl-motion [data-reveal].is-in { opacity: 1; translate: 0 0; }
+  .cl-motion .lp-grid > [data-reveal] { translate: 0 24px; }
+  /* split headings: each word rises out of a blur */
+  .cl-motion [data-reveal]:has(> .cl-word) { opacity: 1; translate: none; }
+  .cl-word {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(0.45em);
+    filter: blur(6px);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1) var(--wd),
+      transform 0.9s cubic-bezier(0.22, 1, 0.36, 1) var(--wd),
+      filter 0.7s cubic-bezier(0.22, 1, 0.36, 1) var(--wd);
+  }
+  .is-in > .cl-word { opacity: 1; transform: none; filter: none; }
+  /* the old scroll-timeline fades would fight the reveal */
+  .cl-motion :is(.lp-download-title, .lp-dl-grid, .lp-bento-title, .lp-next h2, .lp-next-grid, .lp-disclaimer) {
+    animation: none !important;
+  }
+
+  /* cards: lift on hover (features-12), glow handled above */
+  .lp-cell,
+  .lp-dl-card {
+    transition:
+      transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .lp-cell:hover,
+  .lp-dl-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 24px 48px -24px rgba(16, 42, 67, 0.28);
+  }
+  :root:not([data-theme='light']) .lp-cell:hover,
+  :root:not([data-theme='light']) .lp-dl-card:hover { box-shadow: 0 24px 48px -24px rgba(0, 0, 0, 0.7); }
+
+  /* closing panel: the photo slowly breathes behind the clouds */
+  @keyframes cl-breathe {
+    from { transform: scale(1.04); }
+    to { transform: scale(1.12) translateY(-2%); }
+  }
+  .lp-cloud-cta img { animation: cl-breathe 18s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate; }
+
+  /* buttons: Cloudlight press + arrow nudge */
+  .lp-btn-primary svg,
+  .lp-announce svg { transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+  .lp-btn-primary:hover svg,
+  .lp-announce:hover svg { transform: translateX(2px); }
+  .lp-btn-primary:active,
+  .lp-btn-ghost:active,
+  .lp-dl-btn:active,
+  .lp-github-cta:active { scale: 0.98; }
+}
+
+/* ---- hero word roll (built by the motion script) ------------------------
+   The slot is as wide as the current word and eases to the next word's
+   width, so the text around it slides instead of colliding. */
+.lp-drum-js { display: inline-block; perspective: none; }
+.lp-roll {
+  display: inline-grid;
+  justify-items: start;
+  vertical-align: baseline;
+  white-space: nowrap;
+  transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lp-roll-word {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: translateY(0.55em);
+  filter: blur(10px);
+  transition:
+    opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lp-roll-word.is-on { opacity: 1; transform: none; filter: none; }
+.lp-roll-word.is-out { opacity: 0; transform: translateY(-0.55em); filter: blur(10px); }
+.lp-next { scroll-margin-top: calc(var(--sl-nav-height) + 1rem); }
