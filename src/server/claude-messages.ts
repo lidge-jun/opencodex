@@ -970,6 +970,47 @@ async function handleClaudeMessagesWithBudget(
     ...(settledRoute?.provider.authMode === "oauth" && settledInstance
       ? { oauthFailoverQuorum: anthropicRoutingFor(settledInstance).hasAnthropicFailoverQuorum() } : {}),
   };
+  if (settledRoute && isRec(anthropicBody)
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector) === "bridge-only-policy"
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, { ...nativeSelector, webSearchBackendAvailable: false }) === undefined) {
+    const { parseRequest } = await import("../responses/parser");
+    const { planWebSearch, shouldResolveOpenAiWebSearchSidecar } = await import("../web-search");
+    const replayConfig = buildClaudeReplayConfig(config);
+    const parsed = parseRequest(internalBody);
+    let openAiSidecar: import("../providers/openai-sidecar").ResolvedOpenAiForwardSidecar | undefined;
+    if (shouldResolveOpenAiWebSearchSidecar(replayConfig, parsed, false)) {
+      const { listOpenAiForwardSidecarCandidates, captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar } = await import("../providers/openai-sidecar");
+      const candidates = listOpenAiForwardSidecarCandidates(replayConfig);
+      const headers = new Headers();
+      if (candidates.length && tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
+        const { getMainAccountToken } = await import("../codex/main-account");
+        const token = getMainAccountToken();
+        if (token) {
+          const auth = captureExplicitOpenAiCallerAuth(new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId }), replayConfig);
+          if (auth) { headers.set("authorization", auth.authorization); headers.set("chatgpt-account-id", auth.chatgptAccountId); }
+        }
+      }
+      const { codexAccountSelectionForTurn } = await import("./lifecycle");
+      const errors = await import("../codex/auth-context");
+      try {
+        openAiSidecar = await resolveFirstUsableOpenAiSidecar(candidates, headers, replayConfig, {
+          admission: logIds?.admission, codexAuthPolicy: config,
+          beginCodexAccountSelection: codexAccountSelectionForTurn(logIds?.turnAdmissionLease),
+        });
+      } catch (err) {
+        if (!(err instanceof errors.CodexPoolAuthenticationError) && !(err instanceof errors.CodexAuthContextError)
+          && !(err instanceof errors.CodexAccountCooldownError) && !(err instanceof errors.CodexThreadAffinityExpiredError)
+          && !(err instanceof errors.CodexMainProfileDrainingError)) throw err;
+      }
+    }
+    try {
+      nativeSelector.webSearchBackendAvailable = !!planWebSearch(replayConfig, parsed, false, settledRoute.provider, settledRoute.modelId, openAiSidecar, {
+        admission: logIds?.admission, codexAuthPolicy: config, providerName: settledRoute.providerName,
+      });
+    } finally {
+      openAiSidecar?.releaseProbeLease?.();
+    }
+  }
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
     : "rollout-disabled";

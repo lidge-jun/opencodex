@@ -68,7 +68,7 @@ async function claudeTurn(
   frames: Record<string, unknown>[],
   target: "anth" | "gpt" = "anth",
   messages: unknown[] = [{ role: "user", content: "What did Bun release? https://bun.sh/blog" }],
-  { stream = true, direct = false }: { stream?: boolean; direct?: boolean } = {},
+  { stream = true, direct = false, native = false, searchBackend, searchTool = WEB_SEARCH }: { stream?: boolean; direct?: boolean; native?: boolean; searchBackend?: { backend: "exa"; exaApiKey: string }; searchTool?: typeof WEB_SEARCH & { allowed_domains?: string[] } } = {},
 ): Promise<{ wire: Record<string, unknown>; clientSse: string }> {
   const wires: string[] = [];
   const fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -82,8 +82,8 @@ async function claudeTurn(
   const config = {
     port: 0, defaultProvider: "anth",
     claudeCode: { nativePassthrough: false },
-    webSearchSidecar: { enabled: false },
-    ...(direct ? { protocols: { rollout: { directEncoders: true } } } : {}),
+    ...(searchBackend ? { webSearchSidecar: searchBackend } : native ? {} : { webSearchSidecar: { enabled: false } }),
+    ...(direct || native ? { protocols: { rollout: { directEncoders: direct, managedMessagesNative: native } } } : {}),
     providers: {
       anth: { adapter: "anthropic", baseUrl, authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch },
       gpt: { adapter: "openai-chat", baseUrl: "https://gpt.invalid/v1", authMode: "key", apiKey: "sk-fixture", models: ["g"], fetch },
@@ -96,8 +96,8 @@ async function claudeTurn(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: direct ? `anth/${MODEL}` : "combo/waterfall", max_tokens: 64, stream,
-      tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, WEB_SEARCH, WEB_FETCH],
+      model: direct || native ? `anth/${MODEL}` : "combo/waterfall", max_tokens: 64, stream,
+      tools: [{ name: "Read", description: "read", input_schema: { type: "object", properties: {} } }, searchTool, WEB_FETCH],
       messages,
     }),
   }), config, { model: "", provider: "" });
@@ -112,6 +112,19 @@ function clientFrames(text: string): Record<string, unknown>[] {
 }
 
 describe("translated Claude lane carries typed web tools to Anthropic", () => {
+  test("native compatible upstream receives search and returns its result without a sidecar", async () => {
+    const searchTool = { ...WEB_SEARCH, allowed_domains: ["bun.sh"] };
+    const { wire, clientSse } = await claudeTurn("https://compat.example.com", SEARCH_TURN, "anth", undefined, { native: true, searchTool });
+    expect(wire.tools).toContainEqual(searchTool);
+    expect(clientSse).toContain('"type":"web_search_tool_result"');
+    expect(clientSse).toContain("Bun blog");
+  });
+  test("an available sidecar keeps the compatible route on the bridge", async () => {
+    const { wire } = await claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined,
+      { native: true, searchBackend: { backend: "exa", exaApiKey: "fixture" } });
+    expect(wire.tools).not.toContainEqual(WEB_SEARCH);
+    expect((wire.tools as Record<string, unknown>[]).map(tool => tool.name)).toContain("web_search");
+  });
   test("api.anthropic.com receives web_search and web_fetch as declared", async () => {
     const { wire } = await claudeTurn("https://api.anthropic.com", OK_TURN);
     const tools = wire.tools as Record<string, unknown>[];
