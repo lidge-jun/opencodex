@@ -971,7 +971,14 @@ export function poolWhamPolicyObservation(
   data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt"> | null,
 ): MainPolicyQuotaObservation | null {
   if (!quota || !isValidWhamHistoryObservation(data)) return null;
-  return data.rate_limit?.allowed === false ? quota : withWhamShortWindowAbsence(data, quota);
+  // Retirement releases a block, so a present reading that does not parse is not "unknown".
+  const readings = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  for (const limit of Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : []) {
+    if (limit && typeof limit === "object") readings.push(limit.rate_limit?.primary_window, limit.rate_limit?.secondary_window);
+  }
+  const malformed = readings.some(window => window?.used_percent != null
+    && normalizeUsagePercent(window.used_percent) === undefined);
+  return data.rate_limit?.allowed === false || malformed ? quota : withWhamShortWindowAbsence(data, quota);
 }
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {

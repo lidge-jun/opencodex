@@ -264,6 +264,19 @@ describe("pool WHAM short-window retirement", () => {
     expect(evidence({ ...weeklyOnly, additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: 101 } } }] })).toBeNull();
   });
 
+  test("a malformed usage reading keeps the carried tuple and its reset", async () => {
+    savePool();
+    const ctx = poolContext();
+    const first = await commitPoolQuotaResponse(observe(short(), weekly()), ctx);
+    for (const used_percent of ["unreadable", true, {}]) {
+      const result = await commitPoolQuotaResponse(observe(weekly(), null, {
+        additional_rate_limits: [{ rate_limit: { primary_window: { used_percent, limit_window_seconds: 604_800 } } }],
+      }), ctx);
+      expect(result.quota?.shortPercent).toBe(100);
+      expect(result.quota?.shortResetAt).toBe(first.quota?.shortResetAt);
+    }
+  });
+
   test("a writer captured before a credential rollover cannot retire the tuple", async () => {
     savePool();
     await commitPoolQuotaResponse(observe(short(), weekly()), poolContext());
