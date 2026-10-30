@@ -16,7 +16,7 @@ import { createTempHome } from "../helpers/temp-home";
 
 type Rec = Record<string, unknown>;
 type Lane = "adapter" | "runTurn";
-type Wire = "chat" | "anthropic";
+type Wire = "chat" | "anthropic" | undefined;
 const REFUSAL_CODE = "undeclared_tool_call";
 const userInput = { role: "user", content: [{ type: "input_text", text: "fixture request" }] };
 const tool = (name: string) => ({ type: "function", name, parameters: { type: "object", properties: {} } });
@@ -143,6 +143,25 @@ function assertAllowed(response: Rec, name: string): void {
 }
 
 describe("explicit empty catalog current-turn and continuation boundaries", () => {
+  for (const lane of ["adapter", "runTurn"] as const) for (const stream of [false, true]) {
+    for (const partial of [false, true]) {
+      test(`Responses ${lane}, ${stream ? "SSE" : "JSON"}, ${partial ? "partial" : "omitted"} catalog: history cannot authorize a call`, async () => {
+        const config = setup(lane);
+        const prior = await post(config, undefined, stream, { input: [additional(["shell"]), userInput] });
+        expect(prior.status).toBe("completed");
+        nextCall = "shell";
+        const response = await post(config, undefined, stream, {
+          previous_response_id: prior.id,
+          input: [...(partial ? [additional(["benign_tool"])] : []), userInput],
+        });
+        expect(dispatched[1]!.replayPrefix).toBeGreaterThan(0);
+        expect(dispatched[1]!.tools).toContain("shell");
+        if (partial) expect(dispatched[1]!.tools).toContain("benign_tool");
+        assertRefusedAndUncached(response);
+      });
+    }
+  }
+
   for (const lane of ["adapter", "runTurn"] as const) for (const wire of ["chat", "anthropic"] as const) {
     for (const stream of [false, true]) {
       const label = `${lane}, ${wire}, ${stream ? "SSE" : "JSON"}`;
@@ -164,7 +183,7 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         });
       }
 
-      test(`${label}: historical additional_tools:[] does not restrict a current partial catalog`, async () => {
+      test(`${label}: current partial catalog preserves a deferred tool`, async () => {
         const config = setup(lane);
         const prior = await post(config, wire, stream, { input: [additional([]), userInput] });
         expect(prior.status).toBe("completed");
@@ -176,13 +195,13 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         assertAllowed(response, "Write");
       });
 
-      test(`${label}: current declaration controls output normalization after historical default.Read`, async () => {
+      for (const explicitEmpty of [false, true]) test(`${label}: current ${explicitEmpty ? "restricted" : "deferred"} declaration normalizes historical default.Read`, async () => {
         const config = setup(lane);
         const prior = await post(config, wire, stream, { input: [additional(["default.Read"]), userInput] });
         expect(prior.status).toBe("completed");
         nextCall = "default.Read";
         const response = await post(config, wire, stream, {
-          previous_response_id: prior.id, tools: [], input: [additional(["Read"]), userInput],
+          previous_response_id: prior.id, ...(explicitEmpty ? { tools: [] } : {}), input: [additional(["Read"]), userInput],
         });
         expect(dispatched).toHaveLength(2);
         expect(dispatched[1]!.replayPrefix).toBeGreaterThan(0);
