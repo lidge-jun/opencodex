@@ -498,7 +498,8 @@ touched row; ordinary publication does not reread auth or revalidate every bindi
 ACL settlement barrier and private no-follow atomic publisher; bounded hydration rejects final-entry symlinks,
 junctions and non-regular files with identifier-free warnings. Aliases above the config root remain supported.
 Memory and pending writes belong to the resolved config home; reset or an observed home change retires that scope.
-Timestamp-only updates coalesce for at most one second, with a best-effort shutdown flush. Failures emit identifier-free warnings
+All mutations coalesce behind a one-second publication timer so caller-selected session keys cannot trigger synchronous
+snapshot writes; explicit and best-effort shutdown flushes publish immediately. Failures emit identifier-free warnings
 and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
 `tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.
 

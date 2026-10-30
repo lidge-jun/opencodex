@@ -44,12 +44,14 @@ test("snapshot contains only digests, opaque account and timestamp", async () =>
   store.resetMemory(); expect(store.get(key)?.accountId).toBe(id);
 });
 test("back-to-back structural mutations are both persisted and raw keys are refused", async () => {
-  const store = owner(); const other = anthropicAffinityDigest("anthropic", "second");
+  let writes = 0; const store = owner("anthropic", (...args) => { writes++; atomicWriteFile(...args); });
+  const other = anthropicAffinityDigest("anthropic", "second");
   store.set(key, { accountId: id, lastUsedAt: Date.now() });
   store.set(other, { accountId: id, lastUsedAt: Date.now() });
   store.set(secret, { accountId: id, lastUsedAt: Date.now() });
+  expect(writes).toBe(0);
   await store.flush(); store.resetMemory();
-  expect(store.size).toBe(2); expect(store.get(other)?.accountId).toBe(id);
+  expect(writes).toBe(1); expect(store.size).toBe(2); expect(store.get(other)?.accountId).toBe(id);
   expect(readFileSync(path(), "utf8")).not.toContain(secret);
 });
 test("load rejects expired and future rows and keeps the newest 2000", async () => {
