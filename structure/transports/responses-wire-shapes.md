@@ -221,7 +221,7 @@ the destination is the whole predicate, because Meta's refusal is a gateway sche
 Muse model it serves, its default `muse-spark-1.3` is not a Contributor id, and a missing model id
 still strips. Because the predicate is the host, a custom provider pointed at that exact URL gets the
 same strip.
-Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, current search discoveries activate tools, historical discovery stays replay data, historical custom calls retain their conversion without live authority, and malformed catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
+Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, declarations retain their schemas over search discoveries, historical discovery stays replay data, and historical custom calls retain their conversion without live authority. The reserved `functions` group and nested function definitions become public function declarations. Catalog validation also covers string/omitted input; unrepresentable namespace children and malformed catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
 Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
 names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
 flattening, `src/responses/muse-tool-name-alias.ts` rewrites those identities on the `api.meta.ai`

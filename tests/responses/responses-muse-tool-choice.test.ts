@@ -295,6 +295,83 @@ describe("Meta Muse additional tool catalogs", () => {
     }
   });
 
+  test("current declarations keep their schema when search discovers the same tool", () => {
+    const declared = { ...lookup, defer_loading: true, parameters: { type: "object", properties: { project_id: { type: "string" } } } };
+    const discovered = { ...lookup, parameters: { type: "object", properties: { admin_mode: { type: "boolean" } } } };
+    for (const namespace of [undefined, "functions", "workspace"]) {
+      const catalog = namespace ? [{ type: "namespace", name: namespace, tools: [declared] }] : [declared];
+      const discoveries = namespace === "workspace" ? [{ type: "namespace", name: namespace, tools: [discovered] }] : [discovered];
+      for (const tools of [undefined, []]) {
+        const raw = { tools, input: [
+          { type: "additional_tools", tools: catalog },
+          { type: "tool_search_output", call_id: "s1", tools: discoveries },
+        ] };
+        const original = structuredClone(raw);
+        const body = JSON.parse(build(meta, raw).body);
+        expect(body.tools).toHaveLength(1);
+        expect(body.tools[0].parameters).toEqual(declared.parameters);
+        expect(body.tools[0]).not.toHaveProperty("defer_loading");
+        expect(raw).toEqual(original);
+      }
+    }
+  });
+
+  test("unrepresentable namespace children fail without a partial catalog", () => {
+    for (const invalid of [
+      { type: "namespace", name: "inner", tools: [lookup] },
+      { ...lookup, name: "bad\u0000name" },
+      { type: "web_search" },
+    ]) {
+      const group = { type: "namespace", name: "outer", tools: [lookup, invalid] };
+      for (const raw of [
+        { tools: [group], input: [] },
+        { input: [{ type: "additional_tools", tools: [group] }] },
+        { input: [{ type: "tool_search_output", call_id: "s1", tools: [group] }] },
+      ]) expect(() => build(meta, raw)).toThrow("Malformed tool catalog for Meta Responses.");
+    }
+    expect(() => build(meta, { tools: [{ type: "namespace", name: "bad\nname", tools: [lookup] }] }))
+      .toThrow("Malformed tool catalog for Meta Responses.");
+  });
+
+  test("explicit bare declarations win over reserved namespace duplicates in either carrier order", () => {
+    const bare = { ...lookup, parameters: { type: "object", properties: { project_id: { type: "string" } } } };
+    const group = { type: "namespace", name: "functions", tools: [{ ...lookup, parameters: { type: "object", properties: { group_id: { type: "string" } } } }] };
+    for (const raw of [
+      { tools: [group], input: [{ type: "additional_tools", tools: [bare] }] },
+      { tools: [bare], input: [{ type: "additional_tools", tools: [group] }] },
+      { input: [{ type: "additional_tools", tools: [group] }, { type: "additional_tools", tools: [bare] }] },
+      { input: [{ type: "additional_tools", tools: [bare] }, { type: "additional_tools", tools: [group] }] },
+      { tools: [group, bare], input: "continue" },
+    ]) {
+      const original = structuredClone(raw);
+      expect(JSON.parse(build(meta, raw).body).tools).toEqual([bare]);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("validates top-level catalogs with string or omitted input", () => {
+    for (const input of ["continue", undefined]) {
+      expect(() => build(meta, { input, tools: [lookup, { type: "namespace", name: "bad", tools: null }] }))
+        .toThrow("Malformed tool catalog for Meta Responses.");
+    }
+  });
+
+  test("normalizes nested function definitions across input forms and catalog carriers", () => {
+    const definition = { name: "read", description: "Read a project", parameters: { type: "object", properties: { project_id: { type: "string" } } }, strict: true };
+    const nested = { type: "function", function: definition };
+    for (const raw of [
+      { input: "continue", tools: [nested] },
+      { input: undefined, tools: [nested] },
+      { input: [], tools: [nested] },
+      { input: [{ type: "additional_tools", tools: [nested] }] },
+      { input: [{ type: "tool_search_output", call_id: "s1", tools: [nested] }] },
+    ]) {
+      const original = structuredClone(raw);
+      expect(JSON.parse(build(meta, raw).body).tools).toEqual([{ type: "function", ...definition }]);
+      expect(raw).toEqual(original);
+    }
+  });
+
   test("preserves historical custom-call conversion without declaring the old tool", () => {
     for (const toolChoice of ["auto", "none"]) {
       const raw = { tool_choice: toolChoice, input: [
