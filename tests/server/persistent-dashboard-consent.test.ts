@@ -13,6 +13,7 @@ import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
 import { trustedLoopbackForIngress } from "../../src/server/index/serve-options";
 import * as jobs from "../../src/codex/cli-update-job";
 import * as workers from "../../src/codex/cli-update-job-worker";
+import { consumeGuiPairingGrant, createGuiPairingGrant } from "../../src/server/gui-session";
 
 const ORIGIN = "http://127.0.0.1:10100";
 const ADMIN = "ocx_admin_consent_fixture";
@@ -151,6 +152,52 @@ test("ordinary loopback GUI apply cannot self-authorize an update", async () => 
   expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY), false)).status).toBe(403);
   expect(effects).toEqual([]);
   expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY))).status).toBe(403);
+  expect(effects).toEqual([]);
+});
+
+function pairLocalDashboard() {
+  config.port = Number(new URL(ORIGIN).port);
+  if (!state.available) throw new Error("fixture management authority unavailable");
+  const issued = createGuiPairingGrant(ORIGIN, config, state);
+  const exchange = request("/opencodex-session", "POST", "", { grant: issued.grant });
+  exchange.headers.delete("X-OpenCodex-API-Key");
+  const session = consumeGuiPairingGrant(exchange,
+    { grant: issued.grant }, config, state, Date.now(), {
+      ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: ORIGIN,
+    });
+  if (!session || "allowed" in session) throw new Error("fixture pairing redemption refused");
+  expect(session.issuance).toBe("pairing");
+  expect(state.pairingGrants.size).toBe(0);
+  return { session, cookie: "" };
+}
+
+test("a redeemed local pairing session admits one confirmed CLI update", async () => {
+  const device = pairLocalDashboard();
+  const response = await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY));
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ job: JOB });
+  expect(effects).toEqual(["admit", "run", "worker"]);
+  expect(jobs.admitCodexCliUpdateJob).toHaveBeenCalledTimes(1);
+  expect(workers.runCodexCliUpdateApplyInWorker).toHaveBeenCalledTimes(1);
+});
+
+test("paired CLI apply retains confirmation, ingress, origin, CSRF and current-session gates", async () => {
+  const device = pairLocalDashboard();
+  const makeRequest = () => sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY);
+  expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", { ...APPLY, confirmed: false }))).status).toBe(400);
+  expect((await dispatch(makeRequest(), false)).status).toBe(403);
+  const wrongOrigin = makeRequest();
+  wrongOrigin.headers.set("Origin", "http://localhost:10100");
+  expect((await dispatch(wrongOrigin)).status).toBe(401);
+  const wrongCsrf = makeRequest();
+  wrongCsrf.headers.set("X-OpenCodex-CSRF-Token", "wrong");
+  expect((await dispatch(wrongCsrf)).status).toBe(401);
+  const invalidSession = makeRequest();
+  invalidSession.headers.set("X-OpenCodex-API-Key", "unknown-session");
+  expect((await dispatch(invalidSession)).status).toBe(401);
+  if (!state.available) throw new Error("fixture management authority unavailable");
+  state.sessions.get(device.session.token)!.expiresAt = Date.now() - 1;
+  expect((await dispatch(makeRequest())).status).toBe(401);
   expect(effects).toEqual([]);
 });
 
