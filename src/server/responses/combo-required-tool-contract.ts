@@ -10,6 +10,33 @@ export type RequiredToolContract =
   | { kind: "any"; hostedCallTypes: ReadonlySet<string> }
   | { kind: "named"; name: string };
 
+const allowedHostedSelectors = new Set([
+  "web_search", "web_search_preview", "file_search", "computer_use_preview", "computer_use",
+  "code_interpreter", "image_generation", "image_gen", "tool_search",
+]);
+
+/** Only definite, well-formed mandatory selectors justify excluding a destination. */
+export function hasMandatoryToolChoice(rawBody: unknown): boolean {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return false;
+  const choice = (rawBody as Record<string, unknown>).tool_choice;
+  if (choice === "required") return true;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice)) return false;
+  const selector = choice as Record<string, unknown>;
+  if (selector.type === "function" || selector.type === "custom") {
+    return typeof selector.name === "string" && selector.name.trim().length > 0;
+  }
+  return selector.type === "allowed_tools" && selector.mode === "required"
+    && Array.isArray(selector.tools) && selector.tools.length > 0
+    && selector.tools.every((tool: unknown) => {
+      if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
+      const entry = tool as Record<string, unknown>;
+      if (entry.name !== undefined && (typeof entry.name !== "string" || !entry.name.trim())) return false;
+      if (entry.type === "function" || entry.type === "custom") return typeof entry.name === "string";
+      if (entry.type === "mcp") return typeof entry.server_label === "string" && !!entry.server_label.trim();
+      return typeof entry.type === "string" && allowedHostedSelectors.has(entry.type);
+    });
+}
+
 const hostedCalls = new Map([
   ["web_search", "web_search_call"], ["web_search_preview", "web_search_call"],
   ["file_search", "file_search_call"], ["code_interpreter", "code_interpreter_call"],

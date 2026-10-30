@@ -193,6 +193,8 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 일치가 확인된(`matched`) autostart wrapper만 backing Codex를 직접 실행합니다. 검사 예외를 포함한 알 수 없는 상태는 검증된 bypass가 필요하며, 관리되는 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처는 지원합니다. 검증할 수 없거나 오래된 wrapper는 종료 코드 1로 거부하며 Codex를 시작하지 않습니다. `ocx codex-shim install`로 갱신하세요. 이 실행은 shim을 수리하지 않으며, 내용 검사는 Windows backing 파일 출처나 동시 경로 교체를 보장하지 않습니다.
 
+macOS에서는 도움말과 버전을 포함한 매 실행 시, 선택한 실행 파일의 경로나 정규 경로가 `.app` 번들 내부에 있으면 검증합니다. 이름을 바꾼 번들과 번들 내부를 가리키는 심볼릭 링크도 번들 및 실행 파일의 안전한 소유권, 권한, OpenAI 서명을 요구합니다. 선택한 번들 구성원은 실행 파일, 중간 디렉터리 또는 번들 전체의 심볼릭 링크를 거쳐도 해당 번들의 정규 `Contents/` 내부에 있어야 합니다. 검증 실패 시 Codex를 시작하지 않고 종료 코드 1을 반환합니다. npm 설치를 포함한 일반 번들 외부 실행 파일의 동작은 유지됩니다.
+
 런처 도움말은 `ocx help codex`, Codex 도움말은 `ocx codex --help`입니다. 이후 plain `codex`의 동작은 기존과 같습니다.
 
 ### `ocx opencode [opencode args...]`

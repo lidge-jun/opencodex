@@ -1,4 +1,7 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
+import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
+import { hasMandatoryToolChoice } from "./combo-required-tool-contract";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
@@ -56,7 +59,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
-import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
+import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
@@ -533,10 +536,29 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
+    if (!hasMandatoryToolChoice(body)) return true;
+    try {
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const inboundWire = options.inboundWire ?? "responses";
+      const policy = captureRouteStaticPolicy(route.providerName, route.modelId, route.provider,
+        route.staticPolicy.effectiveAlias, inboundWire);
+      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, policy);
+      return provider.adapter !== "openai-responses"
+        || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
+    } catch {
+      return true;
+    }
+  };
+  const onlyMuseToolIncompatible = (): boolean => {
+    const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
+    return enabled.length > 0 && enabled.every(target => !museToolEligible(target));
+  };
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    && museToolEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
@@ -651,6 +673,9 @@ export async function executeComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
+      if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+        return comboUnavailableResponse(`No available targets for combo: ${comboId}; Meta Responses does not support mandatory tool_choice`);
+      }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : comboUnavailable(comboId, undefined,
@@ -668,6 +693,9 @@ export async function executeComboResponses(
     const protocolRefusal = protocolLanes?.refusal();
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
+    if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
+      return comboUnavailableResponse(`No available targets for combo: ${comboId}; Meta Responses does not support mandatory tool_choice`);
+    }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
       : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
