@@ -2428,6 +2428,46 @@ describe("fetchProviderQuotaReports", () => {
     expect((await fetchProviderQuotaReports(config)).reports[0]?.aggregation?.weekly?.usedPercent).toBeCloseTo((20 * 20 + 11) / 21, 8);
   });
 
+  test("restamped pool observations keep the report cache and last-good rows (#7956)", async () => {
+    await saveCredential("anthropic", { access: "synthetic-claude-access", refresh: "synthetic-claude-refresh", expires: Date.now() + 3600_000 });
+    saveCodexAccountCredential("added", {
+      accessToken: "added-access", refreshToken: "added-refresh",
+      expiresAt: Date.now() + 3600_000, chatgptAccountId: "added-chatgpt-id",
+    });
+    const config = testConfig();
+    config.providers = { openai: config.providers.openai, anthropic: config.providers.anthropic };
+    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "pro", isMain: false }];
+    let anthropicCalls = 0;
+    let anthropicDown = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.anthropic.com/api/oauth/usage") {
+        anthropicCalls += 1;
+        if (anthropicDown) return new Response("unavailable", { status: 503 });
+        return Response.json({ five_hour: { utilization: 41, resets_at: new Date(Date.now() + 3600_000).toISOString() } });
+      }
+      const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
+      return Response.json({ plan_type: added ? "pro" : "plus",
+        rate_limit: { secondary_window: { used_percent: added ? 30 : 11, reset_at: 1_999_000_000 } } });
+    }) as typeof fetch;
+
+    await fetchProviderQuotaReports(config, true);
+    expect(anthropicCalls).toBe(1);
+    // A proxied Codex response re-observes unchanged values with a new timestamp.
+    await Bun.sleep(5);
+    updateAccountQuota("added", 30, 1_999_000_000);
+    const cached = await fetchProviderQuotaReports(config);
+    expect(anthropicCalls).toBe(1);
+    expect(cached.reports.map(report => report.provider).sort()).toEqual(["anthropic", "openai"]);
+
+    // A transient Anthropic failure on the next probe keeps its bounded last-good row.
+    anthropicDown = true;
+    await Bun.sleep(5);
+    updateAccountQuota("added", 30, 1_999_000_000);
+    const refreshed = await fetchProviderQuotaReports(config, true);
+    expect(anthropicCalls).toBe(2);
+    expect(refreshed.reports.find(report => report.provider === "anthropic")?.quota.fiveHourPercent).toBe(41);
+  });
+
   test("ordinary fetch reflects runtime reauthentication state", async () => {
     saveCodexAccountCredential("added", {
       accessToken: "added-access", refreshToken: "added-refresh",

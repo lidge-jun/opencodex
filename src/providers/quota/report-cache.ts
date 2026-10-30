@@ -154,7 +154,13 @@ export function hasCodexPoolProvider(config: OcxConfig): boolean {
   ));
 }
 
-function quotaSignatureValue(quota: CodexCapacityQuota | null): unknown {
+/**
+ * Signature of one pool account's presentation state. Aggregation reads `updatedAt` only to
+ * decide whether a reading is fresh, so the signature carries that verdict instead of the raw
+ * timestamp: every proxied Codex response restamps the observation, and a timestamp in the key
+ * would stop the report cache from ever committing while traffic flows (#7956).
+ */
+function quotaSignatureValue(quota: CodexCapacityQuota | null, now: number): unknown {
   if (!quota) return null;
   return {
     fiveHourPercent: quota.fiveHourPercent,
@@ -163,7 +169,7 @@ function quotaSignatureValue(quota: CodexCapacityQuota | null): unknown {
     weeklyResetAt: quota.weeklyResetAt,
     monthlyPercent: quota.monthlyPercent,
     monthlyResetAt: quota.monthlyResetAt,
-    updatedAt: quota.updatedAt,
+    fresh: Number.isFinite(quota.updatedAt) && now - quota.updatedAt <= CODEX_CAPACITY_MAX_QUOTA_AGE_MS,
     customWindows: [...(quota.customWindows ?? [])]
       .map(window => ({ label: window.label, percent: window.percent, resetAt: window.resetAt }))
       .sort((a, b) => a.label.localeCompare(b.label)),
@@ -204,13 +210,14 @@ export function cacheKeyWithAggregationState(
     try {
       const activeId = effectiveCodexAuthAccountId(config);
       const snapshot = await (prefetchedSnapshot ?? listCodexAuthAccountsSnapshot(config, false));
+      const now = Date.now();
       const rows = snapshot.accounts.map(account => ({
         isMain: account.isMain,
         active: account.id === activeId,
         plan: codexPlanKey(account.plan) ?? null,
         paused: account.paused,
         needsReauth: account.needsReauth === true,
-        quota: quotaSignatureValue(providerQuotaFromCodexQuota(account.quota)),
+        quota: quotaSignatureValue(providerQuotaFromCodexQuota(account.quota), now),
       }));
       const canonicalRows = rows.map(row => JSON.stringify(row)).sort();
       const digest = createHash("sha256").update(JSON.stringify(canonicalRows)).digest("hex").slice(0, 24);
