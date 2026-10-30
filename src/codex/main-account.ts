@@ -3,7 +3,7 @@ import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration,
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
@@ -22,6 +22,7 @@ import {
 } from "./account-store";
 import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
+import { readNativeMainAuthBytes } from "./native-main-auth-file";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import {
   clearAccountNeedsReauth,
@@ -214,7 +215,7 @@ function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
   const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readNativeMainAuthBytes(path, "plain").toString("utf8");
   } catch {
     return null;
   }
