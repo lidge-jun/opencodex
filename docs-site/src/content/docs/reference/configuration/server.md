@@ -8,8 +8,18 @@ runs helper features around provider requests.
 
 ## Server fields
 
+`completeOnMaxOutputTokens` is an optional boolean, default `false`. Set it to `true` to
+report a token-limited translated Responses text answer as `completed` rather than `incomplete`.
+The answer remains truncated: OpenCodex preserves its exact text, including unfinished Markdown.
+Only nonempty plain-text output qualifies. Tool calls and hosted operations (even if completed),
+reasoning, `text.format` with `json_schema` or `json_object`, compaction, explicitly unfinished
+turns, errors and missing terminal events remain excluded. Context-window exhaustion and
+`pause_turn` remain incomplete. Chat Completions, Anthropic Messages and native Responses
+passthrough, including native WebSocket output, retain their existing stop behavior.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
 | `port` | `number` | `10100` | Proxy listen port. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a data-admission token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token` — nothing has to be exported by hand. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
@@ -24,6 +34,7 @@ runs helper features around provider requests.
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
+| `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Per-task fan-out ceilings: turns running at once, upstream sends per 10-minute window, and distinct subagent threads per window. Omitted fields keep the built-in value. See [Workflow limits](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -76,6 +87,29 @@ This example retains reasoning `encrypted_content` on a known model switch withi
 Retention means that OpenCodex may forward the carried ciphertext. It cannot confirm that the upstream accepts or reuses that reasoning. A detected decrypt rejection still enters the existing bounded cleanup recovery, and the rejection memo takes precedence over either switch. Response and conversation references, foreign reasoning item ids, uploaded-file account restrictions and cache isolation continue using their own ownership rules. Native compaction blocks keep their existing cleanup behavior; direct native `/v1/responses/compact` sanitization is unchanged.
 
 Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT` with a partial boolean object to update them. `PUT` with JSON `null` restores both defaults. Invalid fields or unknown keys are rejected; a malformed file block disables retention with a warning. Dashboard/API changes apply to subsequent requests. Local `ocx config set/unset` edits require a restart to converge the running proxy.
+
+## Workflow limits
+
+OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
+
+| Field | Default | Allowed | Meaning |
+| --- | --- | --- | --- |
+| `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
+| `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
+
+The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
+
+```jsonc
+{
+  "workflowBudget": {
+    "maxConcurrentChildren": 16,
+    "maxPhysicalSends": 1024
+  }
+}
+```
+
+The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
 
 ## Upstream transport recovery
 
@@ -676,6 +710,7 @@ These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx clau
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time upgrade marker. Do not set manually. |
 | `claudeCode.classifierModel?` | `string` | unset | Explicit target for Claude Code Auto Mode classifier turns, as a qualified `provider/model` (for example `RelayA/claude-opus-5`). Auto Mode sends bare safety checks such as `claude-opus-5` with no provider, so without this they fall through to `defaultProvider` — which may not speak Anthropic at all. Nothing is inferred automatically: only a target you declare here is used. |
 | `claudeCode.classifierFallbacks?` | `string[]` | unset | Ordered classifier targets used when `classifierModel` is not set. Same qualified `provider/model` form; the first usable entry wins. An explicit `modelMap` entry for the classifier model still outranks both. |
+| `claudeCode.desktopModelVisibility?` | `{ mode: "include" \| "exclude"; routes: string[] }` | unset | Which `provider/model` routes the Claude Desktop gateway list carries. `include` lists only `routes` (new models stay hidden); `exclude` lists all but `routes` (new models appear). Unset lists every available model. If the selection leaves no available models, the writer falls back to every available model, including normally hidden routes; update the selection to narrow it again. Affects only Claude Desktop's static and hybrid lists; set it from **Connect → Claude Desktop**. |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort written to generated `~/.claude/agents/ocx-*.md`; separate from Codex guidance and proxy caps. Restart through `ocx claude` to regenerate. |
 
 The compatibility policy applies to Claude Code, Desktop and other clients using translated
@@ -1201,3 +1236,5 @@ Locality is a timeout policy, not network-access authorization. Classification u
 Disabling the header clock preserves client cancellation and any enclosing overall deadline. An explicitly positive `stallTimeoutSec` still bounds local body silence; unset local stall/header clocks provide no automatic bound before headers. Native Chat/Messages local JSON reads use the local stall budget; public JSON reads retain their previous `max(connectTimeoutMs ?? 200000, 5000)` budget. Compact body reads retain their 300-second default even locally. Image/search sidecar budgets are unchanged.
 
 Optional `opencodeClientExport` controls the generated OpenCode provider's `headerTimeoutMs`, `chunkTimeoutMs`, and `timeoutMs` (positive milliseconds or `false` to disable). Unset values preserve OpenCode defaults; malformed fields are omitted. These provider-wide settings are emitted into V1 options and V2 settings. See [slow local models](/guides/opencode/#slow-local-models-prefill-timeouts).
+
+Optional, config-file-only `omoClientExport.api` selects the dialect of the managed Pi-based omo provider block: `openai-completions` (default) or `openai-responses`. Other values are ignored. Only omo reads it. After adding, changing or removing this key, restart the proxy (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh **Connect → omo** in the dashboard. Refresh uses the running proxy's config; it does not reload the file. See [integrations](/guides/integrations/).

@@ -249,7 +249,7 @@ CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. I
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
 jobs out of the general shards. The manual Windows matrix selects all-file scope and overrides the
 process shape to six files and 480 seconds, so batching changes process size without changing the
-platform suite's file set. macOS shards select 1/3, 2/3 and 3/3; control selects 1/1, all in twelve-file, one-worker
+platform suite's file set. macOS shards select 1/4, 2/4, 3/4 and 4/4; control selects 1/1, all in twelve-file, one-worker
 batches bounded to 300 seconds, with dedicated worker-heavy families kept singleton. These
 dedicated batch steps set `OCX_TEST_NO_QUEUE=1`: their sequential
 processes are one logical runner, while each process still installs its own isolated home and test

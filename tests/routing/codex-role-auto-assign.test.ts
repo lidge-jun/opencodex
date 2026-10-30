@@ -6,6 +6,7 @@ import {
   mapEffortToLevel,
   type RoleModelCandidate,
 } from "../../src/codex/role-auto-assign";
+import { candidateModelKey, capabilityTableFromArtificialAnalysis, readBoundedBytes } from "../../src/codex/role-capability";
 import type { RoleSizingOutcome } from "../../src/codex/role-sizing";
 
 const FULL = ["low", "medium", "high", "xhigh"];
@@ -73,6 +74,23 @@ describe("classifyRoleModelCandidates", () => {
     expect(cheapestSufficientCandidate(classified, "standard")!.model).toBe("cheap");
     expect(cheapestSufficientCandidate(classified, "frontier")!.model).toBe("dear");
   });
+
+  test("measured scores tier the candidates and leave unmeasured ones out", () => {
+    const classified = classifyRoleModelCandidates(
+      [candidate("cheap-strong", 1), candidate("dear-weak", 9), candidate("mid", 5), candidate("unmeasured", 2)],
+      {},
+      new Map([["cheap-strong", 1500], ["dear-weak", 1400], ["mid", 1450]]),
+    );
+    expect(classified.map(c => [c.model, c.tier, c.tierSource])).toEqual([
+      ["cheap-strong", "frontier", "measured"], ["dear-weak", "fast", "measured"], ["mid", "standard", "measured"], ["unmeasured", null, null],
+    ]);
+    expect(cheapestSufficientCandidate(classified, "frontier")!.model).toBe("cheap-strong");
+  });
+
+  test("one measured candidate is not a ranking, so price decides", () => {
+    const classified = classifyRoleModelCandidates([candidate("a", 1), candidate("b", 9)], {}, new Map([["a", 1500]]));
+    expect(classified.map(c => [c.model, c.tier, c.tierSource])).toEqual([["a", "standard", "price"], ["b", "frontier", "price"]]);
+  });
 });
 
 describe("cheapestSufficientCandidate", () => {
@@ -100,7 +118,7 @@ describe("cheapestSufficientCandidate", () => {
 
 describe("buildRoleProposals", () => {
   const sized = (tier: "fast" | "standard" | "frontier", effort: "glance" | "exhaustive"): RoleSizingOutcome => ({
-    sizing: { tier, effort, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
+    sizing: { tier, effort, domain: "general", rationale: "r", moveUpIf: "u", moveDownIf: "d" },
   });
 
   test("proposes an effort for every sized role, set or not, and keeps unsized reasons", () => {
@@ -137,6 +155,25 @@ describe("buildRoleProposals", () => {
     expect(proposals.map(p => "proposedModel" in p ? p.proposedModel : null)).toEqual(["routed-mid", "native-mid", "routed-top"]);
   });
 
+  test("ranks a role by its domain's scores and breaks an equal price by the higher score", () => {
+    const pool = [candidate("native-low", 0.6), candidate("routed-low", 0.6), candidate("native-mid", 12), candidate("routed-mid", 12), candidate("routed-top", 24), candidate("native-top", 60)];
+    const coding = classifyRoleModelCandidates(pool, {}, new Map([
+      ["native-low", 1400], ["routed-low", 1410], ["native-mid", 1480], ["routed-mid", 1490], ["native-top", 1500], ["routed-top", 1545],
+    ]));
+    const outcome = (tier: "fast" | "standard" | "frontier", domain: "coding" | "writing"): RoleSizingOutcome => ({
+      sizing: { tier, effort: "glance", domain, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
+    });
+    const proposals = buildRoleProposals(
+      [{ role: "low", model: null, effort: null }, { role: "mid", model: "native-mid", effort: null }, { role: "top", model: null, effort: null }, { role: "prose", model: null, effort: null }],
+      new Map([["low", outcome("fast", "coding")], ["mid", outcome("standard", "coding")], ["top", outcome("frontier", "coding")], ["prose", outcome("frontier", "writing")]]),
+      classifyRoleModelCandidates(pool),
+      new Map([["coding", coding]]),
+    );
+    expect(proposals.map(p => "proposedModel" in p ? [p.proposedModel, p.tierSource] : null)).toEqual([
+      ["routed-low", "measured"], ["routed-mid", "measured"], ["routed-top", "measured"], ["routed-top", "price"],
+    ]);
+  });
+
   test("reports a role no candidate can serve as unassigned", () => {
     const [proposal] = buildRoleProposals(
       [{ role: "architect", model: null, effort: null }],
@@ -144,5 +181,32 @@ describe("buildRoleProposals", () => {
       classifyRoleModelCandidates([candidate("local", null)], { fast: ["local"] }),
     );
     expect(proposal).toMatchObject({ status: "unassigned", proposedModel: null, reason: "no available model is classified frontier or above" });
+  });
+});
+
+describe("capability response bounds", () => {
+  test("reads a leaderboard table up to the byte bound and refuses one past it", async () => {
+    const body = () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(6)); controller.enqueue(new Uint8Array(6)); controller.close(); },
+    }));
+    expect((await readBoundedBytes(body(), 12)).byteLength).toBe(12);
+    await expect(readBoundedBytes(body(), 11)).rejects.toThrow("response exceeded byte bound");
+  });
+});
+
+describe("capabilityTableFromArtificialAnalysis", () => {
+  test("reads each domain's index, falls back to the intelligence index, and matches catalog slugs", () => {
+    const table = capabilityTableFromArtificialAnalysis({
+      status: 200,
+      data: [
+        { name: "Claude Opus 5.5 (Reasoning)", slug: "claude-opus-5-5-reasoning", evaluations: { artificial_analysis_intelligence_index: 71, artificial_analysis_coding_index: 66 } },
+        { name: "Claude Opus 5.5", slug: "claude-opus-5-5", evaluations: { artificial_analysis_intelligence_index: 64, artificial_analysis_coding_index: 58 } },
+        { name: "GPT-6.1 Sol", slug: "gpt-6-1-sol", evaluations: { artificial_analysis_intelligence_index: 73, artificial_analysis_coding_index: 61 } },
+      ],
+    });
+    expect(table.source?.redistributable).toBe(false);
+    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => table.domains.coding!.get(key))).toEqual([66, 61]);
+    expect(table.domains.agentic!.get(candidateModelKey("gpt-6.1-sol"))).toBe(73);
+    expect(() => capabilityTableFromArtificialAnalysis({ error: "API key is required" })).toThrow();
   });
 });

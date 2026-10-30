@@ -110,6 +110,7 @@ import {
 } from "../auth-cors";
 import { managementSessionIssuance } from "../management-auth";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -1335,10 +1336,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
+              advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
           } catch (error) {
@@ -1494,12 +1497,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         const sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission);
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponses(sessionReq, config, logCtx, {
               turnAdmissionLease,
               admission,
+              advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
               abortSignal: req.signal,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -1583,8 +1589,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         let ownsRequestLog = false;
         const claimRequestLog = (work: (lease: ActiveTurnLease) => Promise<Response>) =>
           (lease: ActiveTurnLease) => { ownsRequestLog = true; return work(lease); };
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         const response = await runAdmittedHttpTurn(sessionReq, policy, claimRequestLog(async turnAdmissionLease => withCors(
-          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
+          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy }, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
         )), { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
@@ -1619,10 +1627,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const sessionReq = withCallerSessionIdentity(req, admission);
         // Only expose an id when the handler or a logged refusal owns its history row.
         let ownsRequestLog = false;
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
           ownsRequestLog = true;
           return withCors(
-            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy }),
             req,
             policy,
           );

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { cmdV2, type V2CliDeps } from "../../src/cli/v2";
 import { parseV2Command } from "../../src/cli/v2-input";
 import { isMultiAgentV2Enabled } from "../../src/codex/features";
+import * as selectionGate from "../../src/codex/cli-update-selection-gate";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../src/codex/multi-agent-mode-policy";
 import { SUBAGENT_SURFACE_GUIDE_URL } from "../../src/config/multi-agent-surface";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -59,6 +60,48 @@ describe("explicit plaintext V2 CLI", () => {
     const native = readFileSync(nativePath, "utf8"), config = readFileSync(configPath, "utf8");
     expect(await cmdV2(["mode", "v2-plaintext", acknowledge], deps(true))).toBe(1);
     expect(readFileSync(nativePath, "utf8")).toBe(native); expect(readFileSync(configPath, "utf8")).toBe(config);
+  });
+  test.each([false, true])("rechecks plaintext entry consent after selection admission (ack=%s)", async acknowledged => {
+    writeFileSync(configPath, JSON.stringify({ ...readConfig(), multiAgentMode: "v2-plaintext" }));
+    const realAdmission = selectionGate.withCodexCliSelectionParentWriteAsync;
+    let entered!: () => void, release!: () => void;
+    const atAdmission = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const admission = spyOn(selectionGate, "withCodexCliSelectionParentWriteAsync").mockImplementation(async (run, options) => {
+      entered(); await held; return realAdmission(run, options);
+    });
+    const pending = cmdV2(["mode", "v2-plaintext", ...(acknowledged ? [acknowledge] : []), "--json"], deps());
+    try {
+      await atAdmission;
+      writeFileSync(configPath, JSON.stringify({ ...readConfig(), multiAgentMode: "v1" }));
+      const saved = readFileSync(configPath, "utf8"), native = readFileSync(nativePath, "utf8");
+      release();
+      expect(await pending).toBe(acknowledged ? 0 : 1);
+      if (acknowledged) {
+        expect(readConfig().multiAgentMode).toBe("v2-plaintext");
+        expect(isMultiAgentV2Enabled()).toBe(false);
+      } else {
+        expect(calls).toEqual([]);
+        expect(readFileSync(configPath, "utf8")).toBe(saved);
+        expect(readFileSync(nativePath, "utf8")).toBe(native);
+        expect(JSON.parse(lines.at(-1)!)).toMatchObject({ ok: false, changed: false });
+      }
+    } finally { release(); await pending.catch(() => {}); admission.mockRestore(); }
+  });
+  test("reports plaintext mode when v2 on becomes incompatible during admission", async () => {
+    writeFileSync(configPath, JSON.stringify({ ...readConfig(), multiAgentMode: "v1" }));
+    const realAdmission = selectionGate.withCodexCliSelectionParentWriteAsync;
+    const admission = spyOn(selectionGate, "withCodexCliSelectionParentWriteAsync").mockImplementation(async (run, options) => {
+      writeFileSync(configPath, JSON.stringify({ ...readConfig(), multiAgentMode: "v2-plaintext" }));
+      return realAdmission(run, options);
+    });
+    try {
+      const messages: string[] = [];
+      expect(await cmdV2(["on"], { ...deps(), log: { log: () => {}, error: message => messages.push(String(message)) } })).toBe(1);
+      expect(calls).toEqual([]);
+      expect(readConfig().multiAgentMode).toBe("v2-plaintext");
+      expect(messages.join(" ")).toContain("incompatible with v2-plaintext");
+    } finally { admission.mockRestore(); }
   });
   test.each([["on", acknowledge], ["mode", "v1", acknowledge], ["mode", "v2-plaintext", acknowledge, acknowledge],
     ["mode", "v2-plaintext", `${acknowledge}=true`]])("refuses unrelated or ambiguous consent %j", args => {

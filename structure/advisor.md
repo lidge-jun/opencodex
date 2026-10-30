@@ -59,8 +59,16 @@ multi-call pairing, overlap and lifecycle release.
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
   proxy without the advisor; the limitation is documented, not silently degraded.
-- Turns claimed by the web-search or image/video sidecar loops keep the advisor tool un-injected;
-  preflight still applies.
+- Fetch-based web-search turns: full manual support. `createAdvisorSidecarStep` shares the same
+  consultation and continuation bounds with the normal guard. The search scanner consumes advisor
+  calls alongside `web_search`, fulfills them in worker order, and replays paired results without
+  exposing the synthetic call to the client. Mixed real client calls still end interception. Search
+  and Advisor iterations have independent allowances within one hard loop cap; consultation waits
+  emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
+  covers search-enabled, mixed-call, real-client-call and repeated-consultation paths. The limit
+  reports accumulated worker usage once, without attaching it again to the terminal error;
+  `tests/advisor/advisor-web-search.test.ts` covers the accounting and independent allowances.
+- Turns claimed by the image/video sidecar loops keep the advisor tool un-injected; preflight still applies.
 
 ## Recursion fence (server-owned authority)
 
@@ -85,11 +93,50 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
-immutable provider/model admission scope over the loopback hop as capability-authenticated
-metadata and remains authoritative for every final
-physical Advisor destination, including alias, policy, combo, and retry resolution; the local
-transport credential cannot widen it.
+provider credentials. `src/server/capture-admission-policy.ts` freezes a credential-free copy of
+the caller's model scope, metered consent class, fallback policy and resolved device ids at HTTP
+authentication, before any inbound-body capacity wait or body parsing; `src/server/index/serve-options.ts`
+hands that snapshot to the Responses, Chat, Messages and compact handlers. WebSocket turns capture
+before dispatch; policy-profile retries retain the outer owner's snapshot. Compact retains it through
+native retries and routed Responses/JEV handoffs. `src/types/admission-policy.ts` defines these decision inputs.
+`src/server/advisor-admission-scope.ts` holds them in a process-local registry for one consultation.
+Its random 256-bit handle is honored only beside the current process-owned capability; unknown
+or missing handles are refused. Consultation completion or failure releases the entry; abort
+revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
+The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+
+Routed vision carries the same frozen policy through its plan and a scoped registry entry. Its
+separate sidecar capability header authenticates inheritance without suppressing Advisor on the helper.
+Chat intersects that registration with the host snapshot captured at authentication; missing or
+expired registrations presented with a valid capability are refused. Completion, failure and abort
+release the entry. Ordinary client headers cannot grant inherited policy authority.
+A loopback listener (a loopback bind or the secondary loopback listener) admits the self-fetch before
+reading any token, so that snapshot carries no key limits. After the capability and registration
+are validated, Chat therefore also resolves the `x-opencodex-api-key` the self-fetch presents and
+intersects that key's scope, paid-combo consent and fallback device identity; a presented credential
+the data plane does not recognize is refused. Other loopback callers keep plain loopback admission.
+`tests/advisor/advisor-caller-policy-host-key.test.ts` drives both loopback ingress shapes.
+Senders pick that credential with `selfFetchAdmissionToken` (`src/lib/local-destinations.ts`): the
+unchanged ladder where the destination requires admission, otherwise only the first ladder credential
+this data plane recognizes, so a hub client key a loopback bind left out of its admission credentials
+is not sent. When a loopback listener admitted the hop, `selfFetchHostPolicy` takes paid-combo
+consent from the validated key instead of the loopback default a public bind always refuses; the
+combo's own opt-in and the caller's consent still bind, and the hop keeps loopback transport identity.
+`tests/advisor/advisor-caller-policy-self-fetch.test.ts` covers both on the real listener.
+
+The host keeps its admission identity and adds the captured caller constraints. Shared scope,
+metered-consent and fallback guards require the intersection of caller and host policy for every
+resolved destination, combo pick (including router-collapsed picks), proactive/reactive fallback
+and child invocation. Nested JEV decision turns retain that same admission. Scope intersection
+checks each original scope, preserving bare and provider-qualified model semantics. Later edits
+or removal of the caller's key or fallback settings cannot broaden the frozen decision inputs.
+`tests/advisor/advisor-caller-policy.test.ts` exercises these constraints through real handlers.
+`tests/advisor/advisor-caller-policy-routing.test.ts` covers laptop provider-fallback refusals,
+native combo dispatch, early capture, external forgeries and worker-unavailable delivery.
+`advisor-caller-policy-ingress.test.ts` and `advisor-caller-policy-http.test.ts` widen live config during body reads and capacity waits.
+`advisor-caller-policy-vision.test.ts`, `advisor-caller-policy-replay.test.ts` and
+`advisor-caller-policy-compact.test.ts` cover routed helpers, policy candidates and compact JEV turns;
+`advisor-caller-policy-sidecar-authority.test.ts` covers sidecar capability admission and registration lifetime.
 
 ## Context and safety boundaries
 

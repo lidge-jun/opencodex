@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
+import { normalizeMuseToolCatalog } from "../../src/adapters/openai-responses/muse-tool-catalog";
+import { tagHistoricalInputItems } from "../../src/responses/item-provenance";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -20,9 +22,11 @@ afterEach(() => {
   releaseSpendHome = undefined;
 });
 
-function build(provider: OcxProviderConfig, rawBody: Record<string, unknown>) {
+function build(provider: OcxProviderConfig, rawBody: Record<string, unknown>, compact = false, replayPrefixLength?: number) {
   return createAdapter(provider).buildRequest({
     modelId: "muse-spark-1.3",
+    _compactionRequest: compact,
+    _replayPrefixLen: replayPrefixLength,
     context: { messages: [] },
     stream: false,
     options: {},
@@ -192,4 +196,265 @@ describe("Meta Muse tool choice", () => {
       globalThis.fetch = savedFetch;
     }
   });
+});
+
+
+describe("Meta Muse Responses include compatibility", () => {
+  test("drops output encryption while preserving supported reasoning, other includes and caller input", () => {
+    for (const model of ["muse-spark-1.3", "muse-wonder-1.0", "muse-wonder-full-1.0"]) {
+      const raw = { model, include: ["reasoning.encrypted_content", "output.encrypted_content", "message.output_text.logprobs"], store: false };
+      const original = structuredClone(raw);
+      const body = JSON.parse(build(meta, raw).body);
+      expect(body.include).toEqual(["reasoning.encrypted_content", "message.output_text.logprobs"]);
+      expect(body.model).toBe(model);
+      expect(body.store).toBe(false);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("routed compaction preserves supported reasoning encryption", () => {
+    const raw = { include: ["reasoning.encrypted_content", "output.encrypted_content"], store: false };
+    const body = JSON.parse(build(meta, raw, true).body);
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(raw.include).toEqual(["reasoning.encrypted_content", "output.encrypted_content"]);
+  });
+
+  test("omits include when only unsupported output encryption was requested", () => {
+    expect(JSON.parse(build(meta, { include: ["output.encrypted_content"] }).body)).not.toHaveProperty("include");
+  });
+
+  test("preserves unknown and malformed includes for upstream validation", () => {
+    for (const include of [undefined, null, "output.encrypted_content", { value: "output.encrypted_content" }, ["future.include"], [["output.encrypted_content"]]]) {
+      expect(JSON.parse(build(meta, { include }).body).include).toEqual(include);
+    }
+  });
+
+  test("does not infer Meta from a model name, path or lookalike hostname", () => {
+    for (const baseUrl of ["https://api.openai.com/v1", "https://api.meta.ai.example.test/v1", "https://example.test/api.meta.ai/v1"]) {
+      const include = ["reasoning.encrypted_content", "output.encrypted_content"];
+      expect(JSON.parse(build({ ...meta, baseUrl }, { include }).body).include).toEqual(include);
+    }
+  });
+});
+
+
+describe("Meta Muse additional tool catalogs", () => {
+  const lookup = { type: "function", name: "lookup", parameters: { type: "object", properties: {} } };
+  test("moves current namespace tools to the public catalog without changing messages or caller data", () => {
+    const message = { type: "message", role: "user", content: "continue" };
+    const raw = { input: [{ type: "additional_tools", role: "developer", tools: [{ type: "namespace", name: "functions", tools: [lookup] }] }, message] };
+    const original = structuredClone(raw);
+    const body = JSON.parse(build(meta, raw).body);
+    expect(body.input).toEqual([message]);
+    expect(body.tools).toEqual([lookup]);
+    expect(raw).toEqual(original);
+  });
+
+  test("removes replayed wrappers without authorizing their historical tools", () => {
+    const message = { type: "message", role: "user", content: "continue" };
+    const raw = { tools: [], input: [{ type: "additional_tools", tools: [lookup] }, message] };
+    const body = JSON.parse(build(meta, raw, false, 1).body);
+    expect(body.input).toEqual([message]);
+    expect(body.tools).toEqual([]);
+  });
+
+  test("ignores malformed historical catalogs while normalizing current declarations", () => {
+    for (const historical of [
+      { type: "additional_tools" },
+      { type: "additional_tools", tools: [{ type: "namespace", name: "old", tools: [{ type: "web_search" }] }] },
+    ]) {
+      const definition = { name: "read", parameters: { type: "object", properties: {} } };
+      const raw = { input: [historical, { type: "additional_tools", tools: [{ type: "function", function: definition }] }] };
+      const original = structuredClone(raw);
+      const body = JSON.parse(build(meta, raw, false, 1).body);
+      expect(body.input).toEqual([]);
+      expect(body.tools).toEqual([{ type: "function", ...definition }]);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("does not promote historical search discoveries or let removed history shift current declarations", () => {
+    const stale = { ...lookup, name: "stale" };
+    const live = { ...lookup, name: "live" };
+    const raw = { input: [
+      { type: "configuration_update", config: {} },
+      { type: "additional_tools", tools: [stale] },
+      { type: "tool_search_output", call_id: "old_search", tools: [stale] },
+      { type: "additional_tools", tools: [live] },
+      { type: "tool_search_output", call_id: "new_search", tools: [{ ...lookup, name: "loaded" }] },
+    ] };
+    const body = JSON.parse(build(meta, raw, false, 3).body);
+    expect(body.tools.map((entry: { name: string }) => entry.name).sort()).toEqual(["live", "loaded"]);
+    expect(body.input.some((item: { type: string }) => item.type === "additional_tools")).toBe(false);
+    expect(JSON.stringify(body.input)).toContain("stale");
+  });
+
+  test("a historical duplicate cannot consume the current declaration", () => {
+    const current = { ...lookup, description: "Current declaration" };
+    const body = JSON.parse(build(meta, { input: [
+      { type: "additional_tools", tools: [lookup] },
+      { type: "additional_tools", tools: [current] },
+    ] }, false, 1).body);
+    expect(body.tools).toEqual([current]);
+  });
+
+  test("rejects malformed catalogs before partial promotion", () => {
+    for (const raw of [
+      { tools: null, input: [{ type: "additional_tools", tools: [lookup] }] },
+      { input: [{ type: "additional_tools", tools: null }, { type: "additional_tools", tools: [lookup] }] },
+      { input: [{ type: "additional_tools", tools: [lookup, { type: "namespace", name: "bad", tools: null }] }] },
+      { input: [{ type: "additional_tools", tools: [lookup, null] }] },
+      { input: [{ type: "tool_search_output", call_id: "s1", tools: [lookup, { type: "namespace", name: "bad", tools: null }] }] },
+    ]) {
+      const original = structuredClone(raw);
+      expect(() => build(meta, raw)).toThrow("Malformed tool catalog for Meta Responses.");
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("current declarations keep their schema when search discovers the same tool", () => {
+    const declared = { ...lookup, defer_loading: true, parameters: { type: "object", properties: { project_id: { type: "string" } } } };
+    const discovered = { ...lookup, parameters: { type: "object", properties: { admin_mode: { type: "boolean" } } } };
+    for (const namespace of [undefined, "functions", "workspace"]) {
+      const catalog = namespace ? [{ type: "namespace", name: namespace, tools: [declared] }] : [declared];
+      const discoveries = namespace === "workspace" ? [{ type: "namespace", name: namespace, tools: [discovered] }] : [discovered];
+      for (const tools of [undefined, []]) {
+        const raw = { tools, input: [
+          { type: "additional_tools", tools: catalog },
+          { type: "tool_search_output", call_id: "s1", tools: discoveries },
+        ] };
+        const original = structuredClone(raw);
+        const body = JSON.parse(build(meta, raw).body);
+        expect(body.tools).toHaveLength(1);
+        expect(body.tools[0].parameters).toEqual(declared.parameters);
+        expect(body.tools[0]).not.toHaveProperty("defer_loading");
+        expect(raw).toEqual(original);
+      }
+    }
+  });
+
+  test("unrepresentable namespace children fail without a partial catalog", () => {
+    for (const invalid of [
+      { type: "namespace", name: "inner", tools: [lookup] },
+      { ...lookup, name: "bad\u0000name" },
+      { type: "web_search" },
+    ]) {
+      const group = { type: "namespace", name: "outer", tools: [lookup, invalid] };
+      for (const raw of [
+        { tools: [group], input: [] },
+        { input: [{ type: "additional_tools", tools: [group] }] },
+        { input: [{ type: "tool_search_output", call_id: "s1", tools: [group] }] },
+      ]) expect(() => build(meta, raw)).toThrow("Malformed tool catalog for Meta Responses.");
+    }
+    expect(() => build(meta, { tools: [{ type: "namespace", name: "bad\nname", tools: [lookup] }] }))
+      .toThrow("Malformed tool catalog for Meta Responses.");
+  });
+
+  test("explicit bare declarations win over reserved namespace duplicates in either carrier order", () => {
+    const bare = { ...lookup, parameters: { type: "object", properties: { project_id: { type: "string" } } } };
+    const group = { type: "namespace", name: "functions", tools: [{ ...lookup, parameters: { type: "object", properties: { group_id: { type: "string" } } } }] };
+    for (const raw of [
+      { tools: [group], input: [{ type: "additional_tools", tools: [bare] }] },
+      { tools: [bare], input: [{ type: "additional_tools", tools: [group] }] },
+      { input: [{ type: "additional_tools", tools: [group] }, { type: "additional_tools", tools: [bare] }] },
+      { input: [{ type: "additional_tools", tools: [bare] }, { type: "additional_tools", tools: [group] }] },
+      { tools: [group, bare], input: "continue" },
+    ]) {
+      const original = structuredClone(raw);
+      expect(JSON.parse(build(meta, raw).body).tools).toEqual([bare]);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("validates top-level catalogs with string or omitted input", () => {
+    for (const input of ["continue", undefined]) {
+      expect(() => build(meta, { input, tools: [lookup, { type: "namespace", name: "bad", tools: null }] }))
+        .toThrow("Malformed tool catalog for Meta Responses.");
+    }
+  });
+
+  test("normalizes nested function definitions across input forms and catalog carriers", () => {
+    const definition = { name: "read", description: "Read a project", parameters: { type: "object", properties: { project_id: { type: "string" } } }, strict: true };
+    const nested = { type: "function", function: definition };
+    for (const raw of [
+      { input: "continue", tools: [nested] },
+      { input: undefined, tools: [nested] },
+      { input: [], tools: [nested] },
+      { input: [{ type: "additional_tools", tools: [nested] }] },
+      { input: [{ type: "tool_search_output", call_id: "s1", tools: [nested] }] },
+    ]) {
+      const original = structuredClone(raw);
+      expect(JSON.parse(build(meta, raw).body).tools).toEqual([{ type: "function", ...definition }]);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("preserves historical custom-call conversion without declaring the old tool", () => {
+    for (const toolChoice of ["auto", "none"]) {
+      const raw = { tool_choice: toolChoice, input: [
+        { type: "additional_tools", tools: [{ type: "custom", name: "old_exec", description: "Historical tool" }] },
+        { type: "custom_tool_call", name: "old_exec", call_id: "c1", input: "historical input" },
+        { type: "custom_tool_call_output", call_id: "c1", output: "historical output" },
+        { type: "message", role: "user", content: "continue" },
+      ] };
+      const original = structuredClone(raw);
+      const request = build(meta, raw, false, 3);
+      const body = JSON.parse(request.body);
+      expect(body.tools).toEqual([]);
+      expect(body.input).toEqual([
+        { type: "function_call", name: "old_exec", call_id: "c1", arguments: JSON.stringify({ input: "historical input" }) },
+        { type: "function_call_output", call_id: "c1", output: "historical output" },
+        original.input[3],
+      ]);
+      expect(request.convertedRoutedCustomToolNames?.has("old_exec")).toBe(false);
+      expect(raw).toEqual(original);
+    }
+  });
+
+  test("malformed nested catalogs return a client error without sending upstream", async () => {
+    const config = { port: 0, defaultProvider: "fixture", providers: { fixture: { ...meta, authMode: "key" } } } as OcxConfig;
+    const savedFetch = globalThis.fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => { sends++; throw new Error("must not send"); }) as typeof fetch;
+    try {
+      releaseSpendHome ??= acquireOwnedSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/muse-spark-1.3", input: [
+          { type: "additional_tools", tools: [lookup, { type: "namespace", name: "bad", tools: null }] },
+          { type: "message", role: "user", content: "continue" },
+        ] }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error", message: "Malformed tool catalog for Meta Responses." } });
+      expect(sends).toBe(0);
+    } finally { globalThis.fetch = savedFetch; }
+  });
+
+  test("none clears declarations after promotion and long-name aliasing", () => {
+    const body = JSON.parse(build(meta, { input: [{ type: "additional_tools", tools: [tool] }], tool_choice: "none" }).body);
+    expect(body.tools).toEqual([]);
+    expect(body.input).toEqual([]);
+  });
+
+  test("leaves the private wrapper intact for unrelated destinations", () => {
+    const raw = { input: [{ type: "additional_tools", tools: [lookup] }] };
+    for (const baseUrl of ["https://api.openai.com/v1", "https://api.meta.ai.example.test/v1"]) {
+      expect(JSON.parse(build({ ...meta, baseUrl }, raw).body).input).toEqual(raw.input);
+    }
+  });
+});
+
+test("Meta catalog follows item provenance once an earlier rewrite shortened the input", () => {
+  const schema = { type: "object", properties: {} };
+  const tagged = tagHistoricalInputItems([
+    { type: "additional_tools", tools: [{ type: "function", name: "old_tool", parameters: schema }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+    { type: "tool_search_output", call_id: "search", status: "completed", execution: "client", tools: [{ type: "function", name: "lookup", parameters: schema }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+  ], 2);
+  // Zed lifted the replayed wrapper before the delegate ran, so the numeric prefix of 2 is stale.
+  const body = normalizeMuseToolCatalog({ model: "muse", input: tagged.slice(1) }, 2) as { tools?: { name?: string }[]; input: unknown[] };
+  expect(body.tools?.map(tool => tool.name)).toEqual(["lookup"]);
+  expect(JSON.stringify(body.input)).not.toContain("old_tool");
 });

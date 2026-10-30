@@ -107,7 +107,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | --- | --- | --- | --- |
 | `providers` | `Record<string, OcxProviderConfig>` | — | Map of provider name to provider config. |
 | `openaiProviderTierVersion?` | `2` | set by migration | Marks the single option-aware OpenAI projection as complete. |
-| `disabledModels?` | `string[]` | — | Models hidden from Codex's catalog and `/v1/models`, but not blocked from direct proxy calls. A routed id is removed from listings. An account-qualified native id hides only that selector row; a bare native GPT id hides the bare row and every account-selector row for that model. The dashboard Models page exposes only routed and bare native rows; use this configuration field directly to hide one selector-qualified row. |
+| `disabledModels?` | `string[]` | — | Models hidden from Codex's catalog and `/v1/models`, but not blocked from direct proxy calls. A routed id is removed from listings. An account-qualified native id hides only that selector row; a bare native GPT id hides the bare row and every account-selector row for that model. The dashboard Models page exposes only routed and bare native rows; use this configuration field directly to hide one selector-qualified row. Set [`omitDisabledNativeModels`](/reference/configuration/catalog/) to `true` to omit disabled native rows instead; it defaults off. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | Active provider context limits. Ordinary windows are lowered; native models with a supported long window can expand only up to their own supported ceiling. |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | Last selected provider limits, retained while disabled. These values do not activate a cap. An enabled value takes precedence over a remembered value. |
 | `contextCapValue?` | `number` | `350000` | Default used on first enable. A later enable restores the selected provider value. Updating the global value with `setAll: true` changes enabled caps only; `setAll: true` without a value enables all configured providers at the current global value. |
@@ -326,7 +326,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `preserveResponsesMessageMetadata?` | `boolean` | Default off. Preserve private `internal_chat_message_metadata_passthrough` on input items for explicitly trusted launcher relays, including custom native v1 compact requests. This forwards private turn/session metadata to that destination; do not enable for ordinary gateways. |
 | `dropResponsesReasoningItems?` | `boolean` | Remove replayed Responses `reasoning` items from continuation input entirely, including custom native v1 compact requests, instead of forwarding them with blanked content. This is lossy: summaries, item ids, and `encrypted_content` go with them, so no reasoning item from the previous turn remains in the forwarded input. It does not remove `previous_response_id`, so an upstream holding its own turn state may still reach it. Enable only for an upstream that rejects reasoning replay outright — the built-in Volcengine Ark Coding Plan preset sets it because validated tool continuations answered `400 InvalidParameter` otherwise. Set it to `false` on that provider to forward reasoning items again. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
-| `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](#storing-keys-in-the-os-keychain). |
+| `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](/reference/configuration/keychain/). |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. A healthy committed key is never overridden, so a manual key selection stands. |
@@ -335,7 +335,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
 | `selectedModels?` | `string[]` | Catalog allowlist after discovery. Non-empty exposes only those ids; empty or omitted exposes all discovered models. |
 | `retainModels?` | `string[]` | Ids kept in the catalog even when live discovery omits them. They need not be repeated in `models`. Empty or omitted keeps today's behavior. |
-| `modelDisplayNames?` | `Record<string, string>` | Durable labels used only for display, keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change authentication, adapter behavior, routing, billing, upstream request construction, the routed `provider/model` selector, or the upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. The map accepts at most 2,000 entries, matching the discovery limit. |
+| `modelDisplayNames?` | `Record<string, string>` | Durable labels used only for display, keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change authentication, adapter behavior, billing, upstream request construction, the routed `provider/model` selector, or the wire model of an id the provider already knows. One routing exception: when a direct `provider/model` selector matches no known id, alias or `retainModels` id (for example while a live roster is still cold), a key whose encoded form matches is sent as the native id. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. The map accepts at most 2,000 entries, matching the discovery limit. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. Registry defaults cannot override a lower configured limit; explicit `modelContextWindows` entries take priority. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
 | `inferContextWindow?` | `boolean` | Custom providers only, default off. `true` fills a missing window from bundled model-ID metadata ([details](#context-windows-on-custom-providers)); the value is an estimate, not verified relay capacity. |
@@ -370,6 +370,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `xaiResponsesXSearch?` | `boolean` | Disabled by default. On an xAI Responses destination, append the provider-hosted `x_search` declaration only when a live `web_search` tool survives final request normalization. Existing declarations are not duplicated, caller `tool_choice`/`allowed_tools` selectors are never widened, and this is separate from the web-search sidecar's `search.xSearch` options. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Exact-model opt-in for non-forward Responses gateways that reserve a hosted-tool namespace. Currently accepts only `["image_generation"]`; a matching model must use the `openai-responses` wire and support that hosted tool. It removes colliding client `image_gen` declarations and rewrites their selectors to preserve caller tool choice. For OpenAI API virtual `-pro` models, the selected public ID is matched first and the resolved base wire-model ID is a fallback. `modelAdapters` resolves the public ID first, then the base ID; the second resolution determines the final wire. Other models retain normal alias behavior. |
 | `annotateEmptyToolOutputs?` | `boolean` | Replace a present-but-empty tool result with a short marker before it reaches the model, so a blank result is not read as a missing one. Applies to blank strings and text-only part arrays; image, file, and encrypted parts are never touched. Defaults to `true` for DeepSeek from the built-in registry and is otherwise unset. Set `false` to opt a provider out — an explicit `false` is preserved across later edits that omit the field. `PATCH /api/providers?name=<provider>` accepts `true`, `false`, or `null` to clear the override and return to registry-default behavior. |
+| `promoteAdditionalTools?` | `boolean` | Whether to promote Codex Desktop's `additional_tools` input items into top-level `tools` and strip the wrapper from `input`. Enabled automatically for OpenCode Go and xAI (`api.x.ai` and `cli-chat-proxy.grok.com`) unless `authMode` is `"forward"`, where promotion needs an explicit `true`; other OpenAI-strict third-party gateways that return HTTP 422 for unknown item types in `input` can opt in here. `PATCH /api/providers?name=<provider>` accepts a boolean or `null` to clear it. |
 | `unsupportedHostedTools?` | `string[]` | Hosted tool declarations this Responses destination rejects, so they are stripped from `tools`, from client-loaded `additional_tools`, and from `tool_choice` instead of being forwarded and rejected upstream. Use it for an OpenAI-compatible gateway with a narrower capability set — one that accepts plain Responses requests and `function` tools but returns HTTP 400 for hosted `web_search` — so a text-only prompt is not failed by a capability it never needed. Accepts only hosted tool type names (`web_search`, `web_search_preview`, `file_search`, `computer_use_preview`, `computer_use`, `code_interpreter`, `image_generation`, `image_gen`, `mcp`, `tool_search`, `local_shell`, `x_search`); an unrecognized name is rejected rather than silently ignored. Spelling variants of one capability are aliased, so `["web_search"]` also denies `web_search_preview`. A provider cannot both deny a hosted tool here and prefer it in `modelPreferHostedTools`. Xiaomi MiMo Responses destinations (`xiaomimimo.com` and its subdomains, including `api.xiaomimimo.com` and `token-plan-cn.xiaomimimo.com`) automatically strip `web_search` and `web_search_preview` while preserving function tools; no declaration is needed for these hosts. This is independent of `supportsResponsesCustomTools`; set both for a gateway that also rejects native custom tools. `PATCH /api/providers?name=<provider>` accepts an array or `null` to clear it. |
 | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire aliases for reasoning labels. Map a label to `"__omit__"` to drop the reasoning field from the upstream request entirely: `reasoning_effort` on an OpenAI-compatible wire, and Ollama's native `think` field on the Ollama native adapter (#2356). |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model wire aliases for reasoning labels. Map a label to `"__omit__"` to drop the reasoning field from the upstream request entirely. |
@@ -381,7 +382,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. The built-in `xai` preset lists its reasoning models (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`), which xAI documents as rejecting them; non-reasoning ids keep caller penalties. |
 | `noStructuredOutputModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects `response_format`. Only an exact requested-model match omits the field; structured-output translation stays enabled for every other `openai-chat` model. |
 | `noJsonSchemaModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects a `json_schema` `response_format` but still accepts `json_object`. Such a request is downgraded to `json_object` instead of being dropped, so a caller asking for JSON still gets JSON. `noStructuredOutputModels` wins when a model is on both lists. The `opencode go` and `opencode zen` presets ship this for their DeepSeek routes. |
-| `foldDeveloperRoleToSystem?` | `boolean` | Whether an `openai-chat` destination accepts the `developer` role. `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends `developer`. Unset means nothing has been recorded about this destination; `true` records an upstream that rejects the role; `false` records one that accepts it. The message keeps its position in the conversation in every case — only the role changes. A destination that rejects the role answers `400 role 'developer' is not allowed` and the turn never starts, which is why the unrecorded state is the folded one. A provider save that keeps the destination keeps it; see [What a provider save keeps](#what-a-provider-save-keeps). `PATCH` accepts a boolean or `null` to clear it. |
+| `foldDeveloperRoleToSystem?` | `boolean` | Whether an `openai-chat` destination accepts the `developer` role. `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends `developer`. Unset means nothing has been recorded about this destination; `true` records an upstream that rejects the role; `false` records one that accepts it. Unless [single-leading-system compatibility](/guides/lm-studio/) is enabled, the message keeps its position in the conversation in every case — only the role changes. A destination that rejects the role answers `400 role 'developer' is not allowed` and the turn never starts, which is why the unrecorded state is the folded one. A provider save that keeps the destination keeps it; see [What a provider save keeps](#what-a-provider-save-keeps). `PATCH` accepts a boolean or `null` to clear it. |
 | `omitReasoningEffortWithToolsModels?` | `string[]` | Exact `openai-chat` model IDs that accept a reasoning-effort field on an ordinary turn but reject it once function tools are present. The model keeps its advertised effort ladder; OpenCodex omits the wire field for tool-bearing requests only and the upstream default applies. Narrower than `noReasoningModels`, which strips reasoning from every request and costs the model its picker entirely. A provider save that keeps the destination keeps it; see [What a provider save keeps](#what-a-provider-save-keeps). |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
 | `terminalContinuationGuard?` | `boolean` | Opt in an `openai-chat` provider to one bounded internal re-ask when an actionable turn announces work, then cleanly stops without a tool call. Defaults to `false`; explicit `false` behaves like omission. Combo attempts and routed compaction turns are excluded, and non-`openai-chat` adapters ignore this option. |
@@ -487,15 +488,15 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 ### What a provider save keeps
 
-`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eight of them record how one upstream behaves: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
+`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eleven of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
 
-| Save | The eight settings | Stored `apiKeyPool` |
+| Save | The eleven settings | Stored `apiKeyPool` |
 | --- | --- | --- |
 | Same destination, field omitted | Stored value kept, including an explicit `[]` or `false` | Kept |
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
 | Field sent in the request | The request's value | The request's value |
 
-The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the eight settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
+The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the ten settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
 
 `hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
 
@@ -503,7 +504,7 @@ The optional `inferContextWindow` setting also survives same-name saves that omi
 destination moves. Its read, update, and clear behavior is described under
 [Context windows on custom providers](#context-windows-on-custom-providers).
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all ten settings; `null` clears one. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
@@ -1589,60 +1590,11 @@ same mapping applies to a native `vercel/<model-id>` selector: use the encoded
 `vercel-ai-gateway/vercel-<model-id>` selector in OpenCodex and keep `vercel/<model-id>` as the
 model key.
 
-## Static model allowlists
-
 ## Storing keys in the OS keychain
 
-For Vertex, the dedicated API-key pool input (`POST /api/providers/keys`) accepts complete GCP
-`service_account` or `authorized_user` credential JSON after the provider has been created.
-The provider create/edit form and `ocx provider add --api-key` refuse credential JSON before
-saving: create the provider without a key, then add the JSON through its key pool. Paste the
-JSON contents, not a Windows, Unix, or relative file path. Multiple
-JSON objects separated by commas or whitespace are stored together as separate pool entries;
-the first becomes active. Configuration contains only `gcp-sa:<account>` references, never the
-credential JSON. Mixed JSON/literal-key bulk pastes are rejected as a whole; add literal keys
-separately. Storage failures leave the configuration unchanged and report a fixed error without
-echoing credential material. Empty marker accounts are invalid and do not fall back to host credentials.
-Paste one credential object or a sequence of objects, without an enclosing array or quoted string.
-Malformed credential text is rejected. If a selected stored credential is removed or becomes unreadable,
-Vertex refuses the request even when it previously cached an access token for that credential.
-Removing a key or provider, or replacing a provider with `ocx provider add --force`, deletes its unreferenced GCP credentials after the configuration is
-saved; a credential referenced by another provider is retained. If OS-store cleanup fails, a
-warning requests manual inspection without undoing the committed configuration removal.
-Ordinary keychain store/restore actions leave GCP markers and JSON in the OS store. Restoring
-credential JSON through a `keychain:` alias is refused, and cleanup preserves accounts still
-referenced through either marker spelling.
-Using a `keychain:` alias containing GCP JSON as an API key also refuses the request; select its
-`gcp-sa:` reference for Vertex authentication instead.
-Literal API keys must be plain token text: JSON objects, arrays and quoted JSON strings are refused
-in literal-key resolution and restore, including wrappers containing escaped credential text.
-Credential writes and marker persistence share the cleanup transaction lock, so concurrent
-removal cannot delete the stored JSON between read-back and the marker commit.
+API keys and credential references can be stored in the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `config.json`. See [Storing keys in the OS keychain](/reference/configuration/keychain/) for details on migration commands, storage rules, and headless-service caveats.
 
-By default a provider's `apiKey` and `apiKeyPool` sit in `config.json` (mode 0600, atomic writes).
-If you would rather keep the key material out of the file, move it into the OS credential store:
-
-```bash
-ocx provider keychain deepseek status    # store: file | env | keychain, and whether the keychain answers
-ocx provider keychain deepseek store     # move active key + pool into the OS keychain
-ocx provider keychain deepseek restore   # bring the plaintext back and delete the keychain items
-```
-
-The same operations are `GET`/`POST /api/providers/keychain`. After `store`, `config.json` holds
-`"apiKey": "keychain:deepseek"` (pool entries `keychain:deepseek/<id>`) and the secret lives under the
-`opencodex.provider-api-key.v1` service in macOS Keychain, Windows Credential Manager, or the Linux
-Secret Service. Backups of `config.json` therefore carry references only. Key rotation and failover
-keep working: pool entries compare by reference, so a rotation never writes plaintext back.
-
-Before touching the config, `store` writes and reads back every entry; if the keychain is unavailable
-or the read-back does not match, it refuses with 503 and leaves the file as it was. At request time
-a reference that cannot be read yields no credential and one warning per key — there is no plaintext
-fallback, by design.
-
-When not to opt in: a proxy running as a headless service (systemd, launchd, Task Scheduler) or in a
-container usually has no unlocked keychain session, so requests would fail closed. Use an
-`${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
-by `store`.
+## Static model allowlists
 
 The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and

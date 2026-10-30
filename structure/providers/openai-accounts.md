@@ -259,7 +259,7 @@ and native-main refresh. Exact structured terminal codes apply only to authentic
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
 status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
-or credential material. Pool refresh errors keep that status/code without changing cooldown class.
+or credential material. Pool refresh errors keep that status/code without changing cooldown class. `mapCodexAuthContextErrorToResponse` in `src/server/responses/codex-auth-error.ts` marks only ordinary account-cooldown Responses with process-local provenance; combo reconstruction preserves it under the [combo cooldown contract](../transports/responses-failover.md#single-target-cooldown-retry-ownership). This limits restated account delays at target recording without changing account admission, quota health, probe ownership, client Retry-After or any hard-lock, credit, Reserve or transient policy.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
@@ -426,7 +426,7 @@ The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibilit
 
 The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
 configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
-score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
+score. A known long-window score excludes short usage when its valid reset has elapsed; absent or invalid resets retain it. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
 future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
 extend that observation.
 

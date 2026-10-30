@@ -266,11 +266,13 @@ describe("combo mandatory reasoning replay failover", () => {
     expect(await response.text()).toContain("compatible backup");
   });
 
-  test("an exhausted combo reports target_incompatible when mandatory plaintext is unavailable", async () => {
+  for (const contextRefusal of [false, true]) test(`an exhausted combo with unavailable mandatory plaintext retains context refusal: ${contextRefusal}`, async () => {
     takeSpendHome();
     let firstTargetFails = false;
     const first = serve(() => firstTargetFails
-      ? Response.json({ error: { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: 500 })
+      ? Response.json({ error: contextRefusal
+        ? { type: "invalid_request_error", code: "context_length_exceeded", message: "Please reduce the length of the messages or completion." }
+        : { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: contextRefusal ? 400 : 500 })
       : Response.json(responsesSuccess("seed identity", "m1")));
     let strictHits = 0;
     const strict = serve(() => {
@@ -304,8 +306,9 @@ describe("combo mandatory reasoning replay failover", () => {
     const error = await response.json() as { error?: { code?: string; message?: string } };
 
     expect(response.status).toBe(400);
-    expect(error.error?.code).toBe("target_incompatible");
-    expect(error.error?.message).toBe(TARGET_INCOMPATIBLE_MESSAGE);
+    expect(error.error?.code).toBe(contextRefusal ? "context_length_exceeded" : "target_incompatible");
+    expect(error.error?.message).toBe(contextRefusal
+      ? "Please reduce the length of the messages or completion." : TARGET_INCOMPATIBLE_MESSAGE);
     expect(strictHits).toBe(0);
   });
 });

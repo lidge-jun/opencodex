@@ -131,7 +131,7 @@ is visible) and never forces an upstream refresh.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
+| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. The page distinguishes a catalog saved on the hub, a catalog fetched by this client, and activation in a running client. A fetch timestamp does not prove it includes the latest hub save, and runtime activation is shown as unverified. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends. The Usage page's Models table also breaks each model down into input tokens, output tokens, cache hits, cache writes, and cache hit rate; a dash means cache telemetry for that metric is unavailable. Or enable opt-in provider transport and usage-extraction diagnostics. |
@@ -153,6 +153,8 @@ selection updates the dashboard immediately; account changes do not wait for the
 timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
+
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution.
 
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
@@ -487,7 +489,7 @@ Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and L
 shows **No changes** or **Unsaved changes**, with **Revert** to discard edits and **Save** to commit
 them. Both switches apply immediately; **Save** never changes them. When interception is stopped, the page shows why and offers **Start interception**, which starts it in place without restarting OpenCodex. The former Code, Settings, and Account sub-tabs are gone; everything the read-only Settings view showed except the intercept port number is on this page.
 
-**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker and model families. One status row shows whether Claude Desktop runs the profile and whether it is saved, with **Save** and **Save & apply** beside it.
+**Claude Desktop** is its own Connect tab at `#claude/desktop`. It contains the Desktop mode picker, a per-model list of what Claude Desktop shows (see [Choose which models Claude Desktop lists](/guides/claude-code/#choose-which-models-claude-desktop-lists)), and model families under **Advanced**. One status row shows whether Claude Desktop runs the profile, with a separate chip for whether dashboard edits are saved, and **Save** and **Save & apply** beside it.
 
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
 
@@ -519,3 +521,23 @@ test for the same provider returns 409. Completed diagnostics and applicability
 results return 200, including a structured error when inference fails. Destination
 policy and provider egress settings apply; redirects, retries and failover are disabled.
 For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).
+
+**Test all models** runs the same completion test for every configured, listed and
+default model of the provider, one request at a time, after a single confirmation that
+states the maximum number of requests; some models can be skipped before sending. The
+single-model **Test model** control and **Test all models** share one guard per provider, so
+each stays disabled while the other is confirming or running. **Stop** cancels the in-flight request and sends no
+more. Each model is reported as passed, failed (the upstream answered with an error or
+timed out) or not tested. The latter covers management API refusals such as a concurrent
+test, admission refusals before sending (missing or changed credentials or a refused
+destination), and upstream HTTP 401/403/429 authentication, access or quota refusals
+returned in a structured result with HTTP 200. None of these categories becomes a disable target. An unsupported
+effective adapter marks only that model as not tested and continues, because one provider
+can use different wires for different models. Provider-wide applicability refusals, such as
+OAuth authentication or unsupported transport settings, stop the run. When any model failed, **Disable failed models** asks a second
+confirmation and then removes only those models from the model catalog and picker through the
+same visibility setting as the **Models** page, where they can be re-enabled. Like any hidden
+model, they stay callable by exact id. Models are never disabled
+without that confirmation. Leaving the page or changing the provider connection withdraws
+pending disable consent and aborts its request. A new batch waits until disable consent or
+the visibility write has settled, so an older response cannot hide the newer batch's action.

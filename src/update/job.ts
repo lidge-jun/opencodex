@@ -528,6 +528,26 @@ export function staleActiveUpdateJobReason(
 }
 
 /**
+ * Status view of an active record whose worker is gone (#7967). A worker killed with its service
+ * cgroup never writes a terminal state, so the persisted record stays `running`. The view reports
+ * it as `failed` with the reason so the dashboard stops waiting, without writing: the persisted
+ * record is settled only by the next run's existing stale recovery, which holds the start path,
+ * so a status poll can never overwrite a job another process started meanwhile.
+ */
+export function readUpdateJobForStatus(
+  jobId?: string | null,
+  now = Date.now(),
+  isAlive: (pid: number) => boolean = isProcessAlive,
+): UpdateJobState | null {
+  const job = readUpdateJob(jobId);
+  if (!job) return null;
+  const reason = staleActiveUpdateJobReason(job, now, isAlive);
+  if (!reason) return job;
+  const line = `Update worker stopped before finishing: ${reason}.`;
+  return { ...job, status: "failed", error: line, exitCode: null, log: [...job.log, line] };
+}
+
+/**
  * Spawn the GUI update worker without inheriting the proxy's LISTEN socket.
  *
  * On Windows, `spawn(..., { detached: true, stdio: "ignore" })` still inherits

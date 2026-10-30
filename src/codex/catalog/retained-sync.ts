@@ -17,6 +17,8 @@ import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { applyNativeAccessPrograms } from "./access-programs";
+import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./native-template";
+import { omitDisabledNativeCatalogEntries } from "./native-omission";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -31,7 +33,6 @@ import {
   catalogBackupPathFor,
   catalogHasRoutedEntries,
   findNativeTemplate,
-  findSupportedNativeTemplate,
   isDefaultCatalogPath,
   legacyCatalogBackupPath,
   readCatalog,
@@ -53,6 +54,7 @@ import {
   observedReserveCatalogSource,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
+  shouldUpgradeToUpstreamEntry,
   upstreamNativeEntry,
 } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
@@ -299,9 +301,6 @@ function writeRetainedCatalogSync({
     catalog,
     onDiskCatalog,
   );
-  // Strict selector for template inheritance; the validity gate above keeps the broad one.
-  const template = findSupportedNativeTemplate(catalog);
-
   try {
     // Once-only: preserve the PRISTINE pre-opencodex catalog as the native-priority baseline
     // (later syncs would otherwise overwrite it with featured-modified priorities).
@@ -321,6 +320,9 @@ function writeRetainedCatalogSync({
       }
     }
   } catch { /* backup best-effort */ }
+
+  // Capture inheritance only after pristine backup preparation, before any row projection.
+  const template = captureNativeInheritanceTemplate(catalog, config.omitDisabledNativeModels === true);
 
   // Hide disabled models from Codex, then feature the chosen subagent models (native OR routed)
   // by giving them the lowest priority — see buildCatalogEntries for why priority, not array order.
@@ -371,6 +373,13 @@ function writeRetainedCatalogSync({
     ...desktopAllowlistSuppressedNativeSlugs(config),
     ...unavailableGatedNativeSlugs,
   ]);
+  // An omitted source still needs the same upgrade/normalization as a visible native.
+  // Keep independent combo-alias and entitlement suppression authoritative.
+  if (template && shouldUpgradeToUpstreamEntry(template)
+    && (!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(String(template.slug)) || availableBareGatedNativeSlugs.has(String(template.slug)))
+    && !desktopAllowlistSuppressedNativeSlugs({ ...config, omitDisabledNativeModels: false }).has(String(template.slug))) {
+    suppressedBareNativeSlugs.delete(String(template.slug));
+  }
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -550,9 +559,10 @@ function writeRetainedCatalogSync({
   applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
+  advanceNativeInheritanceTemplate(catalog, catalog.models, shouldUpgradeToUpstreamEntry);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
   // against the effort clamp is load-bearing rather than cosmetic.
-  catalog.models = enforceCatalogSlugUniqueness(catalog.models, true);
+  catalog.models = enforceCatalogSlugUniqueness(omitDisabledNativeCatalogEntries(catalog.models, config), true);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;

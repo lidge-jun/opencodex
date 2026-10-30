@@ -1,6 +1,31 @@
 # Combo Streaming Boundaries
 
+## Context-window refusals
+
+`isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
+OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
+Bedrock `input is too long for requested model` and `Please reduce the length of the messages or completion`
+count only at the start of the leaf message, so a validation error or SDK wrapper that echoes them is not
+evidence. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
+budget fields, `Invalid '<x>'`, Pydantic `input_value=`) never counts. This shared detector grants a
+target-local hop before the generic HTTP 400 stop, without recording a cooldown. Code-only evidence
+beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
+Cancellation, hard policy refusals, non-replayable attempts and the streaming commit boundary still win.
+`src/server/responses/core-combo.ts` retains the first confirmed HTTP 400 context refusal and its child
+diagnostics for exhaustion (including remaining replay-incompatible or unconsented metered targets)
+or a refused later send budget. Later fatal errors and explicit fallback-policy refusals return immediately.
+Every physical attempt retains its own send count and usage. Coverage: `tests/helpers/combo-context-overflow-cases.ts`
+(registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
+and `tests/responses/responses-combo-exhausted-error.test.ts`.
+
 ## Buffered required-tool contract
+
+Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
+for well-formed mandatory `tool_choice` selectors, including required allowed-tools lists. Normal and
+recovery picks share the check, resolving the inbound wire's static model policy and actual Responses
+transport URL; malformed and unknown selectors retain their ordinary error path. The next target
+receives the original selector, and an all-Meta exhaustion names the constraint before any send.
+Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native

@@ -398,6 +398,34 @@ function freeLoopbackPort(): number {
 }
 
 /**
+ * Who holds a pinned port when a sibling missed its deadline: the child itself (bound, record not
+ * yet written), another process (the port was taken between probe and bind) or nobody (the child
+ * never reached its bind). The bare deadline cannot tell these apart.
+ *
+ * Best effort and read-only while the child lives: socket owners are listed before the child is
+ * killed, the bind probe runs after. Nothing here may throw over the original timeout.
+ */
+function pinnedPortSockets(port: number, childPid: number): string {
+  if (process.platform !== "win32") return "";
+  try {
+    const listing = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"], { stdout: "pipe", stderr: "ignore", timeout: 5_000 });
+    if (listing.exitCode !== 0) return `; netstat exit ${listing.exitCode}`;
+    const rows = [...new Set(listing.stdout.toString().split(/\r?\n/)
+      .map(line => line.trim().split(/\s+/))
+      .filter(cols => cols.length >= 5 && cols[1]!.endsWith(`:${port}`))
+      .map(cols => `${cols[3]} pid ${cols[4]}${cols[4] === String(childPid) ? " (child)" : ""}`))];
+    return rows.length ? `; ${rows.join(", ")}` : "; no socket rows";
+  } catch (error) {
+    return `; netstat unavailable (${(error as NodeJS.ErrnoException).code ?? "error"})`;
+  }
+}
+
+function pinnedPortBindable(port: number): string {
+  try { Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null) }).stop(true); return "free after kill"; }
+  catch { return "still bound after kill"; }
+}
+
+/**
  * Spawn `ocx start` and wait for its runtime record and settled readiness.
  *
  * `port` pins the listener with `--port`. A pinned port comes from freeLoopbackPort(), which
@@ -446,7 +474,14 @@ async function startSibling(
     // An early exit already reported its stderr and consumed the stream.
     if (exitedEarly) throw error;
     // Report what the child was doing, which the bare deadline message cannot.
+    const sockets = port === undefined ? "" : pinnedPortSockets(port, child.pid);
     if (child.exitCode === null) child.kill("SIGKILL");
+    // Bounded like tail() below: the diagnostic must never outlast the original failure.
+    const exited = port === undefined
+      || await Promise.race([child.exited.then(() => true), Bun.sleep(5_000).then(() => false)]);
+    // A bind probe while the child may still be alive would only find the child itself.
+    const holders = port === undefined ? "not pinned"
+      : `${exited ? pinnedPortBindable(port) : "child alive 5s after kill; bind probe skipped"}${sockets}`;
     const tail = async (stream: unknown): Promise<string> => {
       try {
         return await Promise.race([
@@ -459,7 +494,7 @@ async function startSibling(
     };
     const [stdout, stderr] = await Promise.all([tail(child.stdout), tail(child.stderr)]);
     throw new Error(
-      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"})\n`
+      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"}, port holders: ${holders})\n`
         + `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
     );
   }

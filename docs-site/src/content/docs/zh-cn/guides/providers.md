@@ -158,7 +158,7 @@ Kimi Code 原生 Responses 路由会省略明确正文为空的 assistant 历史
 
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
 账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。普通登录时，没有身份信息的 Kimi 凭据会替换
-当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户以配置文件 ARN 为键。
+当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户结合配置文件 ARN 与已登录用户的电子邮件地址（若可用）来区分身份；共享同一组织配置文件的用户可以各自保留独立的凭据。
 `chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 
@@ -176,6 +176,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 内联 JSON 和额外的位置参数会被拒绝。请将导出的文件保密，并在导入后删除或安全存储。
 
 ### Kiro 凭据导入
+
+在仪表盘选择 **AWS IAM Identity Center**，输入组织的 AWS 访问门户 URL 和 SSO 区域，即可添加账户，无需 CLI 或 SSH。在浏览器批准设备代码后，如有多个 Kiro 配置文件，请选择要保存的配置文件。下面的 CLI 步骤适用于 **Kiro CLI** 选项。
 
 Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
 
@@ -267,7 +269,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`。`moonshot` API 默认使用 `kimi-k3.1-pro`；官方 API 地址中已保存的 `kimi-k2.5` 选择会迁移到该模型。 |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
