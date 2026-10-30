@@ -25,7 +25,7 @@ import { join } from "node:path";
 // already imports. Going through the ../config barrel closes a cycle back into account-namespaces.ts
 // and leaves COMBO_NAMESPACE in its temporal dead zone for entry points that start at combos/types.ts.
 import { atomicWriteFile } from "../config/atomic-write";
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
 
@@ -375,7 +375,10 @@ export function recordUnsupportedReasoningEffort(
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    try {
+    // Admitted after an overlapping optional config-root ACL flight (#7815); rows are read
+    // inside the callback, and a timed-out admission skips this best-effort write.
+    const dir = getConfigDir();
+    void withConfigDirHardeningSettled(dir, () => {
       const out: SupportSnapshot["rows"] = {};
       for (const [rowKey, at] of rows) {
         const evidenceText = supportEvidence.get(rowKey);
@@ -385,10 +388,10 @@ export function recordUnsupportedReasoningEffort(
           ...(evidenceText ? { evidence: evidenceText } : {}),
         };
       }
-      atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
-    } catch {
+      atomicWriteFile(join(dir, SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
+    }).catch(() => {
       // Best-effort persistence only.
-    }
+    });
   }, PERSIST_DEBOUNCE_MS);
   return true;
 }
@@ -565,7 +568,10 @@ export async function refreshReasoningMetadata(options: { force?: boolean; waitM
       providers[providerKey] = out;
     }
     const next: MetadataSnapshot = { version: 2, fetchedAt: Date.now(), source: SOURCE_URL, providers, apis };
-    atomicWriteFile(join(getConfigDir(), FILENAME), JSON.stringify(next) + "\n");
+    // The last await is the network read; publication waits out an overlapping optional
+    // config-root ACL flight (#7815) and a timed-out admission fails this refresh unpublished.
+    const dir = getConfigDir();
+    await withConfigDirHardeningSettled(dir, () => atomicWriteFile(join(dir, FILENAME), JSON.stringify(next) + "\n"));
     snapshotMemo = next;
     return { ok: true, reason: "refreshed", providers: Object.keys(providers).length, models };
   })();
