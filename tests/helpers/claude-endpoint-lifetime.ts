@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { startServer as startRealServer } from "../../src/server";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { managementFetch } from "./management-auth";
+import { ownedServiceHomeInspection } from "./owned-service-home-inspection";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./isolated-codex-home";
 import { isolateClientLifecycleLock } from "./client-lifecycle-lock";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -29,22 +30,24 @@ export function createEndpointCase(cleanup: () => Promise<void>, joinMs = INTERN
       return body;
     },
     ownServer<T extends { stop(closeActiveConnections?: boolean): unknown }>(server: T): T {
-      assertActive();
       const stop = server.stop.bind(server);
       let stopped: Promise<unknown> | undefined;
       const stopOnce = (force?: boolean) => stopped ??= Promise.resolve().then(() => stop(force));
       Object.defineProperty(server, "stop", { configurable: true, value: stopOnce });
       stops.push(() => stopOnce(true));
+      // Native startup can outlast Bun's body deadline. Ownership must be registered
+      // even if teardown began while the resource was being constructed.
+      if (controller.signal.aborted) { void stopOnce(true).catch(() => {}); assertActive(); }
       return server;
     },
     ownCleanup(release: () => void): () => void {
-      assertActive();
       let called = false, failed = false, failure: unknown;
       const once = () => {
         if (!called) { called = true; try { release(); } catch (error) { failed = true; failure = error; } }
         if (failed) throw failure;
       };
       releases.push(once);
+      assertActive();
       return once;
     },
     close(): Promise<void> {
@@ -54,6 +57,8 @@ export function createEndpointCase(cleanup: () => Promise<void>, joinMs = INTERN
         const drained = (async () => {
           const results = await Promise.allSettled(stops.map(stop => stop()));
           if (body) await body.catch(() => {});
+          // A body can finish constructing a handle after the first stop snapshot.
+          results.push(...await Promise.allSettled(stops.map(stop => stop())));
           const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
           for (const release of releases) { try { release(); } catch (error) { errors.push(error); } }
           if (errors.length) throw new AggregateError(errors, "endpoint shutdown failed");
@@ -119,7 +124,10 @@ export const fetch: typeof managementFetch = (input, init) => {
   return managementFetch(input, { ...init, signal: inherited
     ? AbortSignal.any([owner.signal, inherited]) : owner.signal });
 };
-export const startServer: typeof startRealServer = (...args) => activeCase().ownServer(startRealServer(...args));
+export const startServer: typeof startRealServer = (port, deps = {}) => activeCase().ownServer(startRealServer(port, {
+  // These are in-process endpoint fixtures with isolated homes, not service-manager tests.
+  inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated Claude endpoint fixture"), ...deps,
+}));
 export const serveUpstream = ((options: Parameters<typeof Bun.serve>[0]) => activeCase().ownServer(Bun.serve(options))) as typeof Bun.serve;
 export const ownCleanup = (release: () => void) => activeCase().ownCleanup(release);
 export const caseSignal = () => activeCase().signal;

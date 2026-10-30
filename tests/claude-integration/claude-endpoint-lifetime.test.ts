@@ -72,3 +72,36 @@ test("endpoint shutdown releases the real ledger before a different home can acq
   const next = acquireSpendLedgerOwner(nextHome);
   try { expect(next).toBeDefined(); } finally { next.release(); }
 });
+
+test("endpoint teardown joins a handle constructed after the body was aborted", async () => {
+  const construct = Promise.withResolvers<void>(), stop = Promise.withResolvers<void>();
+  let restored = false, stops = 0;
+  const owner = createEndpointCase(async () => { restored = true; });
+  const body = owner.run(async () => {
+    await construct.promise;
+    owner.ownServer({ stop: async () => { stops++; await stop.promise; } });
+  });
+  const closing = owner.close();
+  construct.resolve();
+  await expect(body).rejects.toThrow("endpoint case is closing");
+  expect(stops).toBe(1);
+  expect(restored).toBe(false);
+  stop.resolve(); await closing;
+  expect(restored).toBe(true);
+  owner.assertClosed();
+});
+
+test("endpoint teardown releases a lease acquired after the body was aborted", async () => {
+  const acquire = Promise.withResolvers<void>();
+  let released = 0, bodySettled = false;
+  const owner = createEndpointCase(async () => {});
+  const body = owner.run(async () => {
+    try { await acquire.promise; owner.ownCleanup(() => { expect(bodySettled).toBe(true); released++; }); }
+    finally { bodySettled = true; }
+  });
+  const closing = owner.close(); acquire.resolve();
+  await expect(body).rejects.toThrow("endpoint case is closing");
+  await closing;
+  expect(released).toBe(1);
+  owner.assertClosed();
+});

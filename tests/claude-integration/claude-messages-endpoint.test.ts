@@ -208,7 +208,7 @@ test("Desktop OFF leaves Claude messages and health live", async () => {
     await server.stop(true);
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("native generated-agent passthrough preserves legacy thinking", async () => {
   let captured: Record<string, unknown> | null = null;
@@ -623,7 +623,7 @@ test("endpoint wiring: configured bodyStallSec bounds a stalled native passthrou
     await server.stop(true);
     upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("native openai-responses route carries prompt_cache_key + synthesized session_id header", async () => {
   const capture: { headers?: Record<string, string>; body?: Record<string, any> } = {};
@@ -991,7 +991,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
     upstream.stop(true);
     resetLifecycleDrainStateForTests();
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("routed Claude requests give OpenAI sidecars main auth without leaking it to the routed provider", async () => {
   const mainAccessToken = "main-chatgpt-access";
@@ -1439,7 +1439,7 @@ test("compatibility is uniform across translated adapters and rejects before inf
       } finally { await server.stop(true); }
     }
   } finally { await upstream.stop(true); }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("compatibility unset, shadow persistence and ordinary enforce controls", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
@@ -1485,7 +1485,7 @@ test("compatibility unset, shadow persistence and ordinary enforce controls", as
     }
     expect(captured).toHaveLength(3);
   } finally { await upstream.stop(true); }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("present invalid compatibility modes return one fixed 503 before translation", async () => {
   const { server: upstream, urls } = mockChatUpstreamCapturing();
@@ -1515,7 +1515,7 @@ test("present invalid compatibility modes return one fixed 503 before translatio
     }
     expect(urls).toEqual([]);
   } finally { await upstream.stop(true); }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("native passthrough precedes even invalid compatibility mode", async () => {
   const received: unknown[] = [];
@@ -1542,7 +1542,7 @@ test("native passthrough precedes even invalid compatibility mode", async () => 
     }
     expect(received).toEqual([body, body]);
   } finally { await upstream.stop(true); }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("compatibility survives management toggles and rejects Desktop source features", async () => {
   const { server: upstream, urls } = mockChatUpstreamCapturing();
@@ -1582,7 +1582,7 @@ test("compatibility survives management toggles and rejects Desktop source featu
     await server.stop(true);
     await upstream.stop(true);
   }
-});
+}, { timeout: SERVER_BUDGET_MS });
 
 test("shadow captures source thinking settings before an effort directive removes them", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
