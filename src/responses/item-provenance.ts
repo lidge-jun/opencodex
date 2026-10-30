@@ -46,10 +46,13 @@ export function copyItemProvenance<T extends object>(source: unknown, target: T)
 
 /**
  * Tag both historical and live items so an empty replay prefix remains distinguishable
- * from an input that has never been tagged.
+ * from an input that has never been tagged. Input that already carries provenance keeps it:
+ * an earlier rewrite (Zed lifting a replayed wrapper) may have shifted items past the
+ * numeric prefix, so re-tagging by index would mislabel current-turn items as history.
  */
 export function tagHistoricalInputItems(input: unknown[], prefixLength: number): unknown[] {
   if (!Array.isArray(input)) return input;
+  if (input.some(hasItemProvenance)) return input;
   const prefix = Math.min(input.length, Math.max(0, Math.trunc(prefixLength)));
   if (prefix <= 0) return input;
   return input.map((item, index) => {
