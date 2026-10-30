@@ -138,7 +138,7 @@ combo whose remaining eligible targets use other providers.
 
 ## Single-target cooldown retry ownership
 
-`src/combos/failover.ts` reports whether the current failure actually records a cooldown.
+`src/combos/failover.ts` reports whether the current failure actually records a cooldown. An ordinary local `CodexAccountCooldownError` mapped by `mapCodexAuthContextErrorToResponse` (`src/server/responses/codex-auth-error.ts`) carries process-local Response identity in `src/codex/account-cooldown-response.ts`. `core-lifetime.ts` carries it through the translator-budget and account-lease wrappers (retained compaction delivers through the latter), and `core-combo-failure.ts` carries it through error reconstruction; `core-combo.ts` omits its restated retry/reset metadata only when recording combo target cooldowns. The target retains the existing capped local backoff, while the client's Retry-After, account quota/health, probe leases and admission policy remain authoritative. Main hard-lock, credit, Reserve and transient-policy subclasses do not receive this provenance. Copied bodies or headers cannot grant it; genuine upstream Retry-After retains the 24-hour ceiling. Coverage: `tests/server/server-combo-cooldown-recording.test.ts`.
 `src/combos/resolve.ts` forwards that result for each target; `src/server/responses/core-combo.ts`
 permits its bounded same-target retry only when this failure records the failed target and its
 cooldown is live. A stale-generation refusal cannot borrow a sibling request's shared entry.
@@ -167,7 +167,7 @@ Identity and consumer aggregation follow the [account attribution contract](../d
 
 When a serving-route change leaves a tool-bearing history whose reasoning has neither plaintext nor
 usable opaque content, a target that requires plaintext reasoning replay is ineligible. Failover
-continues to the next target; exhausting the eligible targets returns `400 target_incompatible`.
+continues to the next target; exhausting the eligible targets returns `400 target_incompatible`, unless an earlier confirmed HTTP 400 context refusal is retained, which returns `context_length_exceeded` with that child's diagnostics. Coverage: `tests/server/server-combo-reasoning-replay-eligibility.test.ts`.
 Foreign opaque reasoning is never forwarded or rewritten into plaintext; a turn with no reasoning item
 gets only the fixed placeholder in [tool-loop continuation](native-reasoning-retention.md#combo-tool-loop-continuation).
 
@@ -262,7 +262,7 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
-For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
+Compact HTTP captures caller policy before capacity/body waits; native retries and routed Responses/JEV handoffs retain it under the [Advisor admission contract](../advisor.md#cross-provider-consultation). For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
 preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
 Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
 with wire `tool_choice: none` when server tools exist, preventing upstream execution.
@@ -462,8 +462,8 @@ that shows the same client resending.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
-A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without dispatch; a denied later hop, like a ladder with no target left, returns the last real upstream failure without contacting that target.
-Exception at both exits (`exhaustedFailure` in `core-combo.ts`): when that last failure is a 400/401/403 (a fallback refusing its own credential or plan), the first 429/402 of the ladder is returned instead, and the logical log adopts that quota failure's child diagnostics while retaining every physical attempt and its spend history. When no target answered with quota evidence, a 503 `combo_unavailable` is considered only from target/expiry pairs snapshotted before dispatch for unexpired 429/402 cooldowns passing the picker's provider availability and cached quota checks, without evaluating request eligibility. Only this exhaustion branch evaluates snapshot targets' request eligibility, treating throws as ineligible, and its `Retry-After` uses the earliest still-active eligible snapshot expiry; non-quota cooldowns, disabled/ineligible targets and cooldowns created during this request cannot replace the fallback refusal or shorten the delay. Coverage: `tests/responses/responses-combo-exhausted-error.test.ts`.
+A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without dispatch; a denied later hop, like a ladder with no target left, retains the first confirmed HTTP 400 context refusal and its child diagnostics as `context_length_exceeded`, otherwise the last real upstream failure, without contacting that target. Every attempt keeps its usage; later fatal errors stop immediately. See [context-window refusals](responses-combo-boundaries.md#context-window-refusals).
+Without a retained context refusal, the exception at both exits (`exhaustedFailure` in `core-combo.ts`): when that last failure is a 400/401/403 (a fallback refusing its own credential or plan), the first 429/402 of the ladder is returned instead, and the logical log adopts that quota failure's child diagnostics while retaining every physical attempt and its spend history. When no target answered with quota evidence, a 503 `combo_unavailable` is considered only from target/expiry pairs snapshotted before dispatch for unexpired 429/402 cooldowns passing the picker's provider availability and cached quota checks, without evaluating request eligibility. Only this exhaustion branch evaluates snapshot targets' request eligibility, treating throws as ineligible, and its `Retry-After` uses the earliest still-active eligible snapshot expiry; non-quota cooldowns, disabled/ineligible targets and cooldowns created during this request cannot replace the fallback refusal or shorten the delay. Coverage: `tests/responses/responses-combo-exhausted-error.test.ts`.
 `src/bridge/errors.ts` retains only the allowlisted non-replayable transport codes,
 reapplies the in-process marker, attaches no `Retry-After`, and restates 429 for the refusal
 code alone so a combo or adapter formatter holding an upstream-shaped 502 cannot hand the

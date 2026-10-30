@@ -9,7 +9,7 @@ import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/code
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { runCodexCliUpdatePlanInWorker } from "../../src/codex/cli-update-job-worker";
-import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
+import { withWindowsCodexCliPlanToolchain, windowsCodexCliPlanRefusalForTests } from "../../src/codex/cli-windows-plan-provenance";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
@@ -74,9 +74,41 @@ native("production Windows inspector binds selected npm shim, package, backing a
   const report = await inspectCodexCliInstall(f.deps);
   expect(report).toMatchObject({ managed: true, selectionAttested: true, provenance: "npm-global", reason: "managed_npm_global", packageVersion: "1.2.3" });
   expect(report.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
-  expect((await inspectCodexCliInstall(f.deps)).installContentDigest).toBe(report.installContentDigest);
+  const second = await inspectCodexCliInstall(f.deps);
+  expect(second.installContentDigest, second.installContentDigest === null
+    ? `Windows plan reinspection refused: ${second.reason}; ${JSON.stringify(windowsCodexCliPlanRefusalForTests(second))}` : undefined).toBe(report.installContentDigest);
   expect(JSON.stringify(report)).not.toContain(f.root);
   expect([...f.files].map(([path]) => readFileSync(path))).toEqual(before);
+});
+
+native("Windows plan sharing refusals retain bounded gate and reason diagnostics", async () => {
+  const f = fixture();
+  const { dlopen, ptr } = await import("bun:ffi");
+  const kernel = dlopen("kernel32.dll", {
+    CreateFileW: { args: ["ptr", "u32", "u32", "ptr", "u32", "u32", "u64"], returns: "u64" },
+    CloseHandle: { args: ["u64"], returns: "i32" },
+  });
+  try {
+    for (const [path, gate] of [
+      [join(f.prefix, "node.exe"), "local-node"],
+      [join(f.backing, "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"), "final-observation"],
+    ] as const) {
+      // A writer that changes no bytes still conflicts with the inspector's read-only sharing.
+      const name = Buffer.from(path + "\0", "utf16le");
+      const handle = kernel.symbols.CreateFileW(ptr(name), 0x40000000, 7, null, 3, 0, 0);
+      expect(handle).not.toBe(0); expect(handle).not.toBe(0xffffffffffffffffn);
+      try {
+        const report = await inspectCodexCliInstall(f.deps);
+        expect(report).toMatchObject({ managed: false, reason: "windows_inspection_deferred", installContentDigest: null });
+        expect(windowsCodexCliPlanRefusalForTests(report)).toEqual({ gate, reason: "open-refused" });
+        expect(JSON.stringify(report)).not.toContain(f.root);
+        expect(JSON.stringify(report)).not.toContain(gate);
+      } finally { expect(kernel.symbols.CloseHandle(handle)).not.toBe(0); }
+    }
+    const recovered = await inspectCodexCliInstall(f.deps);
+    expect(recovered.managed).toBe(true);
+    expect(windowsCodexCliPlanRefusalForTests(recovered)).toBeNull();
+  } finally { kernel.close(); }
 });
 
 test.skipIf(process.platform !== "win32")("native 8.3 spellings cannot promote version-manager ownership or query metadata", async () => {
@@ -268,7 +300,9 @@ native("unattested, mismatched selection, app/Store/version-manager and unverifi
       env: { ...f.deps.env, CODEX_CLI_PATH: join(f.root, dir, "codex.exe") } })),
   ]) expect((await inspectCodexCliInstall(deps)).managed).toBe(false);
   writeFileSync(join(f.prefix, "codex.cmd"), cmd + "\r\necho retargeted");
-  expect((await inspectCodexCliInstall(f.deps)).managed).toBe(false);
+  const invalidShim = await inspectCodexCliInstall(f.deps);
+  expect(invalidShim.managed).toBe(false);
+  expect(windowsCodexCliPlanRefusalForTests(invalidShim)).toEqual({ gate: "shim-content" });
 });
 
 native("a junction prefix is refused and prefix retarget attempts fail throughout the coherent observation", async () => {

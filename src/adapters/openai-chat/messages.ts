@@ -1,6 +1,7 @@
 import { isMistralChatTarget, isNativeOpenAIChatTarget, stripBracketedModelSuffix } from "./wire";
 import { reasoningDetailSegmentForWire } from "./response-events";
 import { translatedChatDeveloperWireRole } from "./developer-role";
+import { singleLeadingSystemMessages } from "./single-system";
 import { isVolcengineArkPaygChatTarget } from "./tool-schema";
 import { contentPartsToText } from "../image";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
@@ -172,7 +173,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   // Gateways serve them under namespaced ids (LiteLLM's openai/Qwen3.8-27B, #6674), so any
   // number of leading path segments is accepted; the final segment names the checkpoint.
   // Orca's GGUF marker must precede any colon quant tag; other Orca variants are unchanged.
-  const leadingSystemTemplate = !nativeOpenAI && /^(?:[^/]+\/)*(?:flash-next|Qwen3\.8-Flash-Next|Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?|OrcaSAQ-2-Cyber-27B(?=[^:/\s]*GGUF)[^:/\s]*(?::[\w-]+)?)$/i.test(parsed.modelId);
+  const leadingSystemTemplate = provider.singleLeadingSystemMessage !== true && !nativeOpenAI && /^(?:[^/]+\/)*(?:flash-next|Qwen3\.8-Flash-Next|Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?|OrcaSAQ-2-Cyber-27B(?=[^:/\s]*GGUF)[^:/\s]*(?::[\w-]+)?)$/i.test(parsed.modelId);
   // Which role a developer message carries, and why the unrecorded state folds, is stated once
   // in ./developer-role.ts and read from there by the native passthrough as well. Either way the
   // message keeps the slot it arrived in — only the role changes, never the position.
@@ -271,6 +272,15 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             role: msg.role === "developer" && !hasImages && !hasAudio ? developerWireRole : "user",
             content: chatParts,
           };
+          if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {
+            // Keep document bytes in a user-compatible slot; only their accompanying text is
+            // instruction content. Use the same tool barrier so instruction order is retained.
+            const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
+            if (instruction.content.length > 0) {
+              (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+            }
+            chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
+          }
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);
         else out.push(chatMsg);
@@ -346,10 +356,10 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             type: "function",
             function: { name: namespacedToolName(tc.namespace, tc.name), arguments: JSON.stringify(tc.arguments) },
           }));
-          if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider);
+          if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider, parsed.modelId);
         }
         if (hasReplayedReasoning && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
-          chatMsg.content = emptyAssistantContent(provider);
+          chatMsg.content = emptyAssistantContent(provider, parsed.modelId);
         }
         out.push(chatMsg);
         pendingToolCalls = wireToolCalls.map(({ tc, id }) => ({ id, name: namespacedToolName(tc.namespace, tc.name) }));
@@ -403,7 +413,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
               : { reasoning_content: orphanReasoning };
           out.push({
             role: "assistant",
-            content: emptyAssistantContent(provider),
+            content: emptyAssistantContent(provider, parsed.modelId),
             ...orphanReasoningFields,
             tool_calls: [{
               id: toolCallId,
@@ -429,7 +439,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
 
   flushPendingToolCalls();
   releaseDeferredBarriers();
-  return out;
+  return singleLeadingSystemMessages(out, provider) as unknown[];
 }
 
 export function safeToolName(name: string | undefined): string {
@@ -438,8 +448,11 @@ export function safeToolName(name: string | undefined): string {
   return sanitized;
 }
 
-export function emptyAssistantContent(provider: OcxProviderConfig): string | { type: "text"; text: string }[] {
-  return isVolcengineArkPaygChatTarget(provider) ? [{ type: "text", text: "" }] : "";
+export function emptyAssistantContent(provider: OcxProviderConfig, modelId = ""): string | { type: "text"; text: string }[] {
+  // Kimi K3.1 Pro rejects Ark's legacy empty-text array during tool continuations.
+  const upstreamModelId = provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId;
+  const kimi31Pro = /^kimi-k3-1-pro(?:-\d{6})?$/.test(upstreamModelId);
+  return isVolcengineArkPaygChatTarget(provider) && !kimi31Pro ? [{ type: "text", text: "" }] : "";
 }
 
 /** Reconstruct completed text-only thinking; never invent signatures or placeholder reasoning. */

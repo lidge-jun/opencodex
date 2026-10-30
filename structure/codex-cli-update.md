@@ -94,6 +94,10 @@ PATH-only candidate selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
 The explicit `attest` report stays observation-only. Only the production plan predicate
 creates private plan evidence; copying a public report cannot enable Windows planning.
+Refusals retain fixed gate codes and available native/derivation reason codes in a report-keyed
+WeakMap, exposed only by `windowsCodexCliPlanRefusalForTests` for regression failure messages.
+These diagnostics contain no paths or exception text, do not serialize with the report, and
+do not change managed status, content digests, private plan evidence or fail-closed decisions.
 This observes linkage and content, not publisher authenticity or a whole-tree guarantee.
 The fresh-source Worker case in `tests/codex-integration/codex-cli-windows-plan.test.ts`
 rebuilds private evidence through the native inspector inside that realm before resolving

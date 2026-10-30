@@ -376,9 +376,9 @@ than nudged.
 - Full cross-platform (macOS/Windows) CI runs **only** via manual
   `workflow_dispatch` and on push to `main`/`preview` (release lines).
 - A manual `lane=all` dispatch is a **batch check on `dev`**, never a per-PR gate.
-  One run is about 30 jobs (11 Windows, 5 macOS, 15 Linux) and six runner-hours, and the
-  account has only five macOS slots, so per-PR dispatches starve every other check. On
-  2026-10-27, parallel agent lanes dispatched 48 of them in twelve hours (about 13,000
+  One run is about 32 jobs (11 Windows, at least 6 macOS, 15 Linux) and six runner-hours, and the
+  account has only five macOS slots (a macOS job can queue), so per-PR dispatches starve
+  every other check. On 2026-10-27, parallel agent lanes dispatched 48 of them in twelve hours (about 13,000
   runner-minutes). The queue passed 200 runs, and ordinary PR checks waited hours to start.
   - Merge a pull request, including a Windows- or macOS-sensitive one, on its green PR
     CI. After a batch of merges, run one `gh workflow run ci.yml --ref dev` as described

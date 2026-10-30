@@ -58,6 +58,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   alias?: string;
   email?: string;
   active: boolean;
+  expiresAt?: number;
   needsReauth?: boolean;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
