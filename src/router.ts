@@ -206,8 +206,11 @@ const compactionFallbackWarnings = new Set<string>();
  * modelDisplayNames keys. Neither list feeds alias generation.
  */
 function decodeDisplayNameFallback(prov: OcxProviderConfig, decoded: string): string {
-  const retained = decodeRoutedModelId(decoded, prov.retainModels ?? []);
-  if (retained !== decoded || prov.retainModels?.includes(decoded)) return retained;
+  const retained = prov.retainModels ?? [];
+  // Any retained claim, even an ambiguous one the codec refuses to guess, ends the fallback.
+  if (retained.some(id => id === decoded || encodeRoutedModelId(id) === decoded)) {
+    return decodeRoutedModelId(decoded, retained);
+  }
   return decodeRoutedModelId(decoded, Object.keys(prov.modelDisplayNames ?? {}));
 }
 

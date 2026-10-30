@@ -368,6 +368,9 @@ describe("routeModel decode (proxy layer)", () => {
       },
     };
     expect(routeModel(config, "other/a-b").modelId).toBe("a/b");
+    config.providers.other!.retainModels = ["x/y-z", "x-y/z"];
+    config.providers.other!.modelDisplayNames = { "x/y-z": "Stale" };
+    expect(routeModel(config, "other/x-y-z").modelId).toBe("x-y-z");
   });
 
   test("a stale modelDisplayNames key does not break an existing default alias", () => {
