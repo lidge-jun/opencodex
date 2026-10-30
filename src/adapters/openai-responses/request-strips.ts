@@ -8,24 +8,13 @@ import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
- * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
- * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
- * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
- * or nested tool data. Copy on write so a later Google route can still replay its signature.
+ * Codex requests output.encrypted_content, which xAI, Meta and Azure reject with HTTP 400.
+ * The caller gates this on the destination. Preserve reasoning.encrypted_content
+ * for stateless replay and leave unknown or malformed values for upstream validation.
  */
-/** Responses `include` entries xAI rejects with a 400 rather than ignoring (#7878). */
-const XAI_UNSUPPORTED_RESPONSES_INCLUDE = new Set(["output.encrypted_content"]);
-
-/**
- * Drop `include` entries xAI's Responses API refuses (`Argument not supported:
- * "output.encrypted_content" in "include" field`). Codex Desktop always asks for the
- * OpenAI reasoning blob, so without this every xai/grok-4.7 turn sent through the
- * Responses path fails, while the same model works on the openai-chat adapter.
- * Copy on write; other destinations and other include entries are untouched.
- */
-export function stripXaiUnsupportedInclude(body: unknown): unknown {
+export function stripUnsupportedOutputInclude(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.include)) return body;
-  const include = body.include.filter(item => !XAI_UNSUPPORTED_RESPONSES_INCLUDE.has(String(item)));
+  const include = body.include.filter(item => item !== "output.encrypted_content");
   if (include.length === body.include.length) return body;
   if (include.length === 0) {
     const { include: _dropped, ...rest } = body;
@@ -34,6 +23,12 @@ export function stripXaiUnsupportedInclude(body: unknown): unknown {
   return { ...body, include };
 }
 
+/**
+ * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
+ * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
+ * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
+ * or nested tool data. Copy on write so a later Google route can still replay its signature.
+ */
 export function stripProviderInputItemMetadata(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   let input: unknown[] | undefined;
@@ -292,12 +287,15 @@ const CANONICAL_ONLY_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
  * {@link stripCanonicalOnlyTopLevelFields}; the canonical and OpenAI-operated destinations keep
  * the items verbatim and in order. Returns the input unchanged when none is present.
  */
+export function isCanonicalOnlyInputItem(item: unknown): boolean {
+  return isPlainObject(item)
+    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
+}
+
 export function stripCanonicalOnlyInputItems(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
-  const isPrivate = (item: unknown): boolean => isPlainObject(item)
-    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
-  if (!body.input.some(isPrivate)) return body;
-  return { ...body, input: body.input.filter(item => !isPrivate(item)) };
+  if (!body.input.some(isCanonicalOnlyInputItem)) return body;
+  return { ...body, input: body.input.filter(item => !isCanonicalOnlyInputItem(item)) };
 }
 
 /**

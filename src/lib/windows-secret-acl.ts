@@ -1207,37 +1207,55 @@ function isTimeoutError(error: unknown): boolean {
  * which is optional and simply omitted when it is not an allowlisted code.
  */
 function sanitizeAclFailure(cause: unknown): AclFailureDiagnostics | undefined {
-  if (!cause || typeof cause !== "object" || !("aclFailure" in cause)) return undefined;
-  const raw = (cause as { aclFailure?: unknown }).aclFailure;
-  if (!raw || typeof raw !== "object") return undefined;
-  const f = raw as Record<string, unknown>;
-  if (typeof f.step !== "string" || !ICACLS_STEPS.has(f.step)) return undefined;
-  if (
-    f.stage !== "deadline_before_spawn" &&
-    f.stage !== "spawn_failed" &&
-    f.stage !== "runner_rejected" &&
-    f.stage !== "runner_watchdog" &&
-    f.stage !== "child_result"
-  ) {
+  // Every read off the untrusted cause — the `in` check, the `aclFailure`
+  // access and each field — may be a throwing accessor or a getter that
+  // returns a different value on the next read. Each field is therefore read
+  // exactly once into a local, and only that local is validated and copied;
+  // a read that throws drops the whole record rather than letting a raw
+  // hostile exception replace the sanitized required-mode error.
+  try {
+    if (!cause || typeof cause !== "object" || !("aclFailure" in cause)) return undefined;
+    const raw = (cause as { aclFailure?: unknown }).aclFailure;
+    if (!raw || typeof raw !== "object") return undefined;
+    const f = raw as Record<string, unknown>;
+    const step = f.step;
+    if (typeof step !== "string" || !ICACLS_STEPS.has(step)) return undefined;
+    const stage = f.stage;
+    if (
+      stage !== "deadline_before_spawn" &&
+      stage !== "spawn_failed" &&
+      stage !== "runner_rejected" &&
+      stage !== "runner_watchdog" &&
+      stage !== "child_result"
+    ) {
+      return undefined;
+    }
+    const elapsedMs = f.elapsedMs;
+    if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs)) return undefined;
+    const budgetMs = f.budgetMs;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs)) return undefined;
+    const success = f.success;
+    if (typeof success !== "boolean") return undefined;
+    const timedOut = f.timedOut;
+    if (typeof timedOut !== "boolean") return undefined;
+    const exitCode = f.exitCode;
+    if (exitCode !== null && (typeof exitCode !== "number" || !Number.isFinite(exitCode))) {
+      return undefined;
+    }
+    const spawnErrorCode = allowlistedSpawnErrorCode(f.spawnErrorCode);
+    return {
+      step: step as IcaclsStep,
+      stage,
+      elapsedMs,
+      budgetMs,
+      success,
+      exitCode: exitCode as number | null,
+      timedOut,
+      ...(spawnErrorCode !== undefined ? { spawnErrorCode } : {}),
+    };
+  } catch {
     return undefined;
   }
-  if (typeof f.elapsedMs !== "number" || !Number.isFinite(f.elapsedMs)) return undefined;
-  if (typeof f.budgetMs !== "number" || !Number.isFinite(f.budgetMs)) return undefined;
-  if (typeof f.success !== "boolean" || typeof f.timedOut !== "boolean") return undefined;
-  if (f.exitCode !== null && (typeof f.exitCode !== "number" || !Number.isFinite(f.exitCode))) {
-    return undefined;
-  }
-  const spawnErrorCode = allowlistedSpawnErrorCode(f.spawnErrorCode);
-  return {
-    step: f.step as IcaclsStep,
-    stage: f.stage,
-    elapsedMs: f.elapsedMs,
-    budgetMs: f.budgetMs,
-    success: f.success,
-    exitCode: f.exitCode as number | null,
-    timedOut: f.timedOut,
-    ...(spawnErrorCode !== undefined ? { spawnErrorCode } : {}),
-  };
 }
 
 /** Preserve only the bounded machine-readable cause on a sanitized public error. */

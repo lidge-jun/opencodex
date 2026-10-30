@@ -38,17 +38,19 @@ function response(frames: Uint8Array[]): Response {
 }
 afterEach(resetKiroThrottleStateForTests);
 
-async function run(first: Uint8Array[], retry: Uint8Array[], buffered = false) {
+async function run(first: Uint8Array[], retry: Uint8Array[], buffered = false, input = structuredClone(parsed)) {
   const adapter = createKiroAdapter(provider);
   const budget = createTranslatorBudget();
   const sends: number[] = [];
   const events: AdapterEvent[] = [];
   let visibleAtRetry: AdapterEvent[] = [];
   let physicalRequests = 0;
+  const bodies: string[] = [];
   try {
-    const request = await adapter.buildRequest(structuredClone(parsed));
+    const request = await adapter.buildRequest(input);
     const upstream = await adapter.fetchResponse!(request, {
-      executor: (async () => {
+      executor: (async (_url, init) => {
+        bodies.push(String(init?.body));
         if (++physicalRequests === 1) return response(first);
         visibleAtRetry = events.filter(event => event.type === "text_delta");
         return response(retry);
@@ -59,13 +61,25 @@ async function run(first: Uint8Array[], retry: Uint8Array[], buffered = false) {
     else for await (const event of adapter.parseStream(upstream, budget)) events.push(event);
     if (buffered) for (const event of events) releaseTranslatedEvent(event, budget);
     expect(budget.snapshot().currentBytes).toBe(0);
-    return { events, sends, physicalRequests, visibleAtRetry };
+    return { events, sends, physicalRequests, visibleAtRetry, bodies };
   } finally {
     budget.dispose();
   }
 }
 
 describe("Kiro single final answer (#6270)", () => {
+  test("advisor guard survives request building and completion retry", async () => {
+    const guard: NonNullable<OcxParsedRequest["_advisorGuard"]> = async function* () {};
+    const input = { ...structuredClone(parsed), _advisorGuard: guard };
+    const answer = "The workspace is ready.";
+    const { events, physicalRequests, bodies } = await run([text(answer)], [text(answer)], false, input);
+    expect(input._advisorGuard).toBe(guard);
+    expect(physicalRequests).toBe(2);
+    expect(bodies[1]).toContain("Inspect the workspace.");
+    expect(bodies[1]).toContain("claude-opus-5.5");
+    expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
+  });
+
   for (const buffered of [false, true]) {
     test.each(["END_TURN", "STOP_SEQUENCE", undefined])(
       `plain text ending is held through validation (stop=%s, buffered=${buffered})`,

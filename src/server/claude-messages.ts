@@ -970,6 +970,83 @@ async function handleClaudeMessagesWithBudget(
     ...(settledRoute?.provider.authMode === "oauth" && settledInstance
       ? { oauthFailoverQuorum: anthropicRoutingFor(settledInstance).hasAnthropicFailoverQuorum() } : {}),
   };
+  if (settledRoute && isRec(anthropicBody)
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector) === "bridge-only-policy"
+    && nativeMessagesDeclineReason(settledRoute, anthropicBody, config, { ...nativeSelector, webSearchBackendAvailable: false }) === undefined) {
+    const { parseRequest } = await import("../responses/parser");
+    const { planWebSearch, shouldResolveOpenAiWebSearchSidecar } = await import("../web-search");
+    const replayConfig = buildClaudeReplayConfig(config);
+    const parsed = parseRequest(internalBody);
+    let openAiSidecar: import("../providers/openai-sidecar").ResolvedOpenAiForwardSidecar | undefined;
+    if (shouldResolveOpenAiWebSearchSidecar(replayConfig, parsed, false)) {
+      const { listOpenAiForwardSidecarCandidates, captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar } = await import("../providers/openai-sidecar");
+      const candidates = listOpenAiForwardSidecarCandidates(replayConfig);
+      const headers = new Headers();
+      for (const name of FORWARD_HEADERS) {
+        if (name === "authorization" || name === "chatgpt-account-id") continue;
+        const value = req.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      const { codexAccountSelectionForTurn, tryAdmitTurn } = await import("./lifecycle");
+      // The probe owns its claim only until selection completes, not for the client turn.
+      const probeLease = logIds?.turnAdmissionLease && candidates.length ? tryAdmitTurn() : undefined;
+      const errors = await import("../codex/auth-context");
+      try {
+        req.signal.throwIfAborted();
+        if (logIds?.turnAdmissionLease && candidates.length && !probeLease) {
+          // No independent admission means availability is unknown; preserve the bridge.
+          nativeSelector.webSearchBackendAvailable = true;
+        } else {
+          if (candidates.some(candidate => candidate.accountMode === "direct") && probeLease) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) {
+              nativeSelector.webSearchBackendAvailable = true;
+            } else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              const token = getMainAccountToken();
+              if (token) {
+                const auth = captureExplicitOpenAiCallerAuth(new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId }), replayConfig);
+                if (auth) { headers.set("authorization", auth.authorization); headers.set("chatgpt-account-id", auth.chatgptAccountId); }
+              }
+            }
+          }
+          openAiSidecar = await resolveFirstUsableOpenAiSidecar(candidates, headers, replayConfig, {
+            admission: logIds?.admission, codexAuthPolicy: config, signal: req.signal,
+            beginCodexAccountSelection: codexAccountSelectionForTurn(probeLease ?? undefined),
+          });
+          req.signal.throwIfAborted();
+          // The bridge can inject main auth into pool selection. Only a negative pool probe
+          // needs this extra read; an unavailable claim or present token leaves it uncertain.
+          if (!openAiSidecar && probeLease && candidates.some(candidate => candidate.accountMode === "pool")) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) nativeSelector.webSearchBackendAvailable = true;
+            else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              if (getMainAccountToken()) nativeSelector.webSearchBackendAvailable = true;
+            }
+          }
+        }
+      } catch (err) {
+        // Refresh wraps cancellation in CodexAuthContextError; a cancelled request must not continue.
+        if (req.signal.aborted) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw req.signal.reason ?? err;
+        }
+        if (!(err instanceof errors.CodexPoolAuthenticationError) && !(err instanceof errors.CodexAuthContextError)
+          && !(err instanceof errors.CodexAccountCooldownError) && !(err instanceof errors.CodexThreadAffinityExpiredError)
+          && !(err instanceof errors.CodexMainProfileDrainingError)) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw err;
+        }
+        if (probeLease && candidates.some(candidate => candidate.accountMode === "pool")) nativeSelector.webSearchBackendAvailable = true;
+      } finally { probeLease?.release(); }
+    }
+    try {
+      nativeSelector.webSearchBackendAvailable ??= !!planWebSearch(replayConfig, parsed, false, settledRoute.provider, settledRoute.modelId, openAiSidecar, {
+        admission: logIds?.admission, codexAuthPolicy: config, providerName: settledRoute.providerName,
+      });
+    } finally {
+      openAiSidecar?.releaseProbeLease?.();
+    }
+  }
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
     : "rollout-disabled";

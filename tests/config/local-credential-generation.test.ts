@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { chmodSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { withLocalCredentialFixture } from "../helpers/local-credentials";
 
 const accountStoreUrl = new URL("../../src/codex/account-store.ts", import.meta.url).href;
@@ -294,3 +295,296 @@ for (const observedFirst of [true, false]) {
     });
   });
 }
+
+async function generationOf(inventory: typeof import("../../src/local-credentials/inventory")): Promise<string | undefined> {
+  return (await inventory.collectLocalCredentials())?.generation;
+}
+async function waitForNewGeneration(
+  inventory: typeof import("../../src/local-credentials/inventory"),
+  previous: string | undefined,
+  timeoutMs = 4000,
+): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  let next: string | undefined;
+  do {
+    next = await generationOf(inventory);
+    if (next !== undefined && next !== previous) return next;
+    if (Date.now() >= deadline) return next;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  } while (true);
+}
+async function expectStableGeneration(
+  inventory: typeof import("../../src/local-credentials/inventory"),
+  previous: string | undefined,
+  windowMs = 1500,
+): Promise<void> {
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(await generationOf(inventory)).toBe(previous);
+  }
+}
+
+// Waits until the generation stays constant over one quiet window, tolerating
+// residual notifications from the mutation that produced it. Throws rather than
+// return an unsettled token, so a caller can never start the ABA on a baseline
+// that was still racing events.
+async function settleGeneration(
+  inventory: typeof import("../../src/local-credentials/inventory"),
+  quietMs = 500,
+  timeoutMs = 4000,
+): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await generationOf(inventory);
+  let quietSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const next = await generationOf(inventory);
+    if (next !== last) { last = next; quietSince = Date.now(); continue; }
+    if (Date.now() - quietSince >= quietMs) return last;
+  }
+  throw new Error("credential generation never settled: notifications still arriving at timeout");
+}
+
+test("the watch seam classifies direct, ancestor, identity, and failure cases deterministically", async () => {
+  const inventory = await import("../../src/local-credentials/inventory");
+  const dir = mkdtempSync(join(tmpdir(), "ocx-watch-seam-"));
+  try {
+    const ancestor = join(dir, "ancestor");
+    const direct = join(dir, "direct");
+    const foreign = join(dir, "foreign");
+    mkdirSync(ancestor); mkdirSync(direct); mkdirSync(foreign);
+    const shortLooking = join(dir, "ocx~1");
+    mkdirSync(shortLooking);
+    const residueLooking = join(dir, "config.json.ocx.home");
+    mkdirSync(residueLooking);
+    writeFileSync(join(dir, "auth.json"), "{}");
+    const same = lstatSync(ancestor, { bigint: true });
+    const shortSame = lstatSync(shortLooking, { bigint: true });
+    const residueSame = lstatSync(residueLooking, { bigint: true });
+    const entry = {
+      names: new Set(["auth.json", "direct"]),
+      ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
+        ["ancestor", { dev: same.dev, ino: same.ino }],
+        ["ocx~1", { dev: shortSame.dev, ino: shortSame.ino }],
+        ["config.json.ocx.home", { dev: residueSame.dev, ino: residueSame.ino }],
+        ["unverifiable", null],
+      ]),
+    };
+    const action = (event: string, name: string | null) =>
+      inventory.credentialWatchEventAction(dir, entry, event, name);
+
+    // A same-identity ancestor reporting only a last-write tick is ordinary child
+    // churn, however often it repeats: no reconcile, no save, no re-arm.
+    expect(action("change", "ancestor")).toBe("ignore");
+    expect(action("change", "ancestor")).toBe("ignore");
+    // A rename is structural even when the entry re-identifies the same afterwards.
+    expect(action("rename", "ancestor")).toBe("reconcile");
+    // Direct names reconcile on any event, including a plain content change.
+    expect(action("change", "auth.json")).toBe("reconcile");
+    expect(action("rename", "auth.json")).toBe("reconcile");
+    expect(action("change", "direct")).toBe("reconcile");
+    // A name carrying both roles stays direct: direct wins over ancestor.
+    const overlapping = { names: new Set(["ancestor"]), ancestors: entry.ancestors };
+    expect(inventory.credentialWatchEventAction(dir, overlapping, "change", "ancestor")).toBe("reconcile");
+    // Credential-write residue is always coverage-relevant.
+    expect(action("change", "config.json.ocx.7.tmp")).toBe("reconcile");
+    // An ancestor that could not be identified at install reconciles on any event.
+    expect(action("change", "unverifiable")).toBe("reconcile");
+    expect(action("rename", "unverifiable")).toBe("reconcile");
+    // Unrelated names never reconcile.
+    expect(action("change", "foreign")).toBe("ignore");
+    expect(action("rename", "unknown.tmp")).toBe("ignore");
+    // A case-insensitive volume reports the writer's spelling: a differently cased or
+    // trailing-dot spelling of a target or its write residue must still reconcile rather
+    // than fall through as an unrelated name.
+    expect(action("rename", "AUTH.JSON")).toBe("reconcile");
+    expect(action("change", "Auth.Json")).toBe("reconcile");
+    expect(action("change", "auth.json.")).toBe("reconcile");
+    expect(action("rename", "Direct")).toBe("reconcile");
+    expect(action("rename", "CONFIG.JSON.OCX.7.tmp")).toBe("reconcile");
+    // An entry without recorded target identities cannot resolve a short name: reconcile.
+    expect(action("rename", "AUTH~1.JSO")).toBe("reconcile");
+    // A real ancestor whose name only looks like a short name (OPENCODEX_HOME=C:\ocx~1) is
+    // identity-checked like any other ancestor, so its own-save tick cannot re-arm the loop.
+    expect(action("change", "ocx~1")).toBe("ignore");
+    expect(action("rename", "ocx~1")).toBe("reconcile");
+    expect(action("change", "config.json.ocx.home")).toBe("ignore");
+    expect(action("rename", "config.json.ocx.home")).toBe("reconcile");
+    // A differently cased ancestor is still an ancestor: renames reconcile, and a change is
+    // ignored only when that spelling resolves to the recorded directory itself.
+    expect(action("rename", "ANCESTOR")).toBe("reconcile");
+    const upper = (() => { try { return lstatSync(join(dir, "ANCESTOR"), { bigint: true }); } catch { return null; } })();
+    const sameDir = upper !== null && upper.dev === same.dev && upper.ino === same.ino;
+    expect(action("change", "ANCESTOR")).toBe(sameDir ? "ignore" : "reconcile");
+    // A different real directory at the same name: the original is kept aside so
+    // its inode stays allocated and the replacement provably has a new identity.
+    renameSync(ancestor, join(dir, "ancestor-aside"));
+    mkdirSync(ancestor);
+    expect(action("change", "ancestor")).toBe("reconcile");
+    // Missing, and replaced by a link, cannot prove the tick is noise either.
+    rmSync(ancestor, { recursive: true, force: true });
+    expect(action("change", "ancestor")).toBe("reconcile");
+    symlinkSync(foreign, ancestor, "junction");
+    expect(action("change", "ancestor")).toBe("reconcile");
+    unlinkSync(ancestor);
+    rmSync(join(dir, "ancestor-aside"), { recursive: true, force: true });
+    // A watcher overflow reports a null name and must fail closed.
+    expect(action("change", null)).toBe("fail");
+    expect(action("rename", null)).toBe("fail");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unmatched 8.3 short names resolve by identity against the install snapshot", async () => {
+  const inventory = await import("../../src/local-credentials/inventory");
+  const dir = mkdtempSync(join(tmpdir(), "ocx-watch-short-"));
+  try {
+    // Literal tilde names stand in for the short spellings Windows may report for files.
+    mkdirSync(join(dir, "longancestor"));
+    writeFileSync(join(dir, "auth.json"), "{}");
+    writeFileSync(join(dir, "localc~1.jso"), "{}");
+    const ancestorStat = lstatSync(join(dir, "longancestor"), { bigint: true });
+    const entry = {
+      names: new Set(["auth.json", "config.json"]),
+      ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
+        ["longancestor", { dev: ancestorStat.dev, ino: ancestorStat.ino }],
+      ]),
+      targetIdentities: new Map([
+        ["auth.json", inventory.watchEntryIdentity(dir, "auth.json")],
+        ["config.json", inventory.watchEntryIdentity(dir, "config.json")],
+      ]),
+    };
+    expect(entry.targetIdentities.get("config.json")).toBe("absent");
+    const action = (event: string, name: string) => inventory.credentialWatchEventAction(dir, entry, event, name);
+    // The observer's own metadata save under a short spelling, live or already renamed
+    // away, changed no target or ancestor, so it must not re-arm the reconcile.
+    expect(action("change", "localc~1.jso")).toBe("ignore");
+    expect(action("rename", "localc~2.tmp")).toBe("ignore");
+    // A short alias of a tracked ancestor: its change is that ancestor's tick, a rename is
+    // structural. Whether LONGAN~1 resolves depends on the volume's 8.3 setting; either way
+    // the change cannot re-arm the loop.
+    const alias = (() => { try { return lstatSync(join(dir, "LONGAN~1"), { bigint: true }); } catch { return null; } })();
+    const resolvesToAncestor = alias !== null && alias.dev === ancestorStat.dev && alias.ino === ancestorStat.ino;
+    expect(action("change", "LONGAN~1")).toBe("ignore");
+    expect(action("rename", "LONGAN~1")).toBe(resolvesToAncestor ? "reconcile" : "ignore");
+    // A short alias that resolves to a target is that target.
+    linkSync(join(dir, "auth.json"), join(dir, "authjs~1.jso"));
+    expect(action("change", "authjs~1.jso")).toBe("reconcile");
+    unlinkSync(join(dir, "authjs~1.jso"));
+    // A removed or newly created target makes any unresolvable short name relevant.
+    writeFileSync(join(dir, "config.json"), "{}");
+    expect(action("rename", "config~1.jso")).toBe("reconcile");
+    unlinkSync(join(dir, "config.json"));
+    expect(action("rename", "config~1.jso")).toBe("ignore");
+    unlinkSync(join(dir, "auth.json"));
+    expect(action("rename", "auth~1.jso")).toBe("reconcile");
+    // A replaced ancestor does too.
+    writeFileSync(join(dir, "auth.json"), "{}");
+    entry.targetIdentities.set("auth.json", inventory.watchEntryIdentity(dir, "auth.json"));
+    expect(action("rename", "other~1")).toBe("ignore");
+    renameSync(join(dir, "longancestor"), join(dir, "aside"));
+    expect(action("change", "LONGAN~1")).toBe("reconcile");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ordinary churn inside a watched ancestor does not re-arm the observer or advance the generation", async () => {
+  await withLocalCredentialFixture(async f => {
+    f.start();
+    const before = await generationOf(f.inventory);
+    expect(before).toBeDefined();
+    // Writes like runtime-port.json, journals, and this observer's own save tick the
+    // ancestor's last-write time on Windows; that tick must not re-arm a reconcile.
+    for (let i = 0; i < 6; i += 1) {
+      writeFileSync(join(f.home, `runtime-${i}.json`), "{}");
+      if (i % 2 === 1) unlinkSync(join(f.home, `runtime-${i - 1}.json`));
+    }
+    await expectStableGeneration(f.inventory, before);
+    // Suppression must not deafen the observer: a real target write still reconciles.
+    f.put(join(f.home, "config.json"), { model: "fixture" });
+    const revived = await waitForNewGeneration(f.inventory, before);
+    expect(revived).toBeDefined();
+    expect(revived).not.toBe(before);
+  });
+});
+
+test("a same-identity rename of a watched ancestor still advances the generation", async () => {
+  await withLocalCredentialFixture(async f => {
+    f.start();
+    const before = await generationOf(f.inventory);
+    expect(before).toBeDefined();
+    const moved = `${f.codex}-moved`;
+    renameSync(f.codex, moved);
+    renameSync(moved, f.codex);
+    const after = await waitForNewGeneration(f.inventory, before);
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+  });
+});
+
+test("a direct target replacing itself with identical bytes still advances the generation", async () => {
+  await withLocalCredentialFixture(async f => {
+    f.start();
+    const before = await generationOf(f.inventory);
+    expect(before).toBeDefined();
+    const auth = join(f.codex, "auth.json");
+    const shadow = join(f.codex, "auth-shadow.tmp");
+    f.put(auth, { OPENAI_API_KEY: "fixture-native-key" });
+    const writeObserved = await waitForNewGeneration(f.inventory, before);
+    expect(writeObserved).toBeDefined();
+    const settled = await settleGeneration(f.inventory);
+    expect(settled).toBeDefined();
+    // Rebind the directory entry to the same inode: the bytes stay identical, so
+    // only the observed event itself -- never content -- may advance coverage.
+    linkSync(auth, shadow);
+    unlinkSync(auth);
+    renameSync(shadow, auth);
+    const after = await waitForNewGeneration(f.inventory, settled);
+    expect(after).toBeDefined();
+    expect(after).not.toBe(settled);
+    expect(readFileSync(auth, "utf8")).toBe(JSON.stringify({ OPENAI_API_KEY: "fixture-native-key" }));
+  });
+});
+
+test("an unknown entry in the shared native-profile vault still reaches the observer", async () => {
+  await withLocalCredentialFixture(async f => {
+    const shared = join(f.codex, ".opencodex-native-main-profiles");
+    // The vault listing itself is verified, so the directory must be a direct watch
+    // target; otherwise an unknown create/delete pair hides behind an ancestor tick.
+    expect(f.inventory.scanLocalCredentials().targets).toContain(shared);
+    f.start();
+    const before = await generationOf(f.inventory);
+    expect(before).toBeDefined();
+    mkdirSync(shared);
+    const created = await waitForNewGeneration(f.inventory, before);
+    expect(created).toBeDefined();
+    // Let residual notifications from the mkdir drain: the ABA below must be
+    // measured against a settled token, not one still racing earlier events.
+    const settled = await settleGeneration(f.inventory);
+    expect(settled).toBeDefined();
+    const vectorBefore = f.inventory.scanLocalCredentials().vector;
+    const unknown = join(shared, "unknown.json");
+    writeFileSync(unknown, "{}");
+    // Coverage fails closed while the entry is present: no attestation for an
+    // unverifiable vault listing.
+    expect(await f.inventory.collectLocalCredentials()).toBeUndefined();
+    unlinkSync(unknown);
+    // The ABA pair leaves the vault listing -- and therefore the scan vector --
+    // exactly as it was, so any advance can only come from observed events.
+    expect(f.inventory.scanLocalCredentials().vector).toBe(vectorBefore);
+    if (process.platform === "win32") {
+      // On Windows the pair ticks the vault's parent and is itself observed, so
+      // the previous token cannot be reused. Platforms that report no event for
+      // this pair cannot force the advance, so this is a win32-only check, not a
+      // platform-common verification.
+      const after = await waitForNewGeneration(f.inventory, settled);
+      expect(after).toBeDefined();
+      expect(after).not.toBe(settled);
+    } else {
+      expect(await generationOf(f.inventory)).toBeDefined();
+    }
+  });
+});

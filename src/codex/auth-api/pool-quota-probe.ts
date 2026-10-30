@@ -3,7 +3,7 @@ import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
-import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
+import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import type { ManualResetRefreshLineage } from "../routing";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
@@ -377,7 +377,7 @@ export async function commitPoolQuotaResponse(
     return { quota: null, needsReauth: false, credentialGeneration: generation };
   }
   const validPolicyObservation = isValidWhamHistoryObservation(data);
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, validPolicyObservation ? quota : null,
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(data, quota),
     ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
     true);
   return {
