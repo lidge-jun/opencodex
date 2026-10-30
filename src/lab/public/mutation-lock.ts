@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../../lib/file-identity";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { readPrivateRegularFile } from "./file-safety";
 import { PublicEvidenceValidationError } from "./validate";
@@ -40,10 +41,7 @@ type MutationLockReclaim = {
   createdAt: number;
 };
 
-type MutationLockDirectoryIdentity = {
-  dev: number;
-  ino: number;
-};
+type MutationLockDirectoryIdentity = FileIdentity;
 
 function mutationLockPath(configDir?: string): string {
   return join(labCommunityDir(configDir), PUBLIC_EVIDENCE_MUTATION_LOCK_NAME);
@@ -106,7 +104,7 @@ function readMutationLockReclaim(lockPath: string): MutationLockReclaim | null {
 }
 
 function assertMutationLockDirectory(lockPath: string) {
-  const stat = lstatSync(lockPath);
+  const stat = lstatSync(lockPath, { bigint: true });
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new PublicEvidenceValidationError(
       "community_cache_lock",
@@ -120,7 +118,7 @@ function sameDirectoryIdentity(
   left: MutationLockDirectoryIdentity,
   right: MutationLockDirectoryIdentity,
 ): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameFileIdentity(left, right);
 }
 
 function currentDirectoryIdentity(lockPath: string): MutationLockDirectoryIdentity {
@@ -139,7 +137,7 @@ function mutationLockIsReclaimable(lockPath: string, nowMs: number): boolean {
   // The only ownerless state is the tiny mkdir-to-owner publication window. Use
   // a deliberately long fallback so a crashed acquisition can eventually heal
   // without treating an ordinary pause as proof that the owner disappeared.
-  return nowMs - stat.mtimeMs > PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS;
+  return nowMs - statTimeMs(stat.mtimeNs) > PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS;
 }
 
 function unlinkIfPresent(path: string): void {

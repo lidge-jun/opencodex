@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { linkSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,27 @@ function tempRoot(): string {
   roots.push(root);
   return root;
 }
+
+test("private reads reject adjacent NTFS-sized descriptor identities", () => {
+  const path = join(tempRoot(), "target.txt");
+  writeFileSync(path, "safe-bytes");
+  const original = fs.fstatSync;
+  const spy = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stats = options?.bigint ? original(fd, { bigint: true }) : original(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: options?.bigint ? 9_007_199_254_740_993n : Number(9_007_199_254_740_993n) });
+  }) as typeof fs.fstatSync);
+  const originalLstat = fs.lstatSync;
+  const pathSpy = spyOn(fs, "lstatSync").mockImplementation(((p, options) => {
+    const stats = options?.bigint ? originalLstat(p, { bigint: true }) : originalLstat(p);
+    return p === path ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+      { ino: options?.bigint ? 9_007_199_254_740_992n : Number(9_007_199_254_740_992n) }) : stats;
+  }) as typeof fs.lstatSync);
+  try {
+    expect(() => readPrivateRegularFile(path, { maxBytes: 1024, errorCode: "unsafe", errorMessage: "unsafe" }))
+      .toThrow(PublicEvidenceValidationError);
+  } finally { spy.mockRestore(); pathSpy.mockRestore(); }
+});
 
 test("descriptor-bound private reads reject a symlink even when O_NOFOLLOW is unavailable", () => {
   const root = tempRoot();

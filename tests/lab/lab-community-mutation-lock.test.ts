@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +42,22 @@ function createLiveOwnerLock(config: string): string {
 }
 
 describe("community mutation lock", () => {
+  test("does not publish into a lock replaced with an adjacent NTFS-sized identity", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    const original = fs.lstatSync;
+    let observations = 0;
+    const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
+      if (path !== lockPath) return stats;
+      const ino = 9_007_199_254_740_992n + BigInt(Math.min(observations++, 1));
+      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+        { ino: options?.bigint ? ino : Number(ino) });
+    }) as typeof fs.lstatSync);
+    try {
+      expect(() => withPublicEvidenceMutationLock(config, () => {})).toThrow(PublicEvidenceValidationError);
+    } finally { spy.mockRestore(); }
+  });
   test("recovers an ancient incomplete lock before reading committed cache state", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
