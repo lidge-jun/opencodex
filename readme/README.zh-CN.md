@@ -5,6 +5,7 @@
 <h3 align="center">一个本地网关，连接你的 AI 编程工具与模型。</h3>
 <p align="center"><b>在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用你选择的模型，<br>并通过托管配置连接 OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code 等工具。</b><br>
 <a href="https://opencodex.me/zh-cn/reference/client-support/">查看所有受支持的工具 →</a></p>
+<p align="center">GOAT 的一部分：在任意模型、任意机器上运行你的编码智能体 → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
@@ -80,7 +81,9 @@ Sol 驱动会话，并调用 Kimi K3 子代理。
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
 </p>
 
-opencodex 是连接编程工具与模型提供商的轻量级本地网关。它接受 Responses、Chat Completions 和 Anthropic Messages API 请求，并将请求转换为提供商使用的协议；在客户端、模型和提供商支持的情况下，传递流式输出、工具调用、推理和图像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等提供商。它还能管理用于 Codex 认证的 **ChatGPT 账号池**：添加账号并在仪表盘刷新配额，新会话会自动路由到用量最低的健康账号，现有线程则保持绑定到启动它们的账号。
+opencodex 是连接编程工具与模型提供商的轻量级本地网关。它接受 Responses、Chat Completions 和 Anthropic Messages API 请求，并将请求转换为提供商使用的协议；在客户端、模型和提供商支持的情况下，传递流式输出、工具调用、推理和图像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等提供商。
+
+> **商业使用：** GOAT 的付费产品只使用提供商的官方 API 和正式协议。
 
 ## 快速开始
 
@@ -136,16 +139,6 @@ WidgetKit 扩展，可显示代理状态、今日用量和提供商配额；它�
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)列出了写入磁盘的所有内容。
 
 </details>
-
-### ChatGPT 账户池
-
-opencodex 还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，
-在仪表板中刷新它们的 5 小时 / 每周 / 30 天配额。在配额路由下，新会话可以使用
-使用量最低的健康账户；round-robin 和 fill-first 则各自使用自己的策略。现有 Codex
-线程通常会保持对启动它的账户的亲和性，因此长时间的 SSH、tmux 或移动端连接的会话
-不会在对话中途跳账户 —— 但配额重新评估、故障转移、账户排除、亲和性过期，或
-401/403 与 429 恢复，仍可能重新绑定。给账户设定选择顺序，以便其中某个账户 ——
-通常是你的 Codex Desktop 登录 —— 只在其他账户耗尽后才被选中。
 
 ### 赞助商
 
@@ -282,14 +275,6 @@ Bun，Windows 也不需要 WSL。如果 npm 拦截了捆绑运行时的安装脚
 
 - **在 Codex、Claude Code、Claude Desktop 和 Grok Build 中使用任意 LLM** —— 开箱即用
   40 多个提供商，各自保留自己的原生界面。
-- **池化 ChatGPT 账户** —— 线程亲和性、感知配额的自动切换、冷却以及
-  fail-closed 认证处理。
-
-  > **提供商政策说明：** 账户池仅用于路由和运行韧性；它不保证能避开提供商的速率限制、
-  > 执法、停用或其他账户处置。OpenCodex 不支持用额外账户规避提供商限制，也不支持
-  > 在人与人之间共享账户凭证。你有责任遵守各提供商的现行条款。见
-  > [Codex Auth 账户池指南](https://opencodex.me/zh-cn/guides/web-dashboard/)
-  > 以及 [OpenAI 现行使用条款](https://openai.com/policies/terms-of-use/)。
 - **Combos** —— 一个虚拟模型 id，跨提供商做故障转移或加权 round-robin。见
   [combo 指南](https://opencodex.me/zh-cn/guides/combos/)。
 - **任意模型上的子代理** —— 把路由模型放进 Codex 的子代理选择器，带 v1/v2
@@ -430,6 +415,29 @@ npm uninstall -g @bitkyc08/opencodex
 回环（`"hostname": "0.0.0.0"`）**必须**提供 bearer 令牌 —— 没有
 `OPENCODEX_API_AUTH_TOKEN` 时代理会拒绝启动，并且每个客户端请求都必须把它放在
 `x-opencodex-api-key` 中。详情：[配置参考](https://opencodex.me/zh-cn/reference/configuration/)。
+
+## 高级用法
+
+面向高级用户的自托管选项。启用前请先查看各提供商的条款。
+
+### ChatGPT 账户池
+
+opencodex 还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，
+在仪表板中刷新它们的 5 小时 / 每周 / 30 天配额。在配额路由下，新会话可以使用
+使用量最低的健康账户；round-robin 和 fill-first 则各自使用自己的策略。现有 Codex
+线程通常会保持对启动它的账户的亲和性，因此长时间的 SSH、tmux 或移动端连接的会话
+不会在对话中途跳账户 —— 但配额重新评估、故障转移、账户排除、亲和性过期，或
+401/403 与 429 恢复，仍可能重新绑定。给账户设定选择顺序，以便其中某个账户 ——
+通常是你的 Codex Desktop 登录 —— 只在其他账户耗尽后才被选中。
+
+- **池化 ChatGPT 账户** —— 线程亲和性、感知配额的自动切换、冷却以及
+  fail-closed 认证处理。
+
+  > **提供商政策说明：** 账户池仅用于路由和运行韧性；它不保证能避开提供商的速率限制、
+  > 执法、停用或其他账户处置。OpenCodex 不支持用额外账户规避提供商限制，也不支持
+  > 在人与人之间共享账户凭证。你有责任遵守各提供商的现行条款。见
+  > [Codex Auth 账户池指南](https://opencodex.me/zh-cn/guides/web-dashboard/)
+  > 以及 [OpenAI 现行使用条款](https://openai.com/policies/terms-of-use/)。
 
 ## 文档
 

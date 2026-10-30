@@ -5,6 +5,7 @@
 <h3 align="center">AI 코딩 도구와 모델을 연결하는 하나의 로컬 게이트웨이.</h3>
 <p align="center"><b>Codex, Claude Code, Claude Desktop, Grok Build에서 원하는 모델을 사용하고,<br>관리형 설정으로 OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code 등을 연결하세요.</b><br>
 <a href="https://opencodex.me/ko/reference/client-support/">지원하는 모든 도구 보기 →</a></p>
+<p align="center">GOAT의 일부: 어떤 모델로든, 어떤 기기에서든 코딩 에이전트를 실행하세요 → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
@@ -80,7 +81,9 @@ Sol이 세션을 이끌고 Kimi K3 서브에이전트를 호출합니다.
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ko/"><b>전체 문서 →</b></a>
 </p>
 
-opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 로컬 게이트웨이입니다. Responses, Chat Completions, Anthropic Messages API 요청을 받아 프로바이더의 프로토콜로 변환하며, 클라이언트와 모델, 프로바이더가 지원하는 경우 스트리밍, 도구 호출, 추론과 이미지를 전달합니다. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등의 프로바이더를 Codex, Claude Code, Claude Desktop, Grok Build 및 [클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에 나열된 도구와 함께 사용하세요. Codex 인증용 **ChatGPT 계정 풀**도 관리할 수 있습니다. 계정을 추가하고 대시보드에서 쿼터를 갱신하면 새 세션은 사용량이 가장 적은 정상 계정으로 자동 라우팅되고 기존 스레드는 시작한 계정에 고정됩니다.
+opencodex는 코딩 도구와 모델 프로바이더를 연결하는 가벼운 로컬 게이트웨이입니다. Responses, Chat Completions, Anthropic Messages API 요청을 받아 프로바이더의 프로토콜로 변환하며, 클라이언트와 모델, 프로바이더가 지원하는 경우 스트리밍, 도구 호출, 추론과 이미지를 전달합니다. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama 등의 프로바이더를 Codex, Claude Code, Claude Desktop, Grok Build 및 [클라이언트 지원 페이지](https://opencodex.me/ko/reference/client-support/)에 나열된 도구와 함께 사용하세요.
+
+> **상업적 이용:** GOAT의 유료 서비스는 프로바이더의 공식 API와 정식 계약만 사용합니다.
 
 ## 빠른 시작
 
@@ -135,15 +138,6 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
 
 </details>
-
-### ChatGPT 계정 풀
-
-opencodex는 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고,
-대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은
-정상 계정을 쓰고, round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로
-시작한 계정에 붙어 있어서 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터
-재평가, failover, 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다.
-Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면 계정에 선택 순서를 지정하세요.
 
 ### 스폰서
 
@@ -281,14 +275,6 @@ CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크
 
 - **Codex, Claude Code, Claude Desktop, Grok Build에서 어떤 LLM이든** — 내장 프로바이더 40개 이상,
   각각 네이티브 UI를 유지합니다.
-- **ChatGPT 계정 풀** — 스레드 affinity, 쿼터 기반 자동 전환, cooldown과 fail-closed 인증 처리.
-
-  > **프로바이더 정책 안내:** 계정 풀은 라우팅과 운영 복원력만을 위한 것이며, 프로바이더 rate limit,
-  > 제재, 정지, 기타 계정 조치로부터의 보호를 보장하지 않습니다. OpenCodex는 프로바이더 한도를
-  > 우회하려고 추가 계정을 쓰거나, 계정 자격 증명을 사람들끼리 공유하는 행위를 지지하지 않습니다.
-  > 각 프로바이더의 현행 약관을 지키는 책임은 사용자에게 있습니다.
-  > [Codex Auth 계정 풀 가이드](https://opencodex.me/ko/guides/web-dashboard/)와
-  > [OpenAI 이용 약관](https://openai.com/policies/terms-of-use/)을 확인하세요.
 - **Combos** — failover나 가중 round-robin으로 프로바이더를 묶는 가상 모델 id 하나입니다.
   [combo 가이드](https://opencodex.me/ko/guides/combos/)를 확인하세요.
 - **어떤 모델에서든 서브에이전트** — Codex 서브에이전트 선택기에 라우팅 모델을 올리고, v1/v2
@@ -431,6 +417,28 @@ npm uninstall -g @bitkyc08/opencodex
 (`"hostname": "0.0.0.0"`) bearer 토큰이 **필수**입니다. `OPENCODEX_API_AUTH_TOKEN`이 없으면 프록시가
 시작을 거부하고, 모든 클라이언트 요청은 `x-opencodex-api-key`로 토큰을 실어야 합니다. 자세한 내용은
 [설정 레퍼런스](https://opencodex.me/ko/reference/configuration/)를 보세요.
+
+## 고급 사용
+
+파워 유저를 위한 셀프 호스팅 옵션입니다. 켜기 전에 각 프로바이더의 약관을 확인하세요.
+
+### ChatGPT 계정 풀
+
+opencodex는 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고,
+대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은
+정상 계정을 쓰고, round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로
+시작한 계정에 붙어 있어서 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터
+재평가, failover, 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다.
+Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면 계정에 선택 순서를 지정하세요.
+
+- **ChatGPT 계정 풀** — 스레드 affinity, 쿼터 기반 자동 전환, cooldown과 fail-closed 인증 처리.
+
+  > **프로바이더 정책 안내:** 계정 풀은 라우팅과 운영 복원력만을 위한 것이며, 프로바이더 rate limit,
+  > 제재, 정지, 기타 계정 조치로부터의 보호를 보장하지 않습니다. OpenCodex는 프로바이더 한도를
+  > 우회하려고 추가 계정을 쓰거나, 계정 자격 증명을 사람들끼리 공유하는 행위를 지지하지 않습니다.
+  > 각 프로바이더의 현행 약관을 지키는 책임은 사용자에게 있습니다.
+  > [Codex Auth 계정 풀 가이드](https://opencodex.me/ko/guides/web-dashboard/)와
+  > [OpenAI 이용 약관](https://openai.com/policies/terms-of-use/)을 확인하세요.
 
 ## 문서
 

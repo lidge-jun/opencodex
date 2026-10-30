@@ -6,6 +6,7 @@
 <p align="center"><b>Use the models you choose with Codex, Claude Code, Claude Desktop and Grok Build,<br>
 and connect OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code and more through managed configs.</b><br>
 <a href="https://opencodex.me/reference/client-support/">See every supported tool →</a></p>
+<p align="center">Part of GOAT: run your coding agents on any model, on any machine → <a href="https://trygoat.ai">trygoat.ai</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Follow @claudeebum on X"></a>
@@ -86,9 +87,9 @@ accepts the Responses, Chat Completions and Anthropic Messages APIs and translat
 whatever your provider speaks, carrying streaming, tool calls, reasoning and images where the client,
 model and provider support them. Use Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama and other
 providers with Codex, Claude Code, Claude Desktop, Grok Build and the tools listed on the
-[client support page](https://opencodex.me/reference/client-support/). It can also manage a **ChatGPT account pool** for Codex auth: add accounts,
-refresh their quotas in the dashboard, and let new sessions auto-route to the lowest-usage healthy
-account while existing threads stay pinned to the account that started them.
+[client support page](https://opencodex.me/reference/client-support/).
+
+> **Commercial use:** GOAT's paid offerings use official provider APIs and agreements only.
 
 ## Quick start
 
@@ -146,17 +147,6 @@ step needs macOS). The [Desktop App guide](https://opencodex.me/guides/desktop-a
 [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed) lists everything written to disk.
 
 </details>
-
-### ChatGPT account pool
-
-opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
-refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
-the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
-threads normally retain affinity to the account that started them, so long SSH, tmux, or
-mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
-account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
-selection order when one of them — usually your Codex Desktop login — should only be reached for
-once the others are drained.
 
 ### Sponsors
 
@@ -297,16 +287,6 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 - **Use any LLM with Codex, Claude Code, Claude Desktop, and Grok Build** — 40+ providers out of
   the box, each keeping its own native UI.
-- **Pool ChatGPT accounts** — thread affinity, quota-aware auto-switching, cooldown and
-  fail-closed auth handling.
-
-  > **Provider-policy note:** Account pooling is for routing and operational resilience only; it does
-  > not guarantee protection from provider rate limits, enforcement, suspension, or other account
-  > actions. OpenCodex does not endorse using additional accounts to circumvent provider limits or
-  > sharing account credentials between people. You are responsible for complying with each
-  > provider's current terms. See the
-  > [Codex Auth account-pool guidance](https://opencodex.me/guides/web-dashboard/#codex-auth-and-account-pools)
-  > and [OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
 - **Combos** — one virtual model id with failover or weighted round-robin across providers. See
   the [combo guide](https://opencodex.me/guides/combos/).
 - **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2
@@ -455,6 +435,32 @@ By default opencodex binds to `127.0.0.1` and needs no extra authentication. Bin
 loopback (`"hostname": "0.0.0.0"`) **requires** a bearer token — the proxy refuses to start
 without `OPENCODEX_API_AUTH_TOKEN`, and every client request must carry it as
 `x-opencodex-api-key`. Details: [configuration reference](https://opencodex.me/reference/configuration/).
+
+## Advanced usage
+
+Self-hosted options for power users. Review each provider's terms before you enable them.
+
+### ChatGPT account pool
+
+opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
+the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+threads normally retain affinity to the account that started them, so long SSH, tmux, or
+mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
+account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
+selection order when one of them — usually your Codex Desktop login — should only be reached for
+once the others are drained.
+
+- **Pool ChatGPT accounts** — thread affinity, quota-aware auto-switching, cooldown and
+  fail-closed auth handling.
+
+  > **Provider-policy note:** Account pooling is for routing and operational resilience only; it does
+  > not guarantee protection from provider rate limits, enforcement, suspension, or other account
+  > actions. OpenCodex does not endorse using additional accounts to circumvent provider limits or
+  > sharing account credentials between people. You are responsible for complying with each
+  > provider's current terms. See the
+  > [Codex Auth account-pool guidance](https://opencodex.me/guides/web-dashboard/#codex-auth-and-account-pools)
+  > and [OpenAI's current Terms of Use](https://openai.com/policies/terms-of-use/).
 
 ## Documentation
 
