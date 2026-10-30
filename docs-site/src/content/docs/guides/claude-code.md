@@ -856,6 +856,9 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Turning Claude Code off with the dashboard's integration toggle prunes them right away, so a
+  native `claude` session started afterwards no longer sees proxy-only agents. Turning it off
+  again also removes definitions an older version left behind.
 - Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
   roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
   do not sync agents. Turning first-party off alone does not disable agent registration.

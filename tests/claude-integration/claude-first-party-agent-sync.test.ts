@@ -178,3 +178,41 @@ test("Desktop saved:false partial success does not reconcile agent definitions",
     spy.mockRestore();
   }
 });
+
+
+async function toggleClaude(enabled: boolean) {
+  const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
+  const response = await handleManagementAPI(new Request(url, {
+    method: "PUT",
+    headers: { Host: url.host, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  }), url, config, {
+    fetchAllModels: async () => [],
+    claudeAgentConfigDir: claudeDir,
+    saveConfigPreservingClaudeCode: () => { persist(); },
+    ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "ca.pem"), pickerProxyPort: null } }),
+  }, "admin-token", undefined, { trustedLoopback: true });
+  expect(response).not.toBeNull();
+  return { status: response!.status, body: await response!.json() as Record<string, unknown> };
+}
+
+test("turning the Claude integration off prunes only marker-owned definitions (#7968)", async () => {
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  expectRegistered();
+  const user = seedExistingAgents()["ocx-user.md"];
+  const result = await toggleClaude(false);
+  expect(result).toMatchObject({ status: 200, body: { ok: true, changed: true, desiredEnabled: false } });
+  expect(agentFiles()).toEqual({ "ocx-user.md": user });
+});
+
+test("a repeated off removes definitions an older version left behind, and on restores the roster", async () => {
+  config.claudeCode = { ...config.claudeCode, enabled: false };
+  persist();
+  // Left behind while disabled by a version that never pruned on disable.
+  writeFileSync(join(claudeDir, "agents", agentFile), "<!-- generated-by: opencodex -->\nstale roster\n");
+  const result = await toggleClaude(false);
+  expect(result).toMatchObject({ status: 200, body: { ok: true, changed: false } });
+  expect(agentFiles()).toEqual({});
+  expect((await toggleClaude(true)).status).toBe(200);
+  expectRegistered();
+});

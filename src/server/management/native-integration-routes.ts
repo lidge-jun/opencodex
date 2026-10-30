@@ -949,6 +949,9 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
 
     const enabled = body.enabled;
     if (claudeCodeEnabled(config) === enabled) {
+      // Re-run the same reconcile on a repeated OFF: definitions left behind by an older
+      // version that never pruned on disable are removed the next time the user says off.
+      if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
       return jsonResponse({
         ok: true, clientId: "claude", changed: false,
         state: enabled ? "current" : "absent",
@@ -982,6 +985,15 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       }
       throw error;
     }
+
+    /*
+     * The generated ~/.claude/agents/ocx-*.md definitions route through this proxy; a
+     * native Claude Code session that still loads them after OFF follows their
+     * placeholder model (issue #7968). Reconcile now -- OFF prunes only marker-owned
+     * regular files, ON writes the current roster -- instead of waiting for a later
+     * launch or startup sync.
+     */
+    await ctx.syncClaudeAgentDefsBestEffort?.();
 
     let interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
     if (enabled && !interceptReason) {

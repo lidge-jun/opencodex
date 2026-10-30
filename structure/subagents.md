@@ -470,6 +470,13 @@ and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TO
 `null` removes that key. The hint affects new native Codex sessions when their v2 surface
 is active, without changing reasoning effort or the proxy guidance switch.
 
+The integrations toggle `PUT /api/native-integrations/claude` reconciles the generated `ocx-*` definitions
+through `syncClaudeAgentDefsBestEffort` after it persists a change, so Off prunes the marker-owned
+regular files at once and On writes the current roster; a repeated Off reconciles again to remove
+definitions an older version left behind (#7968). User-authored and symlinked `ocx-*` files are never
+touched, and a live sibling instance still owns the directory. Coverage:
+`tests/claude-integration/claude-first-party-agent-sync.test.ts`.
+
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
 whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke
