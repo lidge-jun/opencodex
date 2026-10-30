@@ -155,8 +155,10 @@ A structured account-window exhaustion code (`usage_limit_exceeded`, `usage_limi
 `src/server/responses/run-turn-execution.ts` passes the original adapter event code separately
 from its classified verdict to `src/bridge/errors.ts`. When formatting a 400/422 produces
 `insufficient_quota`, a response-identity WeakMap retains that original code (or its absence).
-`src/server/responses/core-combo-failure.ts` reads that provenance before treating the serialized
-code as upstream evidence. A prose-derived quota code cannot authorize a hop or provider scope
+`src/server/responses/core-combo-failure.ts` and policy-candidate fallback read that provenance
+before treating the serialized code as upstream evidence. Account-lease and translator-budget
+response wrappers carry the original marker, including an absent upstream code, to their rebuilt
+responses. A prose-derived quota code cannot authorize a hop or provider scope
 on 400/422; genuine upstream exhaustion codes remain authoritative on both statuses. Rebuilt
 failure responses retain the same distinction. Raw upstream envelopes carry their own code;
 the formatter's client-facing classification and cyber-policy precedence remain intact.

@@ -27,6 +27,9 @@ The initial decision remains the selection evidence while physical attempts reco
 Cancellation, non-replayable responses and committed output keep the
 [shared replay boundaries](responses-failover.md). A local policy refusal is identified by its
 in-process response identity; matching upstream prose or error codes cannot authorize another attempt.
+Formatted quota errors retain [their upstream-code provenance](responses-combo-boundaries.md#upstream-account-quota-exhaustion-failover)
+through lifecycle wrappers; a reflected quota message on a 400/422 response does not authorize a
+candidate hop merely because formatting serialized it as `insufficient_quota`.
 
 Coverage: `tests/routing/routing-policy-dispatch-scope.test.ts` exercises real request preparation,
 normalization and configured subagent selection with synthetic dispatch. It also covers recovery,
