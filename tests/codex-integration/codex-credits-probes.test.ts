@@ -244,7 +244,6 @@ describe("pool WHAM short-window retirement", () => {
     expect((await commitPoolQuotaResponse(observe(weekly(), null), { ...poolContext(), poolWriter: other })).quota?.shortPercent).toBe(100);
     expect((await commitPoolQuotaResponse(observe(weekly(), null), poolContext())).quota?.shortPercent).toBeUndefined();
   });
-
   test("an explicit upstream denial never retires the carried tuple", async () => {
     savePool();
     const ctx = poolContext();
@@ -263,5 +262,16 @@ describe("pool WHAM short-window retirement", () => {
     expect(evidence({ rate_limit: { allowed: true, primary_window: short(), secondary_window: weekly() } })?.shortWindowAbsent).toBeUndefined();
     expect(evidence({ rate_limit: { primary_window: weekly() } })?.shortWindowAbsent).toBeUndefined();
     expect(evidence({ ...weeklyOnly, additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: 101 } } }] })).toBeNull();
+  });
+
+  test("a writer captured before a credential rollover cannot retire the tuple", async () => {
+    savePool();
+    await commitPoolQuotaResponse(observe(short(), weekly()), poolContext());
+    const before = poolContext().poolWriter!;
+    savePool();
+    const after = poolContext();
+    expect(after.generation).not.toBe(before.credentialGeneration);
+    const replay = await commitPoolQuotaResponse(observe(weekly(), null), { ...after, poolWriter: before });
+    expect(replay.quota?.shortPercent).toBe(100);
   });
 });
