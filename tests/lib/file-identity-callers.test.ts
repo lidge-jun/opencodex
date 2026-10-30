@@ -22,6 +22,7 @@ const scopes: Record<string, string[]> = {
 };
 
 const REGEX_PRECEDES = new Set(["", "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "<", ">", "~", "^"]);
+const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
 
 /**
  * Blank literal text (strings, template text, regex literals, comments) keeping offsets, so only
@@ -30,7 +31,12 @@ const REGEX_PRECEDES = new Set(["", "(", ",", "=", ":", "[", "!", "&", "|", "?",
 function maskNonCode(source: string): string {
   const out = source.split("");
   const blank = (from: number, to: number) => { for (let at = from; at < to; at++) if (out[at] !== "\n") out[at] = " "; };
-  const previousToken = (at: number): string => { let back = at - 1; while (back >= 0 && /\s/.test(out[back]!)) back--; return back < 0 ? "" : out[back]!; };
+  const regexMayStart = (at: number): boolean => {
+    let back = at - 1;
+    while (back >= 0 && /\s/.test(out[back]!)) back--;
+    if (back < 0 || REGEX_PRECEDES.has(out[back]!)) return true;
+    return REGEX_KEYWORDS.test(out.slice(Math.max(0, back - 11), back + 1).join(""));
+  };
   const templateDepths: number[] = [];
   let braces = 0;
   let index = 0;
@@ -56,7 +62,7 @@ function maskNonCode(source: string): string {
       blank(index + 1, at); index = at + 1; continue;
     }
     if (char === "`") { index = scanTemplate(index + 1); continue; }
-    if (char === "/" && REGEX_PRECEDES.has(previousToken(index))) {
+    if (char === "/" && regexMayStart(index)) {
       let at = index + 1;
       let inClass = false;
       while (at < source.length && source[at] !== "\n" && (inClass || source[at] !== "/")) {
@@ -165,6 +171,9 @@ describe("file identity caller stats", () => {
       .toEqual(["numeric stat: lstatSync(q)"]);
     expect(inspect("function check() { const r = /'(/; const a = lstatSync(p); // '\n}", ["check"]))
       .toEqual(["numeric stat: lstatSync(p)"]);
+    expect(inspect("function check() { lstatSync(p, { bigint: true }); if (x) return /'/.test(y); lstatSync(q); // '\n}", ["check"]))
+      .toEqual(["numeric stat: lstatSync(q)"]);
+    expect(inspect("function check() { const half = a / b; const s = lstatSync(p, { bigint: true }); return half / 2; }", ["check"])).toEqual([]);
   });
 
   test("resolves the declaration, not an earlier call, and needs a real observation", () => {
