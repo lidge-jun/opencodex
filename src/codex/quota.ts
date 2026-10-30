@@ -962,6 +962,18 @@ export function withWhamShortWindowAbsence(
   return quota;
 }
 
+/**
+ * Policy evidence for a stored pool account's WHAM read (pool probe or re-login): null when any
+ * reading is invalid. A complete long/null topology marks short-window absence (#7961) unless
+ * upstream explicitly denied the account, since a denial is never evidence that a block ended.
+ */
+export function poolWhamPolicyObservation(
+  data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt"> | null,
+): MainPolicyQuotaObservation | null {
+  if (!quota || !isValidWhamHistoryObservation(data)) return null;
+  return data.rate_limit?.allowed === false ? quota : withWhamShortWindowAbsence(data, quota);
+}
+
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
   return isExplicitLongWindow(window) && normalizeUsagePercent(window?.used_percent) !== undefined;
 }

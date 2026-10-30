@@ -9,7 +9,7 @@ import { fetchMainAccountInfoSnapshot } from "../../src/codex/auth-api/main-acco
 import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
-import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, parseUsageQuota, poolWhamPolicyObservation, type WhamUsageResponse } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
@@ -243,5 +243,25 @@ describe("pool WHAM short-window retirement", () => {
     const other = { ...live, accountId: "other-pool" };
     expect((await commitPoolQuotaResponse(observe(weekly(), null), { ...poolContext(), poolWriter: other })).quota?.shortPercent).toBe(100);
     expect((await commitPoolQuotaResponse(observe(weekly(), null), poolContext())).quota?.shortPercent).toBeUndefined();
+  });
+
+  test("an explicit upstream denial never retires the carried tuple", async () => {
+    savePool();
+    const ctx = poolContext();
+    await commitPoolQuotaResponse(observe(short(), weekly()), ctx);
+    const denied = await commitPoolQuotaResponse(Response.json({ plan_type: "pro", rate_limit: {
+      allowed: false, primary_window: weekly(), secondary_window: null, tertiary_window: null,
+    } }), ctx);
+    expect(denied.quota?.shortPercent).toBe(100);
+  });
+
+  test("pool policy evidence marks absence only for a valid, allowed, complete topology", () => {
+    const evidence = (data: WhamUsageResponse) => poolWhamPolicyObservation(data, parseUsageQuota(data));
+    const weeklyOnly = { rate_limit: { allowed: true, primary_window: weekly(), secondary_window: null } };
+    expect(evidence(weeklyOnly)?.shortWindowAbsent).toBe(true);
+    expect(evidence({ rate_limit: { ...weeklyOnly.rate_limit, allowed: false, tertiary_window: null } })?.shortWindowAbsent).toBeUndefined();
+    expect(evidence({ rate_limit: { allowed: true, primary_window: short(), secondary_window: weekly() } })?.shortWindowAbsent).toBeUndefined();
+    expect(evidence({ rate_limit: { primary_window: weekly() } })?.shortWindowAbsent).toBeUndefined();
+    expect(evidence({ ...weeklyOnly, additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: 101 } } }] })).toBeNull();
   });
 });
