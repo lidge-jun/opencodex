@@ -27,6 +27,12 @@ Si le fichier ne peut pas être analysé, opencodex le sauvegarde en tant que
 `config.json.invalid-<timestamp>`, affiche un avertissement dans la console et démarre avec les valeurs par défaut. Si le fichier est absent,
 la valeur par défaut d'une nouvelle installation est également utilisée : un fournisseur `openai` en mode transfert.
 
+Les commandes locales `ocx config set`, `unset`, `import`, la commande hors ligne `ocx effort`,
+les opérations add/remove sur les modèles personnalisés et add/remove/set-default sur les fournisseurs
+refusent un fichier `config.json` existant invalide ou illisible sans en modifier les octets.
+Exécutez `ocx config validate` et réparez le fichier avant de réessayer. Si une configuration existe déjà,
+import exige également que le fichier cible soit lisible et valide.
+
 ## Priorité et valeurs par défaut
 
 Les valeurs valides de `config.json` remplacent les valeurs par défaut intégrées. Les champs facultatifs absents utilisent les valeurs par défaut

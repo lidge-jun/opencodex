@@ -24,8 +24,8 @@ export interface JevModelInvokerContext {
   /** The request that owns the combo; only its spend root is reused, never its headers. */
   req: Pick<Request, "headers">;
   config: OcxConfig;
-  /** Parent options: only the resolved admission scope and Codex auth policy cross over. */
-  options: Pick<HandleResponsesOptions, "admission" | "admissionScope" | "codexAuthPolicy">;
+  /** Parent options: only the resolved admission scope, Advisor caller policy and Codex auth policy cross over. */
+  options: Pick<HandleResponsesOptions, "admission" | "admissionScope" | "advisorAdmissionPolicy" | "codexAuthPolicy">;
   handleResponses: HandleResponses;
 }
 
@@ -154,6 +154,8 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
         // capability-authenticated internal call carries the caller's scope while its own
         // admission is the host's broad key.
         ...(context.options.admissionScope ? { admissionScope: context.options.admissionScope } : {}),
+        // The parent's ingress snapshot; without it the detached turn would re-read mutable config (#7859).
+        ...(context.options.advisorAdmissionPolicy ? { advisorAdmissionPolicy: context.options.advisorAdmissionPolicy } : {}),
         ...(context.options.codexAuthPolicy ? { codexAuthPolicy: context.options.codexAuthPolicy } : {}),
         // Explicit nulls: handleResponses captures caller credentials only when these are undefined.
         callerDirectAuth: null,

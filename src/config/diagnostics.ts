@@ -8,6 +8,7 @@ import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
+import { WORKFLOW_BUDGET_SHAPE_HINT, workflowBudgetConfigError } from "./schema/workflow-budget";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
@@ -145,6 +146,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
+  if (workflowBudgetConfigError(rawParsed)) warnings.push("workflowBudget ignored: " + WORKFLOW_BUDGET_SHAPE_HINT + "; the built-in ceilings remain");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
@@ -200,7 +202,7 @@ export function subagentDefaultSyncEffective(
 }
 
 export function mergeConfigDefaults(parsed: unknown): unknown {
-  if (!parsed || typeof parsed !== "object") return parsed;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
   const defaults = getDefaultConfig();
   const raw = parsed as Record<string, unknown>;
   // Same absence-is-meaningful pin as the repair merge above.
@@ -735,6 +737,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     // drop a refusal on the next whole-config save; the write boundary rejects it instead.
     ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
+    ?? workflowBudgetConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
@@ -839,12 +842,12 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
   }
 }
 
-export function readConfigFileSnapshot(): ConfigFileSnapshot {
+export function readConfigFileSnapshot(options: { passive?: boolean } = {}): ConfigFileSnapshot {
   try {
     const path = getConfigPath();
     const bytes = readFileSync(path);
     const raw = bytes.toString("utf-8");
-    return { diagnostics: configDiagnosticsFromText(raw, { path, bytes }), raw };
+    return { diagnostics: configDiagnosticsFromText(raw, options.passive ? undefined : { path, bytes }), raw };
   } catch (error) {
     if (isMissingPathError(error)) {
       return {
@@ -857,8 +860,9 @@ export function readConfigFileSnapshot(): ConfigFileSnapshot {
   }
 }
 
-export function readConfigDiagnostics(): ConfigDiagnostics {
-  return readConfigFileSnapshot().diagnostics;
+/** Passive observations project retired providers without publishing recovery backups. */
+export function readConfigDiagnostics(options: { passive?: boolean } = {}): ConfigDiagnostics {
+  return readConfigFileSnapshot(options).diagnostics;
 }
 
 /** Read-only init preflight. Occupied unsafe entries are never treated as absence. */

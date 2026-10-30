@@ -224,6 +224,12 @@ tool completion with rewritten arguments.
 
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
+The provider-opt-in tracker in `src/server/responses-snapshot-repair.ts` caches each open item's
+UTF-8 text size and final code unit. It measures only incoming deltas, corrects split surrogate
+pairs even across empty deltas, replaces the count for authoritative text snapshots, and refunds
+the cached count on item closure. Per-item and aggregate open-text caps remain 8 MiB; crossing
+either cap releases state and disables lifecycle reconstruction. `tests/responses/responses-snapshot-scaling.test.ts`
+checks the linear measurement budget, Unicode boundaries, replacement, closure and cap refusal.
 Serialized request and buffered-response observations use byte counts without measurement arrays.
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
@@ -277,6 +283,11 @@ The [Images display contract](../data-planes/images.md#hosted-responses-image-di
 item/metadata limits and lifecycle behavior; raw continuation replay stays upstream-shaped.
 
 ## Response-log inspection
+
+`src/lib/redact-folding.ts` uses an identity fold and UTF-16 offset map for ASCII
+strings without escape introducers when decoding is enabled, and all ASCII strings
+when it is disabled. Other strings keep the general Unicode/escape fold; all
+credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
 
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
 searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,

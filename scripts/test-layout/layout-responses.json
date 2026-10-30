@@ -1,4 +1,7 @@
 {
+  "graceful-max-output-tokens.test.ts": "responses",
+  "graceful-max-output-tokens-exclusions.test.ts": "responses",
+  "advisor-web-search.test.ts": "advisor",
   "passthrough-media-type.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",

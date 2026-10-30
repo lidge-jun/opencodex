@@ -124,6 +124,14 @@ The checkpoint instruction digest includes the format, so a changed schema force
 
 ## Cursor parameterized models
 
+`src/adapters/cursor/catalog.ts` splits thinking/effort variants at the last `-thinking-`
+delimiter and validates its suffix once. `src/adapters/cursor/claude-id.ts` recognizes the
+numeric Claude base before parsing thinking, fast, and effort markers with linear string
+operations. Both retain legacy spelling, marker precedence, and unknown-ID behavior;
+`tests/providers/cursor/cursor-catalog.test.ts` and
+`tests/providers/cursor/cursor-claude-id.test.ts` compare legacy regex results and exercise
+long repeated-delimiter inputs without wall-clock assertions.
+
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
 `cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,
 `cursor/auto-balance`, and `cursor/auto-intelligence` make each optimization level explicit.

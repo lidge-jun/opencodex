@@ -12,7 +12,7 @@ other providers whose models happen to share a name fragment.
 ## Chronological in-conversation instructions
 
 `src/adapters/openai-chat/messages.ts` keeps text-only timeline developer messages in their
-original slots on every Chat destination and model. A later reminder does not rewrite the
+original slots unless the [LM Studio instruction policy](lm-studio-chat.md) applies. A later reminder does not rewrite the
 leading system prompt or move ahead of earlier turns; pending tool results still precede
 deferred reminders. This behavior previously covered only OpenCode Go and
 `deepseek-v4.1-flash`. The base system prompt, vision conversion, native OpenAI developer
@@ -23,7 +23,7 @@ The role that slot carries is a separate decision, and the setting that makes it
 `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends
 `developer`. Unset means nothing has been recorded about the destination; `true` records an
 upstream that rejects the role; `false` records one that accepts it. The message keeps the slot it
-arrived in in every case — only the role changes, never the position. The unrecorded state is the
+arrived in unless the [LM Studio instruction policy](lm-studio-chat.md) applies. The unrecorded state is the
 folded one because a destination that rejects the role answers
 `400 role 'developer' is not allowed` and the turn never starts, a failure that lands outside this
 repository where no test can reach it. The role was previously decided by testing the base URL host
@@ -396,11 +396,12 @@ ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
 ## Volcengine Ark assistant continuation shapes
 
-The `openai-chat` adapter keeps Volcengine's pay-as-you-go Chat endpoint and Coding Plan endpoint
-on separate empty-assistant contracts. The pay-as-you-go `/api/v3` route retains the structured
-`[{ "type": "text", "text": "" }]` placeholder inferred for #796, while `/api/coding/v3` uses the
-ordinary empty string accepted by its live tool-call continuation contract (#1571). Matching only
-the shared Ark hostname is too broad because the two endpoint families reject opposite shapes.
+The `openai-chat` adapter uses `""` for Kimi K3.1 Pro (`kimi-k3-1-pro`, including dated versions)
+on Ark's pay-as-you-go `/api/v3` route: tool continuations reject the legacy empty-text array.
+This covers ordinary, reasoning-only and synthesized orphan assistant turns. Other pay-as-you-go
+Ark models retain the `[{ "type": "text", "text": "" }]` placeholder inferred for #796.
+Coding Plan's `/api/coding/v3` uses the empty string accepted by its live continuation contract
+(#1571); matching only the shared Ark hostname cannot identify the continuation format.
 
 > Decision record: [ADR-0063](../decisions/ADR-0063-volcengine-ark-assistant-continuation-shapes.md)
 

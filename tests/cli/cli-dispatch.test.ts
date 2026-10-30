@@ -36,6 +36,25 @@ import type { OcxConfig } from "../../src/types";
  * runners, which these tests never invoke, so an empty object is enough. */
 const fakeDeps = {} as unknown as CliDispatchDeps;
 
+test.each(["models", "provider"])("%s dispatch retains normal handler exit codes", async command => {
+  const handler = command === "models"
+    ? spyOn(await import("../../src/cli/models"), "handleModels")
+    : spyOn(await import("../../src/cli/provider"), "handleProviderCommand");
+  const previousExit = process.exitCode;
+  try {
+    const args = [command, "list"];
+    for (const code of [0, 1, 2, 4, 5, 79]) {
+      handler.mockImplementation(async () => { process.exitCode = code; });
+      process.exitCode = 99;
+      expect(await dispatchCommand({ kind: "command", command, args }, { ...fakeDeps, args })).toBe(code);
+      expect(process.exitCode).toBe(code);
+    }
+    expect(handler).toHaveBeenCalledTimes(6);
+    expect(handler).toHaveBeenLastCalledWith(["list"]);
+    // Bun keeps the last code when exitCode is set to undefined, so restore an explicit 0.
+  } finally { handler.mockRestore(); process.exitCode = previousExit ?? 0; }
+});
+
 describe("CLI dispatch command coverage", () => {
   test("every non-hidden registry command is dispatchable", () => {
     const aliasResolved = new Set([...DISPATCH_COMMANDS, ...DISPATCH_ALIASES.keys()]);
