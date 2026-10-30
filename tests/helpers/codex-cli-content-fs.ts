@@ -91,19 +91,28 @@ export function virtualPosixFs(initial: Record<string, VirtualFileSpec>): Virtua
     }
   };
 
-  const statLike = (entry: VirtualEntry, options?: { bigint?: boolean }) => ({
-    isFile: () => entry.kind === "file",
-    isSymbolicLink: () => entry.kind === "symlink",
-    isDirectory: () => false,
-    mode: entry.kind === "file" ? entry.mode : 0o777,
-    size: options?.bigint ? BigInt(entry.kind === "file" ? entry.bytes.length : entry.target.length) : entry.kind === "file" ? entry.bytes.length : entry.target.length,
-    dev: options?.bigint ? 42n : 42,
-    ino: options?.bigint ? BigInt(entry.kind === "file" ? entry.ino : 0) : entry.kind === "file" ? entry.ino : 0,
-    mtimeMs: entry.kind === "file" ? entry.mtimeMs : 0,
-    ctimeMs: entry.kind === "file" ? entry.ctimeMs : 0,
-    mtimeNs: BigInt(entry.kind === "file" ? entry.mtimeMs : 0) * 1_000_000n,
-    ctimeNs: BigInt(entry.kind === "file" ? entry.ctimeMs : 0) * 1_000_000n,
-  });
+  // Fractional milliseconds to nanoseconds without requiring an integral value.
+  const nanoseconds = (ms: number): bigint => BigInt(Math.trunc(ms)) * 1_000_000n + BigInt(Math.round((ms % 1) * 1e6));
+  // Same field types as node:fs Stats and BigIntStats: bigint observations carry bigint mode,
+  // truncated bigint *Ms and exact *Ns; numeric observations carry no *Ns fields.
+  const statLike = (entry: VirtualEntry, options?: { bigint?: boolean }) => {
+    const mode = entry.kind === "file" ? entry.mode : 0o777;
+    const size = entry.kind === "file" ? entry.bytes.length : entry.target.length;
+    const ino = entry.kind === "file" ? entry.ino : 0;
+    const mtimeMs = entry.kind === "file" ? entry.mtimeMs : 0;
+    const ctimeMs = entry.kind === "file" ? entry.ctimeMs : 0;
+    const kind = {
+      isFile: () => entry.kind === "file",
+      isSymbolicLink: () => entry.kind === "symlink",
+      isDirectory: () => false,
+    };
+    if (!options?.bigint) return { ...kind, mode, size, dev: 42, ino, mtimeMs, ctimeMs };
+    return {
+      ...kind, mode: BigInt(mode), size: BigInt(size), dev: 42n, ino: BigInt(ino),
+      mtimeMs: BigInt(Math.trunc(mtimeMs)), ctimeMs: BigInt(Math.trunc(ctimeMs)),
+      mtimeNs: nanoseconds(mtimeMs), ctimeNs: nanoseconds(ctimeMs),
+    };
+  };
 
   const fileAt = (path: string): VirtualFileEntry => {
     const resolved = entries.get(resolvePath(path));
