@@ -52,7 +52,10 @@ export function normalizeMuseToolCatalog(body: unknown, replayPrefixLength = 0, 
   // Namespace lowering drops malformed groups; reject them before any partial promotion.
   const topLevelTools = body.tools === undefined ? undefined : normalizeCatalog(body.tools);
   if (!Array.isArray(body.input)) return topLevelTools === undefined ? body : { ...body, tools: flattenBuiltinNamespace(topLevelTools) };
-  const normalizedInput = body.input.map(item => {
+  const start = Number.isFinite(replayPrefixLength)
+    ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength))) : 0;
+  const normalizedInput = body.input.map((item, index) => {
+    if (index < start) return item;
     if (isPlainObject(item) && (item.type === "additional_tools"
       || (item.type === "tool_search_output" && item.tools !== undefined))) {
       const tools = normalizeCatalog(item.tools);
@@ -60,8 +63,6 @@ export function normalizeMuseToolCatalog(body: unknown, replayPrefixLength = 0, 
     }
     return item;
   });
-  const start = Number.isFinite(replayPrefixLength)
-    ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength))) : 0;
   const currentInput = normalizedInput.slice(start);
   const declared = [...(topLevelTools ?? [])];
   for (const item of currentInput) {

@@ -256,6 +256,21 @@ describe("Meta Muse additional tool catalogs", () => {
     expect(body.tools).toEqual([]);
   });
 
+  test("ignores malformed historical catalogs while normalizing current declarations", () => {
+    for (const historical of [
+      { type: "additional_tools" },
+      { type: "additional_tools", tools: [{ type: "namespace", name: "old", tools: [{ type: "web_search" }] }] },
+    ]) {
+      const definition = { name: "read", parameters: { type: "object", properties: {} } };
+      const raw = { input: [historical, { type: "additional_tools", tools: [{ type: "function", function: definition }] }] };
+      const original = structuredClone(raw);
+      const body = JSON.parse(build(meta, raw, false, 1).body);
+      expect(body.input).toEqual([]);
+      expect(body.tools).toEqual([{ type: "function", ...definition }]);
+      expect(raw).toEqual(original);
+    }
+  });
+
   test("does not promote historical search discoveries or let removed history shift current declarations", () => {
     const stale = { ...lookup, name: "stale" };
     const live = { ...lookup, name: "live" };
