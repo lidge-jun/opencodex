@@ -1082,6 +1082,10 @@ unchanged and were not probed in this update.
 > models. Coding Plan defaults to `ark-code-latest`, while Agent Plan defaults to
 > `deepseek-v4-flash`.
 
+On the pay-as-you-go Ark route, Kimi K3.1 Pro (`kimi-k3-1-pro`, including dated versions)
+replays tool-only assistant turns with an empty string. Its endpoint rejects the legacy
+empty-text array with HTTP 400; other Ark models keep their existing continuation format.
+
 > **Volcengine Plan usage restriction:** Volcengine documents Coding Plan and Agent Plan quota as
 > valid only inside supported AI coding tools, and warns that using a plan key for general API
 > calls may suspend the subscription or ban the account. Routing Codex or Claude Code through

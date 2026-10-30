@@ -27,6 +27,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | `quota` | `--refresh`, `--json` | Sağlayıcı kota raporlarını okuyun. |
 | `presets` | `--json` | Kontrol paneli sağlayıcı önayarlarını listeleyin. |
 | `account-mode` | `pool`, `direct`, `--json` | Havuzlanmış veya doğrudan Codex hesap yönlendirmesini seçin. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | CC-Switch SQLite (`cc-switch.db`) veya JSON dosyasından anahtarsız sağlayıcı girdilerini önizleyin, seçerek uygulayın veya geri yükleyin. |
 
 Varsayılan `add`, `remove` ve `set-default` yerel yapılandırmayı değiştirir. Çalışan proxy için `--live`, canlı silme için ayrıca `--yes` kullanın. `--sync --json` da kayıttan sonra eşitlemeyi dener; başarısızlıkta kayıt korunur, sıfır olmayan çıkış kodu ve `needsSync: true` döner. `--live` ile `--sync` birlikte kullanılamaz. Pacing ve snapshot/apply için [İngilizce kılavuza](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) bakın.
 
@@ -62,6 +63,27 @@ saygı duymanız gereken bir sınırdır. Önemli olmasının iki nedeni:
 
 Gizli olan her şey için `--api-key` veya bir OAuth girişi kullanın.
 :::
+
+### Anahtarsız CC-Switch sağlayıcı içe aktarma
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Proxy'yi başka bir terminalde başlatın (veya ocx ensure çalıştırın), ardından anahtar ekleyin:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Ayrı geri alma yolu (önce proxy'yi durdurun; yalnızca düzenlenmemiş anahtarsız girdileri kaldırır):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch`, düz bir CC-Switch SQLite veritabanından veya eski JSON dosyasından **yalnızca** açıkça izin verilen gizli olmayan meta veri alanlarındaki değerleri (sağlayıcı kimlikleri, uygulama türleri, temel URL'ler, bağdaştırıcılar ve varsayılan modeller) yansıtır. Girdiyi taramak için kaynak ve gömülü yapılandırma baytları geçici olarak okunur; gizli alanlar, serbest metin görünen adları ve TOML yorumları bayt düzeyinde atlanır, hiçbir zaman dizelere çözülmez, yazılmaz veyagünlüklenmez ve geçici bayt arabellekleri `finally` içinde sıfırlanır. Dar temel URL yolu kuralları (boş yola veya `/v1`, `/api/v1`, `/compatible-mode/v1` gibi 1–4 küçük harfli `[a-z0-9._-]` API yolu segmentine sahip `http(s)://host[:port]`) ve tanımlayıcı/model sözdizimi denetimleri derinlemesine savunma sağlar ve uygun olmayan değerleri yansıtmadan reddeder. Kaynak dosyalar `O_NOFOLLOW | O_NONBLOCK` tanımlayıcı doğrulamasıyla bir kez açılır ve SQLite için geçici dosya olmadan bellekte salt okunur olarak açılır; birden fazla sabit bağlantıya (`nlink > 1`) sahip SQLite dosyaları yan dosya denetimlerinin takma ad yoluyla aşılmasını önlemek için reddedilir ve kardeş `-wal` veya `-journal` dosyası boş değilse içe aktarma reddedilerek CC-Switch'i kapatıp (veya veritabanını checkpoint edip) yeniden denemenizi ister. Yalnızca güvendiğiniz yerel bir CC-Switch kaynağından içe aktarın ve kimlik bilgisi eklemeden önce yazdırılan her kimliği, modeli ve `baseUrl` değerini doğrulayın:
+
+- **Önizleme (varsayılan):** `--source <FILE>` gerektirir, hiçbir şey yazmaz ve bulunan, uygun, çakışan ve geçersiz girdileri raporlar.
+- **Uygulama (`--apply`):** `--source <FILE>` ve durdurulmuş bir proxy (`ocx stop`) gerektirir; Remote Link Child üzerinde reddedilir. Yalnızca seçili girdileri aktarmak için `--provider <id>` bayrağını tekrarlayın veya geri döngü/özel ağ temel URL'lerine izin vermek için `--allow-private-network` geçirin. Önceden önizleme yapılmasa bile `--apply`, anahtarsız sağlayıcı girdilerini ve `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` geri alma günlüğünü yazmadan önce içe aktarılan her sağlayıcı kimliğini, varsayılan modeli ve hedef URL'yi yazdırır (metin modunda `stdout`, `--json` modunda `stderr`); etkin bir günlük varken ikinci bir `--apply` reddedilir. Yazdırılan girdileri doğrulayın, proxy'yi başlatın (başka bir terminalde `ocx start` veya `ocx ensure`) ve `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (standart girdi borusu) ya da `ocx login <provider>` ile kimlik bilgilerini ekleyin.
+- **Geri yükleme (`--restore`):** kimlik bilgisi eklemenin devamı olmayan ayrı bir geri alma yoludur; durdurulmuş bir proxy (`ocx stop`) gerektirir, Remote Link Child üzerinde reddedilir ve `--source`, `--provider` veya `--allow-private-network` almaz. `auth.json` dosyasını bayt düzeyinde salt okunur denetler (okunamaz veya bozuksa güvenli biçimde korur) ve etkin günlükten yalnızca içe aktarılan anahtarsız durumuyla hâlâ eşleşen, `defaultProvider` olarak seçilmemiş ve yönlendirme, kombolar (combos), yedekleme politikası (fallback policy), OAuth hesapları veya API anahtarları tarafından başvurulmayan sağlayıcıları kaldırır.
 
 ## Kimlik Doğrulama
 

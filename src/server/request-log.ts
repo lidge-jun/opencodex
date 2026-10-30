@@ -47,6 +47,7 @@ import {
   normalizeClaudeCompatibilityUsageLog,
   normalizeRequestFailureAttribution,
   normalizeRequestSpend,
+  normalizedAttempts,
   readRecentUsageEntries,
   modelIdentityLogFields, recordObservedServedModel,
   usageForFinalLog,
@@ -358,6 +359,8 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** True when persistence normalization drops any attempt. */
+  attemptNormalizationDropped?: boolean;
   /**
    * Upstream spend for the whole logical request: sends aggregated across attempts and combo
    * children, split into settled and unresolved, with the budget state and move reasons that
@@ -514,6 +517,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
@@ -620,12 +625,16 @@ export function addRequestLog(entry: RequestLogEntry) {
   const servedModel = modelIdentityLogFields(entry).servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
+  const attempts = normalizedAttempts(entry.attempts);
+  const attemptsDropped = Array.isArray(entry.attempts) && attempts.length < entry.attempts.length;
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
     && servedModel === entry.servedModel
     && entry.claudeCompatibility === undefined
     && entry.jevDecision === undefined
+    && !attemptsDropped
     ? entry
-    : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
+    : { ...entry, ...(entry.attemptNormalizationDropped === true || attemptsDropped ? { attemptNormalizationDropped: true } : {}),
+      ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
   if (!servedModel && retained !== entry) {
     delete retained.servedModel;
@@ -700,6 +709,8 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      ? { attemptNormalizationDropped: true } : {}),
       ...(entry.spend ? { spend: entry.spend } : {}),
       ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
         ? { cacheProvenance: entry.cacheProvenance }

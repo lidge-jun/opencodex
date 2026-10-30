@@ -93,6 +93,8 @@ Les vues Utilisation, Tableau de bord, Fournisseurs, Catalogue des fournisseurs 
 
 ### Filtrer les requêtes
 
+Le détail d’une requête privilégie la cause d’échec amont enregistrée plutôt qu’un message générique d’erreur du proxy. Le nombre d’envois physiques est toujours affiché lorsqu’il est valide ; une comptabilité absente ou invalide affiche **Unavailable**, et non zéro. **Retries** compte les envois après le premier uniquement lorsqu’une seule tentative entièrement réglée et cohérente est enregistrée. Les tentatives multiples, les comptabilités non résolues ou incohérentes et les normalisations avec perte omettent les retries au lieu d’en inventer. Une cause persistante inconnue revient au titre fondé sur le statut, sans attribution brute.
+
 Les filtres combinent interface, requêtes interceptées, fournisseur, modèle exact, statut, période, vitesse et identifiant de conversation dans le journal chargé. Les choix incluent les tentatives de repli ; les modèles ignorent la casse et les espaces externes, sans correspondance partielle. Un choix disparu revient à Tous.
 
 Les périodes de 15 minutes, une heure et un jour évoluent toutes les 30 secondes dans l’onglet Logs, même sans actualisation automatique. La vitesse mesure les jetons de sortie par seconde sur toute la durée : moins de 15, de 15 à moins de 50, ou au moins 50 ; les valeurs indisponibles sont exclues quand ce filtre est actif. Réussite : 2xx ; erreur : 4xx/5xx.

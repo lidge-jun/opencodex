@@ -396,11 +396,12 @@ ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
 ## Volcengine Ark assistant continuation shapes
 
-The `openai-chat` adapter keeps Volcengine's pay-as-you-go Chat endpoint and Coding Plan endpoint
-on separate empty-assistant contracts. The pay-as-you-go `/api/v3` route retains the structured
-`[{ "type": "text", "text": "" }]` placeholder inferred for #796, while `/api/coding/v3` uses the
-ordinary empty string accepted by its live tool-call continuation contract (#1571). Matching only
-the shared Ark hostname is too broad because the two endpoint families reject opposite shapes.
+The `openai-chat` adapter uses `""` for Kimi K3.1 Pro (`kimi-k3-1-pro`, including dated versions)
+on Ark's pay-as-you-go `/api/v3` route: tool continuations reject the legacy empty-text array.
+This covers ordinary, reasoning-only and synthesized orphan assistant turns. Other pay-as-you-go
+Ark models retain the `[{ "type": "text", "text": "" }]` placeholder inferred for #796.
+Coding Plan's `/api/coding/v3` uses the empty string accepted by its live continuation contract
+(#1571); matching only the shared Ark hostname cannot identify the continuation format.
 
 > Decision record: [ADR-0063](../decisions/ADR-0063-volcengine-ark-assistant-continuation-shapes.md)
 

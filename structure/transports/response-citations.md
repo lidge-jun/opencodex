@@ -20,3 +20,5 @@ missing-title error; it does not validate source URLs, establish actual citation
 spans or prove provider acceptance beyond the exercised serialization fixtures.
 The existing destination gate owns eligibility, and the test layout explicitly
 registers the regression beside other Responses tests.
+
+The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.

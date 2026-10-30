@@ -446,6 +446,28 @@ describe("Zed OpenAI tool relay", () => {
     expect(rawBefore).toContain("reasoning");
   });
 
+  test("a current tool_search_output stays current after a replayed wrapper is lifted", async () => {
+    catalogFetch();
+    const lookup = { type: "function", name: "lookup", parameters: { type: "object", properties: {} } };
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      input: [
+        { type: "additional_tools", tools: [{ type: "function", name: "old_tool", parameters: { type: "object", properties: {} } }] },
+        { type: "tool_search_output", call_id: "search", status: "completed", execution: "client", tools: [lookup] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+      ],
+      tools: [],
+      stream: true,
+    });
+    parsed._zedAuthContext = { userId: "user-1" };
+    parsed._replayPrefixLen = 1;
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(JSON.stringify(body.input)).not.toContain("old_tool");
+    expect(body.tools.map((tool: { name?: string }) => tool.name)).toEqual(["lookup"]);
+  });
+
   async function relay(frames: unknown[]): Promise<unknown[]> {
     catalogFetch();
     const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello", stream: true });
