@@ -583,6 +583,8 @@ export interface OcxConfig {
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
   dropCodexSafetyBuffering?: boolean;
+  /** Opt in to completing truncated plain-text translated Responses turns; default off. */
+  completeOnMaxOutputTokens?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *
@@ -714,6 +716,8 @@ export interface OcxConfig {
    * See {@link OcxOpencodeClientExportConfig}.
    */
   opencodeClientExport?: OcxOpencodeClientExportConfig;
+  /** Opt-in dialect for the managed Pi-based omo block; omitted keeps `openai-completions` (#7431). */
+  omoClientExport?: { api?: "openai-completions" | "openai-responses" };
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;

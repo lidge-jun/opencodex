@@ -55,6 +55,7 @@ export interface AdvisorRuntimeDeps {
   workerIdentity: string;
   workerModelId: string;
   admissionScope?: AdmissionModelScope;
+  admissionPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy;
   abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   baseUrlOverride?: string;
@@ -222,7 +223,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         current.timeoutMs,
         consultationSignal,
         deps.baseUrlOverride,
-      deps.admissionScope,
+        deps.admissionScope,
+        deps.admissionPolicy,
       );
     } catch (error) {
       activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });

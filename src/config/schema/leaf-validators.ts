@@ -865,6 +865,11 @@ export const opencodeClientExportSchema = z.object({
   timeoutMs: opencodeClientExportTimeout.optional().catch(undefined),
 }).passthrough();
 
+/** omo dialect: an unknown value is dropped so the export falls back to the Chat default. */
+export const omoClientExportSchema = z.object({
+  api: z.enum(["openai-completions", "openai-responses"]).optional().catch(undefined),
+}).passthrough();
+
 export const asideProfileSyncSchema = z.object({
   allProfiles: z.boolean().optional(),
   profiles: z.record(
