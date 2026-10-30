@@ -370,8 +370,8 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   are dropped from that block. Mapped models keep their mapped tier either way. With two or more measured unmapped
   candidates, those are tiered by distinct score values (equal scores share a tier) without requiring prices, and unmeasured
   unmapped ones are not proposed; otherwise price rank decides. `capability.error` is set only when no key is configured or
-  the source cannot be read; a source that answered but matched fewer than two candidates leaves it null, and each
-  proposal's `tierSource` (here `price`) shows the fallback. Three or more priced models split evenly across the three
+  the source cannot be read; a source that answered but matched fewer than two candidates leaves it null, and a
+  proposal picked by price rank carries `tierSource: "price"`. Three or more priced models split evenly across the three
   tiers. Fewer are anchored at the top, the dearest frontier and each cheaper one a tier lower, so one is frontier and two
   are standard and frontier; fast is the tier left empty, which keeps a standard role on the cheaper model. Price tiering
   excludes unpriced, unmapped models. A role gets the lowest sufficient tier, then the lowest price, then the higher
