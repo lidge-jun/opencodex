@@ -1,0 +1,55 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen/qwen3.8-27b-free",
+      "supported_operations": ["CHAT_COMPLETIONS"],
+      "supported_endpoints": ["/v1/chat/completions"]
+    },
+    {
+      "id": "llmtr/qwen3-8-27b",
+      "supported_operations": ["CHAT_COMPLETIONS"],
+      "supported_endpoints": ["/v1/chat/completions"]
+    },
+    {
+      "id": "google/gemini-3.8-flash",
+      "supported_operations": ["CHAT_COMPLETIONS", "RESPONSES"],
+      "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    },
+    {
+      "id": "openai/gpt-image-2",
+      "supported_operations": ["IMAGES_GENERATIONS"],
+      "supported_endpoints": ["/v1/images/generations"]
+    },
+    {
+      "id": "llmtr/embeddingmagibu-200m",
+      "supported_operations": ["EMBEDDINGS"],
+      "supported_endpoints": ["/v1/embeddings"]
+    },
+    {
+      "id": "jina/rerank",
+      "supported_operations": ["RERANK"],
+      "supported_endpoints": ["/v1/rerank"]
+    },
+    {
+      "id": "google/veo-3.1-generate-001",
+      "supported_operations": ["VIDEO_GENERATIONS"],
+      "supported_endpoints": ["/v1/video/generations"]
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "supported_operations": ["RESPONSES"],
+      "supported_endpoints": ["/v1/responses"]
+    },
+    {
+      "id": "vendor/chat-without-endpoint",
+      "supported_operations": ["CHAT_COMPLETIONS"],
+      "supported_endpoints": ["/v1/responses"]
+    },
+    {
+      "id": "vendor/endpoint-without-operation",
+      "supported_operations": ["RESPONSES"],
+      "supported_endpoints": ["/v1/chat/completions"]
+    }
+  ]
+}

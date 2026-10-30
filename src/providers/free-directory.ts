@@ -1,4 +1,4 @@
-import { getProviderRegistryEntry } from "./registry";
+import { getProviderRegistryEntry, normalizedProviderEndpoint, type ProviderModelDiscoverySpec } from "./registry";
 
 export type ProviderAccessGroup =
   | "recurring-or-keyless"
@@ -11,7 +11,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
     "agy", "aihorde", "api-airforce", "arcee-ai", "bazaarlink", "blackbox", "bluesminds", "cerebras",
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
     "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
-    "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
+    "llmtr", "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
     "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
   ],
   "recurring-uncapped": [
@@ -51,6 +51,11 @@ export interface FreeDirectoryProvider {
   anthropicEofTolerance?: boolean;
   note?: string;
   googleMode?: "ai-studio" | "vertex";
+  /**
+   * Live-discovery policy for this exact fixed key destination. Resolved by base URL and adapter,
+   * never copied into saved config and never read from PROVIDER_REGISTRY.
+   */
+  modelDiscovery?: ProviderModelDiscoverySpec;
 }
 
 type ConnectableOverride = Partial<Omit<FreeDirectoryProvider, "id" | "accessGroups">>;
@@ -111,6 +116,13 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   // WebSocket protocol and does not describe this endpoint.
   iflytek: openAi("https://spark-api-open.xf-yun.com/v1", "https://console.xfyun.cn", { verification: "official", documentationUrl: "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html" }),
   liquid: openAi("https://inference.liquid.ai/v1", "https://playground.liquid.ai", { modelsUrl: "https://inference.liquid.ai/v1/models" }),
+  // Checked 2026-10-29. Docs: https://llmtr.com/docs/gateway/chat-completions/.
+  // Operator: Knowhy, Istanbul (https://llmtr.com/terms). GET /v1/models is public and returned
+  // 382 rows. Chat requires a Bearer key. Six chat rows are the standing zero-price set; other
+  // zero-price rows are dated promotions or EVREN bring-your-own-key routes. Discovery is hybrid:
+  // those six ids are seeded, and live discovery still lists paid chat models, including
+  // Turkey-hosted llmtr/qwen3-8-27b. A model that accepts `reasoning` takes a boolean, not an object.
+  llmtr: openAi("https://llmtr.com/v1", "https://llmtr.com/dashboard/api-keys", { verification: "official", documentationUrl: "https://llmtr.com/docs/gateway/chat-completions/", modelsUrl: "https://llmtr.com/v1/models", lastVerified: "2026-10-29", discovery: "hybrid", models: ["nvidia/nemotron-3-ultra-550b-a55b", "openai/gpt-oss-safeguard-20b", "qwen/qwen3.8-27b-free", "nvidia/nemotron-3.5-super-vl-free", "agnes/agnes-3.0-flash", "agnes/agnes-2.5-flash"], modelDiscovery: { filter: { allOf: [{ path: ["supported_operations"], containsAll: ["CHAT_COMPLETIONS"] }, { path: ["supported_endpoints"], containsAll: ["/v1/chat/completions"] }] } }, note: "The six listed chat models had a zero list price on 2026-10-29. qwen/qwen3.8-27b-free, nvidia/nemotron-3-ultra-550b-a55b, and nvidia/nemotron-3.5-super-vl-free reset on a daily quota; openai/gpt-oss-safeguard-20b, agnes/agnes-2.5-flash, and agnes/agnes-3.0-flash were listed free with no end date. A key is still required. When a daily quota is used up, those requests stop until the next day. Other zero-price rows are dated promotions or EVREN bring-your-own-key routes and stay on live discovery only. Models that are neither listed above nor covered by those promotions or routes are paid at published per-token rates, including Turkey-hosted ids such as llmtr/qwen3-8-27b. Pricing: https://llmtr.com/pricing" }),
   mistral: openAi("https://api.mistral.ai/v1", "https://console.mistral.ai/api-keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.mistral.ai/api/endpoint/models" }),
   morph: openAi("https://api.morphllm.com/v1", "https://morphllm.com", { verification: "official", documentationUrl: "https://docs.morphllm.com/api-reference/introduction" }),
   "ollama-cloud": openAi("https://ollama.com/v1", "https://ollama.com/settings/keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.ollama.com/cloud", modelsUrl: "https://ollama.com/api/tags" }),
@@ -202,7 +214,7 @@ const LABELS: Record<string, string> = {
   bazaarlink: "BazaarLink", blackbox: "Blackbox", bluesminds: "Bluesminds", "cloudflare-ai": "Cloudflare AI",
   coze: "Coze", "duckduckgo-web": "DuckDuckGo Web", "felo-web": "Felo Web", friendliai: "FriendliAI",
   gemini: "Google Gemini", "github-models": "GitHub Models", huggingchat: "HuggingChat", huggingface: "Hugging Face",
-  iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", "muse-spark-web": "Muse Spark Web",
+  iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", llmtr: "LLMTR", "muse-spark-web": "Muse Spark Web",
   nlpcloud: "NLP Cloud", "ollama-cloud": "Ollama Cloud", ovhcloud: "OVHcloud", "qwen-web": "Qwen Web",
   "t3-web": "T3 Web", uncloseai: "UncloseAI", ainative: "AI Native", baidu: "Baidu Qianfan",
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
@@ -238,3 +250,26 @@ export const FREE_PROVIDER_DIRECTORY: readonly FreeDirectoryProvider[] = Object.
       ...override,
     } satisfies FreeDirectoryProvider;
   });
+
+/**
+ * Discovery policy for a directory row's exact fixed key destination.
+ *
+ * A saved provider is matched by adapter and base URL, including when it was saved under another
+ * name. Templated rows, OAuth rows, and a base URL shared by more than one filtered row do not
+ * match. The spec stays in this module: it is not a registry preset and it is not written to config.
+ */
+export function directoryModelDiscoveryForDestination(
+  provider: { baseUrl?: string; adapter?: string; authMode?: string },
+): ProviderModelDiscoverySpec | undefined {
+  if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) return undefined;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
+  const endpoint = normalizedProviderEndpoint(provider.baseUrl);
+  const matches = FREE_PROVIDER_DIRECTORY.filter(row =>
+    row.modelDiscovery
+    && row.authKind === "key"
+    && row.adapter === provider.adapter
+    && row.baseUrl
+    && !/\{[^}]*\}/.test(row.baseUrl)
+    && normalizedProviderEndpoint(row.baseUrl) === endpoint);
+  return matches.length === 1 ? matches[0]!.modelDiscovery : undefined;
+}
