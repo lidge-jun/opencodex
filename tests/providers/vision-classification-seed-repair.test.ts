@@ -161,7 +161,16 @@ describe("stale vision classification migration", () => {
 
 describe("stale whole-list noVisionModels seed (#6906)", () => {
   test("repairs Claude's released seed while preserving edited lists and per-model choices", () => {
-    const seed = STALE_NO_VISION_SEEDS.find(entry => entry.provider === "claude-cli")!.seeds[0]!;
+    // Independent released v2.94.0 fixture: a typo in the migration must not repair its own test data.
+    const seed = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
+    const ordinary = { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", noVisionModels: [...seed] };
+    const initial = { providers: { "claude-cli": ordinary } } as unknown as OcxConfig;
+    expect(requiresVisionPreprocessing(initial, ordinary, "claude-fable-5-1", "claude-cli")).toBe(true);
+    const upgraded = projectStartupConfigRepairs(initial);
+    const upgradedRow = upgraded.config.providers!["claude-cli"]!;
+    expect(upgraded.changed).toBe(true);
+    expect(upgradedRow.noVisionModels).toBeUndefined();
+    expect(requiresVisionPreprocessing(upgraded.config, upgradedRow, "claude-fable-5-1", "claude-cli")).toBe(false);
     const row = (list: readonly string[]) => ({ adapter: "claude-cli", baseUrl: "https://api.anthropic.com", noVisionModels: [...list],
       modelCapabilities: { "claude-fable-5-1": { inputModalities: ["text" as const] } } });
     const saved = row(seed);

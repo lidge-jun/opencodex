@@ -103,3 +103,74 @@ test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage a
     }
   }
 }, 20000);
+
+
+test("image requests retain Responses history and Chat tool results through CLI stdin", async () => {
+  const definition = getAdapterDefinition("claude-cli")!;
+  const originalCreate = definition.create;
+  const releaseSpend = acquireOwnedSpendHome();
+  const model = "claude-cli/claude-sonnet-5-5";
+  const config = { port: 0, defaultProvider: "claude-cli", providers: {
+    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
+  } } as OcxConfig;
+  definition.create = provider => createClaudeCliAdapter(provider, {
+    which: () => process.execPath,
+    timeoutMs: 5000,
+    spawn: (_command, args, options) => spawn(process.execPath,
+      [join(import.meta.dir, "../fixtures/claude-efficiency-cli.ts"), JSON.stringify(args), "", "image-replay"], options),
+  });
+  // Exercise the real request handlers and owned CLI child without needing a listener or credentials.
+  const post = async (path: string, body: unknown) => {
+    const request = new Request(`http://127.0.0.1/v1/${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const response = path === "responses"
+      ? await handleResponses(request, config, { model: "", provider: "" })
+      : await handleChatCompletions(request, config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    return await response.json() as any;
+  };
+  const replay = (response: any) => JSON.parse(response.output
+    ? response.output.flatMap((item: any) => item.content ?? []).filter((part: any) => part.type === "output_text").map((part: any) => part.text).join("")
+    : response.choices[0].message.content);
+  const image = (data: string) => ({ type: "input_image", image_url: `data:image/png;base64,${data}` });
+  const native = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+  try {
+    const first = await post("responses", { model, stream: false, store: true, input: [
+      { role: "user", content: [{ type: "input_text", text: "First pair" }, image("QUFB"), image("QkJC")] },
+    ] });
+    const initial = replay(first);
+    expect(initial).toEqual([{ type: "text", text: "USER:\nFirst pair\n[image]\n[image]" }, native("QUFB"), native("QkJC")]);
+    const second = await post("responses", { model, stream: false, previous_response_id: first.id, input: [
+      { role: "user", content: [{ type: "input_text", text: "Next" }, image("Q0ND")] },
+    ] });
+    const continued = replay(second);
+    expect(continued.slice(0, initial.length)).toEqual(initial);
+    expect(continued.filter((part: any) => part.type === "image")).toEqual([native("QUFB"), native("QkJC"), native("Q0ND")]);
+    const tools = [{ type: "function", name: "screenshot", description: "Return a screenshot", parameters: { type: "object", properties: {} } }];
+    const call = { type: "function_call", name: "screenshot", call_id: "shot_1", arguments: "{}" };
+    const tool = await post("responses", { model, stream: false, tools, input: [
+      { role: "user", content: "Inspect" }, call,
+      { type: "function_call_output", call_id: "shot_1", output: [image("RERERQ==")] },
+    ] });
+    const toolReplay = replay(tool);
+    expect(toolReplay.at(-2).text).toContain("TOOL RESULT (call_id: shot_1)");
+    expect(toolReplay.at(-1)).toEqual(native("RERERQ=="));
+    const chat = await post("chat/completions", { model, stream: false,
+      tools: [{ type: "function", function: { name: "screenshot", description: "Return a screenshot", parameters: { type: "object", properties: {} } } }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Inspect" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUFB" } }] },
+        { role: "assistant", content: null, tool_calls: [{ id: "shot_1", type: "function", function: { name: "screenshot", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "shot_1", content: [{ type: "image_url", image_url: { url: "https://example.test/shot.png" } }] },
+        { role: "user", content: "Continue" },
+      ],
+    });
+    const chatReplay = replay(chat);
+    expect(chatReplay.filter((part: any) => part.type === "image")).toEqual([native("QUFB"), { type: "image", source: { type: "url", url: "https://example.test/shot.png" } }]);
+    expect(chatReplay.find((part: any) => part.type === "text" && part.text.startsWith("TOOL RESULT"))?.text).toContain("call_id: shot_1");
+    expect(chatReplay.at(-1)).toEqual({ type: "text", text: "USER:\nContinue" });
+  } finally {
+    definition.create = originalCreate;
+    releaseSpend();
+  }
+}, 20000);

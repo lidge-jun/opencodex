@@ -197,6 +197,13 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
         emit({ type: "error", message: admission.message ?? "Claude subscription usage is exhausted; launches are paused until the reset.", status: 429, errorType: "rate_limit_error", code: "claude_subscription_cooldown", retryable: false });
         return;
       }
+      // Developer instructions are folded into a text-only system prompt, not replayed as user data.
+      if (parsed.context.messages.some(message => message.role === "developer"
+        && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
+        emit({ type: "error", message: "Claude Code CLI does not support images in developer instructions.",
+          status: 400, errorType: "invalid_request_error", code: "unsupported_input_modality", retryable: false });
+        return;
+      }
       let bridge;
       try {
         bridge = stableClaudeToolBridge(buildCodeBuddyToolBridge(parsed));
