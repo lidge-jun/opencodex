@@ -394,3 +394,199 @@ describe("aclFailure diagnostics on required harden errors", () => {
     expect(result.diagnostics).not.toContain(ownerSid);
   });
 });
+
+describe("aclFailure boundary against an untrusted runner-thrown cause", () => {
+  // A runner that throws instead of returning a result hands its raw error to
+  // the required-mode sanitizer. Every aclFailure field on that error is
+  // untrusted: a getter may return a different value on each read or throw, and
+  // a Proxy may trap `in` or `get`. The sanitizer must read each field once,
+  // validate and copy only that local value, and drop the whole record when any
+  // read throws — a hostile exception must never replace the sanitized error.
+  const throwingRunnerCause = (aclFailure: unknown): Error =>
+    Object.assign(new Error("injected runner failure"), { code: "EICACLS", aclFailure });
+
+  test("a changing step getter cannot swap the validated value for a path at copy time", () => {
+    const filePath = secretFile();
+    let stepReads = 0;
+    let exitCodeReads = 0;
+    const hostile = {
+      get step() { stepReads += 1; return stepReads <= 2 ? "/grant:r" : filePath; },
+      stage: "child_result",
+      elapsedMs: 1,
+      budgetMs: 100,
+      success: false,
+      get exitCode() { exitCodeReads += 1; return exitCodeReads <= 3 ? 5 : `marker:${filePath}`; },
+      timedOut: false,
+    };
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(hostile); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    // Validated values — never the later hostile reads — reach the record.
+    expect(error.aclFailure).toMatchObject({ step: "/grant:r", stage: "child_result", exitCode: 5 });
+    expect(JSON.stringify(error.aclFailure)).not.toContain(filePath);
+  });
+
+  test("every copied field is read exactly once, keeping valid edge values", () => {
+    const filePath = secretFile();
+    const reads: Record<string, number> = {};
+    const field = <T>(name: string, value: T): PropertyDescriptor => ({
+      enumerable: true,
+      get() { reads[name] = (reads[name] ?? 0) + 1; return value; },
+    });
+    const hostile = Object.defineProperties({}, {
+      step: field("step", "/grant:r"),
+      stage: field("stage", "child_result"),
+      elapsedMs: field("elapsedMs", -1),
+      budgetMs: field("budgetMs", 0),
+      success: field("success", false),
+      exitCode: field("exitCode", null),
+      timedOut: field("timedOut", false),
+    });
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(hostile); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    expect(error.aclFailure).toEqual({
+      step: "/grant:r",
+      stage: "child_result",
+      elapsedMs: -1,
+      budgetMs: 0,
+      success: false,
+      exitCode: null,
+      timedOut: false,
+    });
+    for (const name of ["step", "stage", "elapsedMs", "budgetMs", "success", "exitCode", "timedOut"]) {
+      expect(reads[name]).toBe(1);
+    }
+  });
+
+  test("an invalid first read drops the record even when a later read would pass", () => {
+    const filePath = secretFile();
+    let stepReads = 0;
+    const hostile = {
+      get step() { stepReads += 1; return stepReads === 1 ? filePath : "/grant:r"; },
+      stage: "child_result",
+      elapsedMs: 1,
+      budgetMs: 100,
+      success: false,
+      exitCode: 5,
+      timedOut: false,
+    };
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(hostile); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    expect(error.aclFailure).toBeUndefined();
+  });
+
+  test("an invalid success field short-circuits before the timedOut getter runs", () => {
+    const filePath = secretFile();
+    let timedOutReads = 0;
+    const hostile = {
+      step: "/grant:r",
+      stage: "child_result",
+      elapsedMs: 1,
+      budgetMs: 100,
+      success: "yes" as unknown as boolean,
+      get timedOut() { timedOutReads += 1; return false; },
+      exitCode: 5,
+    };
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(hostile); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    expect(error.aclFailure).toBeUndefined();
+    // Original guard read timedOut only after success passed; keep that order.
+    expect(timedOutReads).toBe(0);
+  });
+
+  test("a throwing aclFailure field getter drops the record but keeps the sanitized error", () => {
+    const filePath = secretFile();
+    const hostile = Object.defineProperty({
+      stage: "child_result",
+      elapsedMs: 1,
+      budgetMs: 100,
+      success: false,
+      exitCode: 5,
+      timedOut: false,
+    }, "step", {
+      enumerable: true,
+      get() { throw new Error(`getter-marker ${filePath}`); },
+    });
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(hostile); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    expect(error.aclFailure).toBeUndefined();
+    expect(error.message).not.toContain("getter-marker");
+    expect(error.message).not.toContain(filePath);
+  });
+
+  test("proxy has/get traps on the untrusted cause drop the record without replacing the error", () => {
+    const wellFormed = {
+      step: "/grant:r",
+      stage: "child_result",
+      elapsedMs: 1,
+      budgetMs: 100,
+      success: false,
+      exitCode: 5,
+      timedOut: false,
+    };
+
+    // The record's own get trap throws when step is read.
+    const recordProxy = new Proxy({ ...wellFormed }, {
+      get(target, prop) {
+        if (prop === "step") throw new Error("record-get-marker");
+        return (target as Record<string | symbol, unknown>)[prop];
+      },
+    });
+    const filePath1 = secretFile("secret-a.json");
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(recordProxy); });
+    const first = thrownAclError(() => hardenSecretPath(filePath1, { required: true }));
+    expect(first.code).toBe("EICACLS");
+    expect(first.aclFailure).toBeUndefined();
+    expect(first.message).not.toContain("record-get-marker");
+
+    // The cause's own has trap throws only for the aclFailure key — a trap that
+    // also fires on the separate cause.code boundary is outside this fix.
+    const filePath2 = secretFile("secret-b.json");
+    const causeProxy = new Proxy(throwingRunnerCause({ ...wellFormed }), {
+      has(target, prop) {
+        if (prop === "aclFailure") throw new Error(`cause-has-marker ${filePath2}`);
+        return prop in target;
+      },
+    });
+    setIcaclsRunnerForTests(() => { throw causeProxy; });
+    const second = thrownAclError(() => hardenSecretPath(filePath2, { required: true }));
+    expect(second.code).toBe("EICACLS");
+    expect(second.aclFailure).toBeUndefined();
+    expect(second.message).not.toContain("cause-has-marker");
+    expect(second.message).not.toContain(filePath2);
+  });
+
+  test("a well-formed plain record and its allowlisted spawn code survive verbatim", () => {
+    const filePath = secretFile();
+    const clean = {
+      step: "/remove:g",
+      stage: "spawn_failed",
+      elapsedMs: 2,
+      budgetMs: 50,
+      success: false,
+      exitCode: null,
+      timedOut: false,
+      spawnErrorCode: "ENOENT",
+    };
+    setIcaclsRunnerForTests(() => { throw throwingRunnerCause(clean); });
+
+    const error = thrownAclError(() => hardenSecretPath(filePath, { required: true }));
+
+    expect(error.code).toBe("EICACLS");
+    expect(error.aclFailure).toEqual({ ...clean });
+  });
+});
