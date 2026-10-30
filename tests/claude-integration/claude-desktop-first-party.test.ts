@@ -67,16 +67,6 @@ function expectStatus(result: { status: number; body: unknown }, status: number)
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-1p-"));
   lifecycleLock = isolateClientLifecycleLock(root);
-  // The local-CA ACL inspection spawns PowerShell under the shared 30 s principal-lookup budget,
-  // which loaded hosted Windows runners can exhaust (local_ca_path_unsafe). This file tests
-  // first-party apply, not that inspection (claude-intercept-local-ca-windows.test.ts runs it
-  // natively), so report the private ACL the hardener produces for the real current SID.
-  if (process.platform === "win32") {
-    const sid = resolveCurrentWindowsPrincipal(30_000).replace(/^\*/, "");
-    setLocalCaWindowsAclRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: JSON.stringify({
-      owner: sid, protected: true, rules: [{ sid, type: 0, rights: 2032127 }],
-    }) }));
-  }
   library = join(root, "desktop-library");
   claudeDir = join(root, "claude");
   for (const key of ENV_KEYS) previous[key] = process.env[key];
@@ -84,11 +74,23 @@ beforeEach(() => {
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
+  // The local-CA ACL inspection spawns PowerShell under the shared 30 s principal-lookup budget,
+  // which a loaded hosted Windows runner can exhaust (local_ca_path_unsafe). This file tests
+  // first-party apply; claude-intercept-local-ca.test.ts runs the native inspection. Report the
+  // private ACL for the current SID, which production resolves (and caches) before this runner.
+  if (process.platform === "win32") {
+    setLocalCaWindowsAclRunnerForTests((_path, timeoutMs) => {
+      const sid = resolveCurrentWindowsPrincipal(timeoutMs).replace(/^\*/, "");
+      return { success: true, exitCode: 0, timedOut: false, stdout: JSON.stringify({
+        owner: sid, protected: true, rules: [{ sid, type: 0, rights: 2032127 }],
+      }) };
+    });
+  }
 });
 
 afterEach(async () => {
-  await flushConfigDirHardeningAndReaps(root);
-  setLocalCaWindowsAclRunnerForTests(null);
+  try { await flushConfigDirHardeningAndReaps(root); }
+  finally { setLocalCaWindowsAclRunnerForTests(null); }
   lifecycleLock.restore();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
