@@ -11,6 +11,7 @@ import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import { buildCatalogEntriesFromObservedState } from "../../src/codex/catalog/sync";
 import { cmdV2 } from "../../src/cli/v2";
 import * as recovery from "../../src/codex/cli-update-recovery";
+import * as gate from "../../src/codex/cli-update-selection-gate";
 import { loadConfig, saveConfig } from "../../src/config";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, SUBAGENT_SURFACE_GUIDE_URL } from "../../src/config/multi-agent-surface";
 import { isMultiAgentV2Enabled } from "../../src/codex/features";
@@ -594,6 +595,23 @@ describe("ocx v2 revalidates state once the awaited admission enters", () => {
       hold.release();
       expect(await running).toBe(0);
     } finally { hold.restore(); }
+    expect(loadConfig().multiAgentMode).toBe("v1");
+    expect(loadConfig().keepNativeChatGptOnV1).toBe(true);
+  });
+
+  test("mode saves inside admission, so a save landing after the callback is kept", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = false\n");
+    const real = gate.withCodexCliSelectionParentWriteAsync;
+    const spy = spyOn(gate, "withCodexCliSelectionParentWriteAsync").mockImplementation(async (run, options) => {
+      const value = await real(run, options);
+      // A competing writer between the admitted callback and this command's continuation.
+      saveConfig({ ...loadConfig(), keepNativeChatGptOnV1: true });
+      return value;
+    });
+    try {
+      expect(await cmdV2(["mode", "v1"], { execFile: () => {}, sync: fixtureSync, log: captureLog().log })).toBe(0);
+    } finally { spy.mockRestore(); }
     expect(loadConfig().multiAgentMode).toBe("v1");
     expect(loadConfig().keepNativeChatGptOnV1).toBe(true);
   });
