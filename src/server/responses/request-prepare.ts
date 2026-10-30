@@ -150,6 +150,7 @@ import { nativeContextLimits } from "../../codex/catalog";
 import type { ClientToolCatalogRestriction } from "../../lib/empty-tool-catalog";
 import {
   currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
   collectDeclaredWireToolNames,
   collectDeclaredBareCustomWireToolNames,
 } from "../responses-undeclared-tool-guard";
@@ -481,14 +482,19 @@ export async function prepareResponsesRequest(
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
-    // The direct settings body omits tools, including current legacy Chat functions. Recover
-    // their wire names from the decoded conversation before restricting delivery authority.
+    // Direct decoders already own current function names (including legacy Chat functions).
+    // Project only those names; bridging the conversation would retain its reasoning twice.
     const catalogBody = options.directRequest && parsed.context.tools?.length
-      ? options.directRequest.bridgeConversation() : parsed._rawBody;
+      ? { tools: parsed.context.tools.map(tool => ({ type: "function", name: tool.name })) } : parsed._rawBody;
     const currentCatalog = currentTurnWireToolCatalogBody(catalogBody, parsed._replayPrefixLen);
     clientToolCatalogRestriction = {
       declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
       bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
+      canonicalToolNames: collectDeclaredWireToolNames(currentCatalog, { canonicalOnly: true }),
+      // Ordinary Responses validation stays with its delivery owner; replay cannot add authority.
+      enforceDeclaredToolNames: (inboundWire === "responses" && (parsed._replayPrefixLen ?? 0) > 0)
+        || options.clientDeclaredEmptyToolCatalog === true
+        || hasExplicitEmptyToolCatalog(currentCatalog),
     };
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;

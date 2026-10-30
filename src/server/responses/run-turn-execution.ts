@@ -49,7 +49,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
-import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
+import { currentTurnToolBridgeMaps, emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
@@ -755,8 +755,7 @@ export async function executeResponsesRunTurn(
 
     const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
       ? requestState.clientToolCatalogRestriction : undefined;
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = clientToolCatalog
-      ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,

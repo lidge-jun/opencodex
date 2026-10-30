@@ -19,9 +19,21 @@ so clearing a caller-owned Buffer does not mutate the signing key. No key is gen
 The absent/malformed-key default changes no input. The pass uses bounded linear
 indexing with at most 65,536 input items and retains existing item references.
 
-Independently of structural normalization, request preparation derives downstream
-tool-call authority from the current-turn wire catalog. Declarations prepended while
-expanding `previous_response_id` remain history and cannot authorize a new call.
+Independently of structural normalization, request preparation snapshots current-turn
+tool names for output normalization. Responses enforces membership in that catalog;
+Chat and Messages enforce it when the caller explicitly empties a catalog, while
+omitted and partial catalogs retain deferred delivery. Declarations prepended while
+expanding `previous_response_id` remain history and cannot grant current-turn membership.
+Delivery intersects current names with the existing selection-filtered bridge names, so
+`tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
+delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
+Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
+`tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
+and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
+share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.
+Namespace restoration must also name a current canonical identity; an ambiguous historical bare
+alias is refused while the current canonical spelling stays callable. The two identity directions
+are covered by `tests/responses/current-turn-tool-catalog-namespace.test.ts` on both delivery lanes.
 
 `tests/responses/turn-membership.test.ts` covers token and scope controls;
 `tests/responses/turn-membership-ingress.test.ts` proves actual ingress-to-supplier
