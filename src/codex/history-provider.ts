@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
 import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
-import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../lib/file-identity";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
   codexHistoryBackupId,
@@ -695,7 +695,7 @@ function inspectBackupForNoop(path: string, stateDbPath: string): StrictBackupIn
 function historyFileIdentity(path: string): string | null {
   try {
     const stat = statSync(path, { bigint: true });
-    return [stat.dev, stat.ino, Number(stat.size), Number(stat.mtimeNs) / 1e6, Number(stat.ctimeNs) / 1e6].join(":");
+    return [stat.dev, stat.ino, Number(stat.size), statTimeMs(stat.mtimeNs), statTimeMs(stat.ctimeNs)].join(":");
   } catch {
     return null;
   }

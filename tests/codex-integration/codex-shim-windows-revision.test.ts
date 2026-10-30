@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { autoRestoreCodexShim, installCodexShim, uninstallCodexShim } from "../../src/codex/shim";
 import { createWorkerCommitWindow, createCodexCliUpdateFence, codexCliUpdateSelectionGate } from "../../src/codex/cli-update-selection-gate";
-import { stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { sameFingerprint, stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { ownedWrapperFingerprint, wrapperInodeIsOurs } from "../../src/codex/shim-wrapper-write";
 import { readBoundedRegularFile } from "../../src/codex/shim-state-file";
 import { tryAcquireShimRestoreLock } from "../../src/codex/shim-restore-lock";
 import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
@@ -67,6 +68,39 @@ test("shim probe rejects adjacent NTFS-sized file identities", () => {
   }) as typeof fs.lstatSync);
   try { expect(stableShimPathProbe(path)).toBeNull(); }
   finally { stat.mockRestore(); }
+});
+
+for (const [name, owns] of [
+  ["wrapperInodeIsOurs", (path, probe, written) => wrapperInodeIsOurs(probe, written, undefined)],
+  ["ownedWrapperFingerprint", (path, _probe, written) => ownedWrapperFingerprint(path, written) !== undefined],
+] as const satisfies ReadonlyArray<readonly [string, (path: string, probe: NonNullable<ReturnType<typeof stableShimPathProbe>>, written: { dev: bigint; ino: bigint }) => boolean]>) test(`${name} rejects adjacent identities with equal numeric fields`, () => {
+  const path = join(dir, "launcher");
+  fs.writeFileSync(path, "launcher fixture");
+  const id = 2n ** 53n;
+  const real = fs.lstatSync;
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? real(target, { bigint: true }) : real(target);
+    return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value,
+      { dev: options?.bigint ? 1n : 1, ino: options?.bigint ? id : Number(id) }) : value;
+  }) as typeof fs.lstatSync);
+  try {
+    const probe = stableShimPathProbe(path)!;
+    const written = { dev: 1n, ino: id + 1n };
+    expect(probe.fingerprint.ino).toBe(Number(written.ino));
+    expect(owns(path, probe, written)).toBe(false);
+    // A legacy numeric observation must not regain ownership after rounding.
+    const legacy = { dev: 1, ino: Number(written.ino) } as unknown as typeof written;
+    expect(owns(path, probe, legacy)).toBe(false);
+  } finally { stat.mockRestore(); }
+});
+
+test("fingerprint comparisons fail closed when identity is missing", () => {
+  const path = join(dir, "launcher");
+  fs.writeFileSync(path, "launcher fixture");
+  const fingerprint = stableShimPathProbe(path)!.fingerprint;
+  const missing = { ...fingerprint, identity: undefined } as unknown as typeof fingerprint;
+  expect(sameFingerprint(fingerprint, missing)).toBe(false);
+  expect(sameFingerprint(missing, fingerprint)).toBe(false);
 });
 
 test("shim state read rejects adjacent NTFS-sized file identities", () => {

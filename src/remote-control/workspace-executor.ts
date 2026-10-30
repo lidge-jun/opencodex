@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
-import { sameFileIdentity } from "../lib/file-identity";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 import {
   REMOTE_WORKSPACE_MAX_TOOL_RESULT_BYTES,
   type RemoteWorkspaceToolName,
@@ -178,7 +178,7 @@ function assertOpenedRegularFile(root: string, target: string, descriptor: numbe
   }
   if (!opened.isFile() || !linked.isFile() || linked.isSymbolicLink()
     || !sameFileIdentity(opened, linked)
-    || Number(opened.birthtimeNs) / 1e6 !== Number(linked.birthtimeNs) / 1e6) {
+    || statTimeMs(opened.birthtimeNs) !== statTimeMs(linked.birthtimeNs)) {
     throw new Error("remote workspace file identity changed during access");
   }
   const canonical = realpathSync(target);
@@ -221,7 +221,7 @@ function assertApprovedRootIdentity(root: ApprovedRoot): void {
   const canonical = realpathSync(root.path);
   if (!linked.isDirectory() || linked.isSymbolicLink()
     || !sameFileIdentity(linked, root)
-    || Number(linked.birthtimeNs) / 1e6 !== root.birthtimeMs
+    || statTimeMs(linked.birthtimeNs) !== root.birthtimeMs
     || relative(root.path, canonical) !== "") {
     throw new Error("remote workspace approved root identity changed; pair the folder again");
   }
@@ -263,7 +263,7 @@ export class RemoteWorkspaceExecutor {
         path: canonical,
         dev: identity.dev,
         ino: identity.ino,
-        birthtimeMs: Number(identity.birthtimeNs) / 1e6,
+        birthtimeMs: statTimeMs(identity.birthtimeNs),
       });
     }
     if (this.roots.size === 0) throw new Error("remote workspace executor needs one approved root");

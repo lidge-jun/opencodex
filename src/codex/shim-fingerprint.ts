@@ -13,7 +13,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { posix, win32 } from "node:path";
-import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../lib/file-identity";
 import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER } from "./shim-templates";
 import type { ShimFileState } from "./shim-state-file";
 
@@ -59,8 +59,8 @@ function statFingerprint(path: string, follow: boolean): Omit<ShimPathFingerprin
       kind: stat.isSymbolicLink() ? "symlink" : "file",
       mode: Number(stat.mode),
       size: Number(stat.size),
-      mtimeMs: Number(stat.mtimeNs) / 1e6,
-      ctimeMs: Number(stat.ctimeNs) / 1e6,
+      mtimeMs: statTimeMs(stat.mtimeNs),
+      ctimeMs: statTimeMs(stat.ctimeNs),
     };
   } catch {
     return null;
@@ -71,7 +71,7 @@ function sameFingerprint(
   left: ShimPathFingerprint | Omit<ShimPathFingerprint, "target">,
   right: ShimPathFingerprint | Omit<ShimPathFingerprint, "target">,
 ): boolean {
-  return sameFileIdentity(left.identity, right.identity)
+  return !!left.identity && !!right.identity && sameFileIdentity(left.identity, right.identity)
     && left.kind === right.kind
     && left.mode === right.mode
     && left.size === right.size

@@ -1,11 +1,32 @@
 import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileIdentityKey, sameFileIdentity } from "../../src/lib/file-identity";
+import { fileIdentityKey, sameFileIdentity, statTimeMs } from "../../src/lib/file-identity";
 import { readCodexHomeJournal } from "../../src/codex/codex-home-owner";
 import { readBoundedCodexConfig } from "../../src/codex/inject/bounded-config-reader";
 import { readBoundedLocalFile } from "../../src/codex/orca-auth-source";
 import { repoPath } from "../helpers/repo-root";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+test("bigint timestamps match numeric stat timestamps", () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "ocx-stat-time-"));
+  try {
+    const path = join(root, "file");
+    fs.writeFileSync(path, "fixture");
+    let roundingDifferences = 0;
+    for (const time of [1793358320.9811772, 1793358320.5383171, 1700000000.123456789, 1.5]) {
+      fs.utimesSync(path, time, time);
+      const big = fs.lstatSync(path, { bigint: true });
+      const numeric = fs.lstatSync(path);
+      expect(statTimeMs(big.mtimeNs)).toBe(numeric.mtimeMs);
+      expect(statTimeMs(big.ctimeNs)).toBe(numeric.ctimeMs);
+      if (Number(big.mtimeNs) / 1e6 !== numeric.mtimeMs) roundingDifferences++;
+    }
+    // Some platforms round both calculations identically for these timestamps.
+    if (roundingDifferences > 0) expect(roundingDifferences).toBeGreaterThan(0);
+  } finally { removeTreeWithRetry(root); }
+});
 
 test("compares and formats adjacent large file IDs", () => {
   const a = { dev: 7n, ino: 2n ** 53n };

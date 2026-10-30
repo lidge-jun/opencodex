@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { sameFileIdentity } from "../lib/file-identity";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
 
@@ -143,21 +143,21 @@ function readBoundedRegularFile(path: string, maxBytes: number): { bytes: Buffer
       return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
     }
     if (!sameFileIdentity(before, after) || before.size !== after.size
-      || Number(before.mtimeNs) / 1e6 !== Number(after.mtimeNs) / 1e6 || Number(before.ctimeNs) / 1e6 !== Number(after.ctimeNs) / 1e6
+      || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
       || before.mode !== after.mode || before.uid !== after.uid
       || !sameFileIdentity(lexicalBefore, before)
       || lexicalBefore.mode !== before.mode || lexicalBefore.uid !== before.uid
-      || lexicalBefore.size !== before.size || Number(lexicalBefore.mtimeNs) / 1e6 !== Number(before.mtimeNs) / 1e6 || Number(lexicalBefore.ctimeNs) / 1e6 !== Number(before.ctimeNs) / 1e6
+      || lexicalBefore.size !== before.size || statTimeMs(lexicalBefore.mtimeNs) !== statTimeMs(before.mtimeNs) || statTimeMs(lexicalBefore.ctimeNs) !== statTimeMs(before.ctimeNs)
       || !lexicalAfter.isFile() || lexicalAfter.isSymbolicLink() || !sameFileIdentity(lexicalAfter, after)
       || lexicalAfter.mode !== after.mode || lexicalAfter.uid !== after.uid
-      || lexicalAfter.size !== after.size || Number(lexicalAfter.mtimeNs) / 1e6 !== Number(after.mtimeNs) / 1e6 || Number(lexicalAfter.ctimeNs) / 1e6 !== Number(after.ctimeNs) / 1e6) {
+      || lexicalAfter.size !== after.size || statTimeMs(lexicalAfter.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(lexicalAfter.ctimeNs) !== statTimeMs(after.ctimeNs)) {
       return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
     }
     const stat = Object.assign(Object.create(Object.getPrototypeOf(after)), after, {
       dev: Number(after.dev), ino: Number(after.ino), mode: Number(after.mode), nlink: Number(after.nlink),
       uid: Number(after.uid), gid: Number(after.gid), rdev: Number(after.rdev), size: Number(after.size),
-      blksize: Number(after.blksize), blocks: Number(after.blocks), atimeMs: Number(after.atimeNs) / 1e6,
-      mtimeMs: Number(after.mtimeNs) / 1e6, ctimeMs: Number(after.ctimeNs) / 1e6, birthtimeMs: Number(after.birthtimeNs) / 1e6,
+      blksize: Number(after.blksize), blocks: Number(after.blocks), atimeMs: statTimeMs(after.atimeNs),
+      mtimeMs: statTimeMs(after.mtimeNs), ctimeMs: statTimeMs(after.ctimeNs), birthtimeMs: statTimeMs(after.birthtimeNs),
     }) as Stats;
     return { bytes: buffer, content: buffer.toString("utf8"), stat };
   } finally {
