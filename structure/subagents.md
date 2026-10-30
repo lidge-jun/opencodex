@@ -359,36 +359,30 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   shape, a missing role, or a tier or effort outside the vocabulary leaves that role **unsized** with the reason;
   a missing or unknown domain defaults to general. Keys beyond the six answer fields are ignored; the other five stay required. The
   sizing model never names a model.
-- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
-  `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
-  opencodex config first, then measured score in the role's task domain, then price rank (input plus output
-  per 1M tokens). The sizing answer carries a neutral `domain` (coding, agentic, reasoning, writing,
-  knowledge, general; missing means general), and `src/codex/role-capability.ts` reads that domain's
-  scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
-  resolves. With no key or on failure it keeps configured tiers and price signals, reports the reason
-  through `capability.error`, and returns null source attribution. The source refuses redirects and
-  retains a 30-second timeout and a 16 MiB body bound.
-  The response's `capability` block attributes the source; Artificial Analysis terms forbid
-  redistribution, so its scores are dropped from that block. Models mapped in `codexRoleTiers` keep their
-  mapped tier either way. With two or more measured unmapped candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
-  and unmeasured unmapped ones are not proposed; otherwise price rank decides. `capability.error` carries the
-  reason only when no key is configured or the source cannot be read; a source that answered but matched
-  fewer than two candidates leaves it null, and the per-proposal `tierSource: "price"` shows the
-  fallback. Each proposal names its `tierSource`. Three or more priced models
-  split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
-  one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
-  which keeps a standard role on the cheaper model. Price tiering excludes unpriced, unmapped models. A role
-  gets the lowest sufficient tier, then the lowest price, then the higher measured score, then the model it
-  already uses when that model is in the tie, then picker order. Effort binds to ladder positions of the chosen
-  model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
-  replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
-  the same TOML-aware scan. An empty ladder gives `proposedEffort: null`, meaning no proposal;
-  Apply omits `effort` and preserves the existing pin. A null proposal never means a null PUT. A routed
-  model's ladder is its row's
-  `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
-  explicit empty list stays empty, and a row without its own default takes the catalog's default when that
-  rung is on the ladder.
+- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from `subagentSelectableModels` (the
+  same list the role picker renders) and tiers them: `codexRoleTiers` in the opencodex config first, then measured score in
+  the role's task domain, then price rank (input plus output per 1M tokens). The sizing answer carries a neutral `domain`
+  (coding, agentic, reasoning, writing, knowledge, general; missing means general), and `src/codex/role-capability.ts` reads
+  that domain's scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
+  resolves; the source refuses redirects and keeps a 30-second timeout and a 16 MiB body bound. With no key or on failure it
+  keeps configured tiers and price signals, reports the reason through `capability.error`, and returns null source
+  attribution. The `capability` block attributes the source; Artificial Analysis terms forbid redistribution, so its scores
+  are dropped from that block. Mapped models keep their mapped tier either way. With two or more measured unmapped
+  candidates, those are tiered by distinct score values (equal scores share a tier) without requiring prices, and unmeasured
+  unmapped ones are not proposed; otherwise price rank decides. `capability.error` is set only when no key is configured or
+  the source cannot be read; a source that answered but matched fewer than two candidates leaves it null, and each
+  proposal's `tierSource` (here `price`) shows the fallback. Three or more priced models split evenly across the three
+  tiers. Fewer are anchored at the top, the dearest frontier and each cheaper one a tier lower, so one is frontier and two
+  are standard and frontier; fast is the tier left empty, which keeps a standard role on the cheaper model. Price tiering
+  excludes unpriced, unmapped models. A role gets the lowest sufficient tier, then the lowest price, then the higher
+  measured score, then the model it already uses when that model is in the tie, then picker order. Effort binds to ladder
+  positions of the chosen model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is
+  proposed for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or replace
+  `model_reasoning_effort` through the same span-preserving editor as `model`, located by the same TOML-aware scan. An empty
+  ladder gives `proposedEffort: null`, meaning no proposal; Apply omits `effort` and preserves the existing pin. A null
+  proposal never means a null PUT. A routed model's ladder is its row's `reasoningEfforts`; a row that declares none takes
+  the ladder the written Codex catalog shows for it, an explicit empty list stays empty, and a row without its own default
+  takes the catalog's default when that rung is on the ladder.
 
 The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
 without a provider. Sibling instances refuse the preview too: it sits under the refused
