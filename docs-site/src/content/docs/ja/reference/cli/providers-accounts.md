@@ -24,6 +24,7 @@ description: プロバイダー構成、資格情報、クォータ、および�
 | `quota` | `--refresh`、`--json` |プロバイダー クォータ レポートを読み取ります。 |
 | `presets` | `--json` |ダッシュボードプロバイダーのプリセットを一覧表示します。 |
 | `account-mode` | `pool`、`direct`、`--json` |プールされた Codex アカウント ルーティングまたは直接の Codex アカウント ルーティングを選択します。 |
+| `import-cc-switch` | `--source <FILE>`、`--provider <id>`、`--apply`、`--restore`、`--allow-private-network`、`--json` | CC-Switch の SQLite（`cc-switch.db`）または JSON ファイルからキーなしのプロバイダー項目をプレビュー・選択適用・復元します。 |
 
 既定の `add`、`remove`、`set-default` はローカル設定を変更します。稼働中のプロキシを変更するには `--live`、ライブ削除にはさらに `--yes` が必要です。`--sync --json` も保存後に同期を試み、失敗時は保存を保持して非ゼロ終了と `needsSync: true` を返します。`--live` と `--sync` は併用できません。pacing と snapshot/apply の手順は[英語版](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)を参照してください。
 
@@ -56,6 +57,27 @@ ocx models live --provider ark --json
 
 秘密にあたる値は `--api-key` か OAuth ログインを使ってください。
 :::
+
+### キーなしの CC-Switch プロバイダーインポート
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 別のターミナルでプロキシを起動（または ocx ensure を実行）してからキーを登録：
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# ロールバック用の別経路（先にプロキシを停止；未編集のキーなし項目のみ削除）：
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` は通常の CC-Switch SQLite データベースまたはレガシー JSON ファイルから、非秘密メタデータフィールドの明示的な許可リスト（プロバイダー ID、アプリ種別、ベース URL、アダプター、既定モデル）の値**のみ**を射影します。入力を走査するためソースと埋め込み設定のバイト列を一時的に読み取りますが、秘密フィールド・自由記述の表示名・TOML コメントはバイト単位でスキップされ、文字列へのデコード・書き込み・ログ出力は一切行われず、一時バイトバッファは `finally` でゼロ消去されます。ベース URL パスの厳格な規則（`http(s)://host[:port]` に空パスまたは `/v1`・`/api/v1`・`/compatible-mode/v1` などの小文字 `[a-z0-9._-]` による 1〜4 個の API パスセグメント）と識別子／モデルの構文検査は多層防御として機能し、不適合な値をエコーせずに拒否します。ソースファイルは `O_NOFOLLOW | O_NONBLOCK` の記述子検証付きで一度だけ開かれ、SQLite は一時ファイルを作らずメモリ上で読み取り専用展開されます。複数ハードリンク（`nlink > 1`）を持つ SQLite ファイルは別名パスによるサイドカー検査回避を防ぐため拒否され、隣接する `-wal` または `-journal` ファイルが空でない場合は CC-Switch を終了（またはデータベースをチェックポイント）して再試行するよう求めて拒否します。信頼できるローカルの CC-Switch ソースのみを使用し、出力されたすべての ID・モデル・`baseUrl` を確認してから資格情報を登録してください：
+
+- **プレビュー（既定）：** `--source <FILE>` が必要で、何も書き込まず、検出・対象・競合・無効の件数を報告します。
+- **適用（`--apply`）：** `--source <FILE>` とプロキシの停止（`ocx stop`）が必要で、Remote Link Child では拒否されます。`--provider <id>` を繰り返して対象を絞り込むか、ループバックやプライベートネットワークのベース URL には `--allow-private-network` を指定します。事前のプレビューなしでも、`--apply` はキーなしのプロバイダー項目とロールバックジャーナル `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` を書き込む前にすべてのプロバイダー ID・既定モデル・接続先 URL を出力します（テキストモードでは `stdout`、`--json` モードでは `stderr`）。アクティブなジャーナルが存在する間、2 回目の `--apply` は拒否されます。出力内容を確認したらプロキシを起動（別ターミナルで `ocx start` または `ocx ensure`）し、`printf '%s\n' "$API_KEY" | ocx account add-key <provider>`（パイプ標準入力）または `ocx login <provider>` で資格情報を追加します。
+- **復元（`--restore`）：** 資格情報登録の続きではなく独立したロールバック経路であり、プロキシの停止（`ocx stop`）が必要で、Remote Link Child では拒否され、`--source`・`--provider`・`--allow-private-network` は受け付けません。`auth.json` をバイト単位で読み取り専用検査（読み取り不能または不正形式時はフェイルクローズ）し、インポート時のキーなし状態と一致したままで、かつ `defaultProvider` に選択されておらず、ルーティング・コンボ（combos）・フォールバックポリシー（fallback policy）・OAuth アカウント・API キーのいずれからも参照されていないプロバイダーのみをアクティブなジャーナルから削除します。
 
 ## 認証
 

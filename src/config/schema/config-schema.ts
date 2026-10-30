@@ -6,6 +6,7 @@ import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
+import { workflowBudgetSchema } from "./workflow-budget";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
@@ -33,6 +34,7 @@ import {
   asideProfileSyncSchema,
   clientIntegrationsSchema,
   opencodeClientExportSchema,
+  omoClientExportSchema,
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
@@ -220,6 +222,8 @@ export const configSchema = z.object({
   // A bad hand edit disables only this block; writes validate the catch-free leaf first.
   reasoningRetention: reasoningRetentionSchema.optional().catch(undefined),
   nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
+  // A bad hand edit falls back to the built-in ceilings; it never turns the guard off.
+  workflowBudget: workflowBudgetSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
@@ -265,6 +269,7 @@ export const configSchema = z.object({
   emptyCompletionRetry: z.boolean().optional().catch(false),
   // Header suppression changes what Codex sees, so absence and malformed edits stay off.
   dropCodexSafetyBuffering: z.boolean().optional().catch(false),
+  completeOnMaxOutputTokens: z.boolean().optional().catch(false),
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
@@ -281,6 +286,7 @@ export const configSchema = z.object({
   // Opt-in opencode-side export timeouts; a malformed block degrades to undefined so opencode
   // keeps its native waits rather than failing the parse and hiding valid providers/accounts.
   opencodeClientExport: opencodeClientExportSchema.optional().catch(undefined),
+  omoClientExport: omoClientExportSchema.optional().catch(undefined),
   // A malformed profile policy must not fall back to legacy all-profile activation.
   asideProfileSync: asideProfileSyncSchema.optional().catch({ allProfiles: false }),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
@@ -318,6 +324,14 @@ export const configSchema = z.object({
     standard: z.array(z.string().trim().min(1)).optional(),
     frontier: z.array(z.string().trim().min(1)).optional(),
   }).strict().optional().catch(undefined),
+  // Discard the retired source while preserving an otherwise valid Artificial Analysis key.
+  codexRoleCapability: z.preprocess(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const { huggingFace: _retired, ...rest } = value as Record<string, unknown>;
+    return rest;
+  }, z.object({
+    artificialAnalysis: z.object({ apiKey: z.string().trim().min(1).optional() }).strict().optional(),
+  }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),

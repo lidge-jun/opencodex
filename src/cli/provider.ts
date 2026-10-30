@@ -655,6 +655,11 @@ export async function handleProviderCommand(args: string[], deps: ProviderComman
     process.exitCode = await handleProviderPacingCommand(subArgs, deps);
     return;
   }
+  if (sub === "import-cc-switch") {
+    const { cmdProviderCcSwitchImport } = await import("./provider-cc-switch-import");
+    process.exitCode = await cmdProviderCcSwitchImport(subArgs);
+    return;
+  }
 
   // #6957: a link Child's local providers are inactive; changing them is refused like any other
   // provider change, which belongs to the Home.
