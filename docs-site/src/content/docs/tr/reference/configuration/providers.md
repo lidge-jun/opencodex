@@ -207,7 +207,7 @@ yapılandırılır.
 
 Var olan bir sağlayıcının adıyla gönderilen `POST /api/providers`, saklanan satırı istekten oluşturulan bir satırla değiştirir. Panodaki ekleme/düzenleme formu her alanı gönderemez; bu yüzden kayıt, isteğin atladığı bazı saklanan alanları korur. Bunlardan on biri belirli bir üst kaynağın nasıl davrandığını kaydeder: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| Kayıt | On ayar | Saklanan `apiKeyPool` |
+| Kayıt | On bir ayar | Saklanan `apiKeyPool` |
 | --- | --- | --- |
 | Aynı hedef, alan atlanmış | Saklanan değer korunur, açık bir `[]` veya `false` dahil | Korunur |
 | Yeni hedef, alan atlanmış | Korunmaz; yeni hedef için kayıt defteri varsayılanları uygulanabilir | Korunmaz |

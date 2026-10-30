@@ -490,7 +490,7 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 `POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eleven of them record how one upstream behaves: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
 
-| Save | The ten settings | Stored `apiKeyPool` |
+| Save | The eleven settings | Stored `apiKeyPool` |
 | --- | --- | --- |
 | Same destination, field omitted | Stored value kept, including an explicit `[]` or `false` | Kept |
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |

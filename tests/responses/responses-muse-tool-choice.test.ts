@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
+import { normalizeMuseToolCatalog } from "../../src/adapters/openai-responses/muse-tool-catalog";
+import { tagHistoricalInputItems } from "../../src/responses/item-provenance";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -441,4 +443,18 @@ describe("Meta Muse additional tool catalogs", () => {
       expect(JSON.parse(build({ ...meta, baseUrl }, raw).body).input).toEqual(raw.input);
     }
   });
+});
+
+test("Meta catalog follows item provenance once an earlier rewrite shortened the input", () => {
+  const schema = { type: "object", properties: {} };
+  const tagged = tagHistoricalInputItems([
+    { type: "additional_tools", tools: [{ type: "function", name: "old_tool", parameters: schema }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "earlier" }] },
+    { type: "tool_search_output", call_id: "search", status: "completed", execution: "client", tools: [{ type: "function", name: "lookup", parameters: schema }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+  ], 2);
+  // Zed lifted the replayed wrapper before the delegate ran, so the numeric prefix of 2 is stale.
+  const body = normalizeMuseToolCatalog({ model: "muse", input: tagged.slice(1) }, 2) as { tools?: { name?: string }[]; input: unknown[] };
+  expect(body.tools?.map(tool => tool.name)).toEqual(["lookup"]);
+  expect(JSON.stringify(body.input)).not.toContain("old_tool");
 });
