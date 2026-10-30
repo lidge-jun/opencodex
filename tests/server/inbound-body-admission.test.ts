@@ -590,7 +590,7 @@ describe("raised inbound body admission lifetime", () => {
   }
 
   for (const normalized of [false, true]) {
-    test(`retains measured JSON bytes with translator normalization ${normalized}`, async () => {
+    test(`retains normalized JSON bytes with translator budget ${normalized}`, async () => {
       const text = "1e20";
       const req = admissionRequest("/v1/responses", text);
       const translator = normalized ? createTranslatorBudget() : undefined;
@@ -601,7 +601,7 @@ describe("raised inbound body admission lifetime", () => {
           assert.equal(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT), 1e20);
           return new Response("held");
         }, req);
-        const expected = normalized ? Buffer.byteLength(JSON.stringify(1e20)) : Buffer.byteLength(text);
+        const expected = Buffer.byteLength(JSON.stringify(1e20));
         assert.deepEqual(testBudget.snapshot(), { reservedBytes: expected, activeLeases: 1, queuedRequests: 0 });
         await response.text();
       } finally {
