@@ -42,6 +42,8 @@ type DiskFile = {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
+/** Bumped by cancellation so a fired callback still waiting for ACL admission writes nothing. */
+let persistGeneration = 0;
 
 /** Read the snapshot. Returns an empty map for a missing, corrupt or stale file. */
 export function readPersistedAccountQuotas(now = Date.now()): Map<string, ProviderQuota> {
@@ -108,7 +110,9 @@ export function schedulePersistAccountQuotas(
     // the admitted callback so a late admission still writes the newest snapshot; a timeout
     // skips this best-effort write.
     const dir = getConfigDir();
+    const generation = persistGeneration;
     void withConfigDirHardeningSettled(dir, () => {
+      if (generation !== persistGeneration) return;
       const out: Record<string, ProviderQuota> = {};
       for (const [key, quota] of rows()) out[key] = quota;
       const kiroVerdicts: Record<string, KiroPersistedVerdict> = {};
@@ -128,4 +132,5 @@ export function cancelPendingAccountQuotaPersist(): void {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = null;
   persistStartedAt = null;
+  persistGeneration += 1;
 }

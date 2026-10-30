@@ -322,7 +322,7 @@ describe("learned rung refusals", () => {
       provider: ZEN_GO, modelId: DEEPSEEK_FLASH, requested: "max", rejectionText: REJECTION_BODY,
     });
     expect(first).toEqual({ effort: "high", recorded: true });
-    metadata.flushReasoningSupportCache();
+    await metadata.flushReasoningSupportCache();
     const second = metadata.planReasoningEffortDowngrade({
       provider: ZEN_GO, modelId: DEEPSEEK_FLASH, requested: "max", rejectionText: REJECTION_BODY,
     });
@@ -441,6 +441,23 @@ describe("config-root ACL admission (#7815)", () => {
       acl.setPlatformForTests(null);
       setSyntheticWindowsPrincipalForTests(null);
       acl.resetHardenedStateForTests();
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
+  test("a joined refresh reports the shared failure instead of a coalesced success", async () => {
+    const { metadata } = await load();
+    const previousFetch = globalThis.fetch;
+    let reject!: (error: Error) => void;
+    try {
+      globalThis.fetch = (() => new Promise((_resolve, fail) => { reject = fail; })) as unknown as typeof fetch;
+      const first = metadata.refreshReasoningMetadata({ force: true });
+      const joined = metadata.refreshReasoningMetadata({ force: true });
+      reject(new Error("fixture refusal"));
+      expect(await first).toEqual({ ok: false, reason: "fixture refusal" });
+      expect(await joined).toEqual({ ok: false, reason: "fixture refusal" });
+    } finally {
+      globalThis.fetch = previousFetch;
       metadata.resetReasoningMetadataCachesForTests();
     }
   });

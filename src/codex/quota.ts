@@ -45,6 +45,8 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
 /** The latest admitted snapshot write; settles even when admission times out. */
 let persistWrite: Promise<void> = Promise.resolve();
+/** Bumped by a full clear so a fired callback still waiting for ACL admission writes nothing. */
+let persistGeneration = 0;
 /** Test seam: wait for a fired persistence callback's admitted write. */
 export function settleQuotaPersistenceForTests(): Promise<void> { return persistWrite; }
 
@@ -808,7 +810,9 @@ function schedulePersistAccountQuotas(): void {
     // Admitted after an overlapping optional config-root ACL flight (#7815); the snapshot is
     // taken inside the callback, and a timed-out admission skips this best-effort write.
     const dir = getConfigDir();
+    const generation = persistGeneration;
     persistWrite = withConfigDirHardeningSettled(dir, () => {
+      if (generation !== persistGeneration) return;
       const quotas: Record<string, StoredAccountQuota> = {};
       for (const [accountId, quota] of accountQuota.entries()) {
         quotas[accountId] = quota;
@@ -898,6 +902,7 @@ export function clearAccountQuota(accountId?: string): void {
     persistTimer = null;
   }
   persistStartedAt = null;
+  persistGeneration += 1;
   try {
     const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
     if (existsSync(path)) unlinkSync(path);
