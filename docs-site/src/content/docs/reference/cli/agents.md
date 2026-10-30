@@ -994,6 +994,8 @@ A missing `OPENCODEX_API_AUTH_TOKEN` is read from this installation's `service-a
 
 Only a matched autostart wrapper launches its backing Codex directly. Unknown state, including an inspection exception, requires a verified bypass; Windows CMD managed wrappers must match the complete current generated template before the selected absolute command runs with `OCX_SHIM_BYPASS=1`. Ordinary npm launchers remain supported. Unverifiable or obsolete wrappers refuse with exit 1 and start no Codex; run `ocx codex-shim install` to refresh them. This launch does not repair shims. The content check does not establish Windows backing-file provenance or prevent concurrent pathname replacement.
 
+On macOS, every launch, including help/version, verifies the selected executable when its selected path or canonical location is inside any `.app` bundle. Renamed bundles and symlinks into bundles require the same safe ownership, permissions and OpenAI signatures for the bundle and executable. A selected bundle member must stay inside that bundle's canonical `Contents/`, including through executable, directory or whole-bundle symlinks. Failed verification exits 1 without starting Codex. Ordinary non-bundle executables, including npm installations, retain their behavior.
+
 Use `ocx help codex` for launcher help and `ocx codex --help` for Codex help. Launching plain `codex` later retains its existing behavior.
 
 ### `ocx opencode [opencode args...]`

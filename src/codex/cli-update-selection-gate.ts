@@ -30,8 +30,10 @@
  * stays the documented residual it always was.
  */
 
-import { codexCliUpdateRecoveryBlocksAdmission } from "./cli-update-recovery";
+import { codexCliUpdateRecoveryBlocksAdmission, codexCliUpdateRecoveryBlocksAdmissionAsync } from "./cli-update-recovery";
 import type { CodexCliUpdateNativeChildIdentity, CodexCliUpdateNativeRecoveryProof } from "./cli-update-recovery";
+import { getConfigDir } from "../config/paths";
+import { resolve } from "node:path";
 
 export const CODEX_CLI_UPDATE_FENCE_PREPARING = 0;
 export const CODEX_CLI_UPDATE_FENCE_CANCELLED = 1;
@@ -53,6 +55,10 @@ export class CodexCliSelectionMutationBusyError extends Error {
 }
 
 let selectionGate: SharedArrayBuffer | null = null;
+let asyncParentOwner: { buffer: SharedArrayBuffer; owner: number } | null = null;
+// This scope exists only during one synchronous commit turn. It is never kept
+// across an await, so unrelated parent requests cannot borrow its admission.
+let parentCommitScope: { buffer: SharedArrayBuffer; owner: number; configDir: string } | null = null;
 
 /** One process-wide holder and monotonic generation counter shared across realms. */
 export function codexCliUpdateSelectionGate(): SharedArrayBuffer {
@@ -60,9 +66,19 @@ export function codexCliUpdateSelectionGate(): SharedArrayBuffer {
   return selectionGate;
 }
 
+/** Diagnostic classification does not grant or release gate ownership. */
+export function codexCliSelectionGateState(): "free" | "parent_write" | "worker_commit" | "unrecognized" {
+  const buffer = codexCliUpdateSelectionGate(), owner = Atomics.load(new Int32Array(buffer), 0);
+  if (owner === CODEX_CLI_UPDATE_GATE_FREE) return "free";
+  if (owner === CODEX_CLI_UPDATE_GATE_PARENT_WRITE
+    || (asyncParentOwner?.buffer === buffer && asyncParentOwner.owner === owner)) return "parent_write";
+  return owner >= CODEX_CLI_UPDATE_GATE_WORKER_COMMIT ? "worker_commit" : "unrecognized";
+}
+
 /** Test seam: drop the cell so each case starts from FREE on a fresh buffer. */
 export function resetCodexCliSelectionGatesForTests(): void {
   selectionGate = null;
+  asyncParentOwner = null;
 }
 
 /** Per-job fence: decision, current child pgid (0 = unpublished), terminal proof. */
@@ -112,8 +128,13 @@ export interface CodexCliSelectionParentWrite {
  * paths. entered === false means a commit window (or another writer) is in
  * flight and the caller must surface busy immediately, never wait.
  */
-export function beginCodexCliSelectionParentWrite(): CodexCliSelectionParentWrite {
-  if (codexCliUpdateRecoveryBlocksAdmission()) return Object.freeze({ entered: false, exit() {} });
+export function beginCodexCliSelectionParentWrite(configDir = getConfigDir()): CodexCliSelectionParentWrite {
+  if (parentCommitScope) {
+    const entered = resolve(configDir) === parentCommitScope.configDir
+      && Atomics.load(new Int32Array(parentCommitScope.buffer), 0) === parentCommitScope.owner;
+    return Object.freeze({ entered, exit() {} });
+  }
+  if (codexCliUpdateRecoveryBlocksAdmission(configDir)) return Object.freeze({ entered: false, exit() {} });
   const view = new Int32Array(codexCliUpdateSelectionGate());
   if (Atomics.compareExchange(view, 0, CODEX_CLI_UPDATE_GATE_FREE, CODEX_CLI_UPDATE_GATE_PARENT_WRITE)
     !== CODEX_CLI_UPDATE_GATE_FREE) {
@@ -125,9 +146,58 @@ export function beginCodexCliSelectionParentWrite(): CodexCliSelectionParentWrit
     exit() {
       if (!held) return;
       held = false;
-      Atomics.store(view, 0, CODEX_CLI_UPDATE_GATE_FREE);
+      Atomics.compareExchange(view, 0, CODEX_CLI_UPDATE_GATE_PARENT_WRITE, CODEX_CLI_UPDATE_GATE_FREE);
     },
   });
+}
+
+type SynchronousParentCommit<T> = () => T & (T extends PromiseLike<unknown> ? never : unknown);
+export interface CodexCliSelectionAsyncParentWrite extends CodexCliSelectionParentWrite {
+  /** Run existing synchronous writers under this exact fresh admission. Never await inside. */
+  commit<T>(run: SynchronousParentCommit<T>): T;
+}
+interface ParentAdmissionOptions {
+  configDir?: string;
+  signal?: AbortSignal;
+  /** Test seam; production always uses the fresh async recovery protocol. */
+  recoveryBlocksAdmission?: (configDir?: string) => Promise<boolean>;
+}
+/** Reserve before inspection, keep the generation across awaits, and release only that owner. */
+export async function beginCodexCliSelectionParentWriteAsync(options: ParentAdmissionOptions = {}): Promise<CodexCliSelectionAsyncParentWrite> {
+  const refused = Object.freeze({ entered: false, exit() {}, commit<T>(_run: SynchronousParentCommit<T>): T { throw new CodexCliSelectionMutationBusyError(); } });
+  if (options.signal?.aborted) return refused;
+  const configDir = resolve(options.configDir ?? getConfigDir());
+  const buffer = codexCliUpdateSelectionGate(), view = new Int32Array(buffer);
+  const owner = allocateCodexCliUpdateGateOwner(buffer);
+  if (Atomics.compareExchange(view, 0, CODEX_CLI_UPDATE_GATE_FREE, owner) !== CODEX_CLI_UPDATE_GATE_FREE) return refused;
+  const parent = { buffer, owner };
+  asyncParentOwner = parent;
+  let held = true;
+  const exit = () => {
+    if (!held) return;
+    held = false;
+    releaseCodexCliUpdateGateOwner(buffer, owner);
+    if (asyncParentOwner === parent) asyncParentOwner = null;
+  };
+  try {
+    if (await (options.recoveryBlocksAdmission ?? codexCliUpdateRecoveryBlocksAdmissionAsync)(configDir)
+      || options.signal?.aborted || Atomics.load(view, 0) !== owner) { exit(); return refused; }
+  } catch { exit(); return refused; }
+  return Object.freeze({ entered: true, exit,
+    commit<T>(run: SynchronousParentCommit<T>): T {
+      if (!held || options.signal?.aborted || Atomics.load(view, 0) !== owner) throw new CodexCliSelectionMutationBusyError();
+      const previous = parentCommitScope;
+      parentCommitScope = { buffer, owner, configDir };
+      try { return run(); } finally { parentCommitScope = previous; }
+    },
+  });
+}
+
+/** The callback is synchronous: config critical sections retain their original no-await contract. */
+export async function withCodexCliSelectionParentWriteAsync<T>(run: SynchronousParentCommit<T>, options: ParentAdmissionOptions = {}): Promise<T> {
+  const admission = await beginCodexCliSelectionParentWriteAsync(options);
+  if (!admission.entered) throw new CodexCliSelectionMutationBusyError();
+  try { return admission.commit<T>(run); } finally { admission.exit(); }
 }
 
 /**

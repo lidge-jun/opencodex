@@ -665,6 +665,7 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
   }
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
+  const advisorAdmissionPolicy = options.advisorAdmissionPolicy;
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
     // policy so random/RR cannot refuse while an unmetered target is still usable.
@@ -1629,6 +1630,7 @@ export async function prepareResponsesRequest(
     // the key scope as it stood when this request was admitted.
     inboundSelector,
     admissionScope,
+    advisorAdmissionPolicy,
     translatorBudget,
     parsed,
     toolBridgeMaps,

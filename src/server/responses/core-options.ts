@@ -98,6 +98,8 @@ export interface DirectRequestOption {
 export interface HandleResponsesOptions {
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
+  /** Captured synchronously at ingress, before parsing or child replay can suspend. */
+  advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */

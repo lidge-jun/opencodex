@@ -104,10 +104,11 @@ restart transaction.
 
 ## Failure behavior and known limits
 
-When the platform is not macOS, the OpenCodex runtime is missing, or the filter
-self-test fails, the launcher runs the original binary with untouched stdout. A
-missing bundled app-server binary is the exception: there is nothing to fall back
-to, so the launcher exits with an error (see below).
+The launcher verifies the executable before every start, including Desktop respawns.
+If stdout filtering is unavailable or its self-test fails, the verified executable
+runs with untouched stdout. If executable verification fails or the OpenCodex
+validator is unavailable, the launcher exits with an error without starting the
+app-server. A missing bundled app-server binary also prevents startup (see below).
 A filter that passes the self-test and then dies mid-session closes the pipe.
 What the bundled app-server does after that has not been verified; it may get
 SIGPIPE or a write error and be respawned by Desktop through the same launcher.
@@ -117,8 +118,9 @@ remaining stream to raw bytes.
 
 The experiment depends on the bundled binary path, the app honoring
 `CODEX_CLI_PATH`, and current RPC field shapes. Updates may change these. A moved
-or removed OpenCodex installation fails the launcher preflight and runs the
-original binary. Run `ocx chatgpt launch` again after relocating the installation.
+or removed OpenCodex installation can leave the launcher unable to verify the
+executable, so it refuses startup. Run `ocx chatgpt launch` again after relocating
+the installation, or `ocx chatgpt restore` to remove the override.
 If an app update moves or removes the bundled app-server binary itself, the
 launcher cannot start it: it prints a message naming `ocx chatgpt launch` and
 `ocx chatgpt restore` on stderr and exits, and Desktop cannot start its
