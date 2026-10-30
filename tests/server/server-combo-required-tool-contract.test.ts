@@ -165,9 +165,49 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
+  for (const choice of [{ type: "computer_use" },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "docs", name: null }] }]) {
+    test(`untranslatable mandatory Chat choice skips before send: ${JSON.stringify(choice)}`, async () => {
+      let chatSends = 0; let backupSends = 0;
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { chatSends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const backup = serve(() => { backupSends++; return Response.json(completedNoCall("m2", "eligible Responses target")); });
+      const response = await handleResponses(requiredRequest({ tool_choice: choice }),
+        comboConfig({ a: chat, b: provider("openai-responses", baseUrl(backup), "key-b") }), {} as RequestLogContext);
+      expect(response.status).toBe(200); expect(await response.text()).toContain("eligible Responses target");
+      expect(chatSends).toBe(0); expect(backupSends).toBe(1);
+    });
+    test(`untranslatable mandatory Chat choice fails closed without a backup: ${JSON.stringify(choice)}`, async () => {
+      let sends = 0;
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { sends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const response = await handleResponses(requiredRequest({ tool_choice: choice }), comboConfig({ a: chat }), {} as RequestLogContext);
+      expect(response.status).toBe(503); expect(await response.text()).toContain("mandatory tool_choice");
+      expect(sends).toBe(0);
+    });
+  }
+
+  test("translated Chat child preserves forced tool_search on its actual wire", async () => {
+    const bodies: unknown[] = [];
+    const upstream = serve(async request => {
+      bodies.push(await request.json());
+      return Response.json({ id: "chat-forced-search", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{
+          id: "call_search", type: "function", function: { name: "tool_search", arguments: '{"query":"lookup"}' },
+        }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    });
+    const response = await handleResponses(requiredRequest({ tools: [{ type: "tool_search" }],
+      tool_choice: { type: "tool_search" } }), comboConfig({ a: provider("openai-chat", baseUrl(upstream), "key-a") }), {} as RequestLogContext);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("tool_search");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ tool_choice: { type: "function", function: { name: "tool_search" } } });
+  });
+
   for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" },
     { type: "tool_search" }, { type: "computer_use" }, { type: "image_gen" },
-    { type: "mcp", server_label: "docs", name: null }]) {
+    { type: "mcp", server_label: "docs", name: null },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "docs", name: null }] }]) {
     for (const stream of [false, true]) {
       test(`direct hosted choice skips Meta before send (${JSON.stringify(choice)}, stream=${stream})`, async () => {
         const bodies: unknown[] = []; let metaSends = 0;

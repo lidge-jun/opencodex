@@ -16,6 +16,23 @@ test.each(["tool_search", "computer_use", "image_gen", "mcp"])("preserves direct
   expect(parseRequest(raw)._rawBody?.tool_choice).toEqual(choice);
 });
 
+test("translated tool_search keeps the mandatory synthetic function choice", () => {
+  const parsed = parseRequest({ model: "fixture", input: "hello", tools: [{ type: "tool_search" }],
+    tool_choice: { type: "tool_search" } });
+  expect(parsed.options.toolChoice).toEqual({ name: "tool_search" });
+  expect(parsed.context.tools?.map(tool => tool.name)).toContain("tool_search");
+});
+
+test("MCP allowed-tools null name preserves its raw selector without accepting function null names", () => {
+  const choice = { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "docs", name: null }] };
+  expect(parseRequest({ model: "fixture", input: "hello", tool_choice: choice })._rawBody?.tool_choice).toEqual(choice);
+  for (const type of ["function", "custom"]) {
+    expect(() => parseRequest({ model: "fixture", input: "hello", tool_choice: {
+      ...choice, tools: [{ type, name: null }],
+    } })).toThrow();
+  }
+});
+
 describe("generic effort-only client compatibility", () => {
   const provider: OcxProviderConfig = {
     adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1",

@@ -167,7 +167,10 @@ export const HOSTED_TOOL_TYPES = [
 
 const hostedToolType = z.enum(HOSTED_TOOL_TYPES);
 
-const allowedToolEntrySchema = z.object({ type: z.string(), name: z.string().optional() });
+const allowedToolEntrySchema = z.union([
+  z.object({ type: z.literal("mcp"), server_label: z.string().min(1), name: z.string().nullable().optional() }),
+  z.object({ type: z.string(), name: z.string().optional() }),
+]);
 
 export const toolChoiceSchema = z.union([
   z.literal("auto"),
