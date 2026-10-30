@@ -13,6 +13,7 @@ import {
 import { macCodexAppBundleFor, macCodexAppCommands } from "./mac-app-bundle";
 import {
   beginCodexCliSelectionParentWrite,
+  withCodexCliSelectionParentWriteAsync,
   CodexCliSelectionMutationBusyError,
 } from "./cli-update-selection-gate";
 import { resolveCodexHomeDir } from "./home";
@@ -406,7 +407,7 @@ export function persistCodexRuntime(
   // window, so a held gate is an immediate busy rather than a wait. Checked
   // BEFORE the mkdir and the resolve-cache invalidation so a busy refusal
   // changes nothing at all.
-  const selectionWrite = beginCodexCliSelectionParentWrite();
+  const selectionWrite = beginCodexCliSelectionParentWrite(deps.configDir);
   if (!selectionWrite.entered) throw new CodexCliSelectionMutationBusyError();
   try {
     const configDir = deps.configDir ?? getConfigDir();
@@ -438,7 +439,7 @@ export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): 
   // Same gate as persistCodexRuntime, checked before the cache invalidation
   // and outside the swallowing catch: a busy refusal must stay an error, not
   // become a silent "already removed".
-  const selectionWrite = beginCodexCliSelectionParentWrite();
+  const selectionWrite = beginCodexCliSelectionParentWrite(deps.configDir);
   if (!selectionWrite.entered) throw new CodexCliSelectionMutationBusyError();
   try {
     const configDir = deps.configDir ?? getConfigDir();
@@ -459,6 +460,14 @@ export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): 
   } finally {
     selectionWrite.exit();
   }
+}
+
+export async function persistCodexRuntimeAsync(runtime: ResolvedCodexRuntime, deps: ResolveCodexRuntimeDeps = {},
+  origin: CodexRuntimePinOrigin = "pinned"): Promise<void> {
+  await withCodexCliSelectionParentWriteAsync(() => persistCodexRuntime(runtime, deps, origin), deps);
+}
+export async function clearPersistedCodexRuntimeAsync(deps: ResolveCodexRuntimeDeps = {}): Promise<void> {
+  await withCodexCliSelectionParentWriteAsync(() => clearPersistedCodexRuntime(deps), deps);
 }
 
 type VersionProbeResult = { ok: true; version: string | null; macAppBundle?: boolean } | { ok: false; reason: string };
@@ -1415,7 +1424,38 @@ export async function resolveAndPersistCodexRuntimeAsync(
   if (deps.signal?.aborted || !isCurrent() || observation.epoch === null || observation.epoch !== resolveCacheEpoch
     || observation.inputs !== codexRuntimeSelectionIdentity(deps)) return null;
   if (deps.signal?.aborted) return null;
-  return cloneAndDeepFreeze(persistResolvedCodexRuntime(observation.result, deps));
+  if (resolvedRuntimeMutation(observation.result, deps) === null) return cloneAndDeepFreeze(observation.result);
+  try {
+    return await withCodexCliSelectionParentWriteAsync(() => {
+      // Admission can await Windows ACL subprocesses. Re-prove all selection
+      // inputs after that await, in the same turn as the persisted mutation.
+      if (deps.signal?.aborted || !isCurrent() || observation.epoch !== resolveCacheEpoch
+        || observation.inputs !== codexRuntimeSelectionIdentity(deps)) return null;
+      return cloneAndDeepFreeze(persistResolvedCodexRuntime(observation.result, deps));
+    }, deps);
+  } catch (error) {
+    if (deps.signal?.aborted) return null;
+    if (error instanceof CodexCliSelectionMutationBusyError) {
+      // A recovery denial also followed an await. Never return the obsolete
+      // selection as a usable result merely because no commit callback ran.
+      if (!isCurrent() || observation.epoch !== resolveCacheEpoch
+        || observation.inputs !== codexRuntimeSelectionIdentity(deps)) return null;
+      if (observation.result.runtime.source !== "fallback") {
+        return cloneAndDeepFreeze({ ...observation.result, persistError: error.message });
+      }
+    }
+    throw error;
+  }
+}
+
+function resolvedRuntimeMutation(result: ResolveCodexRuntimeResult, deps: ResolveCodexRuntimeDeps): "persist" | "clear" | null {
+  const persisted = loadPersistedCodexRuntime(deps);
+  const unchanged = persisted !== null && persisted.command === result.runtime.command
+    && persisted.source === result.runtime.source && (persisted.selectedVersion ?? null) === (result.runtime.version ?? null);
+  if (result.runtime.command && result.runtime.source !== "fallback" && !unchanged) return "persist";
+  if (result.runtime.source === "fallback" && persisted?.command && result.failures.some(failure =>
+    failure.command.trim() === persisted.command.trim() && failure.reason === PATH_MISSING_REASON)) return "clear";
+  return null;
 }
 
 function persistResolvedCodexRuntime(

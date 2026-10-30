@@ -310,6 +310,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "  show <name>           Show provider config details",
       "  set-default <name>    Change the default provider",
       "  add/remove/set-default support --live; live removal also requires --yes.",
+      "  import-cc-switch      Preview, apply, or restore keyless CC-Switch provider entries",
       "  selected <name>       Show or set the provider model allowlist",
       "  quota                 Show provider quota reports",
       "  resets                Show recently detected quota resets",

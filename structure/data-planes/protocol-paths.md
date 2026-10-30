@@ -373,10 +373,10 @@ it), and `bridge-only-policy` when operator policy that only the translated path
 engage: a pinned reasoning effort for the route (`resolvePinnedEffort`, read with the translated
 body's model id as the bridge reads it), a blocked-skill bundle the translator would elide
 (`anthropicBodyElidesBlockedSkill` in `src/claude/inbound.ts`), or a `web_search*` server tool the
-web-search sidecar could serve (not excluded by `tool_choice`, sidecar not disabled in the Claude
-replay config; backend credentials are decided at dispatch, so this errs toward the bridge). The
-ingress, `count_tokens` and the planner all ask it. The planner can judge only the config-and-route
-parts: skill elision and web search depend on body content no feature describes.
+web-search sidecar could serve (not excluded by `tool_choice`, sidecar enabled). The cancellable ingress
+probe uses the bridge's credential-free affinity headers, existing plan and authorized backend, with a
+short-lived selection lease; uncertain admission keeps the bridge. Without a runnable plan search alone
+does not decline native Messages. `count_tokens` and the planner lack runtime facts and remain conservative.
 
 With the switch on, a declined route re-marks its bridge entry with the decline reason (after
 any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is
@@ -392,7 +392,7 @@ is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's
 `src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance.
 
 Configured admission-key model scope also applies to separately billed Advisor models before
-managed native key or OAuth dispatch. `src/server/messages-native-scope.ts` resolves active
+managed native key or OAuth dispatch. Scope intersections retain each member's tool-model restrictions. `src/server/messages-native-scope.ts` resolves active
 top-level and system-message tool declarations, including replacement, removal and re-offer;
 deferred definitions remain scoped because tool search can load them. Missing Advisor model
 identity cannot satisfy a model list. Anthropic rejects tool changes in a turn-scoped system

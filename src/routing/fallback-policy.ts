@@ -46,7 +46,7 @@ export interface FallbackEvent {
 }
 
 /** The admission slice this module reads; a configured key is the only device identity. */
-export type FallbackAdmission = { kind: string; keyId?: string } | null | undefined;
+export type FallbackAdmission = { kind: string; keyId?: string; readonly callerPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy } | null | undefined;
 
 const RING_SIZE = 20;
 const ring: FallbackEvent[] = [];
@@ -210,9 +210,13 @@ export function guardFallbackHop(config: OcxConfig, hop: FallbackHop): FallbackG
   const kind = fallbackHopKind(hop.from, hop.to);
   if (kind === null) return { ok: true, kind: null, commit: NO_COMMIT };
   const now = hop.now ?? Date.now();
-  const deviceIds = fallbackDeviceIds(config, hop.admission, now);
+  let deviceIds = fallbackDeviceIds(config, hop.admission, now);
   const routes = [hop.route, ...(hop.aliases ?? [])].filter((value, index, all) => value && all.indexOf(value) === index);
-  const decision = resolveFallbackPolicy(config, { kind, routes, provider: hop.from.provider, deviceIds });
+  let decision = resolveFallbackPolicy(config, { kind, routes, provider: hop.from.provider, deviceIds });
+  for (const captured of hop.admission?.callerPolicy?.fallbackPolicies ?? []) {
+    const caller = resolveFallbackPolicy(captured.config, { kind, routes, provider: hop.from.provider, deviceIds: captured.deviceIds });
+    if (!caller.allowed) { decision = caller; deviceIds = [...captured.deviceIds]; break; }
+  }
   const event: FallbackEvent = {
     at: new Date(now).toISOString(),
     site: hop.site,

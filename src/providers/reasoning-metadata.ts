@@ -25,7 +25,7 @@ import { join } from "node:path";
 // already imports. Going through the ../config barrel closes a cycle back into account-namespaces.ts
 // and leaves COMBO_NAMESPACE in its temporal dead zone for entry points that start at combos/types.ts.
 import { atomicWriteFile } from "../config/atomic-write";
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
 
@@ -96,7 +96,9 @@ interface SupportSnapshot {
 let snapshotMemo: MetadataSnapshot | null | undefined;
 let supportMemo: Map<string, number> | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
-let refreshInFlight: Promise<unknown> | null = null;
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+/** Bumped by reset so a fired support write still waiting for ACL admission writes nothing. */
+let persistGeneration = 0;
 
 /** Test seam: drop the memoised snapshot/support caches so a suite can drive the load paths. */
 export function resetReasoningMetadataCachesForTests(): void {
@@ -107,6 +109,7 @@ export function resetReasoningMetadataCachesForTests(): void {
     persistTimer = null;
   }
   refreshInFlight = null;
+  persistGeneration += 1;
 }
 
 function readJsonFile<T>(filename: string): T | null {
@@ -375,7 +378,12 @@ export function recordUnsupportedReasoningEffort(
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    try {
+    // Admitted after an overlapping optional config-root ACL flight (#7815); rows are read
+    // inside the callback, and a timed-out admission skips this best-effort write.
+    const dir = getConfigDir();
+    const generation = persistGeneration;
+    void withConfigDirHardeningSettled(dir, () => {
+      if (generation !== persistGeneration) return;
       const out: SupportSnapshot["rows"] = {};
       for (const [rowKey, at] of rows) {
         const evidenceText = supportEvidence.get(rowKey);
@@ -385,30 +393,33 @@ export function recordUnsupportedReasoningEffort(
           ...(evidenceText ? { evidence: evidenceText } : {}),
         };
       }
-      atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
-    } catch {
+      atomicWriteFile(join(dir, SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
+    }).catch(() => {
       // Best-effort persistence only.
-    }
+    });
   }, PERSIST_DEBOUNCE_MS);
   return true;
 }
 
-/** Test seam: flush a pending support write so a script sees the snapshot immediately. */
-export function flushReasoningSupportCache(): void {
+/** Test seam: flush a pending support write, admitted like the timer write (#7815). */
+export async function flushReasoningSupportCache(): Promise<void> {
   if (!persistTimer) return;
   clearTimeout(persistTimer);
   persistTimer = null;
-  try {
+  const dir = getConfigDir();
+  const generation = persistGeneration;
+  await withConfigDirHardeningSettled(dir, () => {
+    if (generation !== persistGeneration) return;
     const rows = loadSupport();
     const out: SupportSnapshot["rows"] = {};
     for (const [rowKey, at] of rows) {
       const evidenceText = supportEvidence.get(rowKey);
       out[rowKey] = { effort: JSON.parse(rowKey)[3] ?? "", at, ...(evidenceText ? { evidence: evidenceText } : {}) };
     }
-    atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
-  } catch {
+    atomicWriteFile(join(dir, SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
+  }).catch(() => {
     // Best-effort persistence only.
-  }
+  });
 }
 
 /**
@@ -521,7 +532,8 @@ export async function refreshReasoningMetadata(options: { force?: boolean; waitM
     return { ok: true, reason: "fresh" };
   }
   if (refreshInFlight) {
-    return waitForRefresh(refreshInFlight.then(() => ({ ok: true, reason: "coalesced" })), options.waitMs);
+    // A joined caller learns the shared outcome: a refused or failed refresh is not a success.
+    return waitForRefresh(refreshInFlight.then(outcome => outcome.ok ? { ok: true, reason: "coalesced" } : outcome), options.waitMs);
   }
   const job = (async () => {
     const response = await fetch(SOURCE_URL, {
@@ -565,15 +577,19 @@ export async function refreshReasoningMetadata(options: { force?: boolean; waitM
       providers[providerKey] = out;
     }
     const next: MetadataSnapshot = { version: 2, fetchedAt: Date.now(), source: SOURCE_URL, providers, apis };
-    atomicWriteFile(join(getConfigDir(), FILENAME), JSON.stringify(next) + "\n");
+    // The last await is the network read; publication waits out an overlapping optional
+    // config-root ACL flight (#7815) and a timed-out admission fails this refresh unpublished.
+    const dir = getConfigDir();
+    await withConfigDirHardeningSettled(dir, () => atomicWriteFile(join(dir, FILENAME), JSON.stringify(next) + "\n"));
     snapshotMemo = next;
     return { ok: true, reason: "refreshed", providers: Object.keys(providers).length, models };
   })();
-  refreshInFlight = job.catch(() => undefined).finally(() => { refreshInFlight = null; });
   const settled = job.catch((error): RefreshOutcome => ({
     ok: false,
     reason: error instanceof Error ? error.message : String(error),
   }));
+  const shared = settled.finally(() => { if (refreshInFlight === shared) refreshInFlight = null; });
+  refreshInFlight = shared;
   return waitForRefresh(settled, options.waitMs);
 }
 
