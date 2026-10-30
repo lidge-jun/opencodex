@@ -370,13 +370,15 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   retains a 30-second timeout and a 16 MiB body bound.
   The response's `capability` block attributes the source; Artificial Analysis terms forbid
   redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
-  and unmeasured ones are not proposed; otherwise, or when the source cannot be read, price rank decides
-  and `capability.error` says why. Each proposal names its `tierSource`. Three or more priced models
+  and unmeasured ones are not proposed; otherwise price rank decides. `capability.error` carries the
+  reason only when no key is configured or the source cannot be read; a source that answered but matched
+  fewer than two candidates leaves it null, and the per-proposal `tierSource: "price"` shows the
+  fallback. Each proposal names its `tierSource`. Three or more priced models
   split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
   one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
   which keeps a standard role on the cheaper model. Price tiering excludes unpriced, unmapped models. A role
-  gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
-  in the tie, then picker order. Effort binds to ladder positions of the chosen
+  gets the lowest sufficient tier, then the lowest price, then the higher measured score, then the model it
+  already uses when that model is in the tie, then picker order. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
   for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
   replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
