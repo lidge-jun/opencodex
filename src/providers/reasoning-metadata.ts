@@ -407,7 +407,9 @@ export async function flushReasoningSupportCache(): Promise<void> {
   clearTimeout(persistTimer);
   persistTimer = null;
   const dir = getConfigDir();
+  const generation = persistGeneration;
   await withConfigDirHardeningSettled(dir, () => {
+    if (generation !== persistGeneration) return;
     const rows = loadSupport();
     const out: SupportSnapshot["rows"] = {};
     for (const [rowKey, at] of rows) {
