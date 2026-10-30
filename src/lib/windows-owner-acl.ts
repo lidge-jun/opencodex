@@ -243,9 +243,8 @@ function privateEntryOk(entry: ParsedEntry | null, directory: boolean, run: Pars
  * Confined-write and trusted-ancestry policies for objects this process did not create.
  *
  * Deny ACEs are permitted because they can only remove access; allow ACEs must be
- * ordinary non-callback CommonAce entries. Inherit-only ACEs are skipped: they are
- * templates for children, and every object this module protects carries its own
- * hardened protected DACL, so an ancestor's template cannot grant anything inside it.
+ * ordinary non-callback CommonAce entries. Inherit-only ACEs are evaluated too:
+ * newly created children temporarily inherit those grants before they can be hardened.
  */
 function confinedEntryOk(entry: ParsedEntry | null, run: ParsedAclRun, policy: WindowsAclPolicy): boolean {
   if (!entry || entry.aces === null || (entry.controlFlags & 0x4 /* SE_DACL_PRESENT */) === 0) return false;
@@ -262,9 +261,11 @@ function confinedEntryOk(entry: ParsedEntry | null, run: ParsedAclRun, policy: W
     if (ace.type === 1) continue; // ACCESS_DENIED: removes access, never grants it.
     if (ace.type !== 0) return false; // only ACCESS_ALLOWED records can be evaluated.
     if (ace.flags === null || ace.mask === null || ace.sid === null) return false;
-    if ((ace.flags & INHERIT_ONLY_ACE) !== 0) continue;
     if (ace.sid === run.user || TRUSTED_WRITE_SIDS.has(ace.sid)) continue;
-    const createOk = policy === "trusted-ancestry" && STICKY_OWNERS.has(owner) ? CREATE_MASK : 0;
+    // Create rights on a sticky trusted ancestor are safe for that ancestor itself,
+    // but an inherit-only template would grant them inside a newly created child.
+    const createOk = policy === "trusted-ancestry" && STICKY_OWNERS.has(owner)
+      && (ace.flags & INHERIT_ONLY_ACE) === 0 ? CREATE_MASK : 0;
     const allowed = (READ_MASK | createOk) >>> 0;
     if (((ace.mask >>> 0) & ~allowed) !== 0) return false;
   }

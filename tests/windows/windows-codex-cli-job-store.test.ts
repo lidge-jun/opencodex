@@ -99,6 +99,19 @@ describe("windows owner ACL mixed policies", () => {
     expect(windowsEntriesAclMatches(userRun([{ owner: FOREIGN_SID, aces: [allow(FULL_CONTROL, USER_SID)] }]), entries)).toBe(false);
   });
 
+  test("confined policies reject inherited child-creation grants to foreign users", () => {
+    const inheritOnly = 0x1 | 0x2 | 0x8; // OBJECT_INHERIT | CONTAINER_INHERIT | INHERIT_ONLY
+    for (const policy of ["write-private", "trusted-ancestry"] as const) {
+      const entries: WindowsAclEntry[] = [{ path: "C:\\cfg", directory: true, policy }];
+      expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+        aces: [allow(READ_ONLY_MASK, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(true);
+      expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+        aces: [allow(READ_ONLY_MASK | CREATE_ONLY_MASK, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(false);
+      expect(windowsEntriesAclMatches(userRun([{ owner: ADMIN_SID,
+        aces: [allow(FULL_CONTROL, FOREIGN_SID, inheritOnly)] }]), entries)).toBe(false);
+    }
+  });
+
   test("confined policies tolerate deny ACEs but refuse callback, opaque and NULL-DACL output", () => {
     const entries: WindowsAclEntry[] = [{ path: "C:\\cfg", directory: true, policy: "write-private" }];
     expect(windowsEntriesAclMatches(userRun([{ owner: USER_SID, aces: [allow(FULL_CONTROL, USER_SID), deny(FULL_CONTROL, FOREIGN_SID)] }]), entries)).toBe(true);
