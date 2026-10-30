@@ -508,7 +508,7 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(body).not.toContain("call_adv_mixed");
   });
 
-  test("advisor remains bounded while web-search owns repeated continuations", async () => {
+  test.each([false, true])("advisor remains bounded while web-search owns repeated continuations (allowlist=%s)", async allowlist => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const chatRequests: string[] = [];
@@ -519,11 +519,20 @@ describe("advisor responses wiring (end-to-end)", () => {
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     loopbackInterceptor(config, { chatRequests });
 
-    const response = await handleResponses(workerRequest("Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }]), config, logCtx);
+    const response = await handleResponses(workerRequest(
+      "Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }],
+      allowlist ? { type: "allowed_tools", mode: "required", tools: [
+        { type: "function", name: "advisor" }, { type: "web_search" },
+      ] } : undefined,
+    ), config, logCtx);
     const body = await response.text();
+    const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("web_search");
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("advisor");
     expect(body).toContain("advisor_continuation_limit");
     expect(workerBodies).toHaveLength(5);
-    expect(chatRequests.length).toBeLessThanOrEqual(3);
+    // The repeated fixture question is deduplicated by the real Advisor runtime.
+    expect(chatRequests).toHaveLength(1);
   });
 
   test("scanner drops incomplete and unterminated advisor calls", () => {

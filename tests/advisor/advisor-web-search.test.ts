@@ -62,7 +62,10 @@ async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = 
 }
 
 const advisorLimitChoices: OcxParsedRequest["options"]["toolChoice"][] = [
-  undefined, "required", { name: "advisor" }, { allowedTools: ["advisor"], mode: "required" },
+  undefined, "required",
+  { allowedTools: ["advisor", "web_search"], mode: "required" },
+  // Direct-loop controls only: the web-search planner rejects Advisor-only choices.
+  { name: "advisor" }, { allowedTools: ["advisor"], mode: "required" },
 ];
 test.each(advisorLimitChoices)("Advisor limit reports every billed worker leg once (choice=%j)", async toolChoice => {
   const result = await drive(Array.from({ length: 5 }, (_, i) => [
