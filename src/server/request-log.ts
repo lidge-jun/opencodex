@@ -100,7 +100,7 @@ const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
   /** Whether inbound bodies are actually recorded; the hook is registered at import either way. */
   enabled(): boolean;
-  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
+  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource, admissionPrincipal?: string): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
 }
@@ -282,8 +282,9 @@ export function observeCacheDiagnosticInbound(
   body: unknown,
   headers: Headers,
   source: PromptCacheKeySource,
+  admissionPrincipal?: string,
 ): void {
-  const draft = cacheDiagnosticHooks()?.observeInbound(body, headers, source);
+  const draft = cacheDiagnosticHooks()?.observeInbound(body, headers, source, admissionPrincipal);
   if (draft) logCtx.cacheDiagnosticDraft = draft;
 }
 

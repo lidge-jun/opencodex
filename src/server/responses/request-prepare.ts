@@ -36,7 +36,7 @@ import {
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
-import { resolveContextPrincipal } from "../auth-cors";
+import { contextPrincipalIdOf, resolveContextPrincipal } from "../auth-cors";
 import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
@@ -250,6 +250,7 @@ export async function prepareResponsesRequest(
     options.promptCacheKeyIsSharedCohort === true
       ? "system-derived"
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
+    contextPrincipalIdOf(options.admission),
   );
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
