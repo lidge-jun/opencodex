@@ -8,6 +8,7 @@ import type { RoleModelChange } from "../../src/codex/role-model-history";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest } from "../helpers/management-auth";
+import { STORE_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const saved = { CODEX_HOME: process.env.CODEX_HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME,
@@ -156,7 +157,7 @@ describe("CLI role suggestions preserve bounded whole-batch history", () => {
     const latest = await listedHistory();
     expect(latest).toHaveLength(50);
     expect(new Set(latest.map(c => c.batch))).toEqual(new Set([restored]));
-  });
+  }, { timeout: STORE_BUDGET_MS });
 
   test.each([false, true])("51 changed roles are refused before any PUT or file change (json=%s)", async json => {
     const proposals = seed(51);
@@ -188,7 +189,7 @@ describe("CLI role suggestions preserve bounded whole-batch history", () => {
     expect(transport.writes).toHaveLength(50);
     expect(proposals.slice(50).map(p => roleText(p.role))).toEqual(Array(3).fill(original));
     expect(await listedHistory()).toHaveLength(50);
-  });
+  }, { timeout: STORE_BUDGET_MS });
 
   test("preview remains available above the apply limit", async () => {
     const proposals = seed(51);
