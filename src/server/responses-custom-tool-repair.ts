@@ -41,6 +41,7 @@ function replaceSseEventName(block: string, type: string): string {
 
 type OpenCustomCall = {
   argumentsText: string;
+  argumentsTail: string;
   emittedInput: string;
   canonicalPatchProgress: boolean;
   retainedBytes: number;
@@ -77,6 +78,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
 
   const emptyOpenCall = (): OpenCustomCall => ({
     argumentsText: "",
+    argumentsTail: "",
     emittedInput: "",
     canonicalPatchProgress: false,
     retainedBytes: 0,
@@ -282,6 +284,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       const deltaBytes = Buffer.byteLength(delta, "utf8");
       if (deltaBytes > 0) budget?.chargeRetained(deltaBytes, { kind: "retained_collectors" });
       open.argumentsText += delta;
+      open.argumentsTail = (open.argumentsTail + delta).slice(-64);
       open.retainedBytes += deltaBytes;
       openCalls.set(upstreamItemId, open);
       if (customExecItemNames.get(upstreamItemId) !== "exec"
@@ -341,6 +344,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       const deltaBytes = Buffer.byteLength(delta, "utf8");
       if (deltaBytes > 0) budget?.chargeRetained(deltaBytes, { kind: "retained_collectors" });
       open.argumentsText += delta;
+      open.argumentsTail = (open.argumentsTail + delta).slice(-64);
       open.retainedBytes += deltaBytes;
       openCalls.set(upstreamItemId, open);
       // A helper alias will become JavaScript at completion, never raw patch/JSON.
@@ -374,7 +378,11 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (mayCompile && mayBecomePatchEnvelope(fullInput)) return [];
       let streamInput = fullInput;
       if (mayNormalize && mayBecomePatchEnvelope(fullInput)) {
-        const stablePrefix = stableCanonicalPatchPrefix(fullInput);
+        const stablePrefix = stableCanonicalPatchPrefix(
+          fullInput,
+          fullInput === open.argumentsText ? open.argumentsTail : fullInput,
+          open.canonicalPatchProgress,
+        );
         if (stablePrefix === null) return [];
         streamInput = stablePrefix;
         if (stablePrefix.length > 0) open.canonicalPatchProgress = true;
