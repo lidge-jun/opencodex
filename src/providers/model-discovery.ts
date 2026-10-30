@@ -47,7 +47,7 @@ export type BoundedDiscoveryJsonResult =
 
 export type ProviderModelItemsResult =
   | { ok: true; items: ProviderModelsApiItem[]; rawCount: number }
-  | { ok: false; reason: "invalid_shape" | "too_many_models" };
+  | { ok: false; reason: "invalid_shape" | "too_many_models"; diagnostic?: string };
 
 export type ModelEnvelopeRowsResult =
   | { ok: true; rows: unknown[] }
@@ -534,12 +534,12 @@ export function extractProviderModelItems(
   const preferred: ProviderModelsApiItem[] = [];
   const seen = new Set<string>();
   const idField = discovery.spec?.idField ?? "id";
-  for (const raw of data) {
+  for (const [index, raw] of data.entries()) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      return { ok: false, reason: "invalid_shape" };
+      return { ok: false, reason: "invalid_shape", diagnostic: `row ${index} is not an object` };
     }
     const id = (raw as Record<string, unknown>)[idField];
-    if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape" };
+    if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape", diagnostic: `row ${index} has ${typeof id !== "string" ? "a non-string id" : !id.trim() ? "an empty id" : "an invalid id"}` };
     const prefix = discovery.spec?.stripIdPrefix;
     let finalId = id;
     if (prefix && finalId.startsWith(prefix)) {

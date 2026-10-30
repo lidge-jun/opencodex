@@ -51,6 +51,7 @@ const RETRY_POLICY_VALIDATORS = {
 export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "preserveReasoningContentModels",
   "preserveResponsesReasoningContent",
+  "promoteAdditionalTools",
   "requiresReasoningPlaceholderModels",
   "foldDeveloperRoleToSystem",
   "singleLeadingSystemMessage",
@@ -167,6 +168,8 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
+  const promoteAdditionalTools = provider.promoteAdditionalTools;
+  if (promoteAdditionalTools !== undefined && typeof promoteAdditionalTools !== "boolean") return "promoteAdditionalTools must be a boolean";
   const wire = provider.reasoningWireFormat;
   if (wire !== undefined && !PROVIDER_REASONING_WIRE_FORMATS.includes(wire as never)) {
     return `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}`;
@@ -223,6 +226,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.preserveResponsesReasoningContent;
     else if (typeof value === "boolean") next.preserveResponsesReasoningContent = value;
     else return { error: "preserveResponsesReasoningContent must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "promoteAdditionalTools")) {
+    const value = rawBody.promoteAdditionalTools;
+    if (value === null) delete next.promoteAdditionalTools;
+    else if (typeof value === "boolean") next.promoteAdditionalTools = value;
+    else return { error: "promoteAdditionalTools must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "inferContextWindow")) {

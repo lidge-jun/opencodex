@@ -354,6 +354,8 @@ export interface PersistedUsageEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** A persisted attempt roster lost at least one malformed entry during normalization. */
+  attemptNormalizationDropped?: boolean;
   /** Aggregated upstream spend for this logical request; additive, older rows omit it. */
   spend?: PersistedRequestSpend;
   /** Provenance of this row's cache detail; absent rows are reconstructed, never assumed observed. */
@@ -883,7 +885,7 @@ export function isValidReasoningWireValue(
     || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
 }
 
-function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
+export function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeUsageAttempt)
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);
@@ -998,7 +1000,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
@@ -1072,6 +1074,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      && Object.prototype.propertyIsEnumerable.call(entry, "attemptNormalizationDropped")
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
@@ -1094,6 +1099,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
+  if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true
+    || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length))) {
+    // Preserve the read-time loss signal without changing legacy ledger serialization.
+    Object.defineProperty(normalized, "attemptNormalizationDropped", { value: true, enumerable: false });
+  }
+  return normalized;
 }
 
 // Bound hot-path filesystem hardening to once per second while ensuring an external mode
@@ -1142,7 +1153,11 @@ export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
+  const normalized = normalizeUsageEntry(entry);
+  // Once invalid attempts are removed, persist their loss so future reads can still report it.
+  const line = `${JSON.stringify(normalized.attemptNormalizationDropped === true
+    ? { ...normalized, attemptNormalizationDropped: true }
+    : normalized)}\n`;
   const path = usageLogPath();
   const now = Date.now();
   const doAppend = (): void => {

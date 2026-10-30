@@ -1,4 +1,8 @@
 {
+  "xai-additional-tools.test.ts": "providers/xai",
+  "xai-replay-provenance.test.ts": "providers/xai",
+  "xai-loaded-tool-provenance.test.ts": "providers/xai",
   "free-directory-runcrate.test.ts": "providers",
+  "cc-switch-import.test.ts": "providers",
   "kiro-completion-with-real-tools.test.ts": "providers/kiro"
 }

@@ -268,6 +268,8 @@ export async function deliverAdapterResponse(
         toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
+        completeOnMaxOutputTokens: config.completeOnMaxOutputTokens === true && options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
+        textFormat: parsed.options.textFormat,
         // Same grok-surface split as the runTurn branch above.
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
         onUsage: usage => {
@@ -377,6 +379,8 @@ export async function deliverAdapterResponse(
       freeformToolNames,
       toolSearchToolNames,
       ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
+      completeOnMaxOutputTokens: config.completeOnMaxOutputTokens === true && options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
+      textFormat: parsed.options.textFormat,
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
         transportState.bindKeyUsageFromBridge(usage);
