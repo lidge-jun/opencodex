@@ -6,6 +6,18 @@ import { repoPath } from "../helpers/repo-root";
 // calls made with { bigint: true }. A lexical tripwire over the named declarations, not a
 // full parser: it catches the regression forms below and fails closed on scopes it cannot find.
 const scopes: Record<string, string[]> = {
+  "src/codex/codex-home-owner.ts": ["readCodexHomeJournal"],
+  "src/codex/orca-auth-source.ts": ["readBoundedLocalFile"],
+  "src/codex/inject/bounded-config-reader.ts": ["readBoundedCodexConfig"],
+  "src/codex/main-account.ts": ["statIdentity"],
+  "src/codex/coordinator-doctor.ts": ["inspectTarget"],
+  "src/codex/native-main-lock-file.ts": ["openStableLockFile", "assertStableLockFile"],
+  "src/codex/native-residue.ts": ["readRegularFile", "classifyHistoryDatabase"],
+  "src/codex/history-provider.ts": ["patchFirstLineProviderInPlace", "assertHistoryDescriptorIdentity", "historyFileIdentity"],
+  // shim-fingerprint.ts and shim-state-file.ts keep numeric dev/ino fields for the persisted shim
+  // state format; their runtime comparisons use bigint identity and have behavioral coverage.
+  "src/codex/shim-restore-lock.ts": ["readShimRestoreLockSnapshot", "tryAcquireShimRestoreLock"],
+  "src/remote-control/workspace-executor.ts": ["assertOpenedRegularFile", "assertApprovedRootIdentity"],
   "src/config/initialize.ts": ["identifiesDescriptor"],
   "src/service/state-lock.ts": ["readLockSnapshot"],
   "src/oauth/store.ts": ["snapshot", "createOAuthFileLock"],
@@ -104,9 +116,16 @@ function declarationBody(code: string, name: string): [number, number] | null {
     while (code[at] === " " || code[at] === "\t") at++;
     if (code[at] === ":") {
       at++;
-      while (/\s/.test(code[at] ?? "")) at++;
-      if (code[at] === "{") at = matching(code, at, "{", "}") + 1;
-      while (at < code.length && code[at] !== "{" && code[at] !== ";" && code[at] !== "\n") at++;
+      // A "{" after | & : < , ( opens an object type, not the body.
+      for (;;) {
+        while (at < code.length && code[at] !== "{" && code[at] !== ";" && code[at] !== "\n") at++;
+        if (code[at] !== "{") break;
+        let back = at - 1;
+        while (back >= 0 && (code[back] === " " || code[back] === "\t")) back--;
+        if (!"|&:<,(".includes(code[back] ?? "")) break;
+        at = matching(code, at, "{", "}") + 1;
+        if (at <= 0) break;
+      }
     }
     if (code[at] !== "{") continue;
     const end = matching(code, at, "{", "}");
@@ -182,6 +201,8 @@ describe("file identity caller stats", () => {
     expect(inspect("check()\n{ lstatSync(p, { bigint: true }); }\nfunction check() { return lstatSync(path).ino; }", ["check"]))
       .toEqual(["numeric stat: lstatSync(path)"]);
     expect(inspect("function check() { return 1; }", ["check"])).toEqual(["no stat call in: check"]);
+    expect(inspect('function check(): { kind: "a" } | { kind: "b"; n: number } { return lstatSync(p).ino; }', ["check"]))
+      .toEqual(["numeric stat: lstatSync(p)"]);
     expect(inspect("function check() { lstatSync(root); }", ["check"], true)).toEqual(["no stat call in: check"]);
   });
 

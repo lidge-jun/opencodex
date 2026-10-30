@@ -21,6 +21,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { fileIdentityKey } from "../lib/file-identity";
 
 import { Database } from "bun:sqlite";
 
@@ -524,11 +525,11 @@ export function openCodexCoordinatorTransaction(
         );
       }
     }
-    const opened = lstatSync(finalDatabasePath);
+    const opened = lstatSync(finalDatabasePath, { bigint: true });
     if (opened.isSymbolicLink() || !opened.isFile()) {
       throw new CodexUserIdentityRefusal("The coordinator database path changed during open.");
     }
-    initialIdentity = `${opened.dev}:${opened.ino}`;
+    initialIdentity = fileIdentityKey(opened);
     database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = NORMAL; BEGIN IMMEDIATE");
     transactionOpen = true;
     initialize(database, databaseWasAbsent || databaseWasEmpty);
@@ -546,9 +547,9 @@ export function openCodexCoordinatorTransaction(
   };
   const assertStablePath = (): void => {
     requireOpen();
-    const entry = lstatSync(finalDatabasePath);
+    const entry = lstatSync(finalDatabasePath, { bigint: true });
     if (entry.isSymbolicLink() || !entry.isFile()
-      || `${entry.dev}:${entry.ino}` !== initialIdentity
+      || fileIdentityKey(entry) !== initialIdentity
       || !samePathIdentity(realpathSync.native(finalDatabasePath), finalDatabasePath)) {
       throw new CodexUserIdentityRefusal("The coordinator database path was substituted.");
     }
