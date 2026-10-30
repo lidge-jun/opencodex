@@ -9,7 +9,7 @@ import { fetchMainAccountInfoSnapshot } from "../../src/codex/auth-api/main-acco
 import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
 import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
-import { clearAccountQuota } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
@@ -176,4 +176,60 @@ describe("pool credits publication", () => {
     await listCodexAuthAccounts(cfg);
     expect(poolReads).toBe(1);
   });
+});
+
+describe("pool WHAM short-window retirement", () => {
+  const now = () => Math.floor(Date.now() / 1000);
+  const short = () => ({ used_percent: 100, limit_window_seconds: 18_000, reset_at: now() + 3600 });
+  const weekly = () => ({ used_percent: 0, limit_window_seconds: 604_800, reset_at: now() + 604_800 });
+  const observe = (primary: unknown, secondary: unknown, extra = {}) => Response.json({
+    plan_type: "pro", rate_limit: { allowed: true, primary_window: primary, secondary_window: secondary }, ...extra,
+  });
+
+  test("complete weekly-only probe retires the carried short tuple", async () => {
+    savePool();
+    const ctx = poolContext();
+    await commitPoolQuotaResponse(observe(short(), weekly()), ctx);
+    const result = await commitPoolQuotaResponse(observe(weekly(), null), ctx);
+    expect(result.quota?.shortPercent).toBeUndefined();
+    expect(result.quota?.shortResetAt).toBeUndefined();
+    expect(result.quota?.weeklyPercent).toBe(0);
+  });
+
+  test("a Plus-style five-hour window remains present", async () => {
+    savePool();
+    const ctx = poolContext();
+    const result = await commitPoolQuotaResponse(observe(short(), weekly(), { plan_type: "plus" }), ctx);
+    expect(result.quota?.shortPercent).toBe(100);
+    expect(result.quota?.shortResetAt).toBeDefined();
+  });
+
+  test("partial and invalid WHAM observations retain the carried tuple", async () => {
+    savePool();
+    const ctx = poolContext();
+    await commitPoolQuotaResponse(observe(short(), weekly()), ctx);
+    const partial = await commitPoolQuotaResponse(Response.json({ rate_limit: { primary_window: weekly() } }), ctx);
+    expect(partial.quota?.shortPercent).toBe(100);
+    const invalid = await commitPoolQuotaResponse(observe(weekly(), null, {
+      additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: 101 } } }],
+    }), ctx);
+    expect(invalid.quota?.shortPercent).toBe(100);
+  });
+  test("partial response headers do not retire a carried short window", async () => {
+    savePool();
+    await commitPoolQuotaResponse(observe(short(), weekly()), poolContext());
+    applyAccountQuotaFromUpstreamHeaders(account.id, new Headers({ "x-codex-primary-used-percent": "12" }));
+    expect(getAccountQuota(account.id)?.shortPercent).toBe(100);
+  });
+
+  test("monthly-only pool plans keep their monthly observation", async () => {
+    savePool();
+    const ctx = poolContext();
+    await commitPoolQuotaResponse(observe(short(), weekly()), ctx);
+    const monthly = { used_percent: 14, limit_window_seconds: 2_592_000, reset_at: now() + 2_592_000 };
+    const result = await commitPoolQuotaResponse(observe(monthly, null, { plan_type: "go" }), ctx);
+    expect(result.quota?.shortPercent).toBeUndefined();
+    expect(result.quota?.monthlyPercent).toBe(14);
+  });
+
 });

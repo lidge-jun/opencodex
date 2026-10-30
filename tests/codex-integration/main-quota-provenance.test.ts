@@ -658,3 +658,13 @@ test("native main observations and oversized cache never become pool history", (
   } }, padding: "x".repeat(4 * 1024 * 1024) }));
   expect(getAccountQuotaHistory("history-pool").observations).toEqual([]);
 });
+
+
+test("main short window is retained without a main writer even with WHAM absence evidence", () => {
+  const short = { shortPercent: 100, shortResetAt: Date.now() / 1000 + 3600 };
+  setAccountQuotaFromParsed(MAIN, short);
+  const data: WhamUsageResponse = { rate_limit: { allowed: true,
+    primary_window: { used_percent: 0, limit_window_seconds: 604_800 }, secondary_window: null } };
+  setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, undefined, parseMainPolicyUsageQuota(data));
+  expect(getAccountQuota(MAIN)?.shortPercent).toBe(100);
+});

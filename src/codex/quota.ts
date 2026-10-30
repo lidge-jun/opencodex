@@ -333,7 +333,7 @@ export function setAccountQuotaFromParsed(
   const mainDecisionGeneration = mainWriter && mainDecisionQuotaWriterGeneration(mainWriter);
   if (isMain && mainDecisionGeneration !== undefined && decisionRaw)
     publishCodexDecisionQuota(accountId, mainDecisionGeneration, decisionRaw, updatedAt, "codex-main", decisionObservationPartial);
-  const displayQuota: MainPolicyQuotaObservation = isMain && mainWriter && policyQuota?.shortWindowAbsent === true
+  const displayQuota: MainPolicyQuotaObservation = (!isMain || mainWriter) && policyQuota?.shortWindowAbsent === true
     ? { ...quota, shortWindowAbsent: true }
     : quota;
   const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
@@ -934,7 +934,14 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
-  const [primary, secondary, tertiary] = windows;
+  return quota ? withWhamShortWindowAbsence(data, quota) : null;
+}
+
+/** Derive absence from complete WHAM topology without changing the display quota. */
+export function withWhamShortWindowAbsence(
+  data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt">,
+): MainPolicyQuotaObservation {
+  const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   // Primary and secondary must explicitly report their topology. WHAM also sends
   // two-window responses without tertiary; an explicit allowed verdict disambiguates those
   // from partial observations. A present tertiary still requires measured long/null evidence.
@@ -942,7 +949,7 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
   // Headers never supply this proof, and reset time alone still cannot release a block.
-  if (quota && (isMeasuredLongWindow(primary)
+  if ((isMeasuredLongWindow(primary)
       || (primary === null && isMeasuredLongWindow(secondary) && quota.weeklyPercent !== undefined))
     && (secondary === null || isMeasuredLongWindow(secondary))
     && (tertiary === null || isMeasuredLongWindow(tertiary)
