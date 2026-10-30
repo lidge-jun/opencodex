@@ -15,7 +15,7 @@ const call = (name: string, id: string, incomplete = false): AdapterEvent[] => [
 ];
 const answer: AdapterEvent[] = [{ type: "text_delta", text: "Final answer" }, { type: "done", usage: usage(30) }];
 
-async function drive(passes: AdapterEvent[][], maxSearches = 1) {
+async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = false) {
   const consultations: string[] = [];
   const searches: string[] = [];
   const requests: OcxParsedRequest[] = [];
@@ -46,11 +46,11 @@ async function drive(passes: AdapterEvent[][], maxSearches = 1) {
     parsed: { modelId: "fixture", stream: true, options: {}, context: {
       messages: [], tools: [
         { name: "web_search", description: "Search", parameters: {} },
-        { name: "advisor", description: "Advisor", parameters: {}, advisor: true },
+        { name: "advisor", description: "Advisor", parameters: {}, ...(clientAdvisor ? {} : { advisor: true }) },
         { name: "write", description: "Write", parameters: {} },
       ],
     } },
-    adapter, advisor, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
+    adapter, ...(clientAdvisor ? {} : { advisor }), backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
     settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
     onUsage: value => reported.push(value),
@@ -110,4 +110,22 @@ test("incomplete Advisor calls suppress consultation and search execution", asyn
   expect(result.requests).toHaveLength(1);
   expect(result.text).not.toContain("private-incomplete");
   expect(result.reported).toEqual([expect.objectContaining({ inputTokens: 10, outputTokens: 1 })]);
+});
+
+test("empty-answer recovery revokes an earlier client advisor declaration", async () => {
+  const result = await drive([
+    [...call("web_search", "search-1"), { type: "done", usage: usage(10) }],
+    [{ type: "done", usage: usage(20) }],
+    [...call("advisor", "recovery-private-call"), { type: "done", usage: usage(30) }],
+  ], 1, true);
+  expect(result.requests).toHaveLength(3);
+  expect(result.requests[0]!.context.tools!.some(tool => tool.name === "advisor")).toBe(true);
+  expect(result.requests[2]!.context.tools).toEqual([]);
+  expect(result.requests[2]!.options.toolChoice).toBe("none");
+  expect(result.text).toContain("undeclared_tool_call");
+  expect(result.text).not.toContain("recovery-private-call");
+  expect(result.text).not.toContain("response.completed");
+  expect(result.consultations).toEqual([]);
+  expect(result.searches).toHaveLength(1);
+  expect(result.reported).toEqual([expect.objectContaining({ inputTokens: 60, outputTokens: 3 })]);
 });

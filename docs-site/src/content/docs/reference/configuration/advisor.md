@@ -163,6 +163,9 @@ Fetch-based web-search turns support the same manual consultation path when the 
 excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
 worker order. Search and Advisor iterations have separate allowances,
 and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
+If the worker emits an excluded `advisor` call, the turn fails with `undeclared_tool_call`
+before that call reaches the client. A normal client tool named `advisor` remains available
+only while the current iteration declares and permits it; a tools-disabled recovery cannot reuse an earlier declaration.
 Usage accounting includes each worker turn once, including the leg rejected by the Advisor continuation limit.
 
 Suppression does not read Advisor strings. Automatic dedup is the server-owned ledger. A
