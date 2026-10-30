@@ -44,7 +44,7 @@ describe("codex launcher credential destination", () => {
   codexLaunchOwnershipTest("the managed starting configuration reads the service token exactly once", () => fixture((_home, codexHome) => {
     writeFileSync(join(codexHome, "config.toml"), local);
     let reads = 0;
-    const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttested: true, serviceToken: () => { reads++; return fixtureToken; } });
+    const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, serviceToken: () => { reads++; return fixtureToken; } });
     expect(reads).toBe(1);
     expect(env.OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
   }));
@@ -71,14 +71,14 @@ describe("codex launcher credential destination", () => {
     const originalDirectory = process.cwd();
     try {
       process.chdir(parse(home).root);
-      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttested: true }).OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
+      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" } }).OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
     } finally { process.chdir(originalDirectory); }
   }));
   test("directory and remote overrides never read a service token", () => fixture((_home, codexHome) => {
     writeFileSync(join(codexHome, "config.toml"), local);
     for (const args of [["-C", "other"], ["-Cother"], ["--cd=other"], ["--cd", "other"], ["--remote", "remote"], ["--remote=remote"]]) {
       let reads = 0;
-      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttested: true, args, serviceToken: () => { reads++; return fixtureToken; } })).toEqual({ CODEX_HOME: codexHome });
+      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, args, serviceToken: () => { reads++; return fixtureToken; } })).toEqual({ CODEX_HOME: codexHome });
       expect(reads).toBe(0);
     }
   }));
@@ -93,7 +93,7 @@ describe("codex launcher credential destination", () => {
     try {
       process.chdir(project);
       let reads = 0;
-      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttested: true, serviceToken: () => { reads++; return fixtureToken; } })).toEqual({ CODEX_HOME: codexHome });
+      expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, serviceToken: () => { reads++; return fixtureToken; } })).toEqual({ CODEX_HOME: codexHome });
       expect(reads).toBe(0);
     } finally { process.chdir(originalDirectory); }
   }));
@@ -111,8 +111,8 @@ describe("codex launcher credential destination", () => {
       process.chdir(cwd);
       let reads = 0, reason: string | undefined;
       const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, {
-        routingKind: "opencodex-local", runtimeAttested: true, serviceToken: () => { reads++; return fixtureToken; },
-        credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }),
+        routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, serviceToken: () => { reads++; return fixtureToken; },
+        credentialDestination: (home, report, proof) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }, proof),
       });
       expect(reads).toBe(0);
       expect(reason).toBe(expectedReason);

@@ -33,8 +33,8 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { commandInvocation } from "../lib/win-exec";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
-import { findLiveProxy, proveLiveProxyOwnedByHome, type LiveProxy } from "../server/proxy-liveness";
-import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
+import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import { attestCodexRuntime, codexCredentialDestinationIsTrusted, resolveCodexLaunchHome, type CodexRuntimeAttestation } from "./codex-launch-auth";
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
 import { codexTokenWithheldDiagnostic, type CodexTokenRefusal, type CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
@@ -158,9 +158,9 @@ export type CodexLaunchEnvDeps = {
   args?: readonly string[];
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
-  credentialDestination?: (home: string, report?: CodexTokenRefusalReporter) => boolean;
-  /** True only after the ensured listener proved this home's runtime-record secret. */
-  runtimeAttested?: boolean;
+  credentialDestination?: (home: string, report?: CodexTokenRefusalReporter, runtimeAttestation?: CodexRuntimeAttestation | null) => boolean;
+  /** Exact origin that proved this home's runtime-record secret. */
+  runtimeAttestation?: CodexRuntimeAttestation | null;
 };
 
 /** Read the client admission credential from this installation's service-token file. */
@@ -188,7 +188,7 @@ export function buildCodexLaunchEnv(
     };
     if (!codexTokenArgsAreSafe(deps.args ?? [])) return withhold("args");
     if (!codexTokenEnvironmentIsSafe(env)) return withhold("environment");
-    if (deps.routingKind === "opencodex-local" && deps.runtimeAttested !== true) return withhold("destination");
+    if (!deps.runtimeAttestation) return withhold("destination");
     // NO_PROXY parsing and precedence vary across native HTTP/WebSocket transports.
     // Without proving bypass, preserve the user's transport but never load a secret.
     const home = resolveCodexLaunchHome(env);
@@ -196,8 +196,8 @@ export function buildCodexLaunchEnv(
     let refusal: CodexTokenRefusal = "destination";
     const report: CodexTokenRefusalReporter = reason => { refusal = reason; };
     const trusted = deps.credentialDestination
-      ? deps.credentialDestination(home, report)
-      : codexCredentialDestinationIsTrusted(home, undefined, report);
+      ? deps.credentialDestination(home, report, deps.runtimeAttestation)
+      : codexCredentialDestinationIsTrusted(home, undefined, report, deps.runtimeAttestation);
     if (!trusted) return withhold(refusal);
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
     if (!token) return withhold("credential");
@@ -311,7 +311,7 @@ export async function cmdCodex(args: string[]): Promise<number> {
   }
   // A public health marker proves liveness, not ownership of the listener. Never read the
   // persisted service token until the exact runtime-record endpoint answers a fresh challenge.
-  const runtimeAttested = plan.kind === "routed" && live !== null
-    && await proveLiveProxyOwnedByHome(live) === "proven";
-  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args, runtimeAttested }));
+  const runtimeAttestation = plan.kind === "routed" && live !== null
+    ? await attestCodexRuntime(live) : null;
+  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args, runtimeAttestation }));
 }

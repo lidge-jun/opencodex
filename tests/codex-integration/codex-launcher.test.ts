@@ -39,7 +39,7 @@ import { repoRoot } from "../helpers/repo-root";
 // These env-assembly tests supply destination authority explicitly; real config authority
 // (including the positive managed block) is covered in codex-launcher-security.test.ts.
 const buildCodexLaunchEnv: typeof buildEnv = (base, deps) => buildEnv({ CODEX_HOME: repoRoot(), ...base }, {
-  credentialDestination: () => true, runtimeAttested: true, ...deps,
+  credentialDestination: () => true, runtimeAttestation: { origin: "http://127.0.0.1:12199" }, ...deps,
 });
 
 function withTokenFiles(run: (home: string) => void): void {
@@ -147,7 +147,7 @@ describe("codex launch env assembly", () => {
     let consulted = false;
     const env = buildCodexLaunchEnv({ PATH: "/usr/bin" }, {
       routingKind: "opencodex-local",
-      runtimeAttested: false,
+      runtimeAttestation: null,
       serviceToken: () => { consulted = true; return "must-not-be-read"; },
     });
     expect(env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();

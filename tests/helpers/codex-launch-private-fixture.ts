@@ -75,7 +75,8 @@ export function codexLaunchOwnershipTest(name: string, body: () => void | Promis
       expect(codexLaunchHomeIsOwned(root)).toBe(false);
       let reason: string | undefined, reads = 0;
       const env = buildCodexLaunchEnv({ CODEX_HOME: root }, {
-        credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system"), value => { reason = value; report?.(value); }),
+        runtimeAttestation: { origin: "http://127.0.0.1:12199" },
+        credentialDestination: (home, report, proof) => codexCredentialDestinationIsTrusted(home, join(home, "system"), value => { reason = value; report?.(value); }, proof),
         serviceToken: () => { reads++; return "ocx_fixture_must_not_read"; },
       });
       expect(reason).toBe("ownership");
@@ -96,7 +97,8 @@ export function codexLaunchProjectRefusalTest(name: string, body: (reason: "proj
 // Model a protected, empty machine configuration namespace inside this fixture.
 // Every other authority check uses real config/ownership IO. Native probes use production defaults.
 export const buildCodexPrivateFixtureLaunchEnv: typeof buildCodexLaunchEnv = (base, deps) => buildCodexLaunchEnv(base, {
-  credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), report), ...deps,
+  runtimeAttestation: { origin: "http://127.0.0.1:12199" },
+  credentialDestination: (home, report, proof) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), report, proof), ...deps,
 });
 
 /** Windows Temp grants Users create rights to descendants; model a private Codex home. */

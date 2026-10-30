@@ -16,7 +16,7 @@ const secret = "ocx_fixture_diagnostic_secret", contents = "fixture-key-file-con
 function capture(base: Record<string, string | undefined>, deps: CodexLaunchEnvDeps) {
   const notes: string[] = [], original = console.error;
   console.error = (...values: unknown[]) => { notes.push(values.join(" ")); };
-  try { return { env: buildCodexLaunchEnv(base, deps), notes }; }
+  try { return { env: buildCodexLaunchEnv(base, { runtimeAttestation: { origin: "http://127.0.0.1:12199" }, ...deps }), notes }; }
   finally { console.error = original; }
 }
 
@@ -41,7 +41,7 @@ describe("Codex credential withholding diagnostics", () => {
     [{ CODEX_HOME: "" }, {}, "Codex home cannot be resolved unambiguously"],
   ] as const) test(reason, () => {
     let reads = 0;
-    const result = capture(base, { routingKind: "opencodex-local", runtimeAttested: true, ...deps, serviceToken: () => { reads++; return secret; } });
+    const result = capture(base, { routingKind: "opencodex-local", runtimeAttestation: { origin: "http://127.0.0.1:12199" }, ...deps, serviceToken: () => { reads++; return secret; } });
     diagnostic(result.notes, reason);
     expect(reads).toBe(0);
     expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
@@ -89,7 +89,7 @@ $acl.AddAccessRule($rule)
 [System.IO.Directory]::SetAccessControl($p,$acl)`;
     let reads = 0;
     const launch = () => capture({ CODEX_HOME: home }, {
-      credentialDestination: (path, report) => codexCredentialDestinationIsTrusted(path, system, report),
+      credentialDestination: (path, report, proof) => codexCredentialDestinationIsTrusted(path, system, report, proof),
       serviceToken: () => { reads++; return secret; },
     });
     try {
@@ -185,7 +185,7 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([Sy
       }
       let reads = 0;
       const result = capture({ CODEX_HOME: home }, {
-        credentialDestination: (path, report) => codexCredentialDestinationIsTrusted(path, system, report),
+        credentialDestination: (path, report, proof) => codexCredentialDestinationIsTrusted(path, system, report, proof),
         serviceToken: () => { reads++; return secret; },
       });
       // Diagnostic reachability needs protected ancestors; the mutation and
