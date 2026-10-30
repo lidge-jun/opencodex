@@ -258,7 +258,7 @@ function featureToggleFixture(signal?: AbortSignal) {
     headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) });
   return { path, original, req, url };
 }
-function callFeatureToggle(f: ReturnType<typeof featureToggleFixture>, toggle: NonNullable<ManagementContext["deps"]["toggleDefaultModeRequestUserInput"]>) {
+function callFeatureToggle(f: ReturnType<typeof featureToggleFixture>, toggle?: NonNullable<ManagementContext["deps"]["toggleDefaultModeRequestUserInput"]>) {
   return handleAgentSettingsRoutes({ req: f.req, url: f.url, config: { providers: [] } as unknown as OcxConfig,
     deps: { toggleDefaultModeRequestUserInput: toggle }, version: "test", trustedLoopbackIngress: true,
     guiSessionIssuance: null, convergeCodexCatalog: async () => { throw new Error("unexpected catalog convergence"); },
@@ -276,6 +276,31 @@ test("single feature toggle refuses a held update gate before any child runs", a
     expect(children).toBe(0);
     expect(readFileSync(f.path, "utf8")).toBe(f.original);
     expect(gate.codexCliSelectionGateState()).toBe("worker_commit");
+  } finally { worker.exit(); }
+});
+
+test("no-toggle feature request resolves its runtime inside parent admission commit", async () => {
+  const f = featureToggleFixture();
+  spies.push(spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmissionAsync").mockResolvedValue(false));
+  spies.push(spyOn(recovery, "codexCliUpdateRecoveryBlocksAdmission").mockReturnValue(false));
+  const lock = spyOn(configWriteLock, "acquireConfigWriteLock"); spies.push(lock);
+  const worker = gate.createWorkerCommitWindow({ gate: gate.codexCliUpdateSelectionGate(), fence: gate.createCodexCliUpdateFence() });
+  let resolutions = 0, state = "", workerEntered = false, nestedEntered = false;
+  spies.push(spyOn(runtime, "resolveAndPersistCodexRuntime").mockImplementation(() => {
+    resolutions++; state = gate.codexCliSelectionGateState();
+    workerEntered = worker.tryEnter(); if (workerEntered) worker.exit();
+    const nested = gate.beginCodexCliSelectionParentWrite();
+    nestedEntered = nested.entered; if (nestedEntered) nested.exit();
+    return { runtime: { command: "codex", source: "fallback", version: null }, failures: [] };
+  }));
+  try {
+    const response = await callFeatureToggle(f);
+    expect(resolutions).toBe(1); expect(state).toBe("parent_write");
+    expect(workerEntered).toBe(false); expect(nestedEntered).toBe(true);
+    expect(response?.status).toBe(502);
+    expect(await response!.json()).toMatchObject({ error: "default_mode_request_user_input toggle failed: spawn codex ENOENT" });
+    expect(lock).not.toHaveBeenCalled(); expect(readFileSync(f.path, "utf8")).toBe(f.original);
+    expect(free()).toBe(true);
   } finally { worker.exit(); }
 });
 
