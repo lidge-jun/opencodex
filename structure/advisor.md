@@ -67,7 +67,10 @@ multi-call pairing, overlap and lifecycle release.
   web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
   an emitted `advisor` call is refused before its ID or arguments reach the client unless that
   iteration declares and permits it as an ordinary client tool. Partial calls are refused at
-  their start, and the terminal refusal retains worker usage. Mixed real client calls still end
+  their start, and the terminal refusal retains worker usage. Synthetic permission is also
+  iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
+  turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
+  Mixed real client calls still end
   interception. Search and Advisor iterations have independent allowances within one hard loop cap;
   consultation waits emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
   covers search-enabled, mixed-call, real-client-call and repeated-consultation paths. The limit

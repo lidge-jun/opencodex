@@ -525,6 +525,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     response: Response;
     responseAdapter: ProviderAdapter;
     clientAdvisorAllowed: boolean;
+    syntheticAdvisorAllowed: boolean;
     recover?: (error: WebSearchAdapterEventError) => Promise<IterationResponse | undefined>;
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
@@ -708,7 +709,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const toolAllowed = toolChoiceToolPredicate(iterParsed.options.toolChoice, iterTools);
         const clientAdvisorAllowed = iterTools.some(tool => !tool.advisor && !tool.namespace
           && tool.name === ADVISOR_TOOL_NAME && toolAllowed(tool));
-        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed };
+        const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
+        // Exhaustion removes the declaration, but its paired limit result still belongs
+        // to the sidecar. A tools-disabled recovery revokes that permission too.
+        const advisorCandidate = declaredAdvisor ?? { name: ADVISOR_TOOL_NAME };
+        const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
+          && (!!declaredAdvisor || deps.advisor.exhausted())
+          && toolChoiceToolPredicate(iterParsed.options.toolChoice,
+            declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
+        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
@@ -924,7 +933,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, terminal.message, terminal.code === "context_length_exceeded" ? terminal : undefined);
     }
     deps.thinkingRecovery?.observeIteration(events);
-    return { ...scanEventsForWebSearch(events, { advisor: deps.advisor !== undefined, clientAdvisorAllowed: prepared.clientAdvisorAllowed }), streamedPassthroughCount, events, anthropicReplay };
+    return { ...scanEventsForWebSearch(events, { advisor: prepared.syntheticAdvisorAllowed, clientAdvisorAllowed: prepared.clientAdvisorAllowed }), streamedPassthroughCount, events, anthropicReplay };
   };
 
   /**

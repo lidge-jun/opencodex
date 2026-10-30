@@ -15,7 +15,7 @@ const call = (name: string, id: string, incomplete = false): AdapterEvent[] => [
 ];
 const answer: AdapterEvent[] = [{ type: "text_delta", text: "Final answer" }, { type: "done", usage: usage(30) }];
 
-async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = false) {
+async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = false, toolChoice?: OcxParsedRequest["options"]["toolChoice"]) {
   const consultations: string[] = [];
   const searches: string[] = [];
   const requests: OcxParsedRequest[] = [];
@@ -43,7 +43,7 @@ async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = 
     async *parseStream() { yield* events; },
   };
   const response = await runWithWebSearch({
-    parsed: { modelId: "fixture", stream: true, options: {}, context: {
+    parsed: { modelId: "fixture", stream: true, options: { toolChoice }, context: {
       messages: [], tools: [
         { name: "web_search", description: "Search", parameters: {} },
         { name: "advisor", description: "Advisor", parameters: {}, ...(clientAdvisor ? {} : { advisor: true }) },
@@ -61,10 +61,13 @@ async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = 
   return { consultations, searches, requests, reported, text, terminal };
 }
 
-test("Advisor limit reports every billed worker leg once", async () => {
+const advisorLimitChoices: OcxParsedRequest["options"]["toolChoice"][] = [
+  undefined, "required", { name: "advisor" }, { allowedTools: ["advisor"], mode: "required" },
+];
+test.each(advisorLimitChoices)("Advisor limit reports every billed worker leg once (choice=%j)", async toolChoice => {
   const result = await drive(Array.from({ length: 5 }, (_, i) => [
     ...call("advisor", `advisor-${i}`), { type: "done", usage: usage(10) },
-  ]));
+  ]), 1, false, toolChoice);
   expect(result.consultations).toHaveLength(3);
   expect(result.requests).toHaveLength(5);
   expect(result.text).toContain("advisor_continuation_limit");
@@ -112,12 +115,12 @@ test("incomplete Advisor calls suppress consultation and search execution", asyn
   expect(result.reported).toEqual([expect.objectContaining({ inputTokens: 10, outputTokens: 1 })]);
 });
 
-test("empty-answer recovery revokes an earlier client advisor declaration", async () => {
+test.each([true, false])("empty-answer recovery revokes earlier advisor permission (client=%s)", async clientAdvisor => {
   const result = await drive([
     [...call("web_search", "search-1"), { type: "done", usage: usage(10) }],
     [{ type: "done", usage: usage(20) }],
     [...call("advisor", "recovery-private-call"), { type: "done", usage: usage(30) }],
-  ], 1, true);
+  ], 1, clientAdvisor);
   expect(result.requests).toHaveLength(3);
   expect(result.requests[0]!.context.tools!.some(tool => tool.name === "advisor")).toBe(true);
   expect(result.requests[2]!.context.tools).toEqual([]);
