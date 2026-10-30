@@ -788,7 +788,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (!isPlainRecord(parsedBody)) return jsonResponse({ error: "invalid model settings request" }, 400);
     const body = parsedBody;
     for (const key of Object.keys(body)) {
-      if (!["provider", "modelId", "contextWindow", "inputModalities", "reasoningEfforts", "defaultReasoningEffort"].includes(key)) {
+      if (!["provider", "modelId", "contextWindow", "inputModalities", "responsesCustomTools", "reasoningEfforts", "defaultReasoningEffort"].includes(key)) {
         return jsonResponse({ error: `unknown model settings field: ${key}` }, 400);
       }
     }
@@ -833,6 +833,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         const unique = parsed.values ? [...new Set(parsed.values)] : [];
         modalities = unique.length > 0 ? unique : null;
       }
+    }
+    let responsesCustomTools: boolean | null | undefined;
+    if (body.responsesCustomTools !== undefined) {
+      if (body.responsesCustomTools === null || typeof body.responsesCustomTools === "boolean") {
+        responsesCustomTools = body.responsesCustomTools;
+      } else return jsonResponse({ error: "responsesCustomTools must be a boolean or null" }, 400);
     }
     let ladder: string[] | null | undefined;
     if (body.reasoningEfforts !== undefined) {
@@ -899,19 +905,34 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         writePerModel("modelDefaultReasoningEfforts", null);
       }
     }
-    if (modalities !== undefined) {
+    if (modalities !== undefined || responsesCustomTools !== undefined) {
       const capabilities = Object.assign(Object.create(null), providerConfig.modelCapabilities ?? {}) as NonNullable<typeof providerConfig.modelCapabilities>;
       const row = { ...(capabilities[modelId] ?? {}) };
-      const declared = Array.isArray(row.inputModalities) ? [...row.inputModalities] : undefined;
-      const unchanged = modalities === null
-        ? declared === undefined
-        : declared !== undefined
-          && declared.length === modalities.length
-          && modalities.every(modality => declared.includes(modality));
-      if (!unchanged) {
-        changed = true;
-        if (modalities === null) delete row.inputModalities;
-        else row.inputModalities = modalities;
+      let capabilitiesChanged = false;
+      if (modalities !== undefined) {
+        const declared = Array.isArray(row.inputModalities) ? [...row.inputModalities] : undefined;
+        const unchanged = modalities === null
+          ? declared === undefined
+          : declared !== undefined
+            && declared.length === modalities.length
+            && modalities.every(modality => declared.includes(modality));
+        if (!unchanged) {
+          changed = true;
+          capabilitiesChanged = true;
+          if (modalities === null) delete row.inputModalities;
+          else row.inputModalities = modalities;
+        }
+      }
+      if (responsesCustomTools !== undefined) {
+        const next = responsesCustomTools === null ? undefined : responsesCustomTools;
+        if (row.responsesCustomTools !== next) {
+          changed = true;
+          capabilitiesChanged = true;
+          if (next === undefined) delete row.responsesCustomTools;
+          else row.responsesCustomTools = next;
+        }
+      }
+      if (capabilitiesChanged) {
         if (Object.keys(row).length === 0) delete capabilities[modelId];
         else capabilities[modelId] = row;
         if (Object.keys(capabilities).length === 0) delete providerConfig.modelCapabilities;
@@ -937,13 +958,16 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       providerConfig.modelDefaultReasoningEfforts, providerConfig.modelInputModalities]
       .some(map => map !== undefined && Object.hasOwn(map, modelId))
       || providerConfig.modelCapabilities?.[modelId]?.inputModalities !== undefined;
+    const hasCapabilityOverrides = hasOverrides
+      || providerConfig.modelCapabilities?.[modelId]?.responsesCustomTools !== undefined;
     const state = {
       ok: true as const,
       provider,
       modelId,
-      hasOverrides,
+      hasOverrides: hasCapabilityOverrides,
       contextWindow: providerConfig.modelContextWindows?.[modelId] ?? null,
       inputModalities: providerConfig.modelCapabilities?.[modelId]?.inputModalities ?? null,
+      responsesCustomTools: providerConfig.modelCapabilities?.[modelId]?.responsesCustomTools ?? null,
       reasoningEfforts: providerConfig.modelReasoningEfforts?.[modelId] ?? null,
       defaultReasoningEffort: providerConfig.modelDefaultReasoningEfforts?.[modelId] ?? null,
     };

@@ -60,6 +60,7 @@ export interface ResolvedPerModelStaticPolicy extends Readonly<ReasoningCapabili
   readonly supportsReasoningSummaries?: boolean;
   readonly supportsVerbosity?: boolean;
   readonly supportsServiceTier?: boolean;
+  readonly supportsResponsesCustomTools?: boolean;
   readonly fastTierDescription?: string;
   readonly directReasoningEffort?: boolean;
   readonly responsesUpstreamStreaming?: boolean;
@@ -344,6 +345,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const modelSupportsServiceTier = fastOff
     ? false
     : modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
+  const modelSupportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools
+    ?? providerPolicy.supportsResponsesCustomTools;
   const model: ResolvedPerModelStaticPolicy = {
     adapter,
     ...reasoningCapabilities,
@@ -358,6 +361,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
     ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
     ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
+    ...(modelSupportsResponsesCustomTools !== undefined ? { supportsResponsesCustomTools: modelSupportsResponsesCustomTools } : {}),
     ...(modelSupportsServiceTier === true && entry?.fastTierDescription !== undefined
       ? { fastTierDescription: entry.fastTierDescription }
       : {}),
@@ -408,6 +412,9 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const exactServiceTierSource = modelSource(provider.modelSupportsServiceTier, registryServiceTierDefaults);
   modelProvenance.supportsServiceTier = !fastOff && exactServiceTierSource !== "unknown" ? exactServiceTierSource
     : providerProvenance.supportsServiceTier ?? "unknown";
+  modelProvenance.supportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools !== undefined
+    ? "operator-capability"
+    : providerProvenance.supportsResponsesCustomTools ?? "unknown";
   modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
   modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
   modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";

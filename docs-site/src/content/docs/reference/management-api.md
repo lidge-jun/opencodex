@@ -538,15 +538,19 @@ can still fail when a recorded session has no surviving rollout file.
 | `PUT /api/model-settings` | Edit one routed model's capability axes in place | 400 missing provider/modelId, unknown or native/combo provider, malformed field, unknown field, non-exact model id, or an invalid default effort for the resulting ladder; 500 when the config could not be saved (live config left unchanged) |
 
 `PUT /api/model-settings` takes `{ provider, modelId }` plus any of `contextWindow`,
-`inputModalities`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
+`inputModalities`, `responsesCustomTools`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
 provider-level per-model maps the runtime already reads (`modelContextWindows`,
-`modelCapabilities.<modelId>.inputModalities`, `modelReasoningEfforts`,
+`modelCapabilities.<modelId>.inputModalities`, `modelCapabilities.<modelId>.responsesCustomTools`, `modelReasoningEfforts`,
 `modelDefaultReasoningEfforts`), so an edited row keeps its discovery provenance instead of
 being replaced by a custom model. `inputModalities` accepts `text`, `image`, and `audio`;
-`reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
+`responsesCustomTools` accepts a boolean or `null` to inherit the provider setting. `reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
 are rejected by name. `modelId` must be exact, without surrounding whitespace, control
 characters, excessive length, or a reserved object-property name. `contextWindow` must be
 `null` or a positive safe integer.
+
+When `responsesCustomTools` is `false`, native Responses compaction also lowers custom-tool
+history. History that cannot be lowered safely returns HTTP 400 with `invalid_request_error`
+before sending anything upstream.
 
 Every field is optional, and `null` **clears** the declaration rather than writing a default,
 which hands the fact back to the registry, the catalog, and the provider. An empty
@@ -556,7 +560,7 @@ Clearing `inputModalities` also removes the exact legacy `modelInputModalities` 
 model, so a restore cannot leave an older declaration in force; family keys shared with other
 models stay. An emptied per-model map is removed instead of left as `{}`. A request that changes nothing
 answers `changed: false` with the stored state. The receipt also reports `saved` (whether this
-request published config), `hasOverrides` (whether any of the four axes remains stored), and
+request published config), `hasOverrides` (whether any editable axis remains stored), and
 `catalogRefresh` (`committed`, `skipped`, or `failed`). These fields distinguish a no-op with
 stored declarations from a model with nothing to restore. A changed request persists atomically;
 an unpublished save failure leaves the live config unchanged. After publication the server

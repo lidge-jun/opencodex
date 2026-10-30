@@ -60,6 +60,20 @@ describe("provider config validation leaf", () => {
     });
   });
 
+  test("Responses custom-tool support is a strict exact-model boolean capability", () => {
+    const base = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", authMode: "key" };
+    const valid = { ...base, modelCapabilities: { gpt: { responsesCustomTools: true }, claude: { responsesCustomTools: false } } };
+    expect(providerConfigSchema.safeParse(valid).success).toBe(true);
+    expect(providerManagementConfigError("gateway", valid)).toBeNull();
+    const invalid = { ...base, modelCapabilities: { claude: { responsesCustomTools: "false" } } };
+    expect(providerConfigSchema.safeParse(invalid).success).toBe(false);
+    expect(providerManagementConfigError("gateway", invalid)).toContain("boolean");
+    expect(mergeModelCapabilities(
+      { claude: { inputModalities: ["text"], responsesCustomTools: false } },
+      { claude: { responsesCustomTools: null } },
+    )).toEqual({ claude: { inputModalities: ["text"] } });
+  });
+
   test("accepts only credential-free HTTP(S) base URLs", () => {
     expect(providerBaseUrlConfigError("https://example.test/v1")).toBeNull();
     expect(providerBaseUrlConfigError("file:///tmp/provider")).toBe("baseUrl must be an http(s) URL");

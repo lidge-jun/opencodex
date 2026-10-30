@@ -28,9 +28,19 @@ export function resolveWireProtocolOverride(
   // RouteResult policy is recaptured for the original inbound protocol whenever routing selects
   // or replaces a destination, so every downstream rebuild consumes the same adapter authority.
   if (staticPolicy) {
-    return staticPolicy.model.adapter !== providerConfig.adapter
-      ? { ...providerConfig, adapter: staticPolicy.model.adapter }
-      : providerConfig;
+    const adapter = staticPolicy.model.adapter;
+    const supportsResponsesCustomTools = staticPolicy.model.supportsResponsesCustomTools;
+    if (adapter === providerConfig.adapter
+      && supportsResponsesCustomTools === providerConfig.supportsResponsesCustomTools) return providerConfig;
+    if (supportsResponsesCustomTools === undefined) {
+      const { supportsResponsesCustomTools: _discardedLiveCapability, ...capturedProvider } = providerConfig;
+      return { ...capturedProvider, adapter };
+    }
+    return {
+      ...providerConfig,
+      adapter,
+      supportsResponsesCustomTools,
+    };
   }
   const pinned = pinnedWireAdapter(providerName, modelId, providerConfig);
   if (pinned && providerConfig.adapter !== pinned) {

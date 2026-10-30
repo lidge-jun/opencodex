@@ -17,3 +17,8 @@ gateway preservation and both refresh directions;
 `tests/responses/responses-native-item-extensions-compact.test.ts` covers official API and ChatGPT
 compact repair, while `tests/responses/responses-url-citation-title-repair.test.ts` covers ordinary
 HTTP/WS projection, helper independence and input immutability.
+
+The same final compact body builder applies the captured exact-model custom-tool policy after
+destination-specific citation projection. A custom-tool history compatibility refusal returns
+HTTP 400 before network dispatch and releases host admission without recording a transport failure.
+`tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.

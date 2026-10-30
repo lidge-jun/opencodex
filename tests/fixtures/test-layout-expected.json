@@ -1093,6 +1093,7 @@
   "openai-provider-option-startup.test.ts": "adapters/openai",
   "openai-provider-option-tooling.test.ts": "adapters/openai", "openai-provider-option.test.ts": "adapters/openai",
   "responses-forward-client-headers.test.ts": "responses", "responses-forward-transport-baseurl.test.ts": "responses", "openai-responses-passthrough.test.ts": "responses",
+  "model-custom-tool-capability.test.ts": "responses",
   "responses-native-item-extensions.test.ts": "responses",
   "responses-native-item-extensions-compact.test.ts": "responses",
   "responses-main-quota-observation.test.ts": "responses",
