@@ -65,7 +65,7 @@ Google metadata follows the [destination-scoped replay projection](../providers/
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
-default. Exact xAI Responses destinations, including the US regional API, omit only `output.encrypted_content` from `include`; other entries remain unchanged. Azure adapters and resource hosts under .openai.azure.com apply the same exact-entry omission, including when configured with openai-responses; unrelated destinations retain their includes ([request compatibility](../providers/xai-grok.md#responses-request-compatibility)). API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
+default. Exact xAI Responses destinations, including the US regional API, omit only `output.encrypted_content` from `include`; other entries remain unchanged. Meta at the exact `api.meta.ai` host shares this normalization, as do Azure adapters and resource hosts under .openai.azure.com, including when configured with openai-responses; unrelated destinations retain their include list ([request compatibility](../providers/xai-grok.md#responses-request-compatibility)). API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
 `devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
@@ -221,7 +221,7 @@ the destination is the whole predicate, because Meta's refusal is a gateway sche
 Muse model it serves, its default `muse-spark-1.3` is not a Contributor id, and a missing model id
 still strips. Because the predicate is the host, a custom provider pointed at that exact URL gets the
 same strip.
-
+Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, declarations retain their schemas over search discoveries, historical discovery stays replay data, and historical custom calls retain their conversion without live authority. Historical catalogs are not validated as current declarations. The reserved `functions` group and nested function definitions become public function declarations. Catalog validation also covers string/omitted input; unrepresentable namespace children and malformed current catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
 Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
 names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
 flattening, `src/responses/muse-tool-name-alias.ts` rewrites those identities on the `api.meta.ai`
