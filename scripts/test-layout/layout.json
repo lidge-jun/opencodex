@@ -705,7 +705,7 @@
     "codex-restart-route.test.ts": "codex-integration",
     "codex-restore-app-rewrite.test.ts": "codex-integration",
     "codex-retained-root-serialization.test.ts": "codex-integration",
-    "codex-routing-cache-affinity-detour.test.ts": "codex-integration",
+    "codex-routing-cache-affinity-detour.test.ts": "codex-integration", "codex-routing-elapsed-short-reset.test.ts": "codex-integration",
     "codex-routing.test.ts": "codex-integration",
     "codex-runtime.test.ts": "codex-integration", "codex-runtime-macos-desktop.test.ts": "codex-integration", "codex-clamp-notice.test.ts": "codex-integration",
     "codex-runtime-wsl-desktop.test.ts": "codex-integration",

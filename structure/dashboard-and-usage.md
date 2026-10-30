@@ -10,7 +10,7 @@ The dashboard is a local control surface, not a separate service. It should refl
 and catalog invariants documented in this folder rather than inventing parallel state. The sign-in form offers opt-in **Remember this device** for direct HTTPS dashboards or loopback, storing an HttpOnly device cookie plus a separate proof in this site's origin-scoped localStorage; neither is the admin token or works alone, cookies span ports of one hostname so the proof binds the dashboard origin (still prefer a dedicated hostname), and storage failure reports Remember unavailable. Both mobile and sidebar **Forget this device** actions use logout to revoke the record and derived sessions immediately after successful publication and remove the proof, retaining it on failure for retry (directory-entry crash durability is best effort); remembered sessions cannot approve GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation, which require a fresh local or paired session, and session-change events update both surfaces under [GUI and management API](gui-and-management-api.md).
 
 Codex quota cards consume the display cache from `src/codex/quota.ts`. Partial refreshes remove
-omitted short tuples after their reset deadline; validated main-window absence also removes
+omitted short tuples after their reset deadline; validated main-window absence, or validated complete WHAM absence for a pool account (#7961), also removes
 future-reset short tuples. Main-account hard-lock evidence and reset-notification history follow
 separate retention rules in
 [OpenAI account modes](providers/openai-tiers.md#quota-cache-and-short-window-history). See [permanent refusal auto-pause](account-auto-pause.md).

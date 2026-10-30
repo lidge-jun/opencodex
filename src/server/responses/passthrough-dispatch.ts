@@ -482,10 +482,9 @@ export async function preparePassthroughExchange(
         for (const callType of collectProviderExecutedCallTypes(clientToolAuthorizationBody)) {
           providerExecutedCallTypes.add(callType);
         }
-        const currentOutboundCatalog = currentTurnWireToolCatalogBody(
-          outboundRequestBody,
-          replayedInputPrefixLength,
-        );
+        // Serialization drops provenance, so never slice transformed input by the raw prefix.
+        // Current wrappers were captured above; adapter-injected hosted tools are top-level.
+        const currentOutboundCatalog = { tools: outboundRequestBody?.tools };
         for (const callType of collectProviderExecutedCallTypes(currentOutboundCatalog)) {
           providerExecutedCallTypes.add(callType);
         }
