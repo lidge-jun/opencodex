@@ -205,7 +205,7 @@ Claude Code настраивается через
 
 ### Что сохраняется при сохранении провайдера
 
-`POST /api/providers` с именем существующего провайдера заменяет сохранённую строку строкой, собранной из запроса. Форма добавления и редактирования в панели не может отправить все поля, поэтому сохранение переносит часть сохранённых полей, которые запрос опустил. Десять из них описывают поведение конкретного апстрима: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+`POST /api/providers` с именем существующего провайдера заменяет сохранённую строку строкой, собранной из запроса. Форма добавления и редактирования в панели не может отправить все поля, поэтому сохранение переносит часть сохранённых полей, которые запрос опустил. Одиннадцать из них описывают поведение конкретного апстрима: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
 | Сохранение | Десять настроек | Сохранённый `apiKeyPool` |
 | --- | --- | --- |
