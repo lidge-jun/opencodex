@@ -98,6 +98,8 @@ export interface DirectRequestOption {
 export interface HandleResponsesOptions {
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
+  /** Captured synchronously at ingress, before parsing or child replay can suspend. */
+  advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */
@@ -215,6 +217,13 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /**
+   * Set by the combo loop for each child. A child logs into its own context, which the combo
+   * copies once when the child commits, and the bridge reports usage after that, at the terminal
+   * frame. The transport calls this when it binds that usage on the child's context, so the combo
+   * can carry the binding to the context that writes the row.
+   */
+  onBridgeUsageBound?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */

@@ -454,12 +454,20 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Compatible Responses servers may omit the final newline. Only physical EOF
+        // admits this carry; byte/decoded limits and failed reads must not flush it.
+        buffer += decoder.decode();
+        const data = sseFieldValue(buffer, "data");
+        if (data !== null) handle(data.trim());
+        break;
+      }
       const remaining = MAX_SIDECAR_STREAM_BYTES - responseBytes;
       const accepted = value.byteLength <= remaining ? value : value.subarray(0, remaining);
       responseBytes += accepted.byteLength;
       buffer += decoder.decode(accepted, { stream: true });
-      const lines = buffer.split("\n");
+      // SSE permits CR, LF and CRLF. A split CRLF adds only an ignored empty line here.
+      const lines = buffer.split(/\r\n|[\r\n]/);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         const data = sseFieldValue(line, "data");

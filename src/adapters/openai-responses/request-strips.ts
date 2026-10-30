@@ -8,6 +8,22 @@ import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
+ * Codex requests output.encrypted_content, which xAI and Meta reject with HTTP 400.
+ * The caller gates this on the destination. Preserve reasoning.encrypted_content
+ * for stateless replay and leave unknown or malformed values for upstream validation.
+ */
+export function stripUnsupportedOutputInclude(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.include)) return body;
+  const include = body.include.filter(item => item !== "output.encrypted_content");
+  if (include.length === body.include.length) return body;
+  if (include.length === 0) {
+    const { include: _dropped, ...rest } = body;
+    return rest;
+  }
+  return { ...body, include };
+}
+
+/**
  * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
  * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
  * Strip only the known extension, never an item-field allowlist that can erase newer wire fields

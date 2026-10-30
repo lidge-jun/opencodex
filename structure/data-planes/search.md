@@ -10,6 +10,11 @@ and direct callers keep their existing behavior.
 
 Final client tool output after hosted search follows the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), before client delivery or continuation state. Internal search execution retains its existing behavior.
 
+When the [Advisor sidecar](../advisor.md#execution-paths) is enabled for a fetch-based search turn,
+the same scanner consumes synthetic `web_search` and `advisor` calls in worker order. Both result
+types remain internal, real client tools retain terminal ownership, and the shared Advisor bounds
+apply without spending the web-search allowance. RunTurn search remains preflight-only for Advisor.
+
 ## Serving the relay without ChatGPT auth
 
 `POST /v1/alpha/search` first resolves a non-empty body `model` with `previewRouteModel()`. A route whose
@@ -59,6 +64,8 @@ credentials. Extending exact routing to those endpoints requires an opaque clien
 can be bound server-side to a previously validated selector.
 
 The Responses sidecar parser in `src/web-search/parse.ts` checks runtime field shapes before consuming events: non-string types, non-array output/annotations, null content entries and `output_text` blocks whose text is not a string cannot throw away accumulated text. Streamed text is assembled per content part (`output_index`, `content_index`) in index order: each part contributes its done text, or its deltas when its done event never arrived, so one part's done text cannot discard another part's deltas. The first indexed event identifies any preceding unindexed accumulator. Later events without valid indexes join the only indexed part when exactly one exists; once multiple indexed parts exist, unindexed text stays separate and follows the indexed parts. When the completed output skipped a malformed entry, its text may be partial: an indexed stream fills only the parts the completed output lacks, while an unindexed stream replaces it as a whole; the completed output's citations are kept either way. Failure messages remain nonblank strings; malformed, empty or whitespace-only message values use the existing terminal diagnostic.
+
+The parser accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across chunks. At clean response-body EOF, it consumes a final `data:` line even without its trailing newline. The same event handler owns completion, failure, citations and decoded-text accounting for that line; EOF alone is not completion. A byte-limit stop or failed read does not flush the pending line. `tests/web-search/web-search-eof.test.ts` covers line endings, immediate terminal cancellation, EOF behavior and its limit boundaries.
 
 Trailing source extraction in `src/web-search/parse.ts` pairs a pending title with a following URL only when the URL sits on an unmarked continuation line with no title of its own. A list item that cannot be paired, because another list item, a self-titled citation, or a URL that starts its own list item follows it, remains answer text, and extraction continues, so every later citation line, including one whose URL `appendSafeWebSearchSource` rejects, still leaves the answer. Non-HTTP URI-like text inside an inline code span of any backtick run, such as `mode:fast`, is not treated as a citation; an HTTP(S) URL is a citation even when code-formatted, and a closing code backtick is trimmed from it. Code spans are found by pairing backtick runs in one pass and the URI scheme length is bounded, so a long Sources line is scanned in linear time.
 

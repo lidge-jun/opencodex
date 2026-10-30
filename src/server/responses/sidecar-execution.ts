@@ -9,7 +9,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
-import { ADVISOR_TOOL_NAME } from "./advisor-slot";
+import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -75,6 +75,7 @@ export async function executeResponsesSidecars(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
     | "admissionScope"
+    | "advisorAdmissionPolicy"
   >,
   transportState: Pick<
     ResponsesTransport,
@@ -195,6 +196,7 @@ export async function executeResponsesSidecars(
       workerIdentity: `${route.modelId} (provider ${route.providerName})`,
       workerModelId: route.modelId,
       admissionScope,
+      admissionPolicy: requestState.advisorAdmissionPolicy,
       abortSignal: options.abortSignal,
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
@@ -655,7 +657,21 @@ export async function executeResponsesSidecars(
   // Placed BEFORE the runTurn early-return for non-runTurn adapters so dual-tool turns dispatch
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
-    parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
+    const webSearchAdvisor = advisorPlan && !routedCompaction
+      && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
+      ? advisorPlan
+      : undefined;
+    parsed.context.tools = [
+      ...(parsed.context.tools ?? []).filter(tool => !webSearchAdvisor || (!tool.advisor && tool.name !== ADVISOR_TOOL_NAME)),
+      buildWebSearchTool(),
+      ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
+    ];
+    if (webSearchAdvisor) {
+      requestState.toolBridgeMaps = buildToolBridgeMaps(parsed);
+      translatorBudget.chargeRetained(new TextEncoder().encode(ADVISOR_TOOL_NAME).byteLength * 2, {
+        kind: "retained_collectors",
+      });
+    }
     // Resolve the mutable route at send time: a 429 rotation replaces route.provider, so retaining
     // one pre-rotation providerFetch would keep the old credential and transport pin.
     const routedProviderFetch = ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
@@ -666,6 +682,7 @@ export async function executeResponsesSidecars(
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
       parsed, adapter: transportState.adapter,
+      ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
@@ -773,9 +790,8 @@ export async function executeResponsesSidecars(
 
   // Advisor synthetic tool + stream guard: attach ONLY when this function is about to hand the
   // request back to the normal translated exchange (no sidecar loop claimed the turn, not a
-  // run-turn adapter, not compaction). The web-search/image loops own their own event handling;
-  // run-turn adapters execute their own loop; both would leak the synthetic tool call they
-  // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
+  // run-turn adapter, not compaction). Web-search handles advisor in its own loop above; the
+  // image/video and run-turn loops cannot intercept it. Preflight still applies to those paths.
   if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
     // A client-declared tool named "advisor" would collide with the synthetic injection (one
     // wire name, two schemas); the synthetic runtime owns the name for this turn.

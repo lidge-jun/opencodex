@@ -52,6 +52,31 @@ export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: numb
 }
 
 /** Body-occupancy guard for the native passthrough (devlog 260716_passthrough_followups/010). */
+/**
+ * True when an undelimited SSE tail (LF-normalized) holds nothing a client would act on: only
+ * whitespace, comments, or a ping. Anything else is a message event cut off at EOF.
+ */
+export function isHarmlessSseTail(tail: string): boolean {
+  const lines = tail.split("\n").filter(line => line.trim() !== "");
+  let event: string | null = null;
+  const data: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith(":")) continue;
+    const eventValue = sseFieldValue(line, "event");
+    if (eventValue !== null) { event = eventValue; continue; }
+    const dataValue = sseFieldValue(line, "data");
+    if (dataValue !== null) { data.push(dataValue); continue; }
+    return false;
+  }
+  if (data.length === 0) return event === null || event === "ping";
+  try {
+    const payload: unknown = JSON.parse(data.join("\n"));
+    return isRec(payload) && payload.type === "ping" && (event === null || event === "ping");
+  } catch {
+    return false;
+  }
+}
+
 export interface PassthroughBodyGuard {
   /** Idle window in ms — raw upstream-byte inactivity while a read is pending. 0 disables. */
   stallMs: number;
@@ -59,6 +84,11 @@ export interface PassthroughBodyGuard {
   maxBytes: number;
   /** Client request signal for deterministic cancel classification. */
   reqSignal?: AbortSignal;
+  /**
+   * The routed provider opted into anthropicEofTolerance: a content-only clean EOF (no
+   * message_stop, no stop_reason, nothing cut) stays a completed turn, as it always was.
+   */
+  eofTolerant?: boolean;
 }
 
 export type PassthroughCloseReason = "terminal" | "client_cancel" | "body_stall" | "body_overflow";
@@ -82,53 +112,123 @@ export function tapAnthropicSseForLog(
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = "";
+  let frameParts: string[] = [];
+  let pendingParts: string[] = [];
+  let pendingChars = 0;
+  let heldCr = false;
+  let heldLf = false;
+  const appendPart = (part: string) => {
+    if (!part) return;
+    pendingParts.push(part);
+    pendingChars += part.length;
+    // Coalesce tiny transport fragments: a one-byte feed must not retain one array
+    // entry per byte for the entire event. Each character is joined at most twice.
+    if (pendingChars >= 4096) {
+      frameParts.push(pendingParts.join(""));
+      pendingParts = [];
+      pendingChars = 0;
+    }
+  };
+  const takeFrame = () => {
+    if (pendingParts.length) frameParts.push(pendingParts.join(""));
+    const frame = frameParts.join("");
+    frameParts = [];
+    pendingParts = [];
+    pendingChars = 0;
+    return frame;
+  };
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
-  const inspectFrame = (frame: string) => {
-    const dataLine = frame
-      .split("\n")
+  // stop_reason of the latest message event the client received as a complete SSE event. Any
+  // later message event (resumed content) clears it; pings and comments do not.
+  let lastDeliveredStop: string | null = null;
+  // A frame is evidence of an event only when its payload type and its event name agree (or the
+  // event line is absent): clients and the non-stream fold dispatch on the event name.
+  const named = (event: string | null, data: Rec, type: string) => data.type === type && (event === null || event === type);
+  const inspectFrame = (frame: string, delivered = true) => {
+    const lines = frame.split("\n");
+    // SSE dispatches on the last event field of a frame.
+    const eventLine = lines.map(l => sseFieldValue(l, "event")).findLast((v): v is string => v !== null);
+    // The value is used as SSE delivers it (one leading space stripped, nothing trimmed).
+    const event = eventLine === undefined ? null : eventLine;
+    const dataLine = lines
       .map(l => sseFieldValue(l, "data"))
       .filter((v): v is string => v !== null)
-      .join("");
+      .join("\n");
     if (!dataLine) return;
     let data: unknown;
-    try { data = JSON.parse(dataLine); } catch { return; }
-    if (!isRec(data)) return;
+    try { data = JSON.parse(dataLine); } catch { data = null; }
+    if (!isRec(data)) {
+      // A malformed event after a stop reason means the turn kept going and was cut.
+      if (delivered) lastDeliveredStop = null;
+      return;
+    }
     recordGenerationEvent(logCtx, data.type);
     if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
       usageAcc = { ...usageAcc, ...data.message.usage };
     } else if (data.type === "message_delta" && isRec(data.usage)) {
       usageAcc = { ...usageAcc, ...data.usage };
-    } else if (data.type === "message_stop" || data.type === "error") {
+    }
+    if (named(event, data, "message_stop") || named(event, data, "error")) {
       terminalSeen = true;
+    } else if (delivered && !named(event, data, "ping")) {
+      const delta = isRec(data.delta) ? data.delta : undefined;
+      lastDeliveredStop = named(event, data, "message_delta") && typeof delta?.stop_reason === "string"
+        ? delta.stop_reason
+        : null;
     }
   };
   const inspect = (chunk: Uint8Array) => {
-    buffer += decoder.decode(chunk, { stream: true });
-    // SSE lines may end in CRLF, LF or CR. Normalize the inspection copy to LF (the forwarded
-    // bytes are untouched), holding a trailing CR until the next chunk shows whether an LF
-    // follows it, so a CRLF split across chunks stays one line ending.
-    const heldCr = buffer.endsWith("\r");
-    buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
+    // Normalize and scan only new text. Keep an unfinished frame in fragments so a long
+    // SSE event arriving in small chunks is never flattened or rescanned on each read.
+    let text = (heldCr ? "\r" : "") + decoder.decode(chunk, { stream: true });
+    heldCr = text.endsWith("\r");
+    text = (heldCr ? text.slice(0, -1) : text).replace(/\r\n?/g, "\n");
+    let start = 0;
+    if (text && heldLf) {
+      heldLf = false;
+      if (text[0] === "\n") {
+        inspectFrame(takeFrame());
+        start = 1;
+      } else appendPart("\n");
+    }
     let sep: number;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      inspectFrame(frame);
+    while ((sep = text.indexOf("\n\n", start)) !== -1) {
+      appendPart(text.slice(start, sep));
+      inspectFrame(takeFrame());
+      start = sep + 2;
+    }
+    if (start < text.length) {
+      heldLf = text.endsWith("\n");
+      const end = text.length - (heldLf ? 1 : 0);
+      appendPart(text.slice(start, end));
     }
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
   // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay
-  // flushes the same candidate). Returns true when this flush found the terminal in a block the
-  // client has not seen a blank line after, so the caller restores one.
-  const flushTail = (): boolean => {
+  // flushes the same candidate). terminalInTail: this flush found the terminal in a block the
+  // client has not seen a blank line after, so the caller restores one. tailClean: nothing but
+  // comments or a ping is left undelimited, so no message event was cut off.
+  const flushTail = (): { terminalInTail: boolean; tailClean: boolean } => {
+    // Rebuild the unscanned text in wire order (fragments, held LF, held CR). At EOF a held CR is
+    // a line ending, so it can complete a frame the client already has.
+    const rest = (takeFrame() + (heldLf ? "\n" : "") + (heldCr ? "\r" : "") + decoder.decode()).replace(/\r\n?/g, "\n");
+    heldCr = false;
+    heldLf = false;
+    let start = 0;
+    let sep: number;
+    while ((sep = rest.indexOf("\n\n", start)) !== -1) {
+      inspectFrame(rest.slice(start, sep));
+      start = sep + 2;
+    }
+    const tail = rest.slice(start);
     const terminalBefore = terminalSeen;
-    const tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
-    buffer = "";
-    if (tail) inspectFrame(tail);
-    return terminalSeen && !terminalBefore && !tail.endsWith("\n\n");
+    if (tail) inspectFrame(tail, false);
+    return {
+      terminalInTail: terminalSeen && !terminalBefore,
+      tailClean: isHarmlessSseTail(tail),
+    };
   };
   const reader = upstream.getReader();
   let settled = false;
@@ -152,7 +252,7 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
-    const terminalInTail = flushTail();
+    const { terminalInTail } = flushTail();
     recordUsage();
     if (terminalSeen) {
       // The turn already ended (message_stop or an upstream error event): an upstream that then
@@ -216,12 +316,44 @@ export function tapAnthropicSseForLog(
         idle.pause();
         if (settled) return; // stall/overflow/abort won the race while we awaited
         if (done) {
+          // Bun can resolve a cancelled read as done before the abort listener runs: a client
+          // that left is a cancel, not a cut upstream.
+          if (guard?.reqSignal?.aborted) {
+            onClientAbort();
+            return;
+          }
           settled = true;
           idle.cancel();
           detachAbort();
+          const { terminalInTail, tailClean } = flushTail();
           recordUsage();
-          finalize(200, { closeReason: "terminal" });
-          controller.close();
+          // A clean EOF ends the turn only when the client already has its terminal, or a
+          // complete non-error stop_reason with nothing cut after it (compatible providers may
+          // omit message_stop; the translated adapter accepts the same shape). The opt-in
+          // anthropicEofTolerance profile keeps a content-only EOF as it always was.
+          const failure = terminalSeen
+            ? null
+            : lastDeliveredStop === "error"
+              ? 'upstream ended the turn with stop_reason "error"'
+              : !tailClean
+                ? "anthropic passthrough upstream stream ended before message_stop"
+                : lastDeliveredStop !== null || guard?.eofTolerant === true
+                  ? null
+                  : "anthropic passthrough upstream stream ended before message_stop";
+          if (failure === null) {
+            finalize(200, { closeReason: "terminal" });
+            if (terminalInTail) controller.enqueue(encoder.encode("\n\n"));
+            controller.close();
+            return;
+          }
+          // A body that stopped short is a failed turn, logged and surfaced like a mid-stream
+          // reset (below), so the client never reads a partial answer as a finished message.
+          logCtx.transportPhase = "mid_stream";
+          logCtx.terminalSource = "synthetic";
+          logCtx.upstreamError = failure;
+          if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
+          finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
+          closeWithErrorFrame("api_error", failure);
           return;
         }
         if (value.byteLength > 0) {
@@ -249,7 +381,7 @@ export function tapAnthropicSseForLog(
         settled = true;
         idle.cancel();
         detachAbort();
-        const terminalInTail = flushTail();
+        const { terminalInTail } = flushTail();
         recordUsage();
         if (isTranslatorBudgetExceededError(err)) {
           // A local cap, not an upstream failure: the non-streaming native Messages fold

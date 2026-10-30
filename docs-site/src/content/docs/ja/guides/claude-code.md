@@ -537,7 +537,7 @@ Messages → Responses に変換されるリクエストでは、Claude Code の
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
 | `thinking` / `redacted_thinking` 再生 | シグネチャと秘匿ペイロードを境界付き `ocxr1` エンベロープに保持した `reasoning` 項目 |
-| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com` への翻訳ルートでは、型付き `web_search_*` と `web_fetch_*` 宣言も Anthropic に送信され、サーバー側で実行されます。ただし Web 検索サイドカーが `web_search` を提供する場合はそちらが優先されます。検索と取得の結果は `server_tool_use` と対応する `web_search_tool_result` / `web_fetch_tool_result` としてクライアントに返されます |
+| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com` への翻訳ルートでは、型付き `web_search_*` と `web_fetch_*` 宣言も Anthropic に送信され、サーバー側で実行されます。ただし Web 検索サイドカーが `web_search` を提供する場合はそちらが優先されます。検索と取得の結果は `server_tool_use` と対応する `web_search_tool_result` / `web_fetch_tool_result` としてクライアントに返されます `allowed_domains`、`blocked_domains`、`user_location` を指定したホスト検索は翻訳された Responses/Chat ルートから除外され、強制すると 400 を返します。有効な `defer_loading` 関数定義は通常の関数として呼び出せます。[翻訳の制限](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)を参照してください。 |
 | `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

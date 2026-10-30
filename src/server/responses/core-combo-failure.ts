@@ -4,6 +4,7 @@ import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-option
 import type { OcxUsage } from "../../types";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
+import { carryCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { codexQuotaFailureMessage, codexQuotaOutcomeMeta } from "./core-codex-account";
 import {
   isRateLimitOrQuotaFailureMessage,
@@ -141,6 +142,7 @@ export async function consumeComboFailure(
   carryReplayRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
+  carryCodexAccountCooldownResponse(response, failureResponse);
   return {
     response: failureResponse,
     ...(nonReplayable ? { nonReplayable: true } : {}),
