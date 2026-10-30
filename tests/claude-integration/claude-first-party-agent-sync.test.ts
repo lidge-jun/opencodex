@@ -180,7 +180,7 @@ test("Desktop saved:false partial success does not reconcile agent definitions",
 });
 
 
-async function toggleClaude(enabled: boolean) {
+async function toggleClaude(enabled: boolean, save: (config: OcxConfig) => void = () => { persist(); }) {
   const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
   const response = await handleManagementAPI(new Request(url, {
     method: "PUT",
@@ -189,7 +189,7 @@ async function toggleClaude(enabled: boolean) {
   }), url, config, {
     fetchAllModels: async () => [],
     claudeAgentConfigDir: claudeDir,
-    saveConfigPreservingClaudeCode: () => { persist(); },
+    saveConfigPreservingClaudeCode: save,
     ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "ca.pem"), pickerProxyPort: null } }),
   }, "admin-token", undefined, { trustedLoopback: true });
   expect(response).not.toBeNull();
@@ -215,4 +215,23 @@ test("a repeated off removes definitions an older version left behind, and on re
   expect(agentFiles()).toEqual({});
   expect((await toggleClaude(true)).status).toBe(200);
   expectRegistered();
+});
+
+test("a failed save leaves the shared config on, so a retry neither prunes nor reports success", async () => {
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  config.claudeCode = { ...config.claudeCode, enabled: true };
+  persist();
+  const before = agentFiles();
+  const busy = Object.assign(new Error("config busy"), {
+    code: "CONFIG_MUTATION_LOCK_UNAVAILABLE", cause: { code: "SQLITE_BUSY" },
+  });
+  const failingSave = () => { throw busy; };
+  const refused = await toggleClaude(false, failingSave);
+  expect(refused).toMatchObject({ status: 409, body: { reason: "config_busy" } });
+  expect(config.claudeCode?.enabled).toBe(true);
+  expect(agentFiles()).toEqual(before);
+  // The same object again: still a real transition, not the repeated-OFF shortcut.
+  const retry = await toggleClaude(false);
+  expect(retry).toMatchObject({ status: 200, body: { changed: true } });
+  expect(agentFiles()).toEqual({});
 });

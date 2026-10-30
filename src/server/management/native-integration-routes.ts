@@ -966,6 +966,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
      * sentinel the next startServer would silently convert a user's Auto auth mode into
      * a sticky manual subscription — a failure that surfaces nowhere near this route.
      */
+    // Kept so a failed save leaves the shared in-memory config matching disk: otherwise a
+    // retry on the same object would read the unsaved value, take the repeated-OFF branch
+    // and prune agents while the persisted integration is still on.
+    const previousBlock = config.claudeCode === undefined ? undefined : structuredClone(config.claudeCode);
     commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled });
 
     /*
@@ -976,6 +980,8 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     try {
       persist(config);
     } catch (error) {
+      if (previousBlock === undefined) delete config.claudeCode;
+      else config.claudeCode = previousBlock;
       if (isConfigLockError(error)) {
         return isLockContention(error)
           ? refusal(409, "claude", "config_busy",

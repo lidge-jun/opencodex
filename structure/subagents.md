@@ -473,7 +473,9 @@ is active, without changing reasoning effort or the proxy guidance switch.
 The integrations toggle `PUT /api/native-integrations/claude` reconciles the generated `ocx-*` definitions
 through `syncClaudeAgentDefsBestEffort` after it persists a change, so Off prunes the marker-owned
 regular files at once and On writes the current roster; a repeated Off reconciles again to remove
-definitions an older version left behind (#7968). User-authored and symlinked `ocx-*` files are never
+definitions an older version left behind (#7968). The reconcile is best effort: an unlink failure
+leaves that file and the toggle still succeeds. A failed save restores the in-memory block, so a
+retry on the same config is a real transition. User-authored and symlinked `ocx-*` files are never
 touched, and a live sibling instance still owns the directory. Coverage:
 `tests/claude-integration/claude-first-party-agent-sync.test.ts`.
 
