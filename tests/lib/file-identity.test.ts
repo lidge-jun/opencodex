@@ -14,18 +14,21 @@ test("bigint timestamps match numeric stat timestamps", () => {
   try {
     const path = join(root, "file");
     fs.writeFileSync(path, "fixture");
-    let roundingDifferences = 0;
     for (const time of [1793358320.9811772, 1793358320.5383171, 1700000000.123456789, 1.5]) {
       fs.utimesSync(path, time, time);
       const big = fs.lstatSync(path, { bigint: true });
       const numeric = fs.lstatSync(path);
       expect(statTimeMs(big.mtimeNs)).toBe(numeric.mtimeMs);
       expect(statTimeMs(big.ctimeNs)).toBe(numeric.ctimeMs);
-      if (Number(big.mtimeNs) / 1e6 !== numeric.mtimeMs) roundingDifferences++;
     }
-    // Some platforms round both calculations identically for these timestamps.
-    if (roundingDifferences > 0) expect(roundingDifferences).toBeGreaterThan(0);
   } finally { removeTreeWithRetry(root); }
+});
+
+test("stat milliseconds use whole seconds plus the nanosecond remainder", () => {
+  // Dividing the whole nanosecond count rounds differently from the runtime's sec*1e3 + nsec/1e6.
+  const ns = 1793358320981177200n;
+  expect(statTimeMs(ns)).toBe(1793358320981.1772);
+  expect(Number(ns) / 1e6).toBe(1793358320981.177);
 });
 
 test("compares and formats adjacent large file IDs", () => {
