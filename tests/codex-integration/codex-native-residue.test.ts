@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -77,7 +78,7 @@ test("residue inspection detects adjacent large file identities", () => {
   let observations = 0;
   const spy = spyOn(fs, "statSync").mockImplementation(((target, options) => {
     const value = options?.bigint ? realStat(target, { bigint: true }) : realStat(target);
-    if (target !== path) return value;
+    if (!samePath(target, path)) return value;
     const ino = id + BigInt(observations++ > 0);
     return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) });
   }) as typeof fs.statSync);

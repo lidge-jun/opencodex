@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,13 +117,13 @@ describe("Codex history provider sync", () => {
     const rolloutFds = new Set<number>();
     const open = spyOn(fs, "openSync").mockImplementation(((path, flags, mode) => {
       const fd = realOpen(path, flags, mode);
-      if (path === fixture.rollout) rolloutFds.add(fd);
+      if (samePath(path, fixture.rollout)) rolloutFds.add(fd);
       return fd;
     }) as typeof fs.openSync);
     const close = spyOn(fs, "closeSync").mockImplementation((fd => { rolloutFds.delete(fd); realClose(fd); }) as typeof fs.closeSync);
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
-      return path === fixture.rollout && armed ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(path, fixture.rollout) && armed ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? id : Number(id) }) : stat;
     }) as typeof fs.lstatSync);
     const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
@@ -1327,7 +1328,7 @@ describe("Design B migration helpers", () => {
     const stat = spyOn(fs, "statSync").mockImplementation(((path, options) => {
       const result = options?.bigint ? real(path, { bigint: true }) : real(path);
       const ino = id + (replaced ? 1n : 0n);
-      return path === fixture.dbPath ? Object.assign(Object.create(Object.getPrototypeOf(result)), result,
+      return samePath(path, fixture.dbPath) ? Object.assign(Object.create(Object.getPrototypeOf(result)), result,
         { ino: options?.bigint ? ino : Number(ino) }) : result;
     }) as typeof fs.statSync);
     setAfterNoopPendingCountForTests(() => { replaced = true; });

@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -153,7 +154,7 @@ describe("remote workspace file identity", () => {
     const realLstat = fs.lstatSync, realFstat = fs.fstatSync;
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
-      return path === target ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(path, target) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? id : Number(id) }) : stat;
     }) as typeof fs.lstatSync);
     const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
@@ -176,7 +177,7 @@ describe("remote workspace file identity", () => {
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
       const ino = id + (replacement ? 1n : 0n);
-      return path === state.executorRoot ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(path, state.executorRoot) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? ino : Number(ino) }) : stat;
     }) as typeof fs.lstatSync);
     try {

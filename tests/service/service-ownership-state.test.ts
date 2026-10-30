@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 /**
  * Durable runtime ownership in the shared service install state.
  *
@@ -598,7 +599,7 @@ describe("the anchor lock", () => {
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
       const ino = identity + (changed ? 1n : 0n);
-      return path === lockPath ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(path, lockPath) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? ino : Number(ino) }) : stat;
     }) as typeof fs.lstatSync);
     try {

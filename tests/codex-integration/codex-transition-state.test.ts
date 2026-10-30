@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -67,7 +68,7 @@ test("coordinator detects adjacent large file identities", () => {
   const spy = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
     const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
     const ino = replaced ? id + 1n : id;
-    return target === coordinatorPath ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+    return samePath(target, coordinatorPath) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
   }) as typeof fs.lstatSync);
   try {
     const controller = openCodexCoordinatorTransaction(coordinatorPath);

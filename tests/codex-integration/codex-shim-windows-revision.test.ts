@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 /**
  * An installed Windows CMD or PowerShell wrapper from before the bypass-token fix loads the
  * service token before honoring OCX_SHIM_BYPASS. Those wrappers carry the shim marker but no
@@ -61,7 +62,7 @@ test("shim probe rejects adjacent NTFS-sized file identities", () => {
   let calls = 0;
   const stat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
     const result = options?.bigint ? real(target, { bigint: true }) : real(target);
-    if (target !== path) return result;
+    if (!samePath(target, path)) return result;
     const ino = id + BigInt(calls++ > 0);
     return Object.assign(Object.create(Object.getPrototypeOf(result)), result,
       { ino: options?.bigint ? ino : Number(ino) });
@@ -80,7 +81,7 @@ for (const [name, owns] of [
   const real = fs.lstatSync;
   const stat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
     const value = options?.bigint ? real(target, { bigint: true }) : real(target);
-    return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value,
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value,
       { dev: options?.bigint ? 1n : 1, ino: options?.bigint ? id : Number(id) }) : value;
   }) as typeof fs.lstatSync);
   try {
@@ -110,7 +111,7 @@ test("shim state read rejects adjacent NTFS-sized file identities", () => {
   const realLstat = fs.lstatSync, realFstat = fs.fstatSync;
   const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
     const stat = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
-    return target === path ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
       { ino: options?.bigint ? id : Number(id) }) : stat;
   }) as typeof fs.lstatSync);
   const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {

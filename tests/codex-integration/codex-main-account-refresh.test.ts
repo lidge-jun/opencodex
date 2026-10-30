@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
@@ -43,7 +44,7 @@ describe("native main token refresh", () => {
     const spy = spyOn(fs, "statSync").mockImplementation(((target, options) => {
       const value = options?.bigint ? realStat(target, { bigint: true }) : realStat(target);
       const ino = replaced ? id + 1n : id;
-      return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+      return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
     }) as typeof fs.statSync);
     setMainAuthJsonBeforeRenameHookForTests(() => { replaced = true; });
     try {

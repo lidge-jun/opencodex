@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, symlinkSync } from "node:fs";
 import * as fs from "node:fs";
@@ -599,7 +600,7 @@ describe("Windows audit privacy (r4176128642)", () => {
       { ctimeNs: stat.ctimeNs + (hardened ? 1_000_000n : 0n) }) as fs.BigIntStats;
     const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => options?.bigint ? postAcl(realFstat(fd, { bigint: true })) : realFstat(fd)) as typeof fs.fstatSync);
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) =>
-      path === auditPath() && options?.bigint ? postAcl(realLstat(path, { bigint: true })) : realLstat(path)) as typeof fs.lstatSync);
+      samePath(path, auditPath()) && options?.bigint ? postAcl(realLstat(path, { bigint: true })) : realLstat(path)) as typeof fs.lstatSync);
     const write = spyOn(fs, "writeSync");
     const open = spyOn(fs, "openSync");
     harden.mockImplementation((path, options) => {
@@ -630,7 +631,7 @@ describe("Windows audit privacy (r4176128642)", () => {
     }) as typeof fs.fstatSync);
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
       const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
-      return path === auditPath() ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(path, auditPath()) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? identity + 1n : Number(identity + 1n) }) : stat;
     }) as typeof fs.lstatSync);
     try {
@@ -718,7 +719,7 @@ describe("Windows audit privacy (r4176128642)", () => {
       const realOpen = fs.openSync;
       const open = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
         const fd = realOpen(path, flags, mode);
-        if (phase === "before" && path === auditPath()) substitute();
+        if (phase === "before" && samePath(path, auditPath())) substitute();
         return fd;
       });
       harden.mockImplementation(() => { substitute(); return { ok: true }; });

@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,11 +57,11 @@ for (const [name, read] of [
     const realStat = fs.statSync, realLstat = fs.lstatSync, realFstat = fs.fstatSync;
     const stat = spyOn(fs, "statSync").mockImplementation(((target, options) => {
       const value = options?.bigint ? realStat(target, { bigint: true }) : realStat(target);
-      return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? id : Number(id) }) : value;
+      return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? id : Number(id) }) : value;
     }) as typeof fs.statSync);
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
       const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
-      return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? id : Number(id) }) : value;
+      return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? id : Number(id) }) : value;
     }) as typeof fs.lstatSync);
     const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
       const value = options?.bigint ? realFstat(fd, { bigint: true }) : realFstat(fd);

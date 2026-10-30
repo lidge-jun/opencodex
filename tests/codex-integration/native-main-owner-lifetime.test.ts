@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
@@ -45,7 +46,7 @@ test("stable lock rejects adjacent large file identities", () => {
   const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
     const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
     const ino = replaced ? id + 1n : id;
-    return target === path ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
   }) as typeof fs.lstatSync);
   try {
     const handle = openStableLockFile(path);
