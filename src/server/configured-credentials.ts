@@ -163,6 +163,10 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
     || (config.value.providers !== undefined && !isRecord(config.value.providers)))) complete = false;
   if (authSig !== "absent" && auth.ok && !isRecord(auth.value)) complete = false;
   if (isRecord(config.value) && isRecord(config.value.providers)) walkProvider(config.value.providers, 0);
+  if (isRecord(config.value) && isRecord(config.value.codexRoleCapability)
+    && isRecord(config.value.codexRoleCapability.artificialAnalysis)) {
+    addReference(config.value.codexRoleCapability.artificialAnalysis.apiKey);
+  }
   if (isRecord(auth.value)) walkAuth(auth.value, 0);
 
   const names = [...envNames].sort();
