@@ -48,7 +48,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
-import { namespacedToolName } from "../../types";
+import { namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
@@ -655,12 +655,15 @@ export async function executeResponsesSidecars(
   // Placed BEFORE the runTurn early-return for non-runTurn adapters so dual-tool turns dispatch
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
-    const webSearchAdvisor = advisorPlan && !routedCompaction
+    const requestedTools = parsed.context.tools ?? [];
+    const advisorAllowed = advisorPlan
+      && toolChoiceToolPredicate(parsed.options.toolChoice, [...requestedTools, advisorPlan.tool])(advisorPlan.tool);
+    const webSearchAdvisor = advisorPlan && advisorAllowed && !routedCompaction
       && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
       ? advisorPlan
       : undefined;
     parsed.context.tools = [
-      ...(parsed.context.tools ?? []).filter(tool => !webSearchAdvisor || (!tool.advisor && tool.name !== ADVISOR_TOOL_NAME)),
+      ...requestedTools.filter(tool => !webSearchAdvisor || (!tool.advisor && tool.name !== ADVISOR_TOOL_NAME)),
       buildWebSearchTool(),
       ...(webSearchAdvisor ? [webSearchAdvisor.tool] : []),
     ];

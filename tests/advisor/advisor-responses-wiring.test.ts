@@ -145,7 +145,7 @@ function stubExaSearch() {
   }) as typeof fetch;
 }
 
-function workerRequest(input: unknown, threadId?: string, stream = true, tools?: unknown[]) {
+function workerRequest(input: unknown, threadId?: string, stream = true, tools?: unknown[], toolChoice?: unknown) {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -155,7 +155,11 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
       // Codex sends `thread-id`; it is the ledger's conversation identity.
       ...(threadId ? { "thread-id": threadId } : {}),
     },
-    body: JSON.stringify({ model: "worker/deepseek-v4", input, stream, ...(tools ? { tools } : {}) }),
+    body: JSON.stringify({
+      model: "worker/deepseek-v4", input, stream,
+      ...(tools ? { tools } : {}),
+      ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    }),
   });
 }
 
@@ -371,6 +375,29 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
     expect(body).toContain("Advice accepted during a search-enabled turn");
     expect(body).not.toContain("call_adv_1");
+  });
+
+  test("web-search tool choice cannot be widened to Advisor", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const chatRequests: string[] = [];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([advisorCallFrames], workerBodies),
+    );
+    config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+
+    const response = await handleResponses(workerRequest(
+      "Search without consulting the expert", undefined, true, [{ type: "web_search" }],
+      { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] },
+    ), config, logCtx);
+    await response.text();
+
+    expect(workerBodies).toHaveLength(1);
+    const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
+    expect(dispatched.tools?.map(tool => tool.function?.name)).toEqual(["web_search"]);
+    expect(chatRequests).toHaveLength(0);
   });
 
   test("web_search and advisor calls are fulfilled in worker order without leaking advisor", async () => {
