@@ -109,6 +109,14 @@ export class AnthropicSessionAffinityStore implements Iterable<[string, Entry]> 
     const scope = this.scope;
     if (scope) await this.flushScope(scope);
   }
+  /** Operator acknowledgements require publication, not only completion of an attempt. */
+  async flushConfirmed(): Promise<boolean> {
+    const scope = this.scope;
+    if (!scope) return true;
+    await this.flushScope(scope);
+    if (scope.pending) await scope.pending;
+    return this.scope === scope && scope.active && !scope.dirty && getConfigDir() === scope.home;
+  }
   private async flushScope(scope: Scope): Promise<void> {
     if (!scope?.active) return;
     if (getConfigDir() !== scope.home) { if (this.scope === scope) this.resetMemory(); return; }

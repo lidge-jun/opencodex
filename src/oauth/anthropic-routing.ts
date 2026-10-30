@@ -349,6 +349,7 @@ type RoutingFacadeSymbol =
   | "promoteAnthropicActiveAccount"
   | "commitAnthropicSelectionRouting"
   | "resetAnthropicRoutingForManualSelection"
+  | "flushAnthropicManualSelectionReset"
   | "getAnthropicPoolAccessToken"
   | "getAnthropicPoolAccessSnapshot"
   | "canRefreshAnthropicPoolAccount";
@@ -372,6 +373,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
   // The startup baseline comes from the authoritative store, never a second persisted pin.
   let manualPreference: OAuthAccountSelection | null | undefined;
   let manualSelectionGeneration = 0;
+  let manualResetPending = false;
   /** Automatic pointer moves preserve affinity; manual selection revokes older bindings. */
   function captureAnthropicManualSelectionGeneration(): number { return manualSelectionGeneration; }
 
@@ -530,6 +532,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     sessionAffinity.resetMemory();
     manualPreference = undefined;
     manualSelectionGeneration++;
+    manualResetPending = false;
     quorumCache = null;
   }
 
@@ -1321,11 +1324,20 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
   function resetAnthropicRoutingForManualSelection(accountId: string): void {
     sessionAffinity.clear();
     manualSelectionGeneration++;
+    manualResetPending = true;
     manualPreference = captureOAuthAccountSelection(PROVIDER);
     seedPoolRotationAccount(poolKey, accountId);
     // A manual account selection is an operator statement about the roster; do not answer the
     // next activation question from a count read before it.
     quorumCache = null;
+  }
+
+  async function flushAnthropicManualSelectionReset(): Promise<boolean> {
+    if (!manualResetPending) return true;
+    const generation = manualSelectionGeneration;
+    const persisted = await sessionAffinity.flushConfirmed();
+    if (persisted && generation === manualSelectionGeneration) manualResetPending = false;
+    return persisted && generation === manualSelectionGeneration;
   }
 
   /**
@@ -1439,7 +1451,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
     clearAnthropicSessionAffinityForAccount, rotateAnthropicAccountOn429, rotateAnthropicAccountOnRefusal,
     recordAnthropicAccount429, recordAnthropicAccountRefusal, promoteAnthropicActiveAccount,
-    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, getAnthropicPoolAccessToken,
+    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, flushAnthropicManualSelectionReset, getAnthropicPoolAccessToken,
     getAnthropicPoolAccessSnapshot, canRefreshAnthropicPoolAccount,
   });
 }
@@ -1667,6 +1679,10 @@ export function commitAnthropicSelectionRouting(
 
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   return anthropicRoutingFor("anthropic").resetAnthropicRoutingForManualSelection(accountId);
+}
+
+export function flushAnthropicManualSelectionReset(): Promise<boolean> {
+  return anthropicRoutingFor("anthropic").flushAnthropicManualSelectionReset();
 }
 
 export function getAnthropicPoolAccessToken(accountId: string): Promise<string> {

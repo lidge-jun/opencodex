@@ -595,15 +595,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // side carries resetCodexRoutingForManualSelection for.
     const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
     seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
-    if (isAnthropicOAuthInstance(provider)) {
-      const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-      anthropicRoutingFor(provider).resetAnthropicRoutingForManualSelection(body.accountId);
-    }
+    const anthropicRouting = isAnthropicOAuthInstance(provider)
+      ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
+    anthropicRouting?.resetAnthropicRoutingForManualSelection(body.accountId);
+    const affinityReset = anthropicRouting?.flushAnthropicManualSelectionReset();
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ error: "Account selection was saved, but its session-affinity reset was not persisted. Retry the selection.",
+        code: "affinity_reset_not_persisted", provider, activeAccountId: body.accountId,
+        selectionCommitted: true, retryable: true }, 503);
+    }
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
@@ -629,10 +634,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const result = await setAccountPaused(provider, body.accountId, body.paused);
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
 
+    const anthropicRouting = isAnthropicOAuthInstance(provider)
+      ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
+    let affinityReset: Promise<boolean> | undefined;
     if (result.activeAccountChanged) {
-      if (isAnthropicOAuthInstance(provider)) {
-        const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-        anthropicRoutingFor(provider).resetAnthropicRoutingForManualSelection(result.activeAccountId);
+      if (anthropicRouting) {
+        anthropicRouting.resetAnthropicRoutingForManualSelection(result.activeAccountId);
+        affinityReset = anthropicRouting.flushAnthropicManualSelectionReset();
       } else {
         const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
         seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
@@ -644,6 +652,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
 
+    // An unchanged retry must finish a reset left pending by the first request.
+    affinityReset ??= anthropicRouting?.flushAnthropicManualSelectionReset();
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ error: "Account pause was saved, but its session-affinity reset was not persisted. Retry the pause request.",
+        code: "affinity_reset_not_persisted", provider, accountId: body.accountId, paused: body.paused,
+        activeAccountId: result.activeAccountId, activeAccountChanged: result.activeAccountChanged,
+        pauseCommitted: true, retryable: true }, 503);
+    }
     return jsonResponse({
       ok: true,
       provider,

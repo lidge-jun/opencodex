@@ -388,12 +388,12 @@ User aliases are display metadata only. Codex pool aliases live on `CodexAccount
 identity, active selection, and routing never consult these fields. The matching CLI is
 `ocx account alias <provider> <id> <display-name|->` (`rename` is accepted as a synonym).
 
-OAuth manual and automatic selection share `commitOAuthAccountSelection` in the auth store.
-The caller resolves a usable credential, commits its matching selection, then dispatches it;
-request-local token replacement must not leave a different dashboard account selected.
-Opaque selection revisions protect manual reselection and A→B→A changes from older requests.
-Credential-only refresh preserves the revision. Generic proactive routing is opt-in and retains
-a healthy selected account; reactive 429 recovery remains available even when the pool is off.
+OAuth manual and automatic selection share `commitOAuthAccountSelection`; dispatch uses the credential matching the persisted selection.
+Opaque revisions protect manual reselection and A→B→A changes; credential-only refresh preserves the revision.
+Anthropic manual selection and pause-induced selection changes also await confirmed affinity-reset publication before success.
+A failure returns 503 `affinity_reset_not_persisted`, `retryable: true` and `selectionCommitted` or `pauseCommitted`; the account mutation stays applied.
+An unchanged pause retry completes a pending reset. Ordinary request-driven affinity writes remain batched.
+Generic proactive routing is opt-in and retains a healthy selected account; reactive 429 recovery remains available even when the pool is off.
 API-key manual selection and failover similarly share `commitProviderApiKeySelection`, carrying
 stable entry identity and selection revision instead of comparing a resolved secret with an env reference.
 

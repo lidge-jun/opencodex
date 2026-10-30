@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -15,6 +15,16 @@ let clock: ReturnType<typeof spyOn> | undefined;
 const config = { providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } },
   anthropicAccountPool: { enabled: true, autoSwitchThreshold: 0 } } as unknown as OcxConfig;
 const session = "private-session-L7-never-persist-raw";
+async function accountMutation(path: "active" | "pause", body: Record<string, unknown>) {
+  const { handleOauthAccountRoutes } = await import("../../../src/server/management/oauth-account-routes");
+  const req = new Request(`http://127.0.0.1:10100/api/oauth/accounts/${path}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return handleOauthAccountRoutes({
+    req, url: new URL(req.url), config, deps: {}, version: "test", principal: "gui-session",
+    syncClaudeAgentDefsBestEffort: async () => {},
+  });
+}
 async function flush() {
   // This owner exists with the implementation; keeping the regression runnable on dev
   // proves the behavioral failure rather than a missing-export failure.
@@ -67,6 +77,49 @@ test("runtime manual selection overrides binding", async () => {
   resetAnthropicRoutingForManualSelection(b);
   expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
 });
+
+test("manual selection success survives restart without a shutdown flush", async () => {
+  const { b } = await seed();
+  await flush();
+  const response = await accountMutation("active", { provider: "anthropic", accountId: b });
+  expect(response?.status).toBe(200);
+  expect(await response!.json()).toMatchObject({ ok: true, activeAccountId: b });
+  // Drop process-local state immediately after the success response. No explicit
+  // flush or shutdown hook may repair disk state before hydration is checked.
+  clearAnthropicAccountPoolState();
+  expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+}, 20_000);
+
+for (const action of ["active", "pause"] as const) {
+  test(`${action} reports an unpersisted reset and an unchanged retry completes it`, async () => {
+    const { a, b } = await seed();
+    await flush();
+    const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+    const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+    let attempts = 0;
+    const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+      .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+        return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+      });
+    const body = action === "active" ? { provider: "anthropic", accountId: b }
+      : { provider: "anthropic", accountId: a, paused: true };
+    try {
+      const failed = await accountMutation(action, body);
+      expect(failed?.status).toBe(503);
+      expect(await failed!.json()).toMatchObject({ code: "affinity_reset_not_persisted", activeAccountId: b,
+        retryable: true, ...(action === "active" ? { selectionCommitted: true } : { pauseCommitted: true }) });
+      expect(getAccountSet("anthropic")?.activeAccountId).toBe(b);
+      const retry = await accountMutation(action, body);
+      expect(retry?.status).toBe(200);
+      const completed = await retry!.json();
+      if (action === "pause") expect(completed).toMatchObject({ activeAccountChanged: false, paused: true });
+      expect(attempts).toBe(2);
+      expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+      clearAnthropicAccountPoolState();
+      expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+    } finally { confirmation.mockRestore(); }
+  }, 20_000);
+}
 test("normal transient detour returns to the original and refreshes idle lifetime", async () => {
   const { a, b } = await seed();
   let now = Date.now(); clock = spyOn(Date, "now").mockImplementation(() => now);
