@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { tmpdir } from "node:os";
@@ -99,6 +99,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   clearComboTargetCooldowns();
   for (const key of proxyKeys) {
     if (originalProxyEnv[key] === undefined) delete process.env[key];
@@ -2454,7 +2455,7 @@ describe("fetchProviderQuotaReports", () => {
     await fetchProviderQuotaReports(config, true);
     expect(anthropicCalls).toBe(1);
     // A proxied Codex response re-observes unchanged values with a new timestamp.
-    await Bun.sleep(5);
+    setSystemTime(new Date(Date.now() + 1_000));
     updateAccountQuota("added", 30, 1_999_000_000);
     const cached = await fetchProviderQuotaReports(config);
     expect(anthropicCalls).toBe(1);
@@ -2462,7 +2463,7 @@ describe("fetchProviderQuotaReports", () => {
 
     // A transient Anthropic failure on the next probe keeps its bounded last-good row.
     anthropicDown = true;
-    await Bun.sleep(5);
+    setSystemTime(new Date(Date.now() + 1_000));
     updateAccountQuota("added", 30, 1_999_000_000);
     const refreshed = await fetchProviderQuotaReports(config, true);
     expect(anthropicCalls).toBe(2);
@@ -2497,7 +2498,7 @@ describe("fetchProviderQuotaReports", () => {
 
     const first = fetchProviderQuotaReports(config, true);
     await started;
-    await Bun.sleep(5);
+    setSystemTime(new Date(Date.now() + 1_000));
     updateAccountQuota("added", 30, 1_999_000_000);
     release();
     await first;
