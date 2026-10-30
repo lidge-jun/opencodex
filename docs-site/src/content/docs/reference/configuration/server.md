@@ -34,6 +34,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
+| `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Per-task fan-out ceilings: turns running at once, upstream sends per 10-minute window, and distinct subagent threads per window. Omitted fields keep the built-in value. See [Workflow limits](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -86,6 +87,29 @@ This example retains reasoning `encrypted_content` on a known model switch withi
 Retention means that OpenCodex may forward the carried ciphertext. It cannot confirm that the upstream accepts or reuses that reasoning. A detected decrypt rejection still enters the existing bounded cleanup recovery, and the rejection memo takes precedence over either switch. Response and conversation references, foreign reasoning item ids, uploaded-file account restrictions and cache isolation continue using their own ownership rules. Native compaction blocks keep their existing cleanup behavior; direct native `/v1/responses/compact` sanitization is unchanged.
 
 Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT` with a partial boolean object to update them. `PUT` with JSON `null` restores both defaults. Invalid fields or unknown keys are rejected; a malformed file block disables retention with a warning. Dashboard/API changes apply to subsequent requests. Local `ocx config set/unset` edits require a restart to converge the running proxy.
+
+## Workflow limits
+
+OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
+
+| Field | Default | Allowed | Meaning |
+| --- | --- | --- | --- |
+| `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
+| `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
+
+The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
+
+```jsonc
+{
+  "workflowBudget": {
+    "maxConcurrentChildren": 16,
+    "maxPhysicalSends": 1024
+  }
+}
+```
+
+The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
 
 ## Upstream transport recovery
 

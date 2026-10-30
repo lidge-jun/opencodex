@@ -54,6 +54,7 @@ import {
 import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-responses/muse-tool-choice";
+import { MuseToolCatalogCompatibilityError } from "../../adapters/openai-responses/muse-tool-catalog";
 import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-responses/opengateway-input";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
@@ -389,6 +390,7 @@ export async function preparePassthroughExchange(
         || error instanceof XaiToolSchemaCompatibilityError
         || error instanceof RoutedCustomToolCompatError
         || error instanceof MuseToolChoiceCompatibilityError
+        || error instanceof MuseToolCatalogCompatibilityError
         || error instanceof OpenGatewayInputCompatibilityError
       ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
@@ -480,10 +482,9 @@ export async function preparePassthroughExchange(
         for (const callType of collectProviderExecutedCallTypes(clientToolAuthorizationBody)) {
           providerExecutedCallTypes.add(callType);
         }
-        const currentOutboundCatalog = currentTurnWireToolCatalogBody(
-          outboundRequestBody,
-          replayedInputPrefixLength,
-        );
+        // Serialization drops provenance, so never slice transformed input by the raw prefix.
+        // Current wrappers were captured above; adapter-injected hosted tools are top-level.
+        const currentOutboundCatalog = { tools: outboundRequestBody?.tools };
         for (const callType of collectProviderExecutedCallTypes(currentOutboundCatalog)) {
           providerExecutedCallTypes.add(callType);
         }

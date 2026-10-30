@@ -13,7 +13,7 @@ import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
 import { parseSyncExpectation, SYNC_EXPECTATION_USAGE_EXIT } from "./sync-expectation";
-import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
+import { maybeAutoRestoreCodexShimAsync } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
@@ -64,7 +64,7 @@ export function parseCliHead(argv: string[]): CliHead {
     };
   }
   // P1: pre-parse `ocx ready` and reject invalid arguments with exit 64 BEFORE
-  // maybeAutoRestoreCodexShim (or any discovery/probe/filesystem-capable global
+  // maybeAutoRestoreCodexShimAsync (or any discovery/probe/filesystem-capable global
   // preflight) runs. `ready --help` / `help ready` already exited above, so this
   // only sees ready args without a help flag. Valid args are stashed so the
   // switch dispatch can call runReady without a second parse.
@@ -74,7 +74,7 @@ export function parseCliHead(argv: string[]): CliHead {
     return { kind: "ready", command, args, readyArgs: parsed.args };
   }
   // Same ordering contract as `ready`: `ocx resolve` rejects any argument with exit
-  // 64 BEFORE maybeAutoRestoreCodexShim (or any other preflight with side effects) runs.
+  // 64 BEFORE maybeAutoRestoreCodexShimAsync (or any other preflight with side effects) runs.
   if (command === "resolve") {
     const parsed = parseResolveArgs(args.slice(1));
     if (!parsed.ok) return { kind: "resolve", command, args, resolveArgs: undefined };
@@ -115,7 +115,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error("  Default wait timeout is 45 seconds.");
         process.exit(64);
       }
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
     }
     case "resolve": {
@@ -128,7 +128,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error("  and the identity-checked liveness verdict.");
         process.exit(64);
       }
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
     }
     case "command":
@@ -154,7 +154,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         }
       }
       await maybeNoticeVersionSkew(head.command, head.args);
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
   }
 }

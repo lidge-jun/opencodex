@@ -827,7 +827,9 @@ describe("CC-Switch keyless provider import", () => {
         id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, settings_config TEXT NOT NULL,
         website_url TEXT, notes TEXT, meta TEXT NOT NULL DEFAULT '{}', sort_index INTEGER, PRIMARY KEY (id, app_type)
       )`);
-      db.prepare("INSERT INTO providers (id, app_type, name, settings_config, website_url, notes, meta, sort_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").run(
+      // db.run finalizes its statement; see F3 below for why an unfinalized prepare() breaks cleanup.
+      db.run(
+        "INSERT INTO providers (id, app_type, name, settings_config, website_url, notes, meta, sort_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         "dashscope-compat",
         "openai",
         WORD_CANARY,
@@ -852,7 +854,8 @@ describe("CC-Switch keyless provider import", () => {
         "https://api.example.com/v1/%76ioletotter",
         `https://api.example.com/v1?key=${WORD_CANARY}`,
       ].entries()) {
-        db.prepare("INSERT INTO providers (id, app_type, name, settings_config, sort_index) VALUES (?1, ?2, ?3, ?4, ?5)").run(
+        db.run(
+          "INSERT INTO providers (id, app_type, name, settings_config, sort_index) VALUES (?1, ?2, ?3, ?4, ?5)",
           `bad-url-${idx}`,
           "openai",
           WORD_CANARY,
@@ -1006,7 +1009,10 @@ describe("CC-Switch keyless provider import", () => {
     try {
       writer.run("PRAGMA journal_mode = WAL;");
       writer.run("CREATE TABLE providers (id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, settings_config TEXT NOT NULL, sort_index INTEGER, PRIMARY KEY (id, app_type))");
-      writer.prepare("INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)").run(
+      // writer.run finalizes its statement; an unfinalized prepare() keeps the db, -wal and -shm
+      // open past close(), and Windows then refuses to delete the temp tree (EBUSY).
+      writer.run(
+        "INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)",
         "existing-prov",
         "openai",
         "Existing",
@@ -1017,10 +1023,12 @@ describe("CC-Switch keyless provider import", () => {
 
       // Disable auto-checkpoint so subsequent UPDATE and INSERT stay exclusively in live-wal.db-wal.
       writer.run("PRAGMA wal_autocheckpoint = 0;");
-      writer.prepare("UPDATE providers SET settings_config = ?1 WHERE id = 'existing-prov'").run(
+      writer.run(
+        "UPDATE providers SET settings_config = ?1 WHERE id = 'existing-prov'",
         JSON.stringify({ baseUrl: "https://updated.acme.example/v1" }),
       );
-      writer.prepare("INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)").run(
+      writer.run(
+        "INSERT INTO providers VALUES (?1, ?2, ?3, ?4, ?5)",
         "uncheckpointed-prov",
         "claude",
         "Uncheckpointed",
