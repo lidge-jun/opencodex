@@ -354,12 +354,16 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     const direct = join(dir, "direct");
     const foreign = join(dir, "foreign");
     mkdirSync(ancestor); mkdirSync(direct); mkdirSync(foreign);
+    const shortLooking = join(dir, "ocx~1");
+    mkdirSync(shortLooking);
     writeFileSync(join(dir, "auth.json"), "{}");
     const same = lstatSync(ancestor, { bigint: true });
+    const shortSame = lstatSync(shortLooking, { bigint: true });
     const entry = {
       names: new Set(["auth.json", "direct"]),
       ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
         ["ancestor", { dev: same.dev, ino: same.ino }],
+        ["ocx~1", { dev: shortSame.dev, ino: shortSame.ino }],
         ["unverifiable", null],
       ]),
     };
@@ -396,6 +400,10 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     expect(action("rename", "Direct")).toBe("reconcile");
     expect(action("rename", "CONFIG.JSON.OCX.7.tmp")).toBe("reconcile");
     expect(action("rename", "AUTH~1.JSO")).toBe("reconcile");
+    // A real ancestor whose name only looks like a short name (OPENCODEX_HOME=C:\ocx~1) is
+    // identity-checked like any other ancestor, so its own-save tick cannot re-arm the loop.
+    expect(action("change", "ocx~1")).toBe("ignore");
+    expect(action("rename", "ocx~1")).toBe("reconcile");
     // A differently cased ancestor is still an ancestor: renames reconcile, and a change is
     // ignored only when that spelling resolves to the recorded directory itself.
     expect(action("rename", "ANCESTOR")).toBe("reconcile");

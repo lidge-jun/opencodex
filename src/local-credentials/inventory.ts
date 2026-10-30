@@ -91,11 +91,13 @@ export function credentialWatchEventAction(
   parent: string, entry: WatchEntry, event: string, name: string | null,
 ): WatchEventAction {
   if (name === null) return "fail";
-  if (CREDENTIAL_TMP_NAME.test(name) || SHORT_NAME_ALIAS.test(name)) return "reconcile";
+  if (CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
   const folded = foldWatchName(name);
   if (foldedLookup(entry.names, n => n, folded) !== undefined) return "reconcile";
   const match = foldedLookup(entry.ancestors.entries(), ([n]) => n, folded);
-  if (match === undefined) return "ignore";
+  // A known ancestor whose real name merely looks like a short name (C:\ocx~1) goes through
+  // the identity check below; only an unmatched alias is ambiguous.
+  if (match === undefined) return SHORT_NAME_ALIAS.test(name) ? "reconcile" : "ignore";
   const ancestor = match[1];
   // Renames (create/delete/move, including a same-identity rename) are structural and
   // always reconcile; only "change" may be child-list noise from a same-identity dir.
