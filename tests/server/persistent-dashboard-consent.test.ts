@@ -143,15 +143,15 @@ for (const resumed of [false, true]) {
   });
 }
 
-test("ordinary loopback GUI apply retains confirmation and ingress gates, then dispatches once", async () => {
+test("ordinary loopback GUI apply cannot self-authorize an update", async () => {
   const session = issueGuiSession(request("/", "GET", ""), config, state)!;
   expect(session.issuance).toBe("loopback");
   const device = { session, cookie: "" };
-  expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", { ...APPLY, confirmed: false }))).status).toBe(400);
+  expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", { ...APPLY, confirmed: false }))).status).toBe(403);
   expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY), false)).status).toBe(403);
   expect(effects).toEqual([]);
-  expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY))).status).toBe(202);
-  expect(effects).toEqual(["admit", "run", "worker"]);
+  expect((await dispatch(sessionRequest(device, "/api/codex/cli-update/apply", "POST", APPLY))).status).toBe(403);
+  expect(effects).toEqual([]);
 });
 
 test("remembered CLI plan and job reads retain ordinary management admission", async () => {
