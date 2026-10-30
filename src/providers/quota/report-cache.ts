@@ -3,7 +3,7 @@ import { providerDecisionWindows } from "../quota-decision-publication";
 import type { DecisionQuotaWindow } from "../quota-decision-snapshot";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
-import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../../codex/main-account-cache";
 import { codexPlanKey } from "../../codex/plan";
 import { resolveProviderApiKey } from "../key-store";
@@ -158,15 +158,19 @@ export function hasCodexPoolProvider(config: OcxConfig): boolean {
  * Signature of one pool account's presentation state. Every proxied Codex response restamps the
  * observation, so a raw `updatedAt` in the key stopped the report cache from ever committing
  * while traffic flowed (#7956). The key carries the fresh/stale verdict aggregation derives
- * from it instead; value changes and freshness transitions still miss the cache. Timestamps the
- * report displays (window `updatedAt`, `shortObservedAt`) can therefore lag a restamp by up
- * to the report cache TTL.
+ * from it instead; value changes and freshness transitions still miss the cache. A displayed
+ * window `updatedAt` can therefore lag a restamp by up to the report cache TTL. The exception is
+ * an exhausted short window without a reset: its `shortObservedAt` alone decides whether it
+ * still blocks, over a window as short as that TTL, so that clock stays in the key.
  */
 function quotaSignatureValue(quota: CodexCapacityQuota | null, now: number): unknown {
   if (!quota) return null;
+  const resetless = !(typeof quota.fiveHourResetAt === "number" && quota.fiveHourResetAt > 0);
+  const observationDecides = resetless && (quota.fiveHourPercent ?? 0) >= CODEX_EXHAUSTED_USAGE_PERCENT;
   return {
     fiveHourPercent: quota.fiveHourPercent,
     fiveHourResetAt: quota.fiveHourResetAt,
+    ...(observationDecides ? { shortObservedAt: quota.shortObservedAt } : {}),
     weeklyPercent: quota.weeklyPercent,
     weeklyResetAt: quota.weeklyResetAt,
     monthlyPercent: quota.monthlyPercent,

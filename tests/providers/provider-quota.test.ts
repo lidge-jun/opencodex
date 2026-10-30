@@ -21,6 +21,7 @@ import {
   setAntigravityAccountQuotaTransportForTests,
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
+import { cacheKeyWithAggregationState } from "../../src/providers/quota/report-cache";
 import type { OcxConfig } from "../../src/types";
 import { clearComboTargetCooldowns, coolComboTarget, pickComboTarget, pickComboTargetWithWait } from "../../src/combos";
 import { routedProviderConfig } from "../../src/router";
@@ -2503,6 +2504,28 @@ describe("fetchProviderQuotaReports", () => {
     const next = await fetchProviderQuotaReports(config);
     expect(anthropicCalls).toBe(1);
     expect(next.reports.map(report => report.provider).sort()).toEqual(["anthropic", "openai"]);
+  });
+
+  test("only an exhausted reset-less short window keeps its observation clock in the key (#7956)", async () => {
+    const config = testConfig();
+    config.providers = { openai: config.providers.openai };
+    let quota: Partial<StoredAccountQuota> = {};
+    const poolSpy = spyOn(authApi, "listCodexAuthAccountsSnapshot").mockImplementation(async () => ({
+      mainIdentityGeneration: captureMainAccountIdentityGeneration(),
+      accounts: [{ id: "__main__", isMain: true, paused: false, plan: "plus", quota }],
+    } as unknown as Awaited<ReturnType<typeof authApi.listCodexAuthAccountsSnapshot>>));
+    const keyFor = async (next: Partial<StoredAccountQuota>) => { quota = next; return await cacheKeyWithAggregationState(config); };
+    try {
+      const now = Date.now();
+      const withReset = { weeklyPercent: 20, shortPercent: 100, shortResetAt: Math.floor(now / 1000) + 3600 };
+      expect(await keyFor({ ...withReset, shortObservedAt: now, updatedAt: now }))
+        .toBe(await keyFor({ ...withReset, shortObservedAt: now + 5, updatedAt: now + 5 }));
+      const resetless = { weeklyPercent: 20, shortPercent: 100 };
+      expect(await keyFor({ ...resetless, shortObservedAt: now, updatedAt: now }))
+        .not.toBe(await keyFor({ ...resetless, shortObservedAt: now + 5, updatedAt: now + 5 }));
+    } finally {
+      poolSpy.mockRestore();
+    }
   });
 
   test("ordinary fetch reflects runtime reauthentication state", async () => {
