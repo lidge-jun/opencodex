@@ -358,22 +358,16 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     mkdirSync(shortLooking);
     const residueLooking = join(dir, "config.json.ocx.home");
     mkdirSync(residueLooking);
-    // Stands in for the 8.3 alias of a tracked ancestor: the event spelling matches no
-    // tracked name, but resolves to the directory the ancestor recorded at install.
-    const aliased = join(dir, "longan~1");
-    mkdirSync(aliased);
     writeFileSync(join(dir, "auth.json"), "{}");
     const same = lstatSync(ancestor, { bigint: true });
     const shortSame = lstatSync(shortLooking, { bigint: true });
     const residueSame = lstatSync(residueLooking, { bigint: true });
-    const aliasedSame = lstatSync(aliased, { bigint: true });
     const entry = {
       names: new Set(["auth.json", "direct"]),
       ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
         ["ancestor", { dev: same.dev, ino: same.ino }],
         ["ocx~1", { dev: shortSame.dev, ino: shortSame.ino }],
         ["config.json.ocx.home", { dev: residueSame.dev, ino: residueSame.ino }],
-        ["longancestor", { dev: aliasedSame.dev, ino: aliasedSame.ino }],
         ["unverifiable", null],
       ]),
     };
@@ -402,13 +396,14 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     expect(action("change", "foreign")).toBe("ignore");
     expect(action("rename", "unknown.tmp")).toBe("ignore");
     // A case-insensitive volume reports the writer's spelling: a differently cased or
-    // trailing-dot spelling of a target, its write residue, or an unresolvable 8.3 short
-    // name must still reconcile rather than fall through as an unrelated name.
+    // trailing-dot spelling of a target or its write residue must still reconcile rather
+    // than fall through as an unrelated name.
     expect(action("rename", "AUTH.JSON")).toBe("reconcile");
     expect(action("change", "Auth.Json")).toBe("reconcile");
     expect(action("change", "auth.json.")).toBe("reconcile");
     expect(action("rename", "Direct")).toBe("reconcile");
     expect(action("rename", "CONFIG.JSON.OCX.7.tmp")).toBe("reconcile");
+    // An entry without recorded target identities cannot resolve a short name: reconcile.
     expect(action("rename", "AUTH~1.JSO")).toBe("reconcile");
     // A real ancestor whose name only looks like a short name (OPENCODEX_HOME=C:\ocx~1) is
     // identity-checked like any other ancestor, so its own-save tick cannot re-arm the loop.
@@ -416,11 +411,6 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     expect(action("rename", "ocx~1")).toBe("reconcile");
     expect(action("change", "config.json.ocx.home")).toBe("ignore");
     expect(action("rename", "config.json.ocx.home")).toBe("reconcile");
-    // A short alias of a tracked ancestor is identity-checked; one that resolves to anything
-    // else (a target file, an unknown or missing entry) still reconciles.
-    expect(action("change", "longan~1")).toBe("ignore");
-    expect(action("rename", "longan~1")).toBe("reconcile");
-    expect(action("change", "missin~1")).toBe("reconcile");
     // A differently cased ancestor is still an ancestor: renames reconcile, and a change is
     // ignored only when that spelling resolves to the recorded directory itself.
     expect(action("rename", "ANCESTOR")).toBe("reconcile");
@@ -442,6 +432,60 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     // A watcher overflow reports a null name and must fail closed.
     expect(action("change", null)).toBe("fail");
     expect(action("rename", null)).toBe("fail");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unmatched 8.3 short names resolve by identity against the install snapshot", async () => {
+  const inventory = await import("../../src/local-credentials/inventory");
+  const dir = mkdtempSync(join(tmpdir(), "ocx-watch-short-"));
+  try {
+    // Literal tilde names stand in for the short spellings Windows may report for files.
+    mkdirSync(join(dir, "longancestor"));
+    writeFileSync(join(dir, "auth.json"), "{}");
+    writeFileSync(join(dir, "localc~1.jso"), "{}");
+    const ancestorStat = lstatSync(join(dir, "longancestor"), { bigint: true });
+    const entry = {
+      names: new Set(["auth.json", "config.json"]),
+      ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
+        ["longancestor", { dev: ancestorStat.dev, ino: ancestorStat.ino }],
+      ]),
+      targetIdentities: new Map([
+        ["auth.json", inventory.watchEntryIdentity(dir, "auth.json")],
+        ["config.json", inventory.watchEntryIdentity(dir, "config.json")],
+      ]),
+    };
+    expect(entry.targetIdentities.get("config.json")).toBe("absent");
+    const action = (event: string, name: string) => inventory.credentialWatchEventAction(dir, entry, event, name);
+    // The observer's own metadata save under a short spelling, live or already renamed
+    // away, changed no target or ancestor, so it must not re-arm the reconcile.
+    expect(action("change", "localc~1.jso")).toBe("ignore");
+    expect(action("rename", "localc~2.tmp")).toBe("ignore");
+    // A short alias of a tracked ancestor: its change is that ancestor's tick, a rename is
+    // structural. Whether LONGAN~1 resolves depends on the volume's 8.3 setting; either way
+    // the change cannot re-arm the loop.
+    const alias = (() => { try { return lstatSync(join(dir, "LONGAN~1"), { bigint: true }); } catch { return null; } })();
+    const resolvesToAncestor = alias !== null && alias.dev === ancestorStat.dev && alias.ino === ancestorStat.ino;
+    expect(action("change", "LONGAN~1")).toBe("ignore");
+    expect(action("rename", "LONGAN~1")).toBe(resolvesToAncestor ? "reconcile" : "ignore");
+    // A short alias that resolves to a target is that target.
+    linkSync(join(dir, "auth.json"), join(dir, "authjs~1.jso"));
+    expect(action("change", "authjs~1.jso")).toBe("reconcile");
+    unlinkSync(join(dir, "authjs~1.jso"));
+    // A removed or newly created target makes any unresolvable short name relevant.
+    writeFileSync(join(dir, "config.json"), "{}");
+    expect(action("rename", "config~1.jso")).toBe("reconcile");
+    unlinkSync(join(dir, "config.json"));
+    expect(action("rename", "config~1.jso")).toBe("ignore");
+    unlinkSync(join(dir, "auth.json"));
+    expect(action("rename", "auth~1.jso")).toBe("reconcile");
+    // A replaced ancestor does too.
+    writeFileSync(join(dir, "auth.json"), "{}");
+    entry.targetIdentities.set("auth.json", inventory.watchEntryIdentity(dir, "auth.json"));
+    expect(action("rename", "other~1")).toBe("ignore");
+    renameSync(join(dir, "longancestor"), join(dir, "aside"));
+    expect(action("change", "LONGAN~1")).toBe("reconcile");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

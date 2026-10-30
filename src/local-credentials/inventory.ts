@@ -59,6 +59,12 @@ export type WatchEntry = {
    * identified at install, and an unverifiable ancestor reconciles on any event.
    */
   ancestors: Map<string, { dev: bigint; ino: bigint } | null>;
+  /**
+   * Identity of each target name at install (watchEntryIdentity). An unmatched 8.3 short
+   * name is resolved against these: it reconciles when a target here changed or when the
+   * alias is a target. Absent means the entry is treated as unresolvable and reconciles.
+   */
+  targetIdentities?: Map<string, string>;
 };
 const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./i;
 /**
@@ -72,9 +78,43 @@ function foldWatchName(name: string): string {
 }
 /**
  * An 8.3 short name (AUTH~1.JSO, OPENC~1) cannot be mapped back to its long name by
- * spelling; it is resolved by identity instead (see credentialWatchEventAction).
+ * spelling; it is resolved by identity instead (see shortNameAction).
  */
 const SHORT_NAME_ALIAS = /~\d/;
+/** "<dev>:<ino>", "absent", or "unreadable" for one entry of a watched parent. */
+export function watchEntryIdentity(parent: string, child: string): string {
+  try {
+    const stat = lstatSync(join(parent, child), { bigint: true });
+    return `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+}
+/**
+ * Windows may report either name of an entry that has both, and a removed entry's short
+ * name can no longer be looked up. Such an event is coverage-relevant when a target or
+ * ancestor in this parent no longer has its install identity, or when the alias resolves to
+ * a target; a change that resolves to a tracked ancestor is that ancestor's tick. Anything
+ * else -- this observer's own metadata save under a short spelling -- changed no target.
+ */
+function shortNameAction(parent: string, entry: WatchEntry, event: string, name: string): WatchEventAction {
+  const recorded = entry.targetIdentities;
+  if (!recorded) return "reconcile";
+  const resolved = watchEntryIdentity(parent, name);
+  if (resolved === "unreadable") return "reconcile";
+  for (const [target, identity] of recorded) {
+    const now = watchEntryIdentity(parent, target);
+    if (now === "unreadable" || now !== identity) return "reconcile";
+    if (resolved !== "absent" && resolved === now) return "reconcile";
+  }
+  let aliasOfAncestor = false;
+  for (const [ancestorName, identity] of entry.ancestors) {
+    const now = ancestorIdentity(parent, ancestorName);
+    if (identity === null || now === null || now.dev !== identity.dev || now.ino !== identity.ino) return "reconcile";
+    if (resolved === `${identity.dev}:${identity.ino}`) aliasOfAncestor = true;
+  }
+  return aliasOfAncestor && event !== "change" ? "reconcile" : "ignore";
+}
 function foldedLookup<T>(keys: Iterable<T>, key: (item: T) => string, folded: string): T | undefined {
   for (const item of keys) if (foldWatchName(key(item)) === folded) return item;
   return undefined;
@@ -98,20 +138,10 @@ export function credentialWatchEventAction(
   if (foldedLookup(entry.names, n => n, folded) !== undefined) return "reconcile";
   const match = foldedLookup(entry.ancestors.entries(), ([n]) => n, folded);
   // A known ancestor whose real name merely looks like write residue or a short name
-  // (C:\config.json.ocx.home, C:\ocx~1) goes through the identity check below; only an
-  // unmatched name of either shape is coverage-relevant on its own.
+  // (C:\config.json.ocx.home, C:\ocx~1) goes through the identity check below.
   if (match === undefined) {
     if (CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
-    if (!SHORT_NAME_ALIAS.test(name)) return "ignore";
-    // An unmatched short name may alias a target (reconcile) or a tracked ancestor
-    // (OPENC~1 for OpenCodex). Only a change that resolves to the very directory a tracked
-    // ancestor recorded at install is that ancestor's child-churn tick.
-    if (event !== "change") return "reconcile";
-    const resolved = ancestorIdentity(parent, name);
-    for (const recorded of entry.ancestors.values()) {
-      if (resolved && recorded && recorded.dev === resolved.dev && recorded.ino === resolved.ino) return "ignore";
-    }
-    return "reconcile";
+    return SHORT_NAME_ALIAS.test(name) ? shortNameAction(parent, entry, event, name) : "ignore";
   }
   const ancestor = match[1];
   // Renames (create/delete/move, including a same-identity rename) are structural and
@@ -319,9 +349,9 @@ export function startLocalCredentialObservation(): { stop(): void; reconcile(): 
         const parent = dirname(path);
         if (!exists(parent)) continue;
         assertParents(path);
-        const entry = watched.get(parent) ?? { names: new Set<string>(), ancestors: new Map() };
+        const entry = watched.get(parent) ?? { names: new Set<string>(), ancestors: new Map(), targetIdentities: new Map<string, string>() };
         const child = path.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1));
-        if (leaf) entry.names.add(child);
+        if (leaf) { entry.names.add(child); entry.targetIdentities?.set(child, watchEntryIdentity(parent, child)); }
         else if (!entry.ancestors.has(child)) entry.ancestors.set(child, ancestorIdentity(parent, child));
         watched.set(parent, entry);
         leaf = false;
