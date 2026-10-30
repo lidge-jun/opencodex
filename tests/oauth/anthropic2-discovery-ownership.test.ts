@@ -351,3 +351,15 @@ test("A and an unrelated key provider retain their existing discovery authentica
   expect(calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-vendor-key");
   expect(unexpectedFetches).toBe(0);
 });
+
+test("connection probe explains invalid model rows and static recovery (#7910)", async () => {
+  const live = config();
+  live.providers.vendor = { adapter: "openai-chat", authMode: "key", baseUrl: "https://vendor.example.test/v1",
+    apiKey: "synthetic-vendor-key", fetch: (async () => Response.json({ data: [{ id: "" }, { id: "valid" }] })) as typeof fetch } as OcxProviderConfig;
+  const result = await probe(live, "vendor");
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("row 0 has an empty id");
+  expect(result.error).toContain("pending");
+  expect(result.error).toContain("liveModels: false");
+  expect(result.error).toContain("models");
+});
