@@ -982,29 +982,60 @@ async function handleClaudeMessagesWithBudget(
       const { listOpenAiForwardSidecarCandidates, captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar } = await import("../providers/openai-sidecar");
       const candidates = listOpenAiForwardSidecarCandidates(replayConfig);
       const headers = new Headers();
-      if (candidates.length && tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
-        const { getMainAccountToken } = await import("../codex/main-account");
-        const token = getMainAccountToken();
-        if (token) {
-          const auth = captureExplicitOpenAiCallerAuth(new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId }), replayConfig);
-          if (auth) { headers.set("authorization", auth.authorization); headers.set("chatgpt-account-id", auth.chatgptAccountId); }
-        }
+      for (const name of FORWARD_HEADERS) {
+        if (name === "authorization" || name === "chatgpt-account-id") continue;
+        const value = req.headers.get(name);
+        if (value) headers.set(name, value);
       }
-      const { codexAccountSelectionForTurn } = await import("./lifecycle");
+      const { codexAccountSelectionForTurn, tryAdmitTurn } = await import("./lifecycle");
+      // The probe owns its claim only until selection completes, not for the client turn.
+      const probeLease = logIds?.turnAdmissionLease && candidates.length ? tryAdmitTurn() : undefined;
       const errors = await import("../codex/auth-context");
       try {
-        openAiSidecar = await resolveFirstUsableOpenAiSidecar(candidates, headers, replayConfig, {
-          admission: logIds?.admission, codexAuthPolicy: config,
-          beginCodexAccountSelection: codexAccountSelectionForTurn(logIds?.turnAdmissionLease),
-        });
+        req.signal.throwIfAborted();
+        if (logIds?.turnAdmissionLease && candidates.length && !probeLease) {
+          // No independent admission means availability is unknown; preserve the bridge.
+          nativeSelector.webSearchBackendAvailable = true;
+        } else {
+          if (candidates.some(candidate => candidate.accountMode === "direct") && probeLease) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) {
+              nativeSelector.webSearchBackendAvailable = true;
+            } else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              const token = getMainAccountToken();
+              if (token) {
+                const auth = captureExplicitOpenAiCallerAuth(new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId }), replayConfig);
+                if (auth) { headers.set("authorization", auth.authorization); headers.set("chatgpt-account-id", auth.chatgptAccountId); }
+              }
+            }
+          }
+          openAiSidecar = await resolveFirstUsableOpenAiSidecar(candidates, headers, replayConfig, {
+            admission: logIds?.admission, codexAuthPolicy: config, signal: req.signal,
+            beginCodexAccountSelection: codexAccountSelectionForTurn(probeLease ?? undefined),
+          });
+          req.signal.throwIfAborted();
+          // The bridge can inject main auth into pool selection. Only a negative pool probe
+          // needs this extra read; an unavailable claim or present token leaves it uncertain.
+          if (!openAiSidecar && probeLease && candidates.some(candidate => candidate.accountMode === "pool")) {
+            if (!tryClaimNativeMainProfileForTurn(probeLease)) nativeSelector.webSearchBackendAvailable = true;
+            else {
+              const { getMainAccountToken } = await import("../codex/main-account");
+              if (getMainAccountToken()) nativeSelector.webSearchBackendAvailable = true;
+            }
+          }
+        }
       } catch (err) {
         if (!(err instanceof errors.CodexPoolAuthenticationError) && !(err instanceof errors.CodexAuthContextError)
           && !(err instanceof errors.CodexAccountCooldownError) && !(err instanceof errors.CodexThreadAffinityExpiredError)
-          && !(err instanceof errors.CodexMainProfileDrainingError)) throw err;
-      }
+          && !(err instanceof errors.CodexMainProfileDrainingError)) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw err;
+        }
+        if (probeLease && candidates.some(candidate => candidate.accountMode === "pool")) nativeSelector.webSearchBackendAvailable = true;
+      } finally { probeLease?.release(); }
     }
     try {
-      nativeSelector.webSearchBackendAvailable = !!planWebSearch(replayConfig, parsed, false, settledRoute.provider, settledRoute.modelId, openAiSidecar, {
+      nativeSelector.webSearchBackendAvailable ??= !!planWebSearch(replayConfig, parsed, false, settledRoute.provider, settledRoute.modelId, openAiSidecar, {
         admission: logIds?.admission, codexAuthPolicy: config, providerName: settledRoute.providerName,
       });
     } finally {
