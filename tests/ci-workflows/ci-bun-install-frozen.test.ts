@@ -109,6 +109,51 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
       calls: existsSync(f.count) ? Number(readFileSync(f.count, "utf8")) : 0 };
   }
 
+  function timeoutCandidates(f: ReturnType<typeof fixture>, compatibleFallback: boolean) {
+    const bin = join(f.root, "timeout-bin");
+    mkdirSync(bin);
+    for (const name of ["timeout", "gtimeout"]) {
+      writeFileSync(join(bin, name), [
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == --signal=TERM ]]; then exit 0; fi',
+        'if [[ "$1" == --foreground ]]; then',
+        ...(name === "gtimeout" && compatibleFallback
+          ? ['  shift 2', '  exec "$@"']
+          : ['  exit 64']),
+        "fi",
+        "exit 64",
+      ].join("\n"));
+      chmodSync(join(bin, name), 0o755);
+    }
+    return { ...f.env, PATH: `${bin}:${f.env.PATH ?? ""}` };
+  }
+
+  test("rejects candidates without foreground support before starting an install", () => {
+    const f = fixture(["ok"]);
+    const dir = join(f.root, "dir"); mkdirSync(dir);
+    const child = spawnSync("bash", [script, dir], {
+      encoding: "utf8", timeout: 10_000, env: timeoutCandidates(f, false),
+    });
+    expect(child.error, child.stdout + child.stderr).toBeUndefined();
+    expect(child.status, child.stdout + child.stderr).toBe(69);
+    expect(child.stdout + child.stderr).toContain("GNU timeout is required");
+    expect(existsSync(f.count)).toBe(false);
+    expect(drained(f.root)).toBe(true);
+  });
+
+  test("falls back to gtimeout when timeout lacks foreground support", () => {
+    const f = fixture(["ok"]);
+    const dir = join(f.root, "dir"); mkdirSync(dir);
+    const child = spawnSync("bash", [script, dir], {
+      encoding: "utf8", timeout: 10_000, env: timeoutCandidates(f, true),
+    });
+    expect(child.error, child.stdout + child.stderr).toBeUndefined();
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    expect(existsSync(f.count)).toBe(true);
+    expect(readFileSync(f.count, "utf8")).toBe("1\n");
+    expect(drained(f.root)).toBe(true);
+  });
+
   test.each(["1", "124", "137", "sigkill"])("ordinary install failure %s never retries", (step) => {
     const r = run([step, "ok"]);
     expect(r.status, r.out).toBe(step === "sigkill" ? 137 : Number(step));

@@ -79,7 +79,7 @@ for value in "$ATTEMPT_SECONDS" "$TOTAL_SECONDS" "$MIN_ATTEMPT_SECONDS" "$KILL_G
 done
 TIMEOUT_BIN=""
 for candidate in timeout gtimeout; do
-  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --signal=TERM --kill-after=1s 1s true >/dev/null 2>&1; then
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --foreground 1s true >/dev/null 2>&1; then
     TIMEOUT_BIN=$(command -v "$candidate"); break
   fi
 done
