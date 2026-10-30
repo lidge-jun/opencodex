@@ -70,7 +70,10 @@ const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./i;
 function foldWatchName(name: string): string {
   return name.toLowerCase().replace(/[. ]+$/, "");
 }
-/** An 8.3 short name (AUTH~1.JSO) cannot be mapped back to its long name without a lookup. */
+/**
+ * An 8.3 short name (AUTH~1.JSO, OPENC~1) cannot be mapped back to its long name by
+ * spelling; it is resolved by identity instead (see credentialWatchEventAction).
+ */
 const SHORT_NAME_ALIAS = /~\d/;
 function foldedLookup<T>(keys: Iterable<T>, key: (item: T) => string, folded: string): T | undefined {
   for (const item of keys) if (foldWatchName(key(item)) === folded) return item;
@@ -97,7 +100,19 @@ export function credentialWatchEventAction(
   // A known ancestor whose real name merely looks like write residue or a short name
   // (C:\config.json.ocx.home, C:\ocx~1) goes through the identity check below; only an
   // unmatched name of either shape is coverage-relevant on its own.
-  if (match === undefined) return CREDENTIAL_TMP_NAME.test(name) || SHORT_NAME_ALIAS.test(name) ? "reconcile" : "ignore";
+  if (match === undefined) {
+    if (CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
+    if (!SHORT_NAME_ALIAS.test(name)) return "ignore";
+    // An unmatched short name may alias a target (reconcile) or a tracked ancestor
+    // (OPENC~1 for OpenCodex). Only a change that resolves to the very directory a tracked
+    // ancestor recorded at install is that ancestor's child-churn tick.
+    if (event !== "change") return "reconcile";
+    const resolved = ancestorIdentity(parent, name);
+    for (const recorded of entry.ancestors.values()) {
+      if (resolved && recorded && recorded.dev === resolved.dev && recorded.ino === resolved.ino) return "ignore";
+    }
+    return "reconcile";
+  }
   const ancestor = match[1];
   // Renames (create/delete/move, including a same-identity rename) are structural and
   // always reconcile; only "change" may be child-list noise from a same-identity dir.

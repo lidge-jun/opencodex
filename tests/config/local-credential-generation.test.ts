@@ -358,16 +358,22 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     mkdirSync(shortLooking);
     const residueLooking = join(dir, "config.json.ocx.home");
     mkdirSync(residueLooking);
+    // Stands in for the 8.3 alias of a tracked ancestor: the event spelling matches no
+    // tracked name, but resolves to the directory the ancestor recorded at install.
+    const aliased = join(dir, "longan~1");
+    mkdirSync(aliased);
     writeFileSync(join(dir, "auth.json"), "{}");
     const same = lstatSync(ancestor, { bigint: true });
     const shortSame = lstatSync(shortLooking, { bigint: true });
     const residueSame = lstatSync(residueLooking, { bigint: true });
+    const aliasedSame = lstatSync(aliased, { bigint: true });
     const entry = {
       names: new Set(["auth.json", "direct"]),
       ancestors: new Map<string, { dev: bigint; ino: bigint } | null>([
         ["ancestor", { dev: same.dev, ino: same.ino }],
         ["ocx~1", { dev: shortSame.dev, ino: shortSame.ino }],
         ["config.json.ocx.home", { dev: residueSame.dev, ino: residueSame.ino }],
+        ["longancestor", { dev: aliasedSame.dev, ino: aliasedSame.ino }],
         ["unverifiable", null],
       ]),
     };
@@ -410,6 +416,11 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     expect(action("rename", "ocx~1")).toBe("reconcile");
     expect(action("change", "config.json.ocx.home")).toBe("ignore");
     expect(action("rename", "config.json.ocx.home")).toBe("reconcile");
+    // A short alias of a tracked ancestor is identity-checked; one that resolves to anything
+    // else (a target file, an unknown or missing entry) still reconciles.
+    expect(action("change", "longan~1")).toBe("ignore");
+    expect(action("rename", "longan~1")).toBe("reconcile");
+    expect(action("change", "missin~1")).toBe("reconcile");
     // A differently cased ancestor is still an ancestor: renames reconcile, and a change is
     // ignored only when that spelling resolves to the recorded directory itself.
     expect(action("rename", "ANCESTOR")).toBe("reconcile");
