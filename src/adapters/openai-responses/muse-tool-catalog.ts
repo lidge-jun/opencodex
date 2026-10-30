@@ -1,6 +1,7 @@
 import { isPlainObject } from "./internal";
 import { promoteClientLoadedTools } from "./tool-schema";
 import { rewriteRoutedCustomToolsForUpstream } from "../../responses/custom-tool-compat";
+import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
 export class MuseToolCatalogCompatibilityError extends Error {
   constructor() {
@@ -54,8 +55,13 @@ export function normalizeMuseToolCatalog(body: unknown, replayPrefixLength = 0, 
   if (!Array.isArray(body.input)) return topLevelTools === undefined ? body : { ...body, tools: flattenBuiltinNamespace(topLevelTools) };
   const start = Number.isFinite(replayPrefixLength)
     ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength))) : 0;
+  // Item provenance owns membership once present: an earlier rewrite (Zed lifting a replayed
+  // wrapper) may already have shortened the input below the numeric prefix.
+  const originalInput: unknown[] = body.input;
+  const tagged = originalInput.some(hasItemProvenance);
+  const isCurrent = (item: unknown, index: number) => tagged ? !isHistoricalItem(item) : index >= start;
   const normalizedInput = body.input.map((item, index) => {
-    if (index < start) return item;
+    if (!isCurrent(item, index)) return item;
     if (isPlainObject(item) && (item.type === "additional_tools"
       || (item.type === "tool_search_output" && item.tools !== undefined))) {
       const tools = normalizeCatalog(item.tools);
@@ -63,7 +69,7 @@ export function normalizeMuseToolCatalog(body: unknown, replayPrefixLength = 0, 
     }
     return item;
   });
-  const currentInput = normalizedInput.slice(start);
+  const currentInput = normalizedInput.filter((_item, index) => isCurrent(originalInput[index], index));
   const declared = [...(topLevelTools ?? [])];
   for (const item of currentInput) {
     if (isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)) declared.push(...item.tools);

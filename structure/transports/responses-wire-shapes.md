@@ -157,13 +157,13 @@ policy.
 Explicitly selected Codex Lite ordinary unreferenced hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); non-Lite/unknown requests, native compact and public API retain structural history; portable compaction keeps its existing trigger and default projection. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
 `tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
 custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
-It does not recalculate wire identities or response aliases. The matcher reads the constructed
+It reads per-item replay provenance without recalculating wire identities or response aliases. The matcher reads the constructed
 send URL, resolving it with URL semantics, and requires HTTPS `opencode.ai`, the standard port
 and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `responsesPath`
 configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
 Credentials, query, fragment, foreign hosts and other resource paths are excluded. The existing
 URL constructor canonicalizes trailing base slashes before this check. Malformed wrappers remain unchanged and
-the shared mixed-ciphertext agent-message gate remains fail-closed.
+the shared mixed-ciphertext agent-message gate remains fail-closed. Responses passthrough clones and tags historical and current input items before any rewrite, including identity repair; symbol provenance survives message replacement, prompt-cache cleanup, filtering and tool lowering without entering serialized requests. Promotion uses provenance rather than positions in shortened input. Discovery-source filtering follows the [current-turn catalog contract](responses.md#responses-httpsse) before nested tool definitions enter a live catalog.
 
 The canonical `opencode-go` registry entry defaults to `statelessResponses: true` because Go
 rejects reasoning ciphertext combined with `previous_response_id` (#3838). Existing derive
@@ -221,7 +221,7 @@ the destination is the whole predicate, because Meta's refusal is a gateway sche
 Muse model it serves, its default `muse-spark-1.3` is not a Contributor id, and a missing model id
 still strips. Because the predicate is the host, a custom provider pointed at that exact URL gets the
 same strip.
-Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, declarations retain their schemas over search discoveries, historical discovery stays replay data, and historical custom calls retain their conversion without live authority. Historical catalogs are not validated as current declarations. The reserved `functions` group and nested function definitions become public function declarations. Catalog validation also covers string/omitted input; unrepresentable namespace children and malformed current catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
+Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, declarations retain their schemas over search discoveries, historical discovery stays replay data, and historical custom calls retain their conversion without live authority. Historical catalogs are not validated as current declarations; once input items carry replay provenance tags, the tags decide membership instead of the numeric prefix, so an earlier rewrite that shortened the input (Zed lifting a replayed wrapper) cannot shift the boundary. The reserved `functions` group and nested function definitions become public function declarations. Catalog validation also covers string/omitted input; unrepresentable namespace children and malformed current catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
 Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
 names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
 flattening, `src/responses/muse-tool-name-alias.ts` rewrites those identities on the `api.meta.ai`
