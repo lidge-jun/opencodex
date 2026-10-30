@@ -165,6 +165,44 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
+  test.each(["chat", "chat-fast", "chat-effort", "chat-only", "wire-chat", "virtual-chat", "other-provider", "unknown-virtual"])(
+    "virtual Chat eligibility follows the actual wire policy: %s", async mode => {
+      const virtual = mode === "unknown-virtual" ? "gpt-5.6-sol-pro-unknown" : "gpt-5.6-sol-pro";
+      const wire = "gpt-5.6-sol", name = mode === "other-provider" ? "fixture" : "openai-apikey";
+      const sent: Array<{ path: string; model: string; tool_choice: unknown }> = [];
+      const fetchWire = (async (input, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model: string; tool_choice: unknown };
+        const path = new URL(input instanceof globalThis.Request ? input.url : String(input)).pathname; sent.push({ path, ...body });
+        return path.endsWith("/responses") ? Response.json(completedNoCall(body.model, "virtual wire response"))
+          : Response.json({ id: "chat-virtual", object: "chat.completion", choices: [{ index: 0,
+            message: { role: "assistant", content: null, tool_calls: [{ id: "call_search", type: "function",
+              function: { name: "tool_search", arguments: '{"query":"lookup"}' } }] }, finish_reason: "tool_calls" }] });
+      }) as typeof fetch;
+      const primary = provider(mode === "wire-chat" || mode === "virtual-chat" ? "openai-responses" : "openai-chat", "https://api.openai.com/v1", "key-a", {
+        fetch: fetchWire,
+        models: [virtual], autoToolChoiceOnlyModels: [mode === "virtual-chat" ? virtual : wire],
+        // The registry defaults this provider to Responses; explicit per-model overrides
+        // distinguish virtual and wire policy, rather than relying on the provider fallback.
+        ...(mode.startsWith("chat") ? { modelAdapters: { [virtual]: "openai-chat", [wire]: "openai-chat" } }
+          : mode === "wire-chat" ? { modelAdapters: { [wire]: "openai-chat" } }
+          : mode === "virtual-chat" || mode === "unknown-virtual" ? { modelAdapters: { [virtual]: "openai-chat" } } : {}),
+      });
+      const cfg = comboConfig({ [name]: primary, ...(mode === "chat-only" ? {} : { backup: provider("openai-chat", "https://backup.fixture.invalid/v1", "key-b", { fetch: fetchWire }) }) });
+      cfg.combos!.free!.targets[0]!.model = virtual + (mode === "chat-fast" ? "--fast" : mode === "chat-effort" ? "--high" : "");
+      cfg.cursorEffortRows = mode === "chat-effort";
+      const response = await handleResponses(requiredRequest({ tools: [{ type: "tool_search" }], tool_choice: { type: "tool_search" } }), cfg, {} as RequestLogContext);
+      if (mode === "chat-only") {
+        expect(response.status).toBe(503); expect(await response.text()).toContain("mandatory tool_choice"); expect(sent).toEqual([]); return;
+      }
+      expect(response.status).toBe(200); await response.text();
+      expect(sent).toHaveLength(1);
+      if (mode.startsWith("chat") || mode === "wire-chat") {
+        expect(sent[0]).toMatchObject({ model: "m2", path: "/v1/chat/completions", tool_choice: { type: "function", function: { name: "tool_search" } } });
+      } else if (mode === "virtual-chat") {
+        expect(sent[0]).toMatchObject({ model: wire, path: "/v1/responses", tool_choice: { type: "function", name: "tool_search" } });
+      } else expect(sent[0]).toMatchObject({ model: virtual, path: "/v1/chat/completions", tool_choice: { type: "function", function: { name: "tool_search" } } });
+    });
+
   for (const choice of ["required", { type: "function", name: "tool_search" }, { type: "tool_search" },
     { type: "allowed_tools", mode: "required", tools: [{ type: "tool_search" }] }]) {
     for (const [backup, suffix] of [[false, ""], [true, ""], [false, "--fast"], [true, "--fast"], [false, "--high"], [true, "--high"]] as const) {

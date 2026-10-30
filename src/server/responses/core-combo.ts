@@ -5,6 +5,7 @@ import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./co
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { parseSyntheticRowId } from "../fast-row";
+import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
@@ -542,11 +543,12 @@ export async function executeComboResponses(
     try {
       const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
       const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
       const inboundWire = options.inboundWire ?? "responses";
-      const policy = captureRouteStaticPolicy(route.providerName, route.modelId, route.provider,
+      const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
         route.staticPolicy.effectiveAlias, inboundWire);
-      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, policy);
-      return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, route.modelId)
+      const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
         : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
     } catch {
       return true;
