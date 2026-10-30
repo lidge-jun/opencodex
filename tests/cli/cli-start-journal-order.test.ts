@@ -401,18 +401,28 @@ function freeLoopbackPort(): number {
  * Who holds a pinned port when a sibling missed its deadline: the child itself (bound, record not
  * yet written), another process (the port was taken between probe and bind) or nobody (the child
  * never reached its bind). The bare deadline cannot tell these apart.
+ *
+ * Best effort and read-only while the child lives: socket owners are listed before the child is
+ * killed, the bind probe runs after. Nothing here may throw over the original timeout.
  */
-function pinnedPortHolders(port: number, childPid: number): string {
-  let bindable: boolean;
-  try { Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null) }).stop(true); bindable = true; }
-  catch { bindable = false; }
-  if (process.platform !== "win32") return bindable ? "free" : "bound";
-  const listing = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"], { stdout: "pipe", stderr: "ignore" }).stdout.toString();
-  const pids = [...new Set(listing.split(/\r?\n/)
-    .map(line => line.trim().split(/\s+/))
-    .filter(cols => cols.length >= 5 && cols[1]!.endsWith(`:${port}`))
-    .map(cols => `${cols[3]} pid ${cols[4]}${cols[4] === String(childPid) ? " (child)" : ""}`))];
-  return `${bindable ? "free" : "bound"}${pids.length ? `; ${pids.join(", ")}` : ""}`;
+function pinnedPortSockets(port: number, childPid: number): string {
+  if (process.platform !== "win32") return "";
+  try {
+    const listing = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"], { stdout: "pipe", stderr: "ignore", timeout: 5_000 });
+    if (listing.exitCode !== 0) return `; netstat exit ${listing.exitCode}`;
+    const rows = [...new Set(listing.stdout.toString().split(/\r?\n/)
+      .map(line => line.trim().split(/\s+/))
+      .filter(cols => cols.length >= 5 && cols[1]!.endsWith(`:${port}`))
+      .map(cols => `${cols[3]} pid ${cols[4]}${cols[4] === String(childPid) ? " (child)" : ""}`))];
+    return rows.length ? `; ${rows.join(", ")}` : "; no socket rows";
+  } catch (error) {
+    return `; netstat unavailable (${(error as NodeJS.ErrnoException).code ?? "error"})`;
+  }
+}
+
+function pinnedPortBindable(port: number): string {
+  try { Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null) }).stop(true); return "free after kill"; }
+  catch { return "still bound after kill"; }
 }
 
 /**
@@ -464,8 +474,10 @@ async function startSibling(
     // An early exit already reported its stderr and consumed the stream.
     if (exitedEarly) throw error;
     // Report what the child was doing, which the bare deadline message cannot.
-    const holders = port === undefined ? "not pinned" : pinnedPortHolders(port, child.pid);
+    const sockets = port === undefined ? "" : pinnedPortSockets(port, child.pid);
     if (child.exitCode === null) child.kill("SIGKILL");
+    if (port !== undefined) await child.exited;
+    const holders = port === undefined ? "not pinned" : `${pinnedPortBindable(port)}${sockets}`;
     const tail = async (stream: unknown): Promise<string> => {
       try {
         return await Promise.race([
