@@ -550,9 +550,9 @@ charged against the unchanged 32 MiB serialized history budget. The existing
 body-persistence eligibility and accepted-only steering commit rules still apply.
 `tests/responses/ws-steering-stability.test.ts` binds these deadline and replay
 contracts to deterministic clocks and a synthetic real-handler continuation test.
-`src/server/responses/native-response-json.ts` owns content comparison without
-importing either control owner, keeping the replay dependency graph acyclic.
-Injection retains its existing helper export names and comparison semantics.
+`src/server/responses/native-response-json.ts` owns content comparison and
+[bounded output identity](inventory.md#native-output-identity) without importing either control owner.
+Injection retains its existing helper export names and SHA-256 comparison semantics.
 
 ## Steering settings, public API and diagnostic probe
 
