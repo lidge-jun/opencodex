@@ -483,6 +483,7 @@
   "claude-inbound-debug.test.ts": "claude-integration", "claude-inbound.test.ts": "claude-integration",
   "claude-inbound-tool-loading.test.ts": "claude-integration",
   "claude-inbound-tool-reference.test.ts": "claude-integration", "claude-native-reasoning-continuity.test.ts": "claude-integration", "claude-native-reasoning-provenance.test.ts": "claude-integration",
+  "claude-bridge-pool-session.test.ts": "claude-integration",
   "claude-output-schema-strict.test.ts": "claude-integration", "claude-intercept-integration.test.ts": "server",
   "claude-intercept-local-ca.test.ts": "claude-integration",
   "claude-intercept-local-ca-files.test.ts": "claude-integration",

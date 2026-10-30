@@ -7,6 +7,7 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { claudeHeaderSessionId, withClaudeBridgePoolSession } from "./claude-bridge-pool-session";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
@@ -1173,6 +1174,8 @@ async function handleClaudeMessagesWithBudget(
     ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
     ?? metadataGoLane
     ?? getOrAllocateRequestSessionLane(req);
+  // The replay names its Claude session, so every pool binds the turn to it.
+  withClaudeBridgePoolSession(headers, claudeNativeSessionId ?? claudeHeaderSessionId(req.headers, logIds?.admission));
   let internalReq: Request;
   try {
     // The UTF-16 JSON string and the Request's UTF-8 body coexist until dispatch.

@@ -27,6 +27,12 @@ export function withCallerSessionIdentity(req: Request, admission: DataPlaneAdmi
   }
   const headers = new Headers(req.headers);
   headers.set("session_id", sessionId);
+  // A root caller also names its Codex pool identity, as history tools
+  // do (contextSelectionHeaders); a declared parent keeps its upstream lineage key.
+  if (!headers.get("x-codex-parent-thread-id")?.trim()) {
+    headers.set("session-id", sessionId);
+    headers.set("thread-id", sessionId);
+  }
   // Preserve the unread body stream and propagate the original request's abort signal.
   return new Request(req, { headers });
 }
