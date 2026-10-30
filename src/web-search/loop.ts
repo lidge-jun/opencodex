@@ -14,7 +14,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
-import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
+import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -90,7 +90,7 @@ function parseQueries(argsBuf: string): string[] {
  * (Codex never sees the synthetic tool); every other event — text, thinking, real tool calls, done —
  * is preserved in order.
  */
-export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean } = {}): {
+export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean; clientAdvisorAllowed?: boolean } = {}): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
@@ -100,6 +100,7 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
   let hasMalformedToolCall = false;
+  let refusal: Extract<AdapterEvent, { type: "error" }> | undefined;
   let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
@@ -113,8 +114,18 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
     pending = null;
   };
   for (const e of events) {
+    if (refusal) {
+      if ((e.type === "done" || e.type === "incomplete" || e.type === "error") && e.usage) refusal.usage = e.usage;
+      continue;
+    }
     if (e.type === "tool_call_start") {
       flushPending();
+      if (e.name === ADVISOR_TOOL_NAME && !options.advisor && !options.clientAdvisorAllowed) {
+        refusal = { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+          message: "routed provider emitted advisor outside the current iteration's permitted tool catalog" };
+        passthrough.push(refusal);
+        continue;
+      }
       if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
       pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e], providerMetadata: e.providerMetadata };
     } else if (e.type === "tool_call_delta") {
@@ -513,6 +524,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
+    clientAdvisorAllowed: boolean;
+    syntheticAdvisorAllowed: boolean;
     recover?: (error: WebSearchAdapterEventError) => Promise<IterationResponse | undefined>;
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
@@ -692,7 +705,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           request.releaseBodyObservation?.();
         }
         bindAnthropicRejectionResponse(request, response);
-        return { response, responseAdapter: requestAdapter };
+        const iterTools = iterParsed.context.tools ?? [];
+        const toolAllowed = toolChoiceToolPredicate(iterParsed.options.toolChoice, iterTools);
+        const clientAdvisorAllowed = iterTools.some(tool => !tool.advisor && !tool.namespace
+          && tool.name === ADVISOR_TOOL_NAME && toolAllowed(tool));
+        const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
+        // Exhaustion removes the declaration, but its paired limit result still belongs
+        // to the sidecar. A tools-disabled recovery revokes that permission too.
+        const advisorCandidate = declaredAdvisor ?? { name: ADVISOR_TOOL_NAME };
+        const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
+          && (!!declaredAdvisor || deps.advisor.exhausted())
+          && toolChoiceToolPredicate(iterParsed.options.toolChoice,
+            declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
+        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
@@ -908,7 +933,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, terminal.message, terminal.code === "context_length_exceeded" ? terminal : undefined);
     }
     deps.thinkingRecovery?.observeIteration(events);
-    return { ...scanEventsForWebSearch(events, { advisor: deps.advisor !== undefined }), streamedPassthroughCount, events, anthropicReplay };
+    return { ...scanEventsForWebSearch(events, { advisor: prepared.syntheticAdvisorAllowed, clientAdvisorAllowed: prepared.clientAdvisorAllowed }), streamedPassthroughCount, events, anthropicReplay };
   };
 
   /**
