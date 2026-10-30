@@ -1,4 +1,5 @@
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
 import { WindowsSecretAclSettleTimeoutError } from "../../lib/windows-secret-acl";
 import { mirrorDesiredEnabledOntoSnapshot } from "./claude-desktop-config-writers";
@@ -949,6 +950,9 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
 
     const enabled = body.enabled;
     if (claudeCodeEnabled(config) === enabled) {
+      // Re-run the same reconcile on a repeated OFF: definitions left behind by an older
+      // version that never pruned on disable are removed the next time the user says off.
+      if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
       return jsonResponse({
         ok: true, clientId: "claude", changed: false,
         state: enabled ? "current" : "absent",
@@ -963,6 +967,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
      * sentinel the next startServer would silently convert a user's Auto auth mode into
      * a sticky manual subscription — a failure that surfaces nowhere near this route.
      */
+    // Kept so a failed save leaves the shared in-memory config matching disk: otherwise a
+    // retry on the same object would read the unsaved value, take the repeated-OFF branch
+    // and prune agents while the persisted integration is still on.
+    const previousBlock = config.claudeCode === undefined ? undefined : structuredClone(config.claudeCode);
     commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled });
 
     /*
@@ -973,6 +981,11 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     try {
       persist(config);
     } catch (error) {
+      // A published write already put the new value on disk; only an unpublished one rolls back.
+      if (!(error instanceof ConfigWritePublishedError)) {
+        if (previousBlock === undefined) delete config.claudeCode;
+        else config.claudeCode = previousBlock;
+      }
       if (isConfigLockError(error)) {
         return isLockContention(error)
           ? refusal(409, "claude", "config_busy",
@@ -982,6 +995,15 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       }
       throw error;
     }
+
+    /*
+     * The generated ~/.claude/agents/ocx-*.md definitions route through this proxy; a
+     * native Claude Code session that still loads them after OFF follows their
+     * placeholder model (issue #7968). Prune them now instead of waiting for a later
+     * launch or startup sync; the disabled reconcile removes only marker-owned regular
+     * files and needs no model discovery. ON keeps its existing launch/startup sync.
+     */
+    if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
 
     let interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
     if (enabled && !interceptReason) {

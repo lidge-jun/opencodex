@@ -248,7 +248,7 @@ describe("operation capability workflows use existing handlers", () => {
     expect(tray).toContain('args.includes("--no-start") && sub !== "install"');
     expect(tray).toContain('process.platform !== "win32"');
     const dispatch = readFileSync(repoPath("src/cli/dispatch.ts"), "utf8");
-    expect(dispatch).toContain('case "install": {\n        const r = installCodexShim();');
+    expect(dispatch).toContain('case "install": {\n        const r = await installCodexShimAsync();');
   });
 });
 
