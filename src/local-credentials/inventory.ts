@@ -40,6 +40,56 @@ function assertParents(path: string): void {
     if (p === parse(p).root) break;
   }
 }
+/** Watch classification for one parent directory, per basenames seen there. */
+export type WatchEntry = {
+  /**
+   * Basenames that are coverage targets themselves: a file whose bytes are scanned or a
+   * directory whose whole listing is checked. Every event on these is coverage-relevant
+   * -- an in-place content change reconciles exactly like a rename, even when the scan
+   * vector ends up identical, because the advance is what proves the observation ran.
+   */
+  names: Set<string>;
+  /**
+   * Basenames watched only as ancestors of a deeper target, paired with the identity
+   * recorded at install. A "rename" always reconciles: a replacement is the signal these
+   * entries exist to catch. A "change" reconciles too unless the entry re-identifies as
+   * the same real directory -- on Windows a directory entry reports "change" whenever a
+   * child is added or removed, so this observer's own local-credentials.json save would
+   * otherwise re-arm the same reconcile forever. null means the ancestor could not be
+   * identified at install, and an unverifiable ancestor reconciles on any event.
+   */
+  ancestors: Map<string, { dev: bigint; ino: bigint } | null>;
+};
+const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./;
+function ancestorIdentity(parent: string, child: string): { dev: bigint; ino: bigint } | null {
+  try {
+    const stat = lstatSync(join(parent, child), { bigint: true });
+    return stat.isDirectory() && !stat.isSymbolicLink() ? { dev: stat.dev, ino: stat.ino } : null;
+  } catch { return null; }
+}
+type WatchEventAction = "fail" | "reconcile" | "ignore";
+/**
+ * The single (parent, event, name) decision behind the observation watchers, exported so
+ * tests can pin every branch without timing-dependent filesystem notifications.
+ */
+export function credentialWatchEventAction(
+  parent: string, entry: WatchEntry, event: string, name: string | null,
+): WatchEventAction {
+  if (name === null) return "fail";
+  if (entry.names.has(name) || CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
+  const ancestor = entry.ancestors.get(name);
+  if (ancestor === undefined) return "ignore";
+  // Renames (create/delete/move, including a same-identity rename) are structural and
+  // always reconcile; only "change" may be child-list noise from a same-identity dir.
+  if (event !== "change" || ancestor === null) return "reconcile";
+  try {
+    const stat = lstatSync(join(parent, name), { bigint: true });
+    if (stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === ancestor.dev && stat.ino === ancestor.ino) {
+      return "ignore";
+    }
+  } catch { /* an ancestor that cannot be re-identified cannot prove the tick is noise */ }
+  return "reconcile";
+}
 export function scanLocalCredentials(accounts: readonly string[] = []): { count: number; vector: string; targets: string[] } {
   const home = getConfigDir();
   const codex = getCodexHome();
@@ -166,6 +216,10 @@ export function scanLocalCredentials(accounts: readonly string[] = []): { count:
   const profiles = countLocalNativeProfileSlots(vault, homeId);
   if (profiles.active && !main) throw new Error("Active native profile has no readable auth");
   count += main + profiles.inactive;
+  // The whole listing is verified below, so the directory itself is a coverage target:
+  // an unknown create/delete must reach a watcher even when the child's own name is not.
+  targets.add(shared);
+  assertParents(shared);
   if (exists(shared)) {
     if (!lstatSync(shared).isDirectory() || lstatSync(shared).isSymbolicLink()) throw new Error("Unsafe native vault");
     const expected = new Set([`${homeId}.vault.json`, `${homeId}.stages.json`]);
@@ -223,23 +277,28 @@ export function startLocalCredentialObservation(): { stop(): void; reconcile(): 
     }
   };
   const install = (targets: string[]) => {
-    const watched = new Map<string, Set<string>>();
+    const watched = new Map<string, WatchEntry>();
     for (const target of targets) {
+      let leaf = true;
       for (let path = target; dirname(path) !== path; path = dirname(path)) {
         const parent = dirname(path);
         if (!exists(parent)) continue;
         assertParents(path);
-        const names = watched.get(parent) ?? new Set<string>();
-        names.add(path.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
-        watched.set(parent, names);
+        const entry = watched.get(parent) ?? { names: new Set<string>(), ancestors: new Map() };
+        const child = path.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1));
+        if (leaf) entry.names.add(child);
+        else if (!entry.ancestors.has(child)) entry.ancestors.set(child, ancestorIdentity(parent, child));
+        watched.set(parent, entry);
+        leaf = false;
       }
     }
     const next: FSWatcher[] = [];
     try {
-      for (const [parent, names] of watched) {
-        const watcher = watch(parent, { persistent: false }, (_event, name) => {
-          if (name === null) { fail(); return; }
-          if (names.has(String(name)) || /^(auth|config|codex-accounts)\.json\.ocx\./.test(String(name))) reconcile();
+      for (const [parent, entry] of watched) {
+        const watcher = watch(parent, { persistent: false }, (event, name) => {
+          const action = credentialWatchEventAction(parent, entry, event, name === null ? null : String(name));
+          if (action === "fail") fail();
+          else if (action === "reconcile") reconcile();
         });
         watcher.on("error", fail);
         next.push(watcher);
