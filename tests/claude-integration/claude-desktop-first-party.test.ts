@@ -25,6 +25,8 @@ import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
+import { setLocalCaWindowsAclRunnerForTests } from "../../src/claude/intercept/local-ca-windows";
+import { resolveCurrentWindowsPrincipal } from "../../src/lib/windows-user-principal";
 
 let root = "";
 let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
@@ -65,6 +67,16 @@ function expectStatus(result: { status: number; body: unknown }, status: number)
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-1p-"));
   lifecycleLock = isolateClientLifecycleLock(root);
+  // The local-CA ACL inspection spawns PowerShell under the shared 30 s principal-lookup budget,
+  // which loaded hosted Windows runners can exhaust (local_ca_path_unsafe). This file tests
+  // first-party apply, not that inspection (claude-intercept-local-ca-windows.test.ts runs it
+  // natively), so report the private ACL the hardener produces for the real current SID.
+  if (process.platform === "win32") {
+    const sid = resolveCurrentWindowsPrincipal(30_000).replace(/^\*/, "");
+    setLocalCaWindowsAclRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: JSON.stringify({
+      owner: sid, protected: true, rules: [{ sid, type: 0, rights: 2032127 }],
+    }) }));
+  }
   library = join(root, "desktop-library");
   claudeDir = join(root, "claude");
   for (const key of ENV_KEYS) previous[key] = process.env[key];
@@ -76,6 +88,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await flushConfigDirHardeningAndReaps(root);
+  setLocalCaWindowsAclRunnerForTests(null);
   lifecycleLock.restore();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
