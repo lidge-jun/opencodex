@@ -205,7 +205,7 @@ test("turning the Claude integration off prunes only marker-owned definitions (#
   expect(agentFiles()).toEqual({ "ocx-user.md": user });
 });
 
-test("a repeated off removes definitions an older version left behind, and on restores the roster", async () => {
+test("a repeated off removes definitions an older version left behind", async () => {
   config.claudeCode = { ...config.claudeCode, enabled: false };
   persist();
   // Left behind while disabled by a version that never pruned on disable.
@@ -213,8 +213,23 @@ test("a repeated off removes definitions an older version left behind, and on re
   const result = await toggleClaude(false);
   expect(result).toMatchObject({ status: 200, body: { ok: true, changed: false } });
   expect(agentFiles()).toEqual({});
-  expect((await toggleClaude(true)).status).toBe(200);
-  expectRegistered();
+});
+
+test("turning the integration on fetches no models and leaves the roster to launch-time sync", async () => {
+  config.claudeCode = { ...config.claudeCode, enabled: false };
+  persist();
+  let fetched = 0;
+  const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
+  const response = await handleManagementAPI(new Request(url, {
+    method: "PUT", headers: { Host: url.host, "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  }), url, config, {
+    fetchAllModels: async () => { fetched++; return []; },
+    claudeAgentConfigDir: claudeDir,
+    saveConfigPreservingClaudeCode: () => { persist(); },
+    ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "ca.pem"), pickerProxyPort: null } }),
+  }, "admin-token", undefined, { trustedLoopback: true });
+  expect(response?.status).toBe(200);
+  expect(fetched).toBe(0);
 });
 
 test("a failed save leaves the shared config on, so a retry neither prunes nor reports success", async () => {
@@ -247,5 +262,5 @@ test("a save that published before failing keeps the new value, so a later On is
   expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).claudeCode.enabled).toBe(false);
   const on = await toggleClaude(true);
   expect(on).toMatchObject({ status: 200, body: { changed: true } });
-  expectRegistered();
+  expect(config.claudeCode?.enabled).toBe(true);
 });

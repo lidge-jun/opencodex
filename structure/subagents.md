@@ -471,8 +471,8 @@ and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TO
 is active, without changing reasoning effort or the proxy guidance switch.
 
 The integrations toggle `PUT /api/native-integrations/claude` reconciles the generated `ocx-*` definitions
-through `syncClaudeAgentDefsBestEffort` after it persists a change, so Off prunes the marker-owned
-regular files at once and On writes the current roster; a repeated Off reconciles again to remove
+through `syncClaudeAgentDefsBestEffort` after it persists Off, so the marker-owned regular files are
+pruned at once without model discovery (On keeps the launch and startup sync); a repeated Off reconciles again to remove
 definitions an older version left behind (#7968). The reconcile is best effort: an unlink failure
 leaves that file and the toggle still succeeds. A save that fails before publishing restores the in-memory block, so a
 retry on the same config is a real transition; one that published first keeps the new value. User-authored and symlinked `ocx-*` files are never

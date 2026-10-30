@@ -999,11 +999,11 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     /*
      * The generated ~/.claude/agents/ocx-*.md definitions route through this proxy; a
      * native Claude Code session that still loads them after OFF follows their
-     * placeholder model (issue #7968). Reconcile now -- OFF prunes only marker-owned
-     * regular files, ON writes the current roster -- instead of waiting for a later
-     * launch or startup sync.
+     * placeholder model (issue #7968). Prune them now instead of waiting for a later
+     * launch or startup sync; the disabled reconcile removes only marker-owned regular
+     * files and needs no model discovery. ON keeps its existing launch/startup sync.
      */
-    await ctx.syncClaudeAgentDefsBestEffort?.();
+    if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
 
     let interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
     if (enabled && !interceptReason) {
