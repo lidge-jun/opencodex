@@ -95,7 +95,7 @@ OpenCodex bounds how much one task may fan out. A task is the root conversation,
 | Field | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
 | `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
-| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, one task may make inside the 10-minute window. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream sends, retries included, after which the task's new requests are refused for the rest of the 10-minute window. The count is checked when a request is admitted, so retries inside a request that was already admitted, and requests admitted concurrently, can take the total past the ceiling. |
 | `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
 
 The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
