@@ -107,8 +107,8 @@ async function verifyInitial(checks: Check[]): Promise<void> {
   await ready;
 }
 
-function corruptModelIndex(handle: Database, path: string): void {
-  const { rootpage } = handle.query("SELECT rootpage FROM sqlite_master WHERE name = 'idx_requests_model'").get() as { rootpage: number };
+function corruptModelIndex(handle: Database, path: string, index = "idx_requests_model"): void {
+  const { rootpage } = handle.query("SELECT rootpage FROM sqlite_master WHERE name = ?").get(index) as { rootpage: number };
   const { page_size: pageSize } = handle.query("PRAGMA page_size").get() as { page_size: number };
   expect(rootpage).toBeGreaterThan(1);
   const checkpoint = handle.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number };
@@ -119,6 +119,22 @@ function corruptModelIndex(handle: Database, path: string): void {
   try { writeSync(fd, Buffer.from([0]), 0, 1, (rootpage - 1) * pageSize); }
   finally { closeSync(fd); }
   handle.exec("PRAGMA shrink_memory");
+}
+
+// Several indexes can serve the health query; which one SQLite's planner picks differs between
+// builds (Bun bundles SQLite on Linux and Windows, macOS uses the system library). Corrupt the one
+// this build actually reads instead of assuming the model index.
+function healthQueryIndex(handle: Database): string {
+  // prepare + finalize: a query() statement stays cached on the handle and holds a table lock.
+  const statement = handle.prepare(
+    "EXPLAIN QUERY PLAN SELECT status FROM requests WHERE provider = ? AND model = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+  );
+  let plan: Array<{ detail: string }>;
+  try { plan = statement.all("a", "m1", 0, 1) as Array<{ detail: string }>; }
+  finally { statement.finalize(); }
+  const index = plan.map(row => /USING (?:COVERING )?INDEX (\w+)/.exec(row.detail)?.[1]).find(Boolean);
+  expect(index).toMatch(/^idx_requests_/);
+  return index!;
 }
 
 describe("request-history integrity lifecycle (#7966)", () => {
@@ -409,7 +425,7 @@ describe("request-history integrity lifecycle (#7966)", () => {
     clearHealthHistoryCacheForTests();
     const handle = requestHistoryDb();
     const canonical = readFileSync(usageLogPath());
-    corruptModelIndex(handle, path);
+    corruptModelIndex(handle, path, healthQueryIndex(handle));
     expect(healthEvidenceForCandidate(input)).toEqual({});
     expect((await openRequestHistoryIndex()).indexedRows).toBe(5);
     expect(requestHistoryDb()).not.toBe(handle);
