@@ -476,7 +476,8 @@ async function startSibling(
     // Report what the child was doing, which the bare deadline message cannot.
     const sockets = port === undefined ? "" : pinnedPortSockets(port, child.pid);
     if (child.exitCode === null) child.kill("SIGKILL");
-    if (port !== undefined) await child.exited;
+    // Bounded like tail() below: the diagnostic must never outlast the original failure.
+    if (port !== undefined) await Promise.race([child.exited, Bun.sleep(5_000)]);
     const holders = port === undefined ? "not pinned" : `${pinnedPortBindable(port)}${sockets}`;
     const tail = async (stream: unknown): Promise<string> => {
       try {
