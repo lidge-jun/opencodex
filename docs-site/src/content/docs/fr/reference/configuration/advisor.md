@@ -83,6 +83,8 @@ OpenCodex n'insère pas dans ce prompt de clés d'API de fournisseur, d'en-tête
 
 Le conseil manuel est le résultat d'outil de l'appel `advisor` que le worker a lui-même émis. Ce résultat est un objet JSON. Le champ `advice` est le texte du modèle conseiller. Le champ `status` est écrit par le runtime.
 
+Lors des tours de recherche web basés sur fetch, la boucle de recherche n'expose l'outil synthétique `advisor` et n'intercepte ses appels de consultation manuelle que si le `tool_choice` effectif l'autorise. Un choix `allowed_tools` limité à `web_search` exclut les consultations manuelles du conseiller. Activer la recherche hébergée n'élargit pas cette autorisation.
+
 Le conseil automatique est un objet JSON cité dans un message consultatif de rôle user distinct. Seule l’instruction fixe du runtime reste dans le message developer ; le texte généré par le conseiller ne passe jamais dans developer/system. Cela fonctionne avec OpenAI Chat et Anthropic sans inventer un appel d’outil. Les guillemets empêchent la rupture structurelle et les champs falsifiés, pas toute injection en langage naturel. Un protocole dédié pourrait mieux distinguer le conseil d’une demande utilisateur. Chaque requête permet au plus trois consultations et quatre continuations du worker. À la limite, l’outil advisor est retiré ; un nouvel appel reçoit une dernière continuation avec un résultat de limite, puis un autre appel termine avec 502 advisor_continuation_limit sans nouvel envoi. La limite est partagée avec les reprises de complétion vide.
 
 La suppression ne lit pas les chaînes du conseiller. Le dédoublonnage automatique appartient au registre du serveur. Un message developer, même s'il recopie le texte de transport, ne supprime pas le preflight.

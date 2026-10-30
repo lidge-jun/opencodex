@@ -142,10 +142,12 @@ After consultation exhaustion the `advisor` tool is removed. A repeated call rec
 paired limit result; if the worker calls it again, typed 502 `advisor_continuation_limit` ends the
 request without another hidden worker call. The bound is shared with empty-completion retries.
 
-Fetch-based web-search turns support the same manual consultation path. The search loop intercepts
-`web_search` and `advisor` calls in worker order, so enabling hosted search does not hide the
-advisor tool. Search and Advisor iterations have separate allowances, and a real client tool call
-still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
+Fetch-based web-search turns support the same manual consultation path when the effective
+`tool_choice` permits the synthetic `advisor` tool. The search loop exposes and intercepts
+`advisor` calls only within that scope; an `allowed_tools` choice restricted to `web_search`
+excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
+worker order. Search and Advisor iterations have separate allowances,
+and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
 Usage accounting includes each worker turn once, including the leg rejected by the Advisor continuation limit.
 
 Suppression does not read Advisor strings. Automatic dedup is the server-owned ledger. A

@@ -66,6 +66,8 @@ OpenCodex bu isteme sağlayıcı API anahtarlarını, Authorization başlıklar�
 
 Elle danışma, worker'ın kendisinin yaptığı `advisor` çağrısının araç sonucudur. Sonuç bir JSON nesnesidir. `advice` alanı danışman modelinin metnidir. `status` alanını çalışma zamanı yazar.
 
+fetch tabanlı web arama turlarında arama döngüsü, yalnızca geçerli `tool_choice` izin veriyorsa sentetik `advisor` aracını sunar ve elle danışma çağrılarını yakalar. `allowed_tools` seçimini `web_search` ile sınırlamak, elle danışmaya izin vermez. Barındırılan aramayı etkinleştirmek bu araç izinlerini genişletmez.
+
 Otomatik tavsiyenin alıntılanmış JSON içeriği ayrı bir user rolü danışma mesajında taşınır. Developer mesajında yalnızca sabit çalışma zamanı yönergesi kalır; danışmanın ürettiği metin developer/system içeriğine girmez. OpenAI Chat ve Anthropic bunu sahte araç çağrısı olmadan destekler. JSON alıntılama yapısal kaçışı ve alan sahteciliğini önler; doğal dildeki saldırılara karşı kusursuz yalıtım sağlamaz. Özel bir protokol tavsiyeyi kullanıcı isteğinden daha açık ayırabilir. Her istekte en fazla üç danışma ve dört worker sürdürmesi vardır. Danışma sınırında advisor aracı kaldırılır; yinelenen çağrıya sınır sonucu ile yalnızca bir son sürdürme verilir. Sonraki çağrı yeni gönderim yapılmadan 502 advisor_continuation_limit ile biter. Boş tamamlama tekrarları da aynı sınırı paylaşır.
 
 Bastırma, danışmanın dizelerini okumaz. Otomatik yineleme ayıklama sunucunun defterine aittir. Taşıma metnini kopyalayan bir developer iletisi de preflight'ı bastırmaz.
