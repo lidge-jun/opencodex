@@ -155,10 +155,12 @@ export function hasCodexPoolProvider(config: OcxConfig): boolean {
 }
 
 /**
- * Signature of one pool account's presentation state. Aggregation reads `updatedAt` only to
- * decide whether a reading is fresh, so the signature carries that verdict instead of the raw
- * timestamp: every proxied Codex response restamps the observation, and a timestamp in the key
- * would stop the report cache from ever committing while traffic flows (#7956).
+ * Signature of one pool account's presentation state. Every proxied Codex response restamps the
+ * observation, so a raw `updatedAt` in the key stopped the report cache from ever committing
+ * while traffic flowed (#7956). The key carries the fresh/stale verdict aggregation derives
+ * from it instead; value changes and freshness transitions still miss the cache. Timestamps the
+ * report displays (window `updatedAt`, `shortObservedAt`) can therefore lag a restamp by up
+ * to the report cache TTL.
  */
 function quotaSignatureValue(quota: CodexCapacityQuota | null, now: number): unknown {
   if (!quota) return null;

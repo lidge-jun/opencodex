@@ -2468,6 +2468,43 @@ describe("fetchProviderQuotaReports", () => {
     expect(refreshed.reports.find(report => report.provider === "anthropic")?.quota.fiveHourPercent).toBe(41);
   });
 
+  test("a restamp during an outstanding probe still lets that probe commit (#7956)", async () => {
+    await saveCredential("anthropic", { access: "synthetic-claude-access", refresh: "synthetic-claude-refresh", expires: Date.now() + 3600_000 });
+    saveCodexAccountCredential("added", {
+      accessToken: "added-access", refreshToken: "added-refresh",
+      expiresAt: Date.now() + 3600_000, chatgptAccountId: "added-chatgpt-id",
+    });
+    const config = testConfig();
+    config.providers = { openai: config.providers.openai, anthropic: config.providers.anthropic };
+    config.codexAccounts = [{ id: "added", email: "a@example.test", plan: "pro", isMain: false }];
+    let anthropicCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let probing!: () => void;
+    const started = new Promise<void>(resolve => { probing = resolve; });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.anthropic.com/api/oauth/usage") {
+        anthropicCalls += 1;
+        probing();
+        await gate;
+        return Response.json({ five_hour: { utilization: 41, resets_at: new Date(Date.now() + 3600_000).toISOString() } });
+      }
+      const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
+      return Response.json({ plan_type: added ? "pro" : "plus",
+        rate_limit: { secondary_window: { used_percent: added ? 30 : 11, reset_at: 1_999_000_000 } } });
+    }) as typeof fetch;
+
+    const first = fetchProviderQuotaReports(config, true);
+    await started;
+    await Bun.sleep(5);
+    updateAccountQuota("added", 30, 1_999_000_000);
+    release();
+    await first;
+    const next = await fetchProviderQuotaReports(config);
+    expect(anthropicCalls).toBe(1);
+    expect(next.reports.map(report => report.provider).sort()).toEqual(["anthropic", "openai"]);
+  });
+
   test("ordinary fetch reflects runtime reauthentication state", async () => {
     saveCodexAccountCredential("added", {
       accessToken: "added-access", refreshToken: "added-refresh",
