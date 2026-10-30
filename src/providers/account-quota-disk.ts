@@ -44,6 +44,9 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
 /** Bumped by cancellation so a fired callback still waiting for ACL admission writes nothing. */
 let persistGeneration = 0;
+let persistWrite: Promise<void> = Promise.resolve();
+/** Test seam: wait for a fired persistence callback's admitted write (as settleQuotaPersistenceForTests). */
+export function settleAccountQuotaPersistForTests(): Promise<void> { return persistWrite; }
 
 /** Read the snapshot. Returns an empty map for a missing, corrupt or stale file. */
 export function readPersistedAccountQuotas(now = Date.now()): Map<string, ProviderQuota> {
@@ -111,7 +114,7 @@ export function schedulePersistAccountQuotas(
     // skips this best-effort write.
     const dir = getConfigDir();
     const generation = persistGeneration;
-    void withConfigDirHardeningSettled(dir, () => {
+    persistWrite = withConfigDirHardeningSettled(dir, () => {
       if (generation !== persistGeneration) return;
       const out: Record<string, ProviderQuota> = {};
       for (const [key, quota] of rows()) out[key] = quota;
