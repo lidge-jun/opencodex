@@ -78,6 +78,28 @@ test("a root change during active discovery cannot start sibling probes in the n
   expect(antigravityAccountRosterModelIds(provider, "b")).toBeUndefined();
 });
 
+test("revoking discovery authority stops later sibling bearer sends", async () => {
+  const { cfg } = setup();
+  let releaseSibling!: () => void;
+  let siblingSent!: () => void;
+  const atSibling = new Promise<void>(resolve => { siblingSent = resolve; });
+  const held = new Promise<void>(resolve => { releaseSibling = resolve; });
+  const sends: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    const auth = new Headers(init?.headers).get("authorization")!;
+    sends.push(auth);
+    if (auth.endsWith("-b")) { siblingSent(); await held; }
+    return Response.json(payload("model-before-revocation"));
+  }) as typeof fetch;
+  const pending = gatherRoutedModels(cfg);
+  await atSibling;
+  clearModelCache(provider);
+  releaseSibling();
+  await pending;
+  expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
+  expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
+});
+
 test("active discovery held by a sibling cannot erase a newer inference denial", async () => {
   const { cfg } = setup();
   let releaseSibling!: () => void;

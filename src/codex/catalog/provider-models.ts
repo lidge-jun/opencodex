@@ -795,7 +795,7 @@ export async function fetchProviderModelsWithAuth(
       if (getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
       const admitSiblings = resolveAuth.kind === "refreshing" && name === "google-antigravity"
         && prov.authMode === "oauth" && auth.oauthAccountId
-        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir)
+        ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir, isCurrentCacheGeneration)
         : () => [];
       if (!isCurrentCacheGeneration() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
       const activeAccount = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
