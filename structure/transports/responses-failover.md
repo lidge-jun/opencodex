@@ -262,7 +262,7 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
-For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
+Compact HTTP captures caller policy before capacity/body waits; native retries and routed Responses/JEV handoffs retain it under the [Advisor admission contract](../advisor.md#cross-provider-consultation). For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
 preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
 Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
 with wire `tool_choice: none` when server tools exist, preventing upstream execution.

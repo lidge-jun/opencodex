@@ -36,6 +36,7 @@ both `--adapter` and `--base-url`.
 | `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
 | `presets` | `--json` | List dashboard provider presets. |
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Preview, selectively apply, or restore keyless provider entries from a CC-Switch SQLite database (`cc-switch.db`) or legacy JSON file. |
 
 ```bash
 ocx provider list --json
@@ -219,6 +220,27 @@ be stdin. Each input has a 4 MiB limit and a 30-second read deadline. The combin
 serialized `{baseline,next}` request must also fit 4 MiB. Interactive stdin,
 special files, conflicting flags, invalid fields and unconfirmed removals are
 refused before mutation with exit 2. Input errors never echo the submitted values.
+
+### Keyless CC-Switch provider import
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Start the proxy in another terminal (or run ocx ensure), then add credentials:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Separate rollback path (stop the proxy first; removes unedited keyless entries only):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` projects values **only** from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models) from a plain regular CC-Switch SQLite database or legacy JSON file. Source and embedded-config bytes are read transiently to scan the input, while secret fields, free-text display names, and TOML comments are skipped at the byte level, never decoded into strings, written, or logged, and transient byte buffers are zeroed in `finally`. Narrow base-URL path rules (`http(s)://host[:port]` with an empty path or 1–4 lowercase `[a-z0-9._-]` API path segments such as `/v1`, `/api/v1`, or `/compatible-mode/v1`) and identifier/model syntax checks act as defense in depth and reject non-conforming values without echoing them. Source files are opened once with `O_NOFOLLOW | O_NONBLOCK` descriptor verification and deserialized read-only in memory for SQLite without temporary files; SQLite files with multiple hard links (`nlink > 1`) are refused so sidecar checks cannot be bypassed via an alias path, and if a sibling `-wal` or `-journal` file is non-empty, import refuses and asks you to close CC-Switch (or checkpoint the database) and retry. Only import from a trusted local CC-Switch source, and verify every printed ID, model, and `baseUrl` before adding credentials:
+
+- **Preview (default):** requires `--source <FILE>`, writes nothing, and reports discovered, eligible, conflicting, and invalid entries.
+- **Apply (`--apply`):** requires `--source <FILE>` and a stopped proxy (`ocx stop`), and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Even without a prior preview, `--apply` prints every imported provider ID, default model, and destination URL before writing keyless provider entries and recording a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` (`stdout` in text mode, `stderr` in `--json` mode); a second apply is refused while an active journal exists. Verify the printed entries, start the proxy (`ocx start` in another terminal or `ocx ensure`), and add credentials with `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
+- **Restore (`--restore`):** separate rollback path (not a continuation of adding credentials) that requires a stopped proxy (`ocx stop`), is refused on a Remote Link Child, and takes no `--source`, `--provider`, or `--allow-private-network`. It inspects `auth.json` read-only at the byte level (failing closed if unreadable or malformed) and removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
 
 ## Authentication
 

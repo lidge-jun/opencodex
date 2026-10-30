@@ -233,6 +233,16 @@ Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 �
 
 다운로드되는 `cline-config-bundle.json`에는 두 네이티브 문서 구성 요소가 있습니다. `providers.json`용 `settings`와 `models.json`용 `catalog`입니다. 번들 자체가 Cline 설정 파일은 아닙니다. 저널을 남기는 병합과 롤백에는 연동 명령을 권장합니다. 생성된 연동은 원격 수용 연결을 지원하지 않으며 인증이 없는 루프백 접근이 필요합니다.
 
+## omo (Pi 기반) Responses 방언
+
+관리되는 Pi 기반 omo 블록은 기본으로 Chat 방언(`api: "openai-completions"`)을 씁니다. Chat은 도구 호출 사이에서 이전 단계의 추론을 버리므로 긴 omo 도구 루프에서 차이가 납니다. 연결과 모든 갱신에서 Responses 방언을 쓰게 하려면 opencodex 설정 파일에만 넣을 수 있는 다음 키를 추가하세요.
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+수정한 설정을 읽도록 프록시를 다시 시작한 뒤(서비스로 설치했다면 `ocx service restart`, 아니면 `ocx stop` 다음 `ocx start`), 대시보드의 **Connect → omo**에서 omo 통합을 갱신하세요. 갱신만 하면 실행 중인 프록시의 설정을 쓰므로 설정 파일을 다시 읽지 않습니다. 이 설정은 omo에만 적용되며 Pi, Gentle Shell 등 다른 Pi 형식 클라이언트는 `openai-completions`를 유지합니다. Chat으로 되돌리려면 키를 지우고 같은 방법으로 다시 시작한 뒤 **Connect → omo**를 갱신하세요. 알 수 없는 값은 무시됩니다. opencodex는 여전히 `~/.omo/agent/models.json`의 `providers.opencodex`만 관리하며 다른 프로바이더는 그대로 둡니다.
+
 ## omo (Codex / LazyCodex) 역할별 추론 강도
 
 LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$CODEX_HOME/agents/*.toml`에 있는 역할마다 모델과 추론 강도를 고른 뒤 **저장**을 누를 수 있습니다. 모델 고정이 없는 역할의 행은 강도만 저장할 수 있고, 그 역할은 계속 모델을 상속합니다. opencodex는 그 역할 파일의 루트 `model`과 `model_reasoning_effort` 키만 고치고, 없는 고정값은 파일 위쪽에 추가합니다. 역할의 지침, 다른 주석과 다른 키는 그대로 둡니다. 모델만 바꿔 저장하면 `effort`를 보내지 않으므로 두 파일의 추론 강도가 그대로 유지됩니다. 단계를 고르면 역할 파일의 `model_reasoning_effort`를 추가하거나 바꾸고, LazyCodex가 그 단계를 지원하면 `~/.omo/omo.jsonc`의 `[codex].agents.<role>.reasoning`에도 씁니다(`ultra`는 역할 파일에만 남고, 이전 `reasoning`은 제거합니다). 명령줄에서는 `ocx agent roles set <role> <model> --effort <level>`로 같은 작업을 합니다.
