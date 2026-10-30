@@ -169,12 +169,15 @@ test("late D1 publication cannot roll back D2 before a delayed inference denial"
 });
 
 for (const timing of ["before-send", "before-publication"] as const) {
-  for (const mutation of ["paused", "removed", "reauth", "replaced", "root"] as const) {
+  for (const mutation of ["paused", "removed", "reauth", "replaced", "root", "authority"] as const) {
     test(`sibling ${mutation} ${timing} contributes no stale discovery`, async () => {
       const { cfg, store, home } = setup();
       store[provider].accounts.splice(2);
       writeFileSync(join(home, "auth.json"), JSON.stringify(store));
+      let mutationApplied = false;
       const mutate = () => {
+        mutationApplied = true;
+        if (mutation === "authority") { clearModelCache(provider); return; }
         const b = store[provider].accounts[1]!;
         if (mutation === "removed") store[provider].accounts.splice(1);
         if (mutation === "paused") Object.assign(b, { paused: true });
@@ -199,6 +202,7 @@ for (const timing of ["before-send", "before-publication"] as const) {
       });
       try {
         const rows = await gatherRoutedModels(cfg);
+        expect(mutationApplied).toBe(true);
         expect(rows.some(row => row.id === "model-sibling")).toBe(false);
         expect(antigravityAccountRosterModelIds(provider, "b")).toBeUndefined();
         if (timing === "before-send") expect(sends).toEqual(["Bearer synthetic-a"]);
