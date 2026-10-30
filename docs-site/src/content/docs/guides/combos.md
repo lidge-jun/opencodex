@@ -152,6 +152,10 @@ native routing and catalog identity on the next sync.
 
 ### Failover: ordered primary and backups
 
+For Responses requests that require a tool, Meta Responses targets are skipped before sending
+because Meta does not support mandatory `tool_choice`. An eligible later target receives the
+original choice. If every target is incompatible for this reason, the combo reports the constraint.
+
 `failover` selects the first eligible target in configuration order. A target is eligible when its
 provider exists, is enabled, is not cooling down, and can handle any special request constraint.
 Weights and `stickyLimit` do not affect this strategy.

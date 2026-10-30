@@ -199,7 +199,7 @@ function freshNotice(scenario: NoticeScenario = {}) {
           maybeNoticeVersionSkew: (cmd,argv) => { events.push("hook"); return actual(cmd,argv,io); },
         }));
         mock.module(${JSON.stringify(repoPath("src", "cli", "codex-shim-autorestore.ts"))}, () => ({
-          maybeAutoRestoreCodexShim: () => events.push("shim"),
+          maybeAutoRestoreCodexShimAsync: async () => { events.push("shim"); },
         }));
         const { runCli } = await import(${JSON.stringify(repoPath("src", "cli", "root.ts"))});
         await runCli(args); events.push("dispatch");
