@@ -82,11 +82,44 @@ describe("Claude stable replay", () => {
     expect(projected.some(block => block.text.includes("oldold"))).toBe(false);
   });
 
-  test("zero cap, empty conversation and unsupported images have explicit behavior", () => {
+  test("zero cap, empty conversation and unsupported image references have explicit behavior", () => {
     expect(blocks(buildStableClaudeConversationInput(request([])))).toEqual([{ type: "text", text: "" }]);
     expect(blocks(buildStableClaudeConversationInput(request([user("old"), user("now")]), { maxHistoryChars: 0 })).at(-1)!.text).toBe("USER:\nnow");
     expect(blocks(buildStableClaudeConversationInput(request([user("old"), user("")]))).at(-1)!.text).toBe("USER:\n");
-    expect(() => buildStableClaudeConversationInput(request([{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }]))).toThrow("text-only");
+    expect(() => buildStableClaudeConversationInput(request([{ role: "user", content: [{ type: "image", imageUrl: "file:///not-forwarded.png" }], timestamp: 0 }]))).toThrow("unsupported image reference");
+  });
+
+  test("native images retain message order and byte-stable history prefixes", () => {
+    const image = (data: string) => ({ type: "image" as const, imageUrl: `data:image/png;base64,${data}` });
+    const first = request([{ role: "user", content: [{ type: "text", text: "First image" }, image("QUFB"), image("QkJC")], timestamp: 0 }]);
+    const before = blocks(buildStableClaudeConversationInput(first));
+    expect(before).toEqual([
+      { type: "text", text: "USER:\nFirst image\n[image]\n[image]" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "QUFB" } },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "QkJC" } },
+    ] as any);
+    const after = request([...first.context.messages, assistant("Seen."),
+      { role: "user", content: [{ type: "text", text: "Compare" }, image("Q0ND")], timestamp: 0 }]);
+    const projected = blocks(buildStableClaudeConversationInput(after));
+    assertPrefix(before, projected);
+    expect(projected.at(-1)).toMatchObject({ type: "image", source: { data: "Q0ND" } });
+  });
+
+  test("tool screenshot bytes stay with their call result when replayed", () => {
+    const call: OcxMessage = { role: "assistant", content: [{ type: "toolCall", id: "shot_1", name: "screenshot", arguments: {} }], timestamp: 0 };
+    const result: OcxMessage = { role: "toolResult", toolCallId: "shot_1", toolName: "screenshot", isError: false,
+      content: [{ type: "text", text: "Captured" }, { type: "image", imageUrl: "https://example.test/shot.png" }], timestamp: 0 };
+    const original = request([user("Inspect"), call, result]);
+    const projected = blocks(buildStableClaudeConversationInput(original));
+    expect(projected.at(-2)!.text).toContain("TOOL RESULT (call_id: shot_1)");
+    expect(projected.at(-1)).toEqual({ type: "image", source: { type: "url", url: "https://example.test/shot.png" } } as any);
+    assertPrefix(projected, blocks(buildStableClaudeConversationInput(request([...original.context.messages, assistant("Seen"), user("Continue")]))));
+  });
+
+  test("a whole-message checkpoint also omits that message's image bytes", () => {
+    const old: OcxMessage = { role: "user", content: [{ type: "text", text: "old".repeat(200) }, { type: "image", imageUrl: "data:image/png;base64,QUFB" }], timestamp: 0 };
+    const projected = blocks(buildStableClaudeConversationInput(request([old, user("current")]), { maxHistoryChars: 0 }));
+    expect(projected).toEqual([{ type: "text", text: "[Earlier conversation history omitted at a whole-message checkpoint.]" }, { type: "text", text: "USER:\ncurrent" }]);
   });
 
   test("history trimming omits orphan results and retains the current tool's originating call", () => {

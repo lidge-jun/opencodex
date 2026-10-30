@@ -1641,15 +1641,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // request entirely (src/codex/catalog/provider-models.ts).
     liveModels: false,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    // Text-only for v1, not the image modality the Messages API rows publish. The CLI parses an
-    // image frame (verified against 2.1.270), but a headless turn has no verified contract that the
-    // harness hands those bytes to the model, and advertising a modality the route cannot honour
-    // makes a route selection pick this row for a picture it then answers blind. The adapter refuses
-    // direct image input for the same reason; the vision sidecar still captions images into text.
-    noVisionModels: [...ANTHROPIC_MODELS],
+    // The CLI receives native image blocks through Claude's stable conversation replay.
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
   },
 ];

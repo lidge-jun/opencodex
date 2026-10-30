@@ -160,6 +160,22 @@ describe("stale vision classification migration", () => {
 });
 
 describe("stale whole-list noVisionModels seed (#6906)", () => {
+  test("repairs Claude's released seed while preserving edited lists and per-model choices", () => {
+    const seed = STALE_NO_VISION_SEEDS.find(entry => entry.provider === "claude-cli")!.seeds[0]!;
+    const row = (list: readonly string[]) => ({ adapter: "claude-cli", baseUrl: "https://api.anthropic.com", noVisionModels: [...list],
+      modelCapabilities: { "claude-fable-5-1": { inputModalities: ["text" as const] } } });
+    const saved = row(seed);
+    const config = { providers: { "claude-cli": saved } } as unknown as OcxConfig;
+    expect(projectStaleNoVisionSeeds(config).changed).toBe(true);
+    expect(saved.noVisionModels).toBeUndefined();
+    expect(requiresVisionPreprocessing(config, saved, "claude-fable-5-1", "claude-cli")).toBe(true);
+    for (const list of [seed.slice(1), [...seed].reverse(), []]) {
+      const edited = row(list);
+      expect(projectStaleNoVisionSeeds({ providers: { "claude-cli": edited } } as unknown as OcxConfig).changed).toBe(false);
+      expect(edited.noVisionModels).toEqual(list);
+    }
+  });
+
   const QODER_SEED = ["Qwen3.8-Max", "Qwen3.7-Max", "Qwen3.7-Plus", "Kimi-K3", "Kimi-K2.7-Code", "GLM-5.3", "GLM-5.2"];
   const qoderRow = (noVisionModels: string[] | undefined, overrides: Record<string, unknown> = {}) => ({
     adapter: "qoder",

@@ -1489,11 +1489,13 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
-- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
-  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
-  being silently dropped and answered blind. With the
-  vision sidecar on the request path, images are captioned into text before they reach the row.
+- **Input media:** the row advertises text and image input. The stable replay sends native image
+  blocks directly through the official CLI, following the labelled message they belong to. This
+  includes multiple attachments, retained historical images and images returned by client tools.
+  Unsupported image references fail explicitly; omitted history also omits its images. A vision
+  sidecar is not needed. An untouched v2.94.0 text-only roster is migrated; edited lists and explicit
+  per-model capability overrides remain authoritative. Live verification used Claude Code 2.1.312
+  and Fable 5.1; other model/CLI combinations still depend on their upstream image support.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
   feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus

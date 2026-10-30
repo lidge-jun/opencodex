@@ -31,6 +31,13 @@ export interface StaleNoVisionSeedProjection {
 
 export const STALE_NO_VISION_SEEDS: readonly StaleNoVisionSeed[] = [
   {
+    provider: "claude-cli",
+    seeds: [
+      // Released v2.94.0's complete text-only roster; preserve operator-edited lists.
+      ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"],
+    ],
+  },
+  {
     provider: "qoder",
     seeds: [
       // 2026-09-03 (Qoder Global PAT provider) until the DeepSeek V4.1 transition (#4282).
