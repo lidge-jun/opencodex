@@ -413,7 +413,7 @@ retain their synchronous leaf contracts; the nonblocking guarantee covers recove
 machine API, restart and Remote Workspace callers use the async
 entry points. Runtime publication rechecks selection inputs, cache epoch, cancellation and caller
 currentness after recovery. Codex feature-setting callers acquire admission before their synchronous
-transition; management keeps the lease across config-root hardening, then rechecks its mode plan and
+transition; management also holds it across single-feature command preparation, config-lock waits and child execution, and across config-root hardening, then rechecks its mode plan and
 commits in the existing no-await callback. Refusal precedes combined setting writes and returns a
 retryable `codex_cli_selection_busy` response. Diagnostics classify a held async parent by its exact
 buffer and owner, so it cannot appear as a retained Worker. Portable gate/caller regressions and

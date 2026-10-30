@@ -64,6 +64,8 @@ kaldırılır), bu da Codex'in bir Varsayılan mod oturumunu duraklatmasına ve
 akışta geliştirilme aşamasındadır ve yalnızca yeni oturumlara uygulanır; yüklü
 Codex derlemesi bayrağı henüz tanımadığında anahtar yüksek sesle başarısız olur.
 
+Codex CLI güncellemesi kurulumu kullanırken özellik komutu çalıştırılmadan önce `codex_cli_selection_busy` ve `retryable: true` ile HTTP 503 döner. Güncelleme bitince yeniden deneyin; yapılandırma yazma hataları 502 döndürmeye devam eder.
+
 ## Kadro ve rehberlik
 
 Geçerli v2 kadrosu, yapılandırılmış, seçicide görünen, önceliğe göre sıralanmış,

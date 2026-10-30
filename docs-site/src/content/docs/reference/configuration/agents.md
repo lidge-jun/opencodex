@@ -115,6 +115,8 @@ Default-mode session and ask you questions with the `request_user_input` tool. T
 flag is under development upstream and only applies to new sessions; the toggle fails
 loudly when the installed Codex build does not know the flag yet.
 
+While a Codex CLI update owns the installation, the toggle returns retryable HTTP 503 (`codex_cli_selection_busy`) before running the feature command. Retry after the update finishes; config-write failures still return 502.
+
 ## Roster and guidance
 
 The effective v2 roster is the configured, picker-visible, priority-sorted first five models that
