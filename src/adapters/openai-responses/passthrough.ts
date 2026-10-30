@@ -3,7 +3,7 @@ import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
 import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
-import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
+import { isOpenCodeGoResponsesUrl, isXaiResponsesUrl, promoteResponsesAdditionalTools } from "../opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { Buffer } from "node:buffer";
@@ -48,6 +48,7 @@ import { usageFromResponsesPayload } from "./usage";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
 import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
 import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
+import { tagHistoricalInputItems } from "../../responses/item-provenance";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -175,8 +176,22 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> | undefined;
       let convertedMuseToolNameAliases: Map<string, string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let outBody = stripPreviousResponseId(
-        parsed._rawBody,
+      const replayPrefixLen = parsed._replayPrefixLen;
+      let outBody = parsed._rawBody;
+      // Clone and tag before any input rewrite can remove, replace, or reorder replay items.
+      if (
+        typeof replayPrefixLen === "number"
+        && replayPrefixLen > 0
+        && isPlainObject(outBody)
+        && Array.isArray(outBody.input)
+      ) {
+        outBody = {
+          ...outBody,
+          input: tagHistoricalInputItems(outBody.input, replayPrefixLen),
+        };
+      }
+      outBody = stripPreviousResponseId(
+        outBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
       if (isMetaAiResponsesDestination(url)) {
@@ -343,9 +358,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
-        // xAI and Meta answer 400 for `output.encrypted_content` instead of ignoring it;
+        // xAI, Meta and Azure answer 400 for `output.encrypted_content` instead of ignoring it;
         // Codex Desktop asks for it on every turn (#7878).
-        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url)) {
+        // Azure also rejects this exact include entry, including on plain Responses routes.
+        const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
+          || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
+        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
@@ -365,8 +383,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
-      if (!forward) {
-        outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
+      if (
+        provider.promoteAdditionalTools === true
+        || (!forward && (
+          isOpenCodeGoResponsesUrl(url)
+          || isXaiResponsesDestination(provider)
+          || isXaiResponsesUrl(url)
+        ))
+      ) {
+        outBody = promoteResponsesAdditionalTools(outBody);
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
       // neither forward auth nor native v1 endpoint support implies trigger support. The

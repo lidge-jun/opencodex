@@ -189,9 +189,9 @@ API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAu
 
 ### 프로바이더 저장이 유지하는 것
 
-기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
+기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 열한 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`.
 
-| 저장 | 열 가지 설정 | 저장된 `apiKeyPool` |
+| 저장 | 열한 가지 설정 | 저장된 `apiKeyPool` |
 | --- | --- | --- |
 | 같은 목적지, 필드 생략 | 저장된 값 유지(명시적인 `[]`나 `false` 포함) | 유지 |
 | 새 목적지, 필드 생략 | 유지하지 않음. 새 목적지의 레지스트리 기본값이 적용될 수 있음 | 유지하지 않음 |

@@ -823,6 +823,11 @@ appended to the id instead.
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
 **Auth:** `key` via the `api-key` header (not Bearer).
 
+Azure requests omit the unsupported output.encrypted_content entry from include,
+while retaining reasoning.encrypted_content and all other entries. This also applies
+to openai-responses configurations targeting a resource under .openai.azure.com.
+When no entries remain, include is omitted.
+
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
