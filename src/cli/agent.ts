@@ -348,19 +348,25 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
   const skipped: string[] = [];
   const omoJsoncNotWritten: Array<{ role: string; status: string }> = [];
   if (apply) {
+    let batch: string | undefined;
     for (const proposal of proposals) {
       if (proposal.status !== "proposed" || !proposal.proposedModel) continue;
       if (proposalAlreadySet(proposal)) {
         skipped.push(proposal.role);
         continue;
       }
-      const body = { model: proposal.proposedModel, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) };
-      const written = await runtimeRequest<{ omoJsonc?: { status?: string } } | null>(
+      const body = {
+        model: proposal.proposedModel,
+        ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}),
+        ...(batch ? { batch } : {}),
+      };
+      const written = await runtimeRequest<{ batch?: string; omoJsonc?: { status?: string } } | null>(
         `/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`,
         { method: "PUT", body: JSON.stringify(body) },
         deps,
       );
-      applied.push({ role: proposal.role, ...body });
+      batch = written?.batch ?? batch;
+      applied.push({ role: proposal.role, model: body.model, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) });
       const omoStatus = written?.omoJsonc?.status;
       if (omoStatus && OMO_JSONC_NOT_WRITTEN.has(omoStatus)) omoJsoncNotWritten.push({ role: proposal.role, status: omoStatus });
     }
