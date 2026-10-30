@@ -160,6 +160,33 @@ describe("routed Responses custom-tool stream consistency", () => {
   });
 
   test.each([
+    ["LF", "\n", ""], ["LF decorated", "\n", " ***"],
+    ["CRLF", "\r\n", ""], ["CRLF decorated", "\r\n", " ***"],
+  ])("preserves a fragmented long patch through the routed tail: %s", (_label, newline, decoration) => {
+    const opening = `*** Begin Patch${newline}*** Add File: long.txt${newline}`;
+    const body = `+${"x".repeat(65_536)}${newline}+last line${newline}`;
+    const closing = `*** End Patch${decoration}${newline}`;
+    const fragments = [...Array.from(opening), ...body.match(/[\s\S]{1,37}/g)!, ...Array.from(closing)];
+    const raw = opening + body + closing;
+    const normalized = `${opening}${body}*** End Patch${newline}`;
+    const result = restoreExecStream(raw, fragments, "apply_patch");
+    // Every marker byte is a separate delta after the rolling tail has wrapped repeatedly.
+    const closingStart = fragments.length - closing.length;
+    expect(result.previews[closingStart - 1]).toBe(opening + body);
+    for (const preview of result.previews.slice(closingStart)) {
+      expect(normalized.startsWith(preview)).toBe(true);
+    }
+    expect(result.preview).toBe(decoration ? normalized.slice(0, -newline.length) : normalized);
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
+    expect(result.identity).toEqual([
+      "ctc_apply_patch", "ctc_apply_patch", "ctc_apply_patch", "call_apply_patch", "apply_patch",
+      "ctc_apply_patch", "call_apply_patch", "apply_patch",
+    ]);
+  });
+
+  test.each([
     ["LF operation", "*** Begin Patch\n*** Update File: a.txt\n+one\n*** End Patch"],
     ["CRLF operation", "*** Begin Patch\r\n*** Add File: a.txt\r\n+one\r\n*** End Patch\r\n"],
     ["no operation", "*** Begin Patch\ncontext only\n*** End Patch"],
