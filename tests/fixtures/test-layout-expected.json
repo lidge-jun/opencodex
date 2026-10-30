@@ -822,6 +822,7 @@
   "docs-gjc-reasoning-export.test.ts": "ci-workflows", "docs-provider-billing-claims.test.ts": "ci-workflows",
   "docs-provider-discovery-limits.test.ts": "ci-workflows", "docs-provider-preset-counts.test.ts": "ci-workflows",
   "docs-readme-memory-inventory.test.ts": "ci-workflows", "docs-readme-translation-parity.test.ts": "ci-workflows",
+  "docs-spanish-localization.test.ts": "ci-workflows",
   "docs-remote-hub-claims.test.ts": "ci-workflows", "doctor-codex-envkey-readiness.test.ts": "service",
   "doctor-oauth.test.ts": "service", "doctor-provider-apikey.test.ts": "service",
   "doctor-service-memory-contract.test.ts": "service", "doctor.test.ts": "codex-integration",

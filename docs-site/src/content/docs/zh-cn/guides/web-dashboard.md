@@ -17,6 +17,11 @@ ocx gui
 
 ```bash
 ocx start
+```
+
+保持代理在该终端中运行。在第二个终端中启动 GUI 开发服务器：
+
+```bash
 bun run dev:gui
 ```
 

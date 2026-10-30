@@ -12,7 +12,9 @@ Remote Hub 把供應商憑證、模型目錄與用量記錄保存在一台主機
 `standalone` 在同一台機器上執行全部功能；`hub` 保存供應商金鑰與用量；`client` 只保存連線狀態與專屬資料金鑰。
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
 ocx connect status
 ocx sync
 ```
@@ -64,6 +66,8 @@ tailscale serve status
 ```
 
 `/healthz` 只證明程序仍在執行。還必須驗證 `/readyz`、已驗證的 `GET /v1/catalog` 與一次真實模型回應。管理連接埠只能監聽 `127.0.0.1`。自管 TLS proxy 應使用 `tailscale cert hub-name.tailnet-name.ts.net`，並只代理到 `127.0.0.1:10101`。不要偽造 `Tailscale-User-*`；沒有可信身分時請使用一次性配對。
+
+<a id="giving-the-data-listener-tls"></a>
 
 ### 為資料監聽器提供 TLS
 

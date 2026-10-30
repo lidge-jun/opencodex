@@ -60,9 +60,11 @@ Registry 供應商可依名稱新增。例如，以下新增 Anthropic API-key �
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+請保留單引號，以便原樣傳遞環境變數參照，而不是把金鑰值放入程序引數或儲存到設定中。啟動代理前，請在其啟動環境中設定 `ANTHROPIC_API_KEY`，並為模型同步等會解析憑證的 CLI 程序提供該變數。稍後在另一終端中 export 不會更新執行中的代理。背景服務需要設定啟動環境並重新啟動；安裝服務不會自動保留終端中的任意供應商變數。
 
 `ocx provider add` 寫入本機設定。若已有即時代理在執行且你想立即將模型同步到 Codex，請加上 `--sync`；否則稍後執行 `ocx sync`。不在 registry 中的自訂供應商需要同時提供 `--adapter` 與 `--base-url`。
 

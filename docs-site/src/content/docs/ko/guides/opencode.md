@@ -105,9 +105,11 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 루프백이 아닌 예시:
 
+원격 클라이언트에서 수동으로 설정하는 예시입니다. 먼저 TLS 프런트엔드를 구성하고 해당 HTTPS URL을 사용하세요. OpenCodex는 TLS를 종료하지 않으며 `ocx opencode`가 이 URL을 자동으로 찾지도 않습니다. LAN에서도 평문 HTTP는 전송 중 자격 증명을 노출합니다. 대신 프록시를 루프백에 바인딩하고 로컬 SSH 터널을 사용할 수 있습니다. [데이터 리스너 TLS](/ko/guides/remote-hub/#giving-the-data-listener-tls)를 참고하세요.
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

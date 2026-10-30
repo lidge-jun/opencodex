@@ -21,6 +21,11 @@ you can run the GUI dev server separately against a running proxy:
 
 ```bash
 ocx start
+```
+
+Keep the proxy running in that terminal. In a second terminal, start the GUI dev server:
+
+```bash
 bun run dev:gui
 ```
 
@@ -131,7 +136,7 @@ is visible) and never forces an upstream refresh.
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
+| **Subagents** | Set the first five `spawn_agent` priorities through `subagentModels`, using bare native or namespaced routed models. This is not an allowlist: unused positions may be filled from visible catalog rows. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. The page distinguishes a catalog saved on the hub, a catalog fetched by this client, and activation in a running client. A fetch timestamp does not prove it includes the latest hub save, and runtime activation is shown as unverified. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends. The Usage page's Models table also breaks each model down into input tokens, output tokens, cache hits, cache writes, and cache hit rate; a dash means cache telemetry for that metric is unavailable. Or enable opt-in provider transport and usage-extraction diagnostics. |
@@ -217,20 +222,23 @@ upgrade and restart that proxy before retrying. Resetting a manual model price a
 model, preserving other rates saved independently.
 The **Usage** summary and Models/Providers tables show end-to-end output throughput from usage history for the selected range and filters: summed output tokens divided by summed wall-clock seconds, not an average of individual rates. The sample count is measured attempts (or requests for legacy rows without attempts); samples lacking positive finite output tokens or duration are excluded. An em dash means no sample qualified or the server returned an unusable rate. This includes pre-decode waiting and is not estimated decode speed.
 
-The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
-without a matching price or usable usage are counted as excluded beside that amount when the proxy
-reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
-is not priced, and one excluded part excludes the whole request from that row's priced count. A
-leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
-nothing and does not; a client cancellation (499), or a leg whose response began or ended without
-a status but reported no usage, may have been billed, so it does. A refusal followed by a measured
-successful send contributes that send's cost to the summary even when the aggregate usage status
-is `unreported`. A row with only excluded requests shows an em dash with that count
-instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
-An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
-coverage stays distinct from an all-excluded row and from a confirmed zero estimate.
-These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
-may apply instead.
+The **Usage** Models and Providers tables show the estimated priced portion for each row.
+Requests without a matching price or usable usage count as excluded beside that amount when
+the proxy reports pricing coverage fields. Partly measured usage (`unreported` or `unsupported`)
+is not priced; one potentially billable, unpriceable part excludes the whole request from that
+row's priced count. A usage-less leg that never reached an upstream, or was refused with an
+HTTP error before any output and without an aborted stream, is a known zero: it adds no cost
+and does not exclude another measured part of the same request. A client cancellation (499),
+or a leg whose response began or ended without a status and reported no usage, may have been
+billed; its unknown cost does exclude the request from the priced count. A refusal followed
+by a measured successful send contributes that send's cost to the summary even when the
+aggregate usage status is `unreported`. In the overall summary, requests containing only known-zero
+refusals remain unmetered, rather than becoming confirmed zero-dollar estimates. A row with only excluded
+requests shows an em dash with that count instead of a zero-dollar estimate. A displayed
+zero-dollar value is a confirmed priced estimate. An older proxy that reports no coverage
+fields keeps a bare em dash with no count, distinguishing missing coverage, an all-excluded
+row, and a confirmed zero estimate. These are price-list estimates, not billing receipts or
+evidence of an actual charge; subscription usage or provider credits may apply instead.
 
 Provider model rows may include **unresolved requested model usage**: the saved route sent the
 requested name unchanged to the default provider. These tokens belong to that serving provider,
@@ -424,7 +432,9 @@ allowed to answer for you:
   similar). The one-time marker stays unwritten, so the real prompt still shows up on your
   next hand-typed run. The agent is told to ask you instead — and to ask as a plain Yes/No
   choice you have to answer, not as a soft aside it can slip past you. If you never get
-  around to answering, the agent is told to re-ask rather than treat your silence as a no.
+  around to answering, silence remains deferred: the agent must not repeat the question in
+  later replies or sessions. A later version may re-arm the CLI deferral under the timing
+  policy in `AGENTS_INSTALL.md`.
 - `POST /api/github/star` answers `403` with `code: "agent_consent_required"` when the proxy
   runs under an agent session and the request has no dashboard browser session. Possessing
   the admin token is not consent: an agent on your machine can read that file.

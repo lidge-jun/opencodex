@@ -110,6 +110,11 @@ draining producers/reaps and restoring or removing a home. The helper does not r
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
 The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
+The CC-Switch fixtures in `tests/providers/cc-switch-import.test.ts` close connections with
+uncached prepared statements using `Database.close(true)`. This finalizes those statements and
+releases Windows file handles before unlinking hard-link aliases or removing the fixture home;
+cleanup does not depend on garbage collection. The real-home removal guard remains in force.
+
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).

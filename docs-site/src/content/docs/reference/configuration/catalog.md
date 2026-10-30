@@ -22,7 +22,7 @@ account-selector rows; an account-qualified disable omits only that selector row
 The native inheritance template is validated and captured before omission, so routed
 rows keep the same input and tool metadata, including when the only template row is disabled.
 
-Absent, false, or malformed values preserve the default hidden-row behavior.
+Absent, false, or malformed values preserve the default behavior without this additional omission.
 Existing native-alias omission remains independent of this flag. This setting controls
 discovery only: direct requests to disabled native ids still route normally, and unchanged
 sync output keeps its existing no-op write and mtime behavior.

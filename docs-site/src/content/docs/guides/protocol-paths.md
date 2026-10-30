@@ -9,8 +9,7 @@ wire, decided by its adapter. When the client API and the upstream wire differ, 
 converted on the way in and the answer is converted on the way back. This page explains how that
 path is named, how to see it before and after a request, and which settings change it.
 
-Every setting on this page is off by default. With the defaults, requests travel exactly as they
-did before these settings existed.
+The settings on this page are off by default except `antigravityDirect`, which is on. That exception enables the direct Antigravity path when applicable; the other switches require explicit activation.
 
 ## Delivery modes
 

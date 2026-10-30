@@ -31,7 +31,9 @@ Codex와 Claude 요청은 클라이언트에서 허브의 데이터 리스너로
 임시 권한은 stdin으로만 전달하며 설정 파일이나 토큰 파일에 저장되지 않습니다.
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
 ocx connect status
 ocx sync
 ```
@@ -169,6 +171,8 @@ tailscale serve status
 ```
 
 관리 포트는 `127.0.0.1:10101`에서만 보여야 합니다. `hub.managementPublicOrigin`은 Serve가 표시한 정확한 HTTPS Origin으로 설정하세요. 직접 TLS 프록시를 운영한다면 `tailscale cert hub-name.tailnet-name.ts.net`으로 ts.net 전체 FQDN 인증서만 발급하고 `127.0.0.1:10101`로만 프록시하세요. 임의의 `Tailscale-User-*` 헤더를 만들지 말고, 신뢰할 수 있는 Tailscale 신원이 없으면 일회용 pairing을 사용하세요.
+
+<a id="giving-the-data-listener-tls"></a>
 
 ### 데이터 리스너에 TLS 붙이기
 

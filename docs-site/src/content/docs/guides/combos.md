@@ -366,8 +366,10 @@ models remain available in their normal picker groups.
 For headless setup, store the key explicitly or reference the TypeSafe environment variable:
 
 ```bash
-ocx provider add jev --api-key "${TYPESAFE_API_KEY}"
+ocx provider add jev --api-key '${TYPESAFE_API_KEY}'
 ```
+
+Keep the single quotes so the shell passes the reference instead of the secret. Set `TYPESAFE_API_KEY` in the proxy's startup environment and restart it if it is already running; a background service needs its own configured environment.
 
 When the provider has no saved key, the decision client also accepts `TYPESAFE_API_KEY` directly and
 the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
@@ -901,8 +903,16 @@ A native parent can send a newly spawned worker's task only as ciphertext minted
 ChatGPT backend. An external provider cannot read that payload.
 
 For such a request, a combo filters its eligible targets to canonical native ChatGPT routes,
-including after a retryable failure. If the combo has no decrypt-capable target, opencodex stops
-before dispatch and returns HTTP 400:
+including after a retryable failure. Direct-key Responses routes explicitly trusted with
+`allowEncryptedV2AgentTasks: true` can also receive the encrypted task when selected directly,
+outside a combo; the opt-in does not make them eligible combo targets.
+If no canonical native target is selectable, or native attempts are exhausted, explicitly enabled
+`agentTaskRecovery` may recover an eligible spawned task and continue through an available routed
+combo target. The [encrypted v2 task delivery restrictions](/guides/sub-agent-surface/#encrypted-v2-task-delivery)
+still apply, including loopback-only operation, the incoming native credential and no plaintext
+persistence. If recovery is unavailable or fails and no native attempt has occurred, opencodex
+stops before dispatch and returns HTTP 400; after failed native attempts, their last error is retained.
+The initial unreadable-task response is:
 
 ```json
 {
@@ -954,7 +964,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--allow-metered-targets on|off`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+`--allow-metered-targets on|off`, `--cooldown-reprobe on|off`, `--cooldown-reprobe-interval`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--description`, `--decision-provider`, or `--decision-timeout` to
 clear that field. The two decision flags apply only when the effective strategy is JEV: `--strategy jev`, or a stored JEV combo when `--strategy` is omitted. On an existing combo, `--targets` replaces only
 the target list: without `--strategy` the stored strategy and its JEV settings stay as they are. `--native-alias` requires a currently supported bare native

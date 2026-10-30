@@ -56,9 +56,11 @@ ocx health --json
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+작은따옴표를 유지하세요. 참조를 그대로 전달하므로 비밀 값이 프로세스 인수나 설정 파일에 들어가지 않습니다. `ANTHROPIC_API_KEY`를 프록시 시작 전에 시작 환경에 설정하고, 모델 동기화처럼 자격 증명을 해석하는 CLI 프로세스에도 제공하세요. 나중에 다른 터미널에서 export해도 실행 중인 프록시는 갱신되지 않습니다. 백그라운드 서비스는 시작 환경을 설정한 뒤 재시작하세요. 서비스 설치만으로 터미널의 임의 공급자 변수가 보존되지는 않습니다.
 
 `ocx provider add`는 로컬 설정을 기록합니다. 라이브 프록시가 이미 실행 중이고 모델을 즉시 Codex와 동기화하려면 `--sync`를 추가하세요. 그렇지 않으면 나중에 `ocx sync`를 실행하면 됩니다. 레지스트리에 없는 커스텀 공급자는 `--adapter`와 `--base-url`이 모두 필요합니다.
 

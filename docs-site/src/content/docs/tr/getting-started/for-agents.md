@@ -91,9 +91,11 @@ anahtarı önayarını ekler ve onu varsayılan sağlayıcı yapar:
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+Tek tırnakları koruyun: başvuruyu aynen geçirerek sırrın işlem argümanlarına veya yapılandırmaya değer olarak yazılmasını önler. `ANTHROPIC_API_KEY` değişkenini proxy başlamadan önce başlangıç ortamına ve model eşitleme gibi kimlik bilgilerini çözen CLI işlemlerine sağlayın. Sonradan başka bir terminalde export etmek çalışan proxy'yi güncellemez. Arka plan hizmetinde başlangıç ortamını yapılandırıp hizmeti yeniden başlatın; hizmet kurulumu terminaldeki rastgele sağlayıcı değişkenlerini otomatik olarak saklamaz.
 
 `ocx provider add` yerel yapılandırmayı yazar. Canlı bir proxy zaten çalışıyorsa
 ve modelleri hemen Codex ile senkronize etmek istiyorsanız `--sync` ekleyin;

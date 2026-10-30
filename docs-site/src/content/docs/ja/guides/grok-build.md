@@ -102,11 +102,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-ネットワーク経由で到達可能なプロキシの場合は、`grok` が実際にダイヤルしてアドミッション トークンを使用できるアドレスに `base_url` を指定します。
+トークンを設定する前に TLS フロントエンドを構成し、その HTTPS URL を使ってください。代わりにローカルトンネルのループバックアドレスも使えます。Grok は `api_key` の値を `~/.grok/config.toml` に保存するため、アクセス権を制限し、バージョン管理や共有バックアップに含めないでください。
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

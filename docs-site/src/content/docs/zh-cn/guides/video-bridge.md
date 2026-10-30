@@ -18,12 +18,12 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> 如果你是通过 `ocx login xai` 接入的（OAuth），provider 会保持在 `authMode: "oauth"`，桥接就会静默不启用。请在环境中设置 `XAI_API_KEY`，或者像上面那样直接硬编码密钥。
+> 通过 `ocx login xai`（OAuth）接入后，provider 仍处于 `authMode: "oauth"`，桥接不会启用。请在环境中设置 `XAI_API_KEY`，保留上面的 `${XAI_API_KEY}` 引用，并明确选择 `authMode: "key"`。不要将密钥明文写入提交、日志或共享报告。
 
 ## 配置
 

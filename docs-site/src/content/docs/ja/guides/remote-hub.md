@@ -12,7 +12,9 @@ Remote Hub はプロバイダー認証情報、カタログ、使用量を一台
 `standalone` は一台で完結し、`hub` はプロバイダー秘密情報と使用量を所有し、`client` は接続状態とクライアント専用データキーだけを保存します。
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
 ocx connect status
 ocx sync
 ```
@@ -65,6 +67,8 @@ tailscale serve status
 ```
 
 `/healthz` の `200` はプロセスの生存確認にすぎません。`/readyz`、認証済み `GET /v1/catalog`、実際のモデル応答も確認してください。独自 TLS プロキシでは `tailscale cert hub-name.tailnet-name.ts.net` を使い、`127.0.0.1:10101` のみに転送します。`Tailscale-User-*` を偽造せず、信頼できる ID がない場合は一度限りのペアリングを使います。
+
+<a id="giving-the-data-listener-tls"></a>
 
 ### データリスナーに TLS を付ける
 

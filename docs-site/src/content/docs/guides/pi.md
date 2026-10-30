@@ -5,7 +5,7 @@ description: Use any routed model from Pi — ocx export writes a custom provide
 
 Pi reads its providers from a single global JSON file rather than environment variables, so
 opencodex does not launch it. Instead, `ocx export` serializes the `opencodex` provider block —
-base URL, model list, and the env reference Pi interpolates — and you merge it into your own
+base URL, model list, and a non-secret loopback key placeholder — and you merge it into your own
 config.
 
 ## Quickstart
@@ -14,11 +14,17 @@ Start the proxy, then print the config:
 
 ```bash
 ocx start
+```
+
+Leave that process running. In a second terminal, print the configuration:
+
+```bash
 ocx export --client pi
 ```
 
-The output leads with the JSON, then prints the destination path, the merge warning, the env
-export line, and how many models carry authoritative context limits.
+The output leads with the JSON, then prints the destination path, the merge warning, a loopback
+usage hint, and how many models carry authoritative context limits. This export supports only
+an unauthenticated loopback proxy; it does not configure remote admission.
 
 ```json
 {
@@ -26,7 +32,7 @@ export line, and how many models carry authoritative context limits.
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -78,27 +84,13 @@ provider or changing model visibility, and merge the new block over the old one.
 
 ## The admission key
 
-Two different keys are easy to confuse here, and only the first one appears in this file:
-
-| Key | What it is | Where it lives |
-| --- | --- | --- |
-| Proxy admission key | opencodex's own credential, generated on the dashboard's **API** tab | referenced by `apiKey` as `$OPENCODEX_API_KEY`; the value stays in your environment |
-| Provider key | your Anthropic / OpenAI / OpenRouter key | opencodex's own config, per [Providers](/guides/providers/) |
-
-The exported config carries only the reference, never a secret. Pi interpolates a bare `$NAME`, so
-the variable is:
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-That name is Pi's alone. opencode uses a different variable
-(`OPENCODEX_OPENCODE_API_KEY`, in `{env:…}` form) — see the [opencode guide](/guides/opencode/).
-
-**A loopback proxy needs no key at all.** opencodex binds `127.0.0.1` by default and authenticates
-nothing there, so the `$OPENCODEX_API_KEY` reference is inert and you can leave the variable unset.
-It matters only when `hostname` is set beyond loopback, which is also the case where the proxy
-refuses to start without a token — see [Remote access](/reference/configuration/server/#remote-access).
+The exported `apiKey` is the non-secret placeholder `opencodex-loopback`. No
+`OPENCODEX_API_KEY` export is emitted or required. This exporter supports only an
+unauthenticated loopback proxy and refuses a remote or token-protected listener.
+Provider credentials remain in opencodex's own configuration, as described in
+[Providers](/guides/providers/); never put an upstream provider key in this Pi block.
+For remote access, use a client integration that supports proxy admission credentials;
+changing this placeholder does not enable remote Pi export.
 
 ## Model metadata
 

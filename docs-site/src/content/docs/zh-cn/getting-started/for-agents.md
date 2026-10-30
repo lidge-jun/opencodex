@@ -56,9 +56,11 @@ ocx health --json
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+请保留单引号，以便按字面传递环境变量引用，而不是把密钥值放入进程参数或保存到配置中。启动代理前，请在其启动环境中设置 `ANTHROPIC_API_KEY`，并为模型同步等会解析凭据的 CLI 进程提供该变量。稍后在另一终端中 export 不会更新正在运行的代理。后台服务需要配置启动环境并重启；安装服务不会自动保留终端中的任意提供商变量。
 
 `ocx provider add` 会写入本地配置。如果已经有正在运行的代理，并且你希望立刻把模型同步到 Codex，请加上 `--sync`；否则之后再运行 `ocx sync`。不在注册表中的自定义提供方同时需要 `--adapter` 和 `--base-url`。
 

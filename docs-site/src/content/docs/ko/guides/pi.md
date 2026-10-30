@@ -3,10 +3,7 @@ title: Pi
 description: Pi에서 라우팅된 모델을 그대로 쓸 수 있습니다. `ocx export`가 Pi의 `models.json`에 맞는 커스텀 provider 블록을 내보내고, 실행 중인 프록시에 연결합니다.
 ---
 
-Pi는 provider를 환경 변수 대신 하나의 전역 JSON 파일에서 읽기 때문에,
-opencodex가 Pi를 직접 실행하지 않습니다. 대신 `ocx export`가 `opencodex` provider 블록,
-즉 base URL, 모델 목록, 그리고 Pi가 치환하는 환경 변수 참조를 직렬화해서 사용자가
-자신의 설정에 병합하도록 합니다.
+Pi는 하나의 전역 JSON 파일에서 공급자를 읽습니다. opencodex가 Pi를 실행하는 대신 `ocx export`가 기본 URL, 모델 목록, 비밀이 아닌 로컬 키 자리표시자가 담긴 `opencodex` 공급자 블록을 출력합니다. 이 블록을 기존 설정에 병합하세요.
 
 ## 빠른 시작
 
@@ -14,11 +11,15 @@ opencodex가 Pi를 직접 실행하지 않습니다. 대신 `ocx export`가 `ope
 
 ```bash
 ocx start
+```
+
+이 프로세스를 실행한 상태로 두고, 두 번째 터미널에서 설정을 출력하세요.
+
+```bash
 ocx export --client pi
 ```
 
-출력은 JSON으로 시작하고, 이어서 대상 경로, 병합 경고, 환경 변수 export 줄, 그리고
-공식 context limit이 있는 모델 수를 보여줍니다.
+출력에는 JSON 다음으로 대상 경로, 병합 경고, 루프백 사용 안내와 확인된 컨텍스트 한도가 있는 모델 수가 나옵니다. 이 내보내기는 인증이 없는 루프백 프록시만 지원하며 원격 접근 인증을 설정하지 않습니다.
 
 ```json
 {
@@ -26,7 +27,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -78,28 +79,7 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## 인증 키
 
-여기서는 서로 헷갈리기 쉬운 키가 두 개 있고, 이 파일에 등장하는 것은 첫 번째뿐입니다.
-
-| 키 | 무엇인지 | 어디에 있는지 |
-| --- | --- | --- |
-| Proxy admission key | opencodex의 자체 인증 정보이며, 대시보드의 **API** 탭에서 생성됩니다 | `apiKey`로 `$OPENCODEX_API_KEY`를 참조하며, 값은 환경 변수에 둡니다 |
-| Provider key | Anthropic / OpenAI / OpenRouter 키입니다 | opencodex의 자체 config에 있으며, [Providers](/guides/providers/)마다 따로 둡니다 |
-
-내보낸 config에는 비밀값이 아니라 참조만 들어갑니다. Pi는 `$NAME` 형태를 그대로
-치환하므로 변수는 다음과 같습니다.
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-이 이름은 Pi 전용입니다. opencode는 다른 변수를 씁니다
-(`OPENCODEX_OPENCODE_API_KEY`, `{env:…}` 형식) - 자세한 내용은 [opencode 가이드](/guides/opencode/)를 보세요.
-
-**루프백 프록시는 키가 전혀 필요 없습니다.** opencodex는 기본적으로 `127.0.0.1`에
-바인드하고 그곳에서는 아무 것도 인증하지 않으므로, `$OPENCODEX_API_KEY` 참조는
-실제로는 비어 있어도 됩니다. 이 값은 `hostname`이 루프백 바깥으로 설정될 때만
-의미가 있으며, 그 경우에는 프록시가 토큰 없이 시작하지 않습니다. 자세한 내용은
-[Remote access](/ko/reference/configuration/server/#remote-access)를 보세요.
+내보낸 `apiKey`는 비밀이 아닌 자리표시자 `opencodex-loopback`입니다. 키 환경 변수를 내보낼 필요가 없습니다. 내보내기는 인증이 없는 루프백 프록시만 허용하며 원격 또는 토큰으로 보호된 프록시는 거부합니다. 공급자 자격 증명은 [공급자](/ko/guides/providers/)에 설명된 opencodex 설정에 남습니다. 이 Pi 블록에 상위 공급자의 키를 넣지 마세요. 원격 접근에는 프록시 접근 인증을 지원하는 통합을 사용하세요. 자리표시자를 바꿔도 Pi 원격 내보내기가 활성화되지 않습니다.
 
 ## 모델 메타데이터
 

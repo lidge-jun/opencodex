@@ -10,7 +10,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` 將每個目錄模型標記為 v1；`v2` 將每個模型標記為 v2。`default` 還原上游 pin（Sol/Terra v2、Luna v1），否則遵循原生的 `multi_agent_v2` 旗標。套用於新 session。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 最多五個原生或路由 id，在子代理 picker 中優先顯示。[Astra 一次性升級](/reference/configuration/agents/#astra-roster-upgrade)後，明確的空清單會被保留。 |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 最多五個原生 id、帳號限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id，優先顯示在子代理選擇器中。新增選項只提供原生和路由 id；儲存時會保留已設定的精確帳號限定 id，包括目前目錄中無法使用的 id。如需新增精確帳號限定 id，請使用 `ocx agent subagents set` 或編輯設定。[Astra 一次性升級](/reference/configuration/agents/#astra-roster-upgrade)後，明確的空清單會被保留。 |
 | `injectionModel?` | `string` | — | 在代理撰寫的 v2 委派指引中使用的偏好原生或路由子代理模型。 |
 | `injectionEffort?` | `string` | — | 偏好 effort（`low` 到 `ultra`），僅在搭配 `injectionModel` 時有意義。 |
 | `injectionPrompt?` | `string` | — | 取代內建指引本文。支援 `{{model}}`、`{{effort}}`、`{{roster}}` 與 `{{fallback}}`。觸發閘門保持不變。 |
@@ -55,11 +55,11 @@ opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配�
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

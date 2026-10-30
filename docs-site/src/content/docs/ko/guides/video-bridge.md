@@ -19,14 +19,12 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> `ocx login xai`(OAuth)로 연결했다면 provider는 계속 `authMode: "oauth"`
-> 상태이며, 브리지는 아무 경고 없이 활성화되지 않습니다. 환경 변수로 `XAI_API_KEY`를
-> 설정하거나, 위처럼 키를 직접 넣으십시오.
+> `ocx login xai`(OAuth)로 연결했다면 공급자는 `authMode: "oauth"` 상태로 유지되어 브리지가 활성화되지 않습니다. 환경 변수 `XAI_API_KEY`를 설정하고 위의 `${XAI_API_KEY}` 참조를 유지한 다음 `authMode: "key"`를 명시적으로 선택하십시오. 실제 키를 커밋, 로그 또는 공유 보고서에 직접 넣지 마십시오.
 
 ## 구성
 

@@ -93,11 +93,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-如果代理可通过网络访问，请把 `base_url` 指向 `grok` 实际可以连接的地址，并使用你的接入令牌：
+提供令牌前，请先配置 TLS 前端并使用其 HTTPS URL，或使用本地隧道的回环地址。Grok 会把 `api_key` 的字面值保存到 `~/.grok/config.toml`；请限制文件访问权限，并将其排除在版本控制和共享备份之外。
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

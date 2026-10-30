@@ -55,8 +55,45 @@ const fr = {
 	'GitHub, {count} stars': 'GitHub, {count} étoiles',
 } as const;
 
+const es: Record<keyof typeof fr, string> = {
+	"Auto": "Automático",
+	"Light": "Claro",
+	"Dark": "Oscuro",
+	"Theme": "Tema",
+	"Click to use the next theme": "Haz clic para cambiar al siguiente tema",
+	"Getting Started": "Primeros pasos",
+	"Installation": "Instalación",
+	"Quickstart": "Inicio rápido",
+	"How It Works": "Cómo funciona",
+	"Agent Quickstart": "Inicio rápido para agentes",
+	"Guides": "Guías",
+	"Providers": "Proveedores",
+	"Model Routing": "Enrutamiento de modelos",
+	"Combos": "Combos",
+	"Codex Integration": "Integración con Codex",
+	"Codex App Model Picker": "Selector de modelos de Codex App",
+	"Sidecars: Search & Vision": "Sidecars: búsqueda y visión",
+	"Image Bridge": "Puente de imágenes",
+	"Video Bridge": "Puente de video",
+	"Web Dashboard": "Dashboard web",
+	"Sub-agent Surface": "Interfaz de subagentes",
+	"Reference": "Referencia",
+	"Configuration": "Configuración",
+	"Adapters": "Adaptadores",
+	"Architecture": "Arquitectura",
+	"Proxy API Formats": "Formatos de API del proxy",
+	"Management API": "API de administración",
+	"Contributing": "Cómo contribuir",
+	"Main": "Navegación principal",
+	"Select language": "Elegir idioma",
+	"Menu": "Menú",
+	"GitHub": "GitHub",
+	"GitHub, {count} stars": "GitHub, {count} estrellas",
+};
+
+/** Select navigation copy; typed dictionaries require complete French and Spanish keys. */
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
-	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+	locale === 'es' ? es[en] : locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 const starCount = await getStarCount();
 const starLocale = locale ?? 'en';
@@ -68,9 +105,10 @@ const starLabel = t(
 const githubAccessibleName = starCount === null ? githubLabel
 	: starLabel.replace('{count}', starCount.toLocaleString(starLocale));
 
-type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr'; label: string };
+type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr' | 'es'; label: string };
 const languages: LanguageOption[] = [
 	{ code: 'root', label: 'English' },
+	{ code: 'es', label: 'Español' },
 	{ code: 'fr', label: 'Français' },
 	{ code: 'ko', label: '한국어' },
 	{ code: 'zh-cn', label: '简体中文' },
@@ -312,6 +350,21 @@ const contributing: NavLink = {
 
 	.title-wrapper :global(.site-title) { min-height: 44px; }
 	:global(.sl-skip-link:focus) { min-height: 44px; }
+
+	/* Longer locale labels need room before the full search pill fits. */
+	@media (min-width: 50rem) and (max-width: 89.99rem) {
+		.header { gap: 0.5rem; }
+		.title-wrapper { flex-shrink: 0; }
+		.search-wrapper :global(button[data-open-modal]) {
+			width: 44px;
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0;
+			justify-content: center;
+		}
+		.search-wrapper :global(button[data-open-modal] > span),
+		.search-wrapper :global(button[data-open-modal] > kbd) { display: none; }
+	}
 
 	.search-wrapper,
 	.github-link,

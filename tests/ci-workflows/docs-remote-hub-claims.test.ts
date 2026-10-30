@@ -31,7 +31,7 @@ import { repoPath } from "../helpers/repo-root";
 
 const GUIDE = repoPath("docs-site/src/content/docs/guides/remote-hub.md");
 const KO_GUIDE = repoPath("docs-site/src/content/docs/ko/guides/remote-hub.md");
-const TRANSLATED = ["ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
+const TRANSLATED = ["es", "ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
 const LOCALE_GUIDES: ReadonlyArray<readonly [string, string]> = [
   ["en", GUIDE],
   ...TRANSLATED.map(locale => [locale, repoPath(`docs-site/src/content/docs/${locale}/guides/remote-hub.md`)] as const),
@@ -75,9 +75,17 @@ describe("remote hub guide", () => {
   test("ocx connect is shown with a data origin and a separate management origin", async () => {
     // The positional URL is where /readyz and /v1/catalog are fetched; --management-url is where
     // pairing and key issuance go. They need not share a port, and the macOS recipe relies on that.
-    const source = await Bun.file(GUIDE).text();
-    expect(source).toContain("ocx connect https://hub-name.tailnet-name.ts.net:8443");
-    expect(source).toContain("--management-url https://hub-name.tailnet-name.ts.net");
+    for (const [locale, file] of LOCALE_GUIDES) {
+      const source = await Bun.file(file).text();
+      // Shell continuations belong to the same command, including its management-origin flag.
+      const examples = source.replace(/\\\r?\n[ \t]*/g, " ").split(/\r?\n/)
+        .filter(line => line.includes("ocx connect https://hub-name.tailnet-name.ts.net"));
+      expect(examples.length, locale).toBeGreaterThan(0);
+      for (const example of examples) {
+        expect(example, locale).toContain("ocx connect https://hub-name.tailnet-name.ts.net:8443");
+        expect(example, locale).toMatch(/--management-url https:\/\/hub-name\.tailnet-name\.ts\.net(?=\s|$)/);
+      }
+    }
   });
 
   test("the macOS Serve constraint and the loopback-bind trap are both documented", async () => {

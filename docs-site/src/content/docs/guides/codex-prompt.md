@@ -263,7 +263,7 @@ does not recognise is left alone rather than removed.
 An absent key reads as its default rather than as `false`. The panel shows the
 value your file actually holds, and says when a key is not set.
 
-A row that carries an explicit value also offers **Reset to <default>**, which
+A row that carries an explicit value also offers **Reset to &lt;default&gt;**, which
 deletes the key line rather than writing the default back. That is the only
 state that keeps following the default if Codex changes it later — writing
 `key = true` would freeze today's default as an override.
