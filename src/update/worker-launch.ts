@@ -221,8 +221,12 @@ export function dashboardRestartRefusal(context: DashboardRestartContext): strin
   // The innermost unit decides: a terminal or app scope below the per-user manager
   // (user@<uid>.service/app.slice/vte-spawn-1.scope) is not a service; a system or user service is.
   const units: ReturnType<typeof innermostUnit>[] = paths.map(innermostUnit);
-  const inService = Boolean(env.INVOCATION_ID)
-    || units.some(found => found !== null && found.unit.endsWith(".service") && !found.unit.startsWith("user@"));
+  const observed = units.filter((found): found is NonNullable<typeof found> => found !== null);
+  // The observed cgroup wins over an inherited INVOCATION_ID (a shell moved into its own scope
+  // keeps the variable); without an observation the variable alone fails closed.
+  const inService = observed.length > 0
+    ? observed.some(found => found.unit.endsWith(".service") && !found.unit.startsWith("user@"))
+    : Boolean(env.INVOCATION_ID);
   if (!inService) return null;
   const manual = "Stop the service with its own manager, update the package from a shell (for example `ocx update`), then start the service again.";
   if (!context.systemdRun || !env.INVOCATION_ID) {
