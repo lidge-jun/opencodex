@@ -1200,7 +1200,7 @@
   "fixture-teardown-helper.test.ts": "ci-workflows", "replay-refusal-parity.test.ts": "server",
   "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "repo-hygiene.test.ts": "ci-workflows", "request-decompress.test.ts": "usage",
-  "request-evidence.test.ts": "usage", "request-history-index.test.ts": "usage",
+  "request-evidence.test.ts": "usage", "request-history-index.test.ts": "usage", "request-history-integrity.test.ts": "usage",
   "request-log-attempt-identity.test.ts": "usage", "request-log-conversation.test.ts": "usage",
   "request-log-estimate-cap.test.ts": "usage", "request-log-jev.test.ts": "usage",
   "request-log-nonstream.test.ts": "usage", "request-log-protocol-trace.test.ts": "usage",
