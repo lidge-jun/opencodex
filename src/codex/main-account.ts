@@ -3,7 +3,7 @@ import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration,
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
@@ -20,8 +20,9 @@ import {
   refreshGrantFingerprintForToken,
   withCodexRefreshFileLock,
 } from "./account-store";
-import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
+import { resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
+import { readNativeMainAuthBytes, writeNativeMainAuthFile } from "./native-main-auth-file";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import {
   clearAccountNeedsReauth,
@@ -214,7 +215,7 @@ function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
   const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readNativeMainAuthBytes(path, "plain").toString("utf8");
   } catch {
     return null;
   }
@@ -322,6 +323,21 @@ function assertMainAuthJsonIdentityUnchanged(expected: MainAuthJsonCredential): 
   }
 }
 
+function publishMainAuthJson(expected: MainAuthJsonCredential, content: string): void {
+  writeNativeMainAuthFile(expected.path, content, {
+    beforeRename: () => {
+      assertMainAuthJsonSnapshotUnchanged(expected);
+      const hook = beforeMainAuthJsonRenameForTests;
+      beforeMainAuthJsonRenameForTests = null;
+      hook?.();
+    },
+    // Runs immediately before rename(2), after the test hook has had its chance to
+    // simulate an external writer. Full snapshot check (content AND identity): this is
+    // the last look we get, so it asks everything it can rather than the cheap question.
+    validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
+  });
+}
+
 function persistRefreshedMainAuthJson(
   expected: MainAuthJsonCredential,
   refreshed: OAuthCredentials,
@@ -336,22 +352,9 @@ function persistRefreshedMainAuthJson(
     refresh_token: refreshToken,
     account_id: chatgptAccountId,
   };
-  publishCredentialSync(() => atomicWriteFile(
-    expected.path,
+  publishCredentialSync(() => publishMainAuthJson(
+    expected,
     JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n",
-    undefined,
-    {
-      beforeRename: () => {
-        assertMainAuthJsonSnapshotUnchanged(expected);
-        const hook = beforeMainAuthJsonRenameForTests;
-        beforeMainAuthJsonRenameForTests = null;
-        hook?.();
-      },
-      // Runs immediately before rename(2), after the test hook has had its chance to
-      // simulate an external writer. Full snapshot check (content AND identity): this is
-      // the last look we get, so it asks everything it can rather than the cheap question.
-      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
-    },
   ));
   advanceCodexCredentialMutationEpoch();
   return { accessToken, chatgptAccountId };
@@ -403,19 +406,9 @@ function persistNativeMainReauthTokens(
     id_token: tokens.idToken,
     account_id: tokens.chatgptAccountId,
   };
-  atomicWriteFile(
-    expected.path,
+  publishMainAuthJson(
+    expected,
     JSON.stringify({ ...expected.root, tokens: nextTokens }, null, 2) + "\n",
-    undefined,
-    {
-      beforeRename: () => {
-        assertMainAuthJsonSnapshotUnchanged(expected);
-        const hook = beforeMainAuthJsonRenameForTests;
-        beforeMainAuthJsonRenameForTests = null;
-        hook?.();
-      },
-      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
-    },
   );
   advanceCodexCredentialMutationEpoch();
 }

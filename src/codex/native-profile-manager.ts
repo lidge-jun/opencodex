@@ -75,6 +75,7 @@ import {
   type NativeStageProof,
   type NativeStageTerminalOutcome,
 } from "./native-profile-stage-store";
+import { writeNativeMainAuthFileAsync } from "./native-main-auth-file";
 
 const LOCK_WAIT_MS = 5_000;
 const LEGACY_STAGE_MAX_AGE_MS = 30 * 60_000;
@@ -1307,7 +1308,7 @@ export class NativeProfileManager {
         journalPrepared = true;
         await this.onSwitchBoundary("journal-prepared");
         this.assertOperationStorageStable();
-        await this.atomicWrite(this.context.authPath, target.text);
+        await writeNativeMainAuthFileAsync(this.context.authPath, target.text, this.atomicWrite);
         const observedTarget = this.verifyWrittenEnvelope(target.digest, targetProfile.identityHash, key);
         observedTarget.raw.fill(0);
         advanceCodexCredentialMutationEpoch();
@@ -1336,7 +1337,7 @@ export class NativeProfileManager {
         }
         try {
           this.assertOperationStorageStable();
-          await this.atomicWrite(this.context.authPath, source!.text);
+          await writeNativeMainAuthFileAsync(this.context.authPath, source!.text, this.atomicWrite);
           const restored = this.verifyWrittenEnvelope(source!.digest, nativeIdentityHash(key!.key, source!.accountId), key!);
           restored.raw.fill(0);
           advanceCodexCredentialMutationEpoch();
@@ -1451,7 +1452,7 @@ export class NativeProfileManager {
           rollbackVaultPublished = true;
         }
         this.assertOperationStorageStable();
-        await this.atomicWrite(this.context.authPath, sourceEnvelope.text);
+        await writeNativeMainAuthFileAsync(this.context.authPath, sourceEnvelope.text, this.atomicWrite);
         const restored = this.verifyWrittenEnvelope(sourceEnvelope.digest, journal.sourceIdentityHash, key);
         restored.raw.fill(0);
         advanceCodexCredentialMutationEpoch();
