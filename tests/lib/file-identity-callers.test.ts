@@ -7,6 +7,8 @@ import { repoPath } from "../helpers/repo-root";
 // full parser: it catches the regression forms below and fails closed on scopes it cannot find.
 const scopes: Record<string, string[]> = {
   "src/codex/codex-home-owner.ts": ["readCodexHomeJournal"],
+  "src/codex/cli-update-artifacts.ts": ["verifyCodexCliArchive"],
+  "src/codex/cli-install-provenance.ts": ["readBoundedFile", "observeHeldFileSet"],
   "src/codex/orca-auth-source.ts": ["readBoundedLocalFile"],
   "src/codex/inject/bounded-config-reader.ts": ["readBoundedCodexConfig"],
   "src/codex/main-account.ts": ["statIdentity"],
