@@ -10,6 +10,8 @@ import {
 } from "../../src/combos/failover";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import type { AdapterEvent } from "../../src/types";
+import { finalizeAccountLease, finalizeOwnedTranslatorBudget } from "../../src/server/responses/core-lifetime";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 
 const combo = "quota-code-provenance";
 const target = { provider: "devin", model: "swe-2-high" };
@@ -127,6 +129,21 @@ describe("quota evidence through child formatting and combo consumption", () => 
     expect(comboFailureDecision(400, failure.classificationText, { code: failure.upstreamCode })).toBe("stop");
     expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode })).not.toBe("provider");
   });
+
+  for (const [name, wrap] of [
+    ["account lease", (response: Response) => finalizeAccountLease(response, () => {})],
+    ["translator budget", (response: Response) => finalizeOwnedTranslatorBudget(response, createTranslatorBudget())],
+  ] as const) {
+    test(`R2: ${name} preserves reflected quota provenance`, async () => {
+      const formatted = formatErrorResponse(400, "invalid_request_error", "Invalid value: quota exhausted", {
+        classified: true, upstreamCode: null,
+      });
+      const failure = await consumeComboFailure(wrap(formatted));
+      expect(failure.upstreamCode).not.toBe("insufficient_quota");
+      expect(comboFailureDecision(400, failure.classificationText, { code: failure.upstreamCode })).toBe("stop");
+      expect(comboFailureCooldownScope(400, failure.classificationText, { code: failure.upstreamCode })).not.toBe("provider");
+    });
+  }
 
   for (const message of [
     "per-minute quota is exhausted for this tool",
