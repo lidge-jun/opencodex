@@ -398,6 +398,24 @@ function freeLoopbackPort(): number {
 }
 
 /**
+ * Who holds a pinned port when a sibling missed its deadline: the child itself (bound, record not
+ * yet written), another process (the port was taken between probe and bind) or nobody (the child
+ * never reached its bind). The bare deadline cannot tell these apart.
+ */
+function pinnedPortHolders(port: number, childPid: number): string {
+  let bindable: boolean;
+  try { Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null) }).stop(true); bindable = true; }
+  catch { bindable = false; }
+  if (process.platform !== "win32") return bindable ? "free" : "bound";
+  const listing = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"], { stdout: "pipe", stderr: "ignore" }).stdout.toString();
+  const pids = [...new Set(listing.split(/\r?\n/)
+    .map(line => line.trim().split(/\s+/))
+    .filter(cols => cols.length >= 5 && cols[1]!.endsWith(`:${port}`))
+    .map(cols => `${cols[3]} pid ${cols[4]}${cols[4] === String(childPid) ? " (child)" : ""}`))];
+  return `${bindable ? "free" : "bound"}${pids.length ? `; ${pids.join(", ")}` : ""}`;
+}
+
+/**
  * Spawn `ocx start` and wait for its runtime record and settled readiness.
  *
  * `port` pins the listener with `--port`. A pinned port comes from freeLoopbackPort(), which
@@ -446,6 +464,7 @@ async function startSibling(
     // An early exit already reported its stderr and consumed the stream.
     if (exitedEarly) throw error;
     // Report what the child was doing, which the bare deadline message cannot.
+    const holders = port === undefined ? "not pinned" : pinnedPortHolders(port, child.pid);
     if (child.exitCode === null) child.kill("SIGKILL");
     const tail = async (stream: unknown): Promise<string> => {
       try {
@@ -459,7 +478,7 @@ async function startSibling(
     };
     const [stdout, stderr] = await Promise.all([tail(child.stdout), tail(child.stderr)]);
     throw new Error(
-      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"})\n`
+      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"}, port holders: ${holders})\n`
         + `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
     );
   }
