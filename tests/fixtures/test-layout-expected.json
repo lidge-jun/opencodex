@@ -132,6 +132,8 @@
   "messaging-remote-enrollment-gaps.test.ts": "codex-integration",
     "messages-request-id-headers.test.ts": "claude-integration",
   "bounded-file-read.test.ts": "lib",
+  "file-identity.test.ts": "lib",
+  "file-identity-callers.test.ts": "lib",
   "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",

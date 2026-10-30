@@ -80,6 +80,35 @@ afterEach(() => {
 });
 
 describe("loadCommandCodeProjectContext", () => {
+  test("file identity preserves adjacent NTFS-sized values", async () => {
+    const root = makeTempDir("ocx-cc-ctx-identity-");
+    const agentsPath = join(root, "AGENTS.md");
+    const identity = 9_007_199_254_740_992n;
+    try {
+      writeFileSync(agentsPath, "project memory", "utf8");
+      lstatMock.mockImplementation((async (path: Parameters<typeof realLstat>[0], options?: { bigint?: boolean }) => {
+        const stat = options?.bigint ? await realLstat(path, { bigint: true }) : await realLstat(path);
+        return String(path) === agentsPath ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+          { ino: options?.bigint ? identity + 1n : Number(identity + 1n) }) : stat;
+      }) as typeof realLstat);
+      openMock.mockImplementation(async path => {
+        const handle = await realOpen(path);
+        if (String(path) !== agentsPath) return handle;
+        return { ...handle, read: handle.read.bind(handle), close: handle.close.bind(handle),
+          stat: async (options?: { bigint?: boolean }) => {
+            const stat = options?.bigint ? await handle.stat({ bigint: true }) : await handle.stat();
+            return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+              { ino: options?.bigint ? identity : Number(identity) });
+          },
+        } as Awaited<ReturnType<typeof realOpen>>;
+      });
+      expect((await loadCommandCodeProjectContext(root)).memory).toBe("");
+    } finally {
+      openMock.mockImplementation(realOpen);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("undefined cwd returns empty context", async () => {
     const result = await loadCommandCodeProjectContext(undefined);
     expect(result).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
@@ -594,10 +623,12 @@ describe("loadCommandCodeProjectContext", () => {
     const root = makeTempDir("ocx-cc-ctx-read-timeout-");
     const agentsPath = join(root, "AGENTS.md");
     let closeCalls = 0;
+    let readCalls = 0;
     let releaseRead: () => void = () => {};
     const hangingFile = {
-      stat: async () => statSync(agentsPath),
+      stat: async (options?: { bigint?: boolean }) => options?.bigint ? statSync(agentsPath, { bigint: true }) : statSync(agentsPath),
       read: () => new Promise<{ bytesRead: number; buffer: Buffer }>(resolve => {
+        readCalls++;
         releaseRead = () => resolve({ bytesRead: 0, buffer: Buffer.alloc(0) });
       }),
       close: async () => {
@@ -618,6 +649,7 @@ describe("loadCommandCodeProjectContext", () => {
 
       expect(result).not.toBe("timeout");
       expect(result).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
+      expect(readCalls).toBe(1);
       expect(closeCalls).toBe(1);
     } finally {
       openMock.mockImplementation(realOpen);
