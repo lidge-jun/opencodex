@@ -40,7 +40,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripInternalReasoningEnabled, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripXaiUnsupportedInclude, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripUnsupportedOutputInclude, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -54,6 +54,7 @@ import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./ima
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 import { observeOutbound } from "../../usage/cache-diagnostic";
 
+import { normalizeMuseToolCatalog } from "./muse-tool-catalog";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
@@ -193,6 +194,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      if (isMetaAiResponsesDestination(url)) {
+        outBody = normalizeMuseToolCatalog(outBody, parsed._replayPrefixLen, provider.supportsResponsesCustomTools);
+      }
       if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
         allowStringContent: isXaiResponsesDestination(provider),
       });
@@ -323,7 +327,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
           outBody = stripCanonicalOnlyInputItems(outBody);
         }
-        outBody = promoteClientLoadedTools(outBody);
+        // Meta already captured discoveries from the original current-turn slice.
+        if (!isMetaAiResponsesDestination(url)) outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(
@@ -353,10 +358,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
-        // xAI answers 400 for `output.encrypted_content` in `include` instead of ignoring it;
+        // xAI, Meta and Azure answer 400 for `output.encrypted_content` instead of ignoring it;
         // Codex Desktop asks for it on every turn (#7878).
-        if (isXaiResponsesDestination(provider)) {
-          outBody = stripXaiUnsupportedInclude(outBody);
+        // Azure also rejects this exact include entry, including on plain Responses routes.
+        const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
+          || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
+        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses) {
+          outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
