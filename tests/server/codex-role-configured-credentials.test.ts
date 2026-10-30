@@ -7,6 +7,7 @@ import { safeConfigDTO } from "../../src/server/auth-cors";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import { redactSecrets } from "../../src/lib/redact";
+import { diagnosticValueAllowed } from "../../src/server/request-log-terminal-status";
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import type { OcxConfig } from "../../src/types";
 
@@ -20,13 +21,18 @@ test("Artificial Analysis credentials are protected and refreshed", () => {
     write("aa-literal-secret-value");
     expect(configuredCredentials().matches("aa-literal-secret-value")).toBe(true);
     process.env.OCX_TEST_AA_KEY = "aa-env-secret-one";
-    write("$OCX_TEST_AA_KEY");
+    write("  $OCX_TEST_AA_KEY  ");
     expect(configuredCredentials().matches("aa-env-secret-one")).toBe(true);
     process.env.OCX_TEST_AA_KEY = "aa-env-secret-two";
     expect(configuredCredentials().matches("aa-env-secret-two")).toBe(true);
     expect(configuredCredentials().matches("aa-env-secret-one")).toBe(false);
+    expect(diagnosticValueAllowed("harmless_diagnostic")).toBe(true);
+    expect(diagnosticValueAllowed("aa-env-secret-two")).toBe(false);
+    setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => "aa-keychain-secret", setPassword: () => {}, deletePassword: () => true }));
+    write("  keychain:aa-present  ");
+    expect(configuredCredentials().matches("aa-keychain-secret")).toBe(true);
     setProviderKeychainEntryFactoryForTests(() => ({ getPassword: () => null, setPassword: () => {}, deletePassword: () => true }));
-    write("keychain:aa-missing");
+    write("  keychain:aa-missing  ");
     expect(configuredCredentials().complete).toBe(false);
     const config = { providers: {}, codexRoleCapability: { artificialAnalysis: { apiKey: "aa-literal-secret-value" } } };
     expect(JSON.stringify(safeConfigDTO(config as OcxConfig))).not.toContain("aa-literal-secret-value");

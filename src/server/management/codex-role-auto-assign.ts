@@ -192,24 +192,26 @@ export async function proposeCodexRoleModels(options: {
     sizingError,
     proposals: assign.buildRoleProposals(roleRows, outcomes, classified, classifiedByDomain),
     candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
-    capability: capabilityReport(table?.source ?? capability.ARENA_SOURCE, table, capabilityError, classifiedByDomain),
+    capability: capabilityReport(table?.source ?? null, table, capabilityError, classifiedByDomain),
   };
 }
 
 /** The attribution and per-domain tiers; raw scores only from a source whose terms allow it. */
 function capabilityReport(
-  { redistributable, ...source }: import("../../codex/role-capability").CapabilitySource,
+  source: import("../../codex/role-capability").CapabilitySource | null,
   table: import("../../codex/role-capability").CapabilityTable | null,
   error: string | null,
   classifiedByDomain: ReadonlyMap<SizingDomain, ReturnType<typeof import("../../codex/role-auto-assign").classifyRoleModelCandidates>>,
 ) {
   return {
-    ...source,
+    name: source?.name ?? null,
+    url: source?.url ?? null,
+    license: source?.license ?? null,
     publishedAt: table?.publishedAt ?? null,
     error: error ?? table?.fallbackReason ?? null,
     domains: Object.fromEntries([...classifiedByDomain].map(([domain, list]) => [domain,
       list.filter(candidate => candidate.tierSource === "measured")
-        .map(({ model, tier, score }) => (redistributable ? { model, tier, score } : { model, tier }))])),
+        .map(({ model, tier, score }) => (source?.redistributable ? { model, tier, score } : { model, tier }))])),
   };
 }
 

@@ -324,11 +324,14 @@ export const configSchema = z.object({
     standard: z.array(z.string().trim().min(1)).optional(),
     frontier: z.array(z.string().trim().min(1)).optional(),
   }).strict().optional().catch(undefined),
-  // Malformed settings never grant consent to download benchmark data.
-  codexRoleCapability: z.object({
+  // Discard the retired source while preserving an otherwise valid Artificial Analysis key.
+  codexRoleCapability: z.preprocess(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const { huggingFace: _retired, ...rest } = value as Record<string, unknown>;
+    return rest;
+  }, z.object({
     artificialAnalysis: z.object({ apiKey: z.string().trim().min(1).optional() }).strict().optional(),
-    huggingFace: z.object({ enabled: z.boolean().optional() }).strict().optional(),
-  }).strict().optional().catch(undefined),
+  }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),

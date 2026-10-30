@@ -165,7 +165,8 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
   if (isRecord(config.value) && isRecord(config.value.providers)) walkProvider(config.value.providers, 0);
   if (isRecord(config.value) && isRecord(config.value.codexRoleCapability)
     && isRecord(config.value.codexRoleCapability.artificialAnalysis)) {
-    addReference(config.value.codexRoleCapability.artificialAnalysis.apiKey);
+    const key = config.value.codexRoleCapability.artificialAnalysis.apiKey;
+    addReference(typeof key === "string" ? key.trim() : key);
   }
   if (isRecord(auth.value)) walkAuth(auth.value, 0);
 

@@ -772,10 +772,9 @@ export interface OcxConfig {
   codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
   /**
    * Measured-capability source for Codex role auto-assign. With an Artificial Analysis API key
-   * (a literal, ${ENV} or keychain reference) its indexes take precedence. Hugging Face downloads
-   * for the primary or fallback LMArena source require huggingFace.enabled = true (default off).
+   * (a literal, ${ENV} or keychain reference) its indexes inform measured tiers.
    */
-  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string }; huggingFace?: { enabled?: boolean } };
+  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string } };
   /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */

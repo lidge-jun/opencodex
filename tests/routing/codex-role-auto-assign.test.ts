@@ -6,7 +6,7 @@ import {
   mapEffortToLevel,
   type RoleModelCandidate,
 } from "../../src/codex/role-auto-assign";
-import { candidateModelKey, capabilityTableFromArtificialAnalysis, capabilityTableFromRows, readBoundedBytes } from "../../src/codex/role-capability";
+import { candidateModelKey, capabilityTableFromArtificialAnalysis, readBoundedBytes } from "../../src/codex/role-capability";
 import type { RoleSizingOutcome } from "../../src/codex/role-sizing";
 
 const FULL = ["low", "medium", "high", "xhigh"];
@@ -184,25 +184,7 @@ describe("buildRoleProposals", () => {
   });
 });
 
-describe("capabilityTableFromRows", () => {
-  test("keys display names by model, keeps each model's best setting, and matches catalog slugs", () => {
-    const table = capabilityTableFromRows(new Map([
-      ["text", [
-        { model_name: "Claude Opus 5.5 (High)", category: "coding", rating: 1544.9, leaderboard_publish_date: "2026-10-22" },
-        { model_name: "GPT-6.1 Sol (Max)", category: "coding", rating: 1482.4, leaderboard_publish_date: "2026-10-22" },
-        { model_name: "GPT-6.1 Sol (Low)", category: "coding", rating: 1401, leaderboard_publish_date: "2026-10-22" },
-        { model_name: "GPT-6.1 Sol (Max)", category: "overall", rating: 1444, leaderboard_publish_date: "2026-10-21" },
-      ]],
-      ["agent", [{ model_name: "GPT-6 Astra (Max)", category: "overall", score: 0.147, leaderboard_publish_date: "2026-10-20" }]],
-    ]));
-    const coding = table.domains.coding!;
-    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => coding.get(key))).toEqual([1544.9, 1482.4]);
-    expect(table.domains.agentic!.get(candidateModelKey("gpt-6-astra"))).toBe(0.147);
-    expect(table.domains.general!.size).toBe(1);
-    expect(table.domains.writing).toBeUndefined();
-    expect(table.publishedAt).toBe("2026-10-22");
-  });
-
+describe("capability response bounds", () => {
   test("reads a leaderboard table up to the byte bound and refuses one past it", async () => {
     const body = () => new Response(new ReadableStream({
       start(controller) { controller.enqueue(new Uint8Array(6)); controller.enqueue(new Uint8Array(6)); controller.close(); },
@@ -222,7 +204,7 @@ describe("capabilityTableFromArtificialAnalysis", () => {
         { name: "GPT-6.1 Sol", slug: "gpt-6-1-sol", evaluations: { artificial_analysis_intelligence_index: 73, artificial_analysis_coding_index: 61 } },
       ],
     });
-    expect(table.source.redistributable).toBe(false);
+    expect(table.source?.redistributable).toBe(false);
     expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => table.domains.coding!.get(key))).toEqual([66, 61]);
     expect(table.domains.agentic!.get(candidateModelKey("gpt-6.1-sol"))).toBe(73);
     expect(() => capabilityTableFromArtificialAnalysis({ error: "API key is required" })).toThrow();

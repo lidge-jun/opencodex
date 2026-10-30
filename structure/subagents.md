@@ -365,11 +365,9 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   per 1M tokens). The sizing answer carries a neutral `domain` (coding, agentic, reasoning, writing,
   knowledge, general; missing means general), and `src/codex/role-capability.ts` reads that domain's
   scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
-  resolves. Otherwise or on failure, it reads the LMArena leaderboard dataset (CC BY 4.0) once per clock
-  hour only with `codexRoleCapability.huggingFace.enabled: true` (default off). With it off, both paths
-  make no Hugging Face request, keep configured tiers and price signals, and report benchmark data
-  unavailability through `capability.error`. Both sources refuse redirects, retain a 30-second timeout
-  and a 16 MiB body bound, and never download a redirected body; redirected datasets are unavailable.
+  resolves. With no key or on failure it keeps configured tiers and price signals, reports the reason
+  through `capability.error`, and returns null source attribution. The source refuses redirects and
+  retains a 30-second timeout and a 16 MiB body bound.
   The response's `capability` block attributes the source; Artificial Analysis terms forbid
   redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
   and unmeasured ones are not proposed; otherwise, or when the source cannot be read, price rank decides
