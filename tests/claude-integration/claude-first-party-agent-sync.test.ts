@@ -235,3 +235,17 @@ test("a failed save leaves the shared config on, so a retry neither prunes nor r
   expect(retry).toMatchObject({ status: 200, body: { changed: true } });
   expect(agentFiles()).toEqual({});
 });
+
+test("a save that published before failing keeps the new value, so a later On is a real transition", async () => {
+  const { ConfigWritePublishedError } = await import("../../src/config/persist-unlocked");
+  injectClaudeAgentDefs(config, {}, claudeDir);
+  config.claudeCode = { ...config.claudeCode, enabled: true };
+  persist();
+  const publishedThenFailed = () => { persist(); throw new ConfigWritePublishedError(new Error("bookkeeping")); };
+  await toggleClaude(false, publishedThenFailed).catch(() => null);
+  expect(config.claudeCode?.enabled).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).claudeCode.enabled).toBe(false);
+  const on = await toggleClaude(true);
+  expect(on).toMatchObject({ status: 200, body: { changed: true } });
+  expectRegistered();
+});

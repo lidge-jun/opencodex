@@ -1,4 +1,5 @@
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
 import { WindowsSecretAclSettleTimeoutError } from "../../lib/windows-secret-acl";
 import { mirrorDesiredEnabledOntoSnapshot } from "./claude-desktop-config-writers";
@@ -980,8 +981,11 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     try {
       persist(config);
     } catch (error) {
-      if (previousBlock === undefined) delete config.claudeCode;
-      else config.claudeCode = previousBlock;
+      // A published write already put the new value on disk; only an unpublished one rolls back.
+      if (!(error instanceof ConfigWritePublishedError)) {
+        if (previousBlock === undefined) delete config.claudeCode;
+        else config.claudeCode = previousBlock;
+      }
       if (isConfigLockError(error)) {
         return isLockContention(error)
           ? refusal(409, "claude", "config_busy",
