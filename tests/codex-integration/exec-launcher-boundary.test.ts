@@ -72,6 +72,16 @@ test("a failed or thrown trust check never reaches spawn", async () => {
   }
 });
 
+test("a selected executable that disappears before verification keeps the install hint", async () => {
+  const h = harness(async () => { throw new Error("must not inspect a missing target"); });
+  h.deps.findOnPath = () => "/usr/local/bin/codex";
+  h.deps.inspectShim = () => ({ status: "absent" }) as ReturnType<NonNullable<CodexSpawnDeps["inspectShim"]>>;
+  h.deps.execBoundary = { ...h.boundary, executable: () => false, exists: () => false };
+  expect(await spawnCodex(["--version"], {}, h.deps)).toBe(1);
+  expect(h.calls).toHaveLength(0);
+  expect(errors.mock.calls.flat().join(" ")).toContain("codex` CLI not found");
+});
+
 test("non-bundle targets preserve arguments and do not invoke bundle verification", async () => {
   const h = harness(async () => { throw new Error("must not inspect an ordinary CLI"); });
   h.deps.findOnPath = () => "/usr/bin/codex";
