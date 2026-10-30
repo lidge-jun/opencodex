@@ -81,8 +81,12 @@ export function buildStableClaudeConversationInput(
   if (blocks.length === 0) blocks.push("");
   const requestedLimit = options.maxHistoryChars ?? MAX_PROJECTED_HISTORY_CHARS;
   const limit = Number.isFinite(requestedLimit) && requestedLimit >= 0 ? Math.floor(requestedLimit) : MAX_PROJECTED_HISTORY_CHARS;
-  const history = blocks.slice(0, -1);
-  const historyChars = history.reduce((sum, block) => sum + block.length, 0);
+  // Charge image payload/reference strings without serializing another copy of their data.
+  // This is a replay-memory guard, not a token estimate or a bound on remote image contents.
+  const historySizes = messages.slice(0, -1).map((message, index) => blocks[index]!.length
+    + (typeof message.content === "string" ? 0 : message.content.reduce((chars, part) =>
+      chars + (part.type === "image" ? part.imageUrl.length : 0), 0)));
+  const historyChars = historySizes.reduce((sum, size) => sum + size, 0);
   let omitted = 0;
   if (historyChars > limit) {
     // Advance the cut in coarse character steps, then round to a complete message boundary.
@@ -90,9 +94,9 @@ export function buildStableClaudeConversationInput(
     const step = Math.max(1, Math.min(20_000, Math.floor(limit / 10)));
     const dropTarget = Math.ceil((historyChars - limit) / step) * step;
     let removedChars = 0;
-    while (omitted < history.length && removedChars < dropTarget) removedChars += history[omitted++]!.length;
+    while (omitted < historySizes.length && removedChars < dropTarget) removedChars += historySizes[omitted++]!;
     // Do not retain orphaned historical results at the beginning of a truncated replay.
-    while (omitted < history.length && messages[omitted]!.role === "toolResult") omitted++;
+    while (omitted < historySizes.length && messages[omitted]!.role === "toolResult") omitted++;
     // The current result must keep its originating call, even if that group exceeds the soft cap.
     const current = messages.at(-1);
     if (current?.role === "toolResult") {

@@ -109,9 +109,9 @@ test("image requests retain Responses history and Chat tool results through CLI 
   const definition = getAdapterDefinition("claude-cli")!;
   const originalCreate = definition.create;
   const releaseSpend = acquireOwnedSpendHome();
-  const model = "claude-cli/claude-sonnet-5-5";
+  const model = "claude-cli/claude-opus-5-5";
   const config = { port: 0, defaultProvider: "claude-cli", providers: {
-    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-sonnet-5-5"] },
+    "claude-cli": { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", authMode: "key", selectedModels: ["claude-opus-5-5"] },
   } } as OcxConfig;
   definition.create = provider => createClaudeCliAdapter(provider, {
     which: () => process.execPath,
@@ -136,6 +136,17 @@ test("image requests retain Responses history and Chat tool results through CLI 
   const image = (data: string) => ({ type: "input_image", image_url: `data:image/png;base64,${data}` });
   const native = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
   try {
+    // No explicit context override: real routing must inherit Opus's 1M registry window.
+    const history = Array.from({ length: 30 }, (_, index) => [
+      { role: "user", content: `EARLY_RECORD_${index}:` + "x".repeat(5000) },
+      { role: "assistant", content: `RESULT_${index}:` + "y".repeat(5000) },
+    ]).flat();
+    const longReplay = replay(await post("responses", { model, stream: false,
+      input: [...history, { role: "user", content: "Current request after the long history" }],
+    }));
+    expect(longReplay).toHaveLength(61);
+    expect(longReplay[0].text).toStartWith("USER:\nEARLY_RECORD_0:");
+    expect(longReplay.at(-1).text).toBe("USER:\nCurrent request after the long history");
     const first = await post("responses", { model, stream: false, store: true, input: [
       { role: "user", content: [{ type: "input_text", text: "First pair" }, image("QUFB"), image("QkJC")] },
     ] });
