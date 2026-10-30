@@ -60,7 +60,22 @@ export type WatchEntry = {
    */
   ancestors: Map<string, { dev: bigint; ino: bigint } | null>;
 };
-const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./;
+const CREDENTIAL_TMP_NAME = /^(auth|config|codex-accounts)\.json\.ocx\./i;
+/**
+ * Watcher names are compared the way a case-insensitive volume resolves them. Windows and
+ * default macOS volumes report a notification under the spelling the writer used, so a
+ * credential created as AUTH.JSON reaches the watcher under that name while the scan reads
+ * it as auth.json. Folding can only add reconciles on a case-sensitive volume, never drop one.
+ */
+function foldWatchName(name: string): string {
+  return name.toLowerCase().replace(/[. ]+$/, "");
+}
+/** An 8.3 short name (AUTH~1.JSO) cannot be mapped back to its long name without a lookup. */
+const SHORT_NAME_ALIAS = /~\d/;
+function foldedLookup<T>(keys: Iterable<T>, key: (item: T) => string, folded: string): T | undefined {
+  for (const item of keys) if (foldWatchName(key(item)) === folded) return item;
+  return undefined;
+}
 function ancestorIdentity(parent: string, child: string): { dev: bigint; ino: bigint } | null {
   try {
     const stat = lstatSync(join(parent, child), { bigint: true });
@@ -76,9 +91,12 @@ export function credentialWatchEventAction(
   parent: string, entry: WatchEntry, event: string, name: string | null,
 ): WatchEventAction {
   if (name === null) return "fail";
-  if (entry.names.has(name) || CREDENTIAL_TMP_NAME.test(name)) return "reconcile";
-  const ancestor = entry.ancestors.get(name);
-  if (ancestor === undefined) return "ignore";
+  if (CREDENTIAL_TMP_NAME.test(name) || SHORT_NAME_ALIAS.test(name)) return "reconcile";
+  const folded = foldWatchName(name);
+  if (foldedLookup(entry.names, n => n, folded) !== undefined) return "reconcile";
+  const match = foldedLookup(entry.ancestors.entries(), ([n]) => n, folded);
+  if (match === undefined) return "ignore";
+  const ancestor = match[1];
   // Renames (create/delete/move, including a same-identity rename) are structural and
   // always reconcile; only "change" may be child-list noise from a same-identity dir.
   if (event !== "change" || ancestor === null) return "reconcile";

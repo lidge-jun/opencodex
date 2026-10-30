@@ -387,6 +387,21 @@ test("the watch seam classifies direct, ancestor, identity, and failure cases de
     // Unrelated names never reconcile.
     expect(action("change", "foreign")).toBe("ignore");
     expect(action("rename", "unknown.tmp")).toBe("ignore");
+    // A case-insensitive volume reports the writer's spelling: a differently cased or
+    // trailing-dot spelling of a target, its write residue, or an unresolvable 8.3 short
+    // name must still reconcile rather than fall through as an unrelated name.
+    expect(action("rename", "AUTH.JSON")).toBe("reconcile");
+    expect(action("change", "Auth.Json")).toBe("reconcile");
+    expect(action("change", "auth.json.")).toBe("reconcile");
+    expect(action("rename", "Direct")).toBe("reconcile");
+    expect(action("rename", "CONFIG.JSON.OCX.7.tmp")).toBe("reconcile");
+    expect(action("rename", "AUTH~1.JSO")).toBe("reconcile");
+    // A differently cased ancestor is still an ancestor: renames reconcile, and a change is
+    // ignored only when that spelling resolves to the recorded directory itself.
+    expect(action("rename", "ANCESTOR")).toBe("reconcile");
+    const upper = (() => { try { return lstatSync(join(dir, "ANCESTOR"), { bigint: true }); } catch { return null; } })();
+    const sameDir = upper !== null && upper.dev === same.dev && upper.ino === same.ino;
+    expect(action("change", "ANCESTOR")).toBe(sameDir ? "ignore" : "reconcile");
     // A different real directory at the same name: the original is kept aside so
     // its inode stays allocated and the replacement provably has a new identity.
     renameSync(ancestor, join(dir, "ancestor-aside"));
