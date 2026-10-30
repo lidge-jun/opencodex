@@ -15,6 +15,15 @@ const allowedHostedSelectors = new Set([
   "code_interpreter", "image_generation", "image_gen", "tool_search",
 ]);
 
+function knownToolSelector(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  if (entry.name !== undefined && (typeof entry.name !== "string" || !entry.name.trim())) return false;
+  if (entry.type === "function" || entry.type === "custom") return typeof entry.name === "string";
+  if (entry.type === "mcp") return typeof entry.server_label === "string" && !!entry.server_label.trim();
+  return typeof entry.type === "string" && allowedHostedSelectors.has(entry.type);
+}
+
 /** Only definite, well-formed mandatory selectors justify excluding a destination. */
 export function hasMandatoryToolChoice(rawBody: unknown): boolean {
   if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return false;
@@ -22,19 +31,11 @@ export function hasMandatoryToolChoice(rawBody: unknown): boolean {
   if (choice === "required") return true;
   if (!choice || typeof choice !== "object" || Array.isArray(choice)) return false;
   const selector = choice as Record<string, unknown>;
-  if (selector.type === "function" || selector.type === "custom") {
-    return typeof selector.name === "string" && selector.name.trim().length > 0;
-  }
-  return selector.type === "allowed_tools" && selector.mode === "required"
+  // Eligibility is broader than terminal inspection: hosted selectors retain their own terminal owner.
+  if (selector.type !== "allowed_tools") return knownToolSelector(selector);
+  return selector.mode === "required"
     && Array.isArray(selector.tools) && selector.tools.length > 0
-    && selector.tools.every((tool: unknown) => {
-      if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
-      const entry = tool as Record<string, unknown>;
-      if (entry.name !== undefined && (typeof entry.name !== "string" || !entry.name.trim())) return false;
-      if (entry.type === "function" || entry.type === "custom") return typeof entry.name === "string";
-      if (entry.type === "mcp") return typeof entry.server_label === "string" && !!entry.server_label.trim();
-      return typeof entry.type === "string" && allowedHostedSelectors.has(entry.type);
-    });
+    && selector.tools.every(knownToolSelector);
 }
 
 const hostedCalls = new Map([

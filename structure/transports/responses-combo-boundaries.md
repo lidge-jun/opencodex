@@ -21,7 +21,7 @@ and `tests/responses/responses-combo-exhausted-error.test.ts`.
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
-for well-formed mandatory `tool_choice` selectors, including required allowed-tools lists. Normal and
+for well-formed mandatory `tool_choice` selectors, including direct hosted/MCP choices and required allowed-tools lists. Normal and
 recovery picks share the check, resolving the inbound wire's static model policy and actual Responses
 transport URL; malformed and unknown selectors retain their ordinary error path. The next target
 receives the original selector, and an all-Meta exhaustion names the constraint before any send.

@@ -555,7 +555,7 @@ uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choi
 `additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
 outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
 upstream send because Muse supports only `auto`. Filtering a required tool never changes the caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
-destination. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
+destination. Combo eligibility excludes it before sending for known mandatory selectors, including direct hosted types and MCP selectors with a nonempty server label; malformed and unknown selectors retain the adapter error path. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
 
 ## Shared type declarations
 

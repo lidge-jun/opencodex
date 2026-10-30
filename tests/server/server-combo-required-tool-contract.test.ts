@@ -165,6 +165,53 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
+  for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }]) {
+    for (const stream of [false, true]) {
+      test(`direct hosted choice skips Meta before send (${choice.type}, stream=${stream})`, async () => {
+        const bodies: unknown[] = []; let metaSends = 0;
+        const upstream = serve(async request => {
+          bodies.push(await request.json());
+          const response = completedNoCall("m2", "hosted terminal owner");
+          return stream ? new Response(`data: ${JSON.stringify({ type: "response.completed", response })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } }) : Response.json(response);
+        });
+        const declaration = choice.type === "mcp" ? { ...choice, server_url: "https://docs.example.invalid/mcp" } : choice;
+        const response = await handleResponsesWith(comboConfig({
+          a: provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+            fetch: (async () => { metaSends++; throw new Error("unexpected Meta send"); }) as typeof fetch }),
+          b: provider("openai-responses", baseUrl(upstream), "key-b"),
+        }), requiredRequest({ tools: [declaration], tool_choice: choice, stream }));
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("hosted terminal owner");
+        expect(metaSends).toBe(0); expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toMatchObject({ tool_choice: choice });
+      });
+    }
+    test(`direct hosted choice reports all-Meta exhaustion (${choice.type})`, async () => {
+      let sends = 0;
+      const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+        fetch: (async () => { sends++; throw new Error("unexpected Meta send"); }) as typeof fetch });
+      const response = await handleResponsesWith(comboConfig({ a: meta, b: meta }), requiredRequest({ tool_choice: choice }));
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("mandatory tool_choice");
+      expect(sends).toBe(0);
+    });
+  }
+  test("direct hosted selectors keep their terminal owner and reject malformed selector shapes", async () => {
+    const { hasMandatoryToolChoice, requiredToolContractOf } = await import("../../src/server/responses/combo-required-tool-contract");
+    const { createComboRequiredToolStreamGuard } = await import("../../src/server/responses/combo-required-tool-stream");
+    for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }, { type: "tool_search" }]) {
+      const body = { tools: [choice], tool_choice: choice };
+      expect(hasMandatoryToolChoice(body)).toBe(true);
+      expect(requiredToolContractOf(body)).toBeUndefined();
+      expect(createComboRequiredToolStreamGuard(body, new Set())).toBeUndefined();
+    }
+    for (const choice of [{ type: "web_search", name: 5 }, { type: "web_search", name: " " },
+      { type: "mcp" }, { type: "mcp", server_label: 5 }, { type: "mcp", server_label: " " },
+      { type: "mcp", server_label: "docs", name: " " }, { type: "unknown_hosted" }]) {
+      expect(hasMandatoryToolChoice({ tool_choice: choice })).toBe(false);
+    }
+  });
   for (const choice of ["required", { type: "function", name: "shell" },
     { type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "shell" }] }]) {
   test(`Meta mandatory tool choice selects the next target before send (#7964): ${JSON.stringify(choice)}`, async () => {
