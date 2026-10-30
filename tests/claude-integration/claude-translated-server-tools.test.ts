@@ -8,7 +8,7 @@ import { handleClaudeMessages } from "../../src/server/claude-messages";
 import * as openAiSidecar from "../../src/providers/openai-sidecar";
 import * as mainAdmission from "../../src/codex/native-main-admission";
 import * as mainAccount from "../../src/codex/main-account";
-import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { CodexAuthContextError, codexPoolAffinityKey } from "../../src/codex/auth-context";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { updateAccountQuota, clearAccountQuota } from "../../src/codex/quota";
 import { bindThreadAffinity, CODEX_THREAD_AFFINITY_IDLE_TTL_MS } from "../../src/codex/routing/thread-affinity";
@@ -179,6 +179,19 @@ describe("translated Claude lane carries typed web tools to Anthropic", () => {
     try {
       await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, signal: controller.signal })).rejects.toThrow();
       expect(seenSignal?.aborted).toBe(true);
+    } finally { resolver.mockRestore(); }
+  });
+
+  test("cancellation wrapped by a credential refresh error still ends the request", async () => {
+    const controller = new AbortController();
+    let sends = 0;
+    const resolver = spyOn(openAiSidecar, "resolveFirstUsableOpenAiSidecar").mockImplementation(async () => {
+      controller.abort();
+      throw new CodexAuthContextError("fixture-account", controller.signal.reason);
+    });
+    try {
+      await expect(claudeTurn("https://compat.example.com", OK_TURN, "anth", undefined, { native: true, pool: true, signal: controller.signal, onUpstream: () => { sends++; } })).rejects.toThrow();
+      expect(sends).toBe(0);
     } finally { resolver.mockRestore(); }
   });
 

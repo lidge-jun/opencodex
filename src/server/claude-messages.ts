@@ -1025,6 +1025,11 @@ async function handleClaudeMessagesWithBudget(
           }
         }
       } catch (err) {
+        // Refresh wraps cancellation in CodexAuthContextError; a cancelled request must not continue.
+        if (req.signal.aborted) {
+          openAiSidecar?.releaseProbeLease?.();
+          throw req.signal.reason ?? err;
+        }
         if (!(err instanceof errors.CodexPoolAuthenticationError) && !(err instanceof errors.CodexAuthContextError)
           && !(err instanceof errors.CodexAccountCooldownError) && !(err instanceof errors.CodexThreadAffinityExpiredError)
           && !(err instanceof errors.CodexMainProfileDrainingError)) {
