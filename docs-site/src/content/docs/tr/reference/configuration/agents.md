@@ -263,3 +263,10 @@ Yapılandırılmış sınırlar, model effort sabitlemesi olmayan uygun yerel Ch
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
+
+## V1 eşitlemesi sırasında CLI güncellemeleri
+
+`multiAgentMode: "v1"` eşitlemesinin Codex'in genel v2 geçersiz kılmasını kapatması
+gerekiyorsa, devam eden bir Codex CLI güncellemesi eşitlemeyi geçici olarak reddedebilir.
+Güncelleme bittikten sonra yeniden deneyin. Zaten v1 kullanan bir Codex dizini, yerel
+özellik komutu gerekmediği için güncelleme sırasında da eşitlenebilir.

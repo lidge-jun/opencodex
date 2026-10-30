@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { OcxConfig } from "../../types";
 import { ConfigWriteDestinationChanged, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH } from "../paths";
+import type { CodexCliSelectionAsyncParentWrite } from "../cli-update-selection-gate";
 
 /**
  * Reconcile the native `features.multi_agent_v2` override when an injection carries an
@@ -17,7 +18,7 @@ import { CODEX_CONFIG_PATH } from "../paths";
  */
 export type InjectedV1SurfaceReconcile =
   | { ok: true; content: string; changed: boolean }
-  | { ok: false; message: string };
+  | { ok: false; message: string; retryable?: boolean };
 
 let toggleForTests: ((enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void) | undefined;
 
@@ -44,6 +45,9 @@ export interface PreparedV1SurfaceReconcile {
    * only — `run()` re-checks the flag on the bytes present under the lock.
    */
   readonly enabledAtPrepare: boolean;
+  /** Acquire before the config lock; an already-v1 home needs no selection lease. */
+  admit(): Promise<boolean>;
+  release(): void;
   /**
    * `heldConfigWriteLock` is the injector's own held write-lock handle: the
    * transition would otherwise re-acquire the same file and refuse itself.
@@ -74,17 +78,39 @@ export async function prepareInjectedV1SurfaceReconcile(
     toggle = (enabled, env, validate) => runCodexFeaturesCommand(enabled ? "enable" : "disable", "multi_agent_v2", env, validate);
   }
   const resolvedToggle = toggle;
+  const { beginCodexCliSelectionParentWriteAsync, CodexCliSelectionMutationBusyError } = await import("../cli-update-selection-gate");
+  let selection: CodexCliSelectionAsyncParentWrite | undefined;
+  const busy = (): InjectedV1SurfaceReconcile => ({
+    ok: false, retryable: true,
+    message: "Codex config injection refused: the v1 transition has no current CLI selection admission. Retry the injection after the CLI update finishes.",
+  });
   return {
     enabledAtPrepare,
+    async admit() {
+      if (!enabledAtPrepare) return true;
+      if (selection) return selection.entered;
+      selection = await beginCodexCliSelectionParentWriteAsync();
+      return selection.entered;
+    },
+    release() { selection?.exit(); },
     run(heldConfigWriteLock) {
       // Decide on the bytes present NOW, under the lock — the prepare-time
       // answer is stale the moment another writer could have touched the file.
       if (!isMultiAgentV2Enabled()) {
         return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: false };
       }
-      const transition = transitionMultiAgentV2(false, resolvedToggle, {
-        ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
-      });
+      // A prepare-time no-op may have become a transition. Refuse without a child;
+      // a fresh pass can acquire admission before taking the config lock.
+      if (!selection?.entered) return busy();
+      let transition: ReturnType<typeof transitionMultiAgentV2>;
+      try {
+        transition = selection.commit(() => transitionMultiAgentV2(false, resolvedToggle, {
+          ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
+        }));
+      } catch (error) {
+        if (error instanceof CodexCliSelectionMutationBusyError) return busy();
+        throw error;
+      }
       if (!transition.ok) {
         if (transition.retryable === false) throw new ConfigWriteDestinationChanged(transition.error);
         return {

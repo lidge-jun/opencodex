@@ -412,7 +412,13 @@ inherit an earlier async verdict. Ordinary atomic secret-file publication and na
 retain their synchronous leaf contracts; the nonblocking guarantee covers recovery admission. CLI,
 machine API, restart and Remote Workspace callers use the async
 entry points. Runtime publication rechecks selection inputs, cache epoch, cancellation and caller
-currentness after recovery. Codex feature-setting callers acquire admission before their synchronous
+currentness after recovery. Automatic v1 injection uses the same async admission before its config
+lock when the global v2 flag needs disabling. Its synchronous feature-transition commit permits
+nested runtime-pin writes while excluding the update worker; already-v1 no-ops acquire no lease,
+and a newly enabled flag without admission refuses retryably before spawning.
+The injection releases admission after config commit or rollback, including config-lock acquisition
+failure, before its history worker starts. The feature transition retains the shared artifact preimage.
+Codex feature-setting callers acquire admission before their synchronous
 transition; management keeps the lease across config-root hardening, then rechecks its mode plan and
 commits in the existing no-await callback. Refusal precedes combined setting writes and returns a
 retryable `codex_cli_selection_busy` response. Diagnostics classify a held async parent by its exact
