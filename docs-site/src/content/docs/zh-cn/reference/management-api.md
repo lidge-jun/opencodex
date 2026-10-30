@@ -241,7 +241,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 读取或更新 Anthropic OAuth 池策略 | 400 非 Anthropic provider 或策略无效 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一个 OAuth 账户的运行时冷却 | 400 provider/账户无效 |
 | `PUT /api/oauth/accounts/alias` | 设置或清除 OAuth 账户别名 | 400 provider/账户/别名无效 |
-| `PUT /api/oauth/accounts/pause` | 暂停或恢复 Anthropic 或通用 OAuth 账户。Body `{ provider, accountId, paused }`；暂停活跃账户时，如有其他可用账户则切换过去。 | 400 不支持的 provider 或无效 body；404 账户不存在；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 暂停状态已保存；请重新发送相同请求，不要反转暂停状态) |
+| `PUT /api/oauth/accounts/pause` | 暂停或恢复 Anthropic 或通用 OAuth 账户。Body `{ provider, accountId, paused }`；暂停活跃账户时，如有其他可用账户则切换过去。 | 400 不支持的 provider 或无效 body；404 账户不存在；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 暂停状态已保存；保留账户和暂停状态，添加 `retryAffinityReset: true` 后重试，服务器重启后也会确认重置) |
 | `GET, POST, DELETE /api/providers/keys` | 列出已脱敏的 provider 密钥，添加/激活一个，或移除一个 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |

@@ -622,6 +622,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       return jsonResponse({ error: "missing accountId" }, 400);
     }
     if (typeof body.paused !== "boolean") return jsonResponse({ error: "paused must be a boolean" }, 400);
+    if (body.retryAffinityReset !== undefined && typeof body.retryAffinityReset !== "boolean") {
+      return jsonResponse({ error: "retryAffinityReset must be a boolean" }, 400);
+    }
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
@@ -637,11 +640,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
     let affinityReset: Promise<boolean> | undefined;
+    // Explicit retries rebuild reset intent after a server restart lost the in-memory marker.
+    if (anthropicRouting && (result.activeAccountChanged || body.retryAffinityReset === true)) {
+      anthropicRouting.resetAnthropicRoutingForManualSelection(result.activeAccountId);
+      affinityReset = anthropicRouting.flushAnthropicManualSelectionReset();
+    }
     if (result.activeAccountChanged) {
-      if (anthropicRouting) {
-        anthropicRouting.resetAnthropicRoutingForManualSelection(result.activeAccountId);
-        affinityReset = anthropicRouting.flushAnthropicManualSelectionReset();
-      } else {
+      if (!anthropicRouting) {
         const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
         seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
       }
@@ -655,7 +660,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // An unchanged retry must finish a reset left pending by the first request.
     affinityReset ??= anthropicRouting?.flushAnthropicManualSelectionReset();
     if (affinityReset && !await affinityReset) {
-      return jsonResponse({ error: "Account pause was saved, but its session-affinity reset was not persisted. Retry the pause request.",
+      return jsonResponse({ error: "Account pause was saved, but its session-affinity reset was not persisted. Retry with the same pause state and retryAffinityReset: true.",
         code: "affinity_reset_not_persisted", provider, accountId: body.accountId, paused: body.paused,
         activeAccountId: result.activeAccountId, activeAccountChanged: result.activeAccountChanged,
         pauseCommitted: true, retryable: true }, 503);

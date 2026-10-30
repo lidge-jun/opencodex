@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act, useLayoutEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useProviderAccountPools, type OAuthAccount } from "../src/hooks/useProviderAccountPools";
+import { clearAffinityResetRetry } from "../src/provider-affinity-reset-retries";
 
 // A pause is persisted by the PUT alone. Everything after it is a follow-up read, and its
 // failure must never be reported as a failed pause (the operator would retry a saved change).
@@ -17,9 +18,9 @@ let fetchOauth: () => Promise<void>;
 
 const row = (id: string, active: boolean, paused = false): OAuthAccount => ({ id, email: `${id}@example.test`, active, paused });
 
-function Harness() {
+function Harness({ apiBase = "/pause-hook" }: { apiBase?: string }) {
   const aliveRef = useRef(true);
-  const current = useProviderAccountPools({ apiBase: "/pause-hook", config: null, aliveRef, t: key => key,
+  const current = useProviderAccountPools({ apiBase, config: null, aliveRef, t: key => key,
     oauthStatus: {}, notify: (key: string, ok: boolean) => { notices.push({ key, ok }); },
     fetchConfig: async () => {}, fetchOauth: () => fetchOauth(), fetchProviderQuotas: async () => {},
     codexActiveNeedsReauth: false });
@@ -28,6 +29,8 @@ function Harness() {
 }
 
 beforeEach(async () => {
+  clearAffinityResetRetry("/pause-hook", "fixture");
+  clearAffinityResetRetry("/other-server", "fixture");
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previous;
   const win = new Window({ url: "http://localhost" });
   Object.defineProperties(globalThis, {
@@ -47,6 +50,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => { root?.unmount(); });
   root = null;
+  clearAffinityResetRetry("/pause-hook", "fixture");
+  clearAffinityResetRetry("/other-server", "fixture");
   for (const key of globals) {
     const descriptor = previous[key];
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -95,10 +100,52 @@ test.each(["active", "pause"] as const)("committed %s failure retains an exact r
   expect(pools.pendingAffinityResets.fixture).toBeDefined();
   confirmed = true;
   await act(async () => { await pools.retryAffinityReset("fixture"); });
-  expect(writes).toEqual(Array.from({ length: 3 }, () => action === "active"
-    ? { provider: "fixture", accountId: "b" } : { provider: "fixture", accountId: "a", paused: true }));
+  expect(writes).toEqual(Array.from({ length: 3 }, (_, index) => action === "active"
+    ? { provider: "fixture", accountId: "b" }
+    : { provider: "fixture", accountId: "a", paused: true, ...(index ? { retryAffinityReset: true } : {}) }));
   expect(pools.pendingAffinityResets.fixture).toBeUndefined();
   expect(notices).toContainEqual({ key: "prov.affinityResetPending", ok: false });
+});
+
+test("unrelated successful pause preserves reset retry after server state may have restarted", async () => {
+  respond = async (url, init) => {
+    if (init?.method !== "PUT") return Response.json({ activeAccountId: "b", accounts: [row("a", false), row("b", true)] });
+    return url.endsWith("/active")
+      ? Response.json({ code: "affinity_reset_not_persisted", retryable: true,
+        selectionCommitted: true, activeAccountId: "b" }, { status: 503 })
+      : Response.json({ ok: true, activeAccountId: "b", activeAccountChanged: false });
+  };
+  await act(async () => { await pools.switchAccount("fixture", row("b", false)); });
+  await act(async () => { await pools.pauseAccount("fixture", row("a", false), true); });
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "active", accountId: "b" });
+});
+
+test("pending reset survives page navigation and remains scoped to its server", async () => {
+  let confirmed = false;
+  const writes: string[] = [];
+  respond = async (url, init) => {
+    if (init?.method === "PUT") {
+      writes.push(url);
+      return confirmed ? Response.json({ ok: true, activeAccountId: "b" })
+        : Response.json({ code: "affinity_reset_not_persisted", retryable: true,
+          selectionCommitted: true, activeAccountId: "b" }, { status: 503 });
+    }
+    return Response.json({ activeAccountId: "b", accounts: [row("a", false), row("b", true)] });
+  };
+  await act(async () => { await pools.switchAccount("fixture", row("b", false)); });
+  await act(async () => { root!.render(null); });
+  await act(async () => { root!.render(<Harness apiBase="/other-server" />); });
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); await pools.retryAffinityReset("fixture"); });
+  expect(writes).toHaveLength(1);
+  await act(async () => { root!.render(null); });
+  await act(async () => { root!.render(<Harness />); });
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "active", accountId: "b" });
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  confirmed = true;
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(writes).toEqual(["/pause-hook/api/oauth/accounts/active", "/pause-hook/api/oauth/accounts/active"]);
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
 });
 
 test("equal account IDs in two pools have independent pending mutation ownership", async () => {

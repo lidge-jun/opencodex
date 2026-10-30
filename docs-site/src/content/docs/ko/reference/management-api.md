@@ -260,7 +260,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic과 일반 OAuth provider의 기존 pool policy입니다. `/api/pool/settings`로 대체되었고 기존 클라이언트를 위해 유지합니다 | 400 codex 또는 API 키 provider, 잘못된 policy |
 | `POST /api/oauth/accounts/clear-cooldown` | OAuth 계정 하나의 런타임 cooldown을 지웁니다 | 400 잘못된 provider/account |
 | `PUT /api/oauth/accounts/alias` | OAuth 계정 alias를 설정하거나 지웁니다 | 400 잘못된 provider/account/alias |
-| `PUT /api/oauth/accounts/pause` | Anthropic 또는 일반 OAuth 계정을 정지·재개합니다. Body `{ provider, accountId, paused }`. 활성 계정을 정지하면 사용 가능한 다른 계정이 있을 때 전환합니다. | 400 지원하지 않는 provider 또는 잘못된 body; 404 계정 없음; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 일시정지 상태는 저장됨; 상태를 반대로 바꾸지 말고 동일 요청을 재전송) |
+| `PUT /api/oauth/accounts/pause` | Anthropic 또는 일반 OAuth 계정을 정지·재개합니다. Body `{ provider, accountId, paused }`. 활성 계정을 정지하면 사용 가능한 다른 계정이 있을 때 전환합니다. | 400 지원하지 않는 provider 또는 잘못된 body; 404 계정 없음; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 일시정지 상태는 저장됨; 계정과 정지 상태를 유지하고 `retryAffinityReset: true`를 추가해 재시도하면 서버 재시작 후에도 초기화를 확인) |
 | `GET, POST, DELETE /api/providers/keys` | 마스킹된 provider key를 나열, 추가/활성화, 또는 제거합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/active` | provider의 활성 key를 선택합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |

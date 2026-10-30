@@ -120,6 +120,59 @@ for (const action of ["active", "pause"] as const) {
     } finally { confirmation.mockRestore(); }
   }, 20_000);
 }
+
+test("explicit pause reset retry survives loss of process-local pending state", async () => {
+  const { a, b } = await seed();
+  await saveCredential("anthropic", { access: "fixture-access-C", refresh: "fixture-refresh-C",
+    expires: Date.now() + 3_600_000, accountId: "C" });
+  const c = getAccountSet("anthropic")!.accounts.find(row => row.id !== a && row.id !== b)!.id;
+  await setActiveAccount("anthropic", a);
+  bindAnthropicSessionAffinity(session, c);
+  await flush();
+  const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+  let attempts = 0;
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+    .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+      return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+    });
+  try {
+    const body = { provider: "anthropic", accountId: a, paused: true };
+    expect((await accountMutation("pause", body))?.status).toBe(503);
+    clearAnthropicAccountPoolState(); // Abrupt restart: no graceful flush repairs the snapshot.
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    expect((await accountMutation("pause", { ...body, retryAffinityReset: "true" }))?.status).toBe(400);
+    expect((await accountMutation("pause", body))?.status).toBe(200);
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    const retry = await accountMutation("pause", { ...body, retryAffinityReset: true });
+    expect(retry?.status).toBe(200);
+    expect(await retry!.json()).toMatchObject({ activeAccountId: b, activeAccountChanged: false });
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+  } finally { confirmation.mockRestore(); }
+}, 20_000);
+
+test("pausing an unrelated inactive account confirms an outstanding selection reset", async () => {
+  const { a, b } = await seed();
+  await flush();
+  const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+  let attempts = 0;
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+    .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+      return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+    });
+  try {
+    const selection = await accountMutation("active", { provider: "anthropic", accountId: b });
+    expect(selection?.status).toBe(503);
+    const unrelated = await accountMutation("pause", { provider: "anthropic", accountId: a, paused: true });
+    expect(unrelated?.status).toBe(200);
+    expect(await unrelated!.json()).toMatchObject({ activeAccountId: b, activeAccountChanged: false });
+    expect(attempts).toBe(2);
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+  } finally { confirmation.mockRestore(); }
+}, 20_000);
 test("normal transient detour returns to the original and refreshes idle lifetime", async () => {
   const { a, b } = await seed();
   let now = Date.now(); clock = spyOn(Date, "now").mockImplementation(() => now);

@@ -502,7 +502,7 @@ Ordinary routing mutations coalesce behind a one-second publication timer so cal
 synchronous snapshot writes. Manual management selection and pause-induced selection changes explicitly await confirmed
 reset publication before reporting success. A failed publication leaves the account mutation committed and returns
 503 `affinity_reset_not_persisted` with `selectionCommitted` or `pauseCommitted` and `retryable: true`; repeating the
-request finishes the pending reset, including an unchanged pause retry. The synchronous routing-reset API is preserved.
+selection request finishes the pending reset; pause retries preserve the account and desired state and add `retryAffinityReset: true` to rebuild reset intent even after restart. The synchronous routing-reset API is preserved.
 Explicit best-effort and shutdown flushes remain distinct from confirmed operator publication. Failures emit identifier-free
 warnings and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
 `tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.

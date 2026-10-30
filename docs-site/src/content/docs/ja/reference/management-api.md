@@ -251,7 +251,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth プール ポリシーの読み取りまたは更新 | 400 非 Anthropic プロバイダーまたは無効なポリシー |
 | `POST /api/oauth/accounts/clear-cooldown` | 1 つの OAuth アカウントのランタイム クールダウンをクリアする | 400 無効なプロバイダー/アカウント |
 | `PUT /api/oauth/accounts/alias` | OAuth アカウント エイリアスを設定またはクリアする | 400 無効なプロバイダー/アカウント/エイリアス |
-| `PUT /api/oauth/accounts/pause` | Anthropic または汎用 OAuth アカウントを一時停止・再開。Body `{ provider, accountId, paused }`。アクティブなアカウントを停止すると、利用可能な別のアカウントがあれば切り替えます。 | 400 未対応のプロバイダーまたは無効な body；404 アカウントなし；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 一時停止状態は保存済み。状態を反転せず同じリクエストを再送信) |
+| `PUT /api/oauth/accounts/pause` | Anthropic または汎用 OAuth アカウントを一時停止・再開。Body `{ provider, accountId, paused }`。アクティブなアカウントを停止すると、利用可能な別のアカウントがあれば切り替えます。 | 400 未対応のプロバイダーまたは無効な body；404 アカウントなし；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 一時停止状態は保存済み。同じアカウントと停止状態を維持し、`retryAffinityReset: true` を追加して再送信。サーバー再起動後もリセットを確認) |
 | `GET, POST, DELETE /api/providers/keys` |マスクされたプロバイダー キーを一覧表示し、1 つを追加/アクティブ化するか、1 つを削除します。 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/active` |プロバイダーのアクティブなキーを選択します | 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/alias` |プロバイダー キー エイリアスを設定またはクリアする | 400 無効な入力。 404 プロバイダー/キーがありません |
