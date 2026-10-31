@@ -214,6 +214,17 @@ test("served-connection guard permits catalog sync metadata at a later write", a
   expect(report.result).toEqual({ writes: ["before-change", "after-change"], refused: false, boundary: "restore" });
 });
 
+for (const retryError of ["busy", "locked", "exhausted", "permission", "unwrapped", "identity"]) {
+  test(`signal sync fencing bounds and classifies ${retryError} retries`, async () => {
+    const report = await runStop({ mode: "retry", retryError });
+    const succeeds = retryError === "busy" || retryError === "locked";
+    expect(report.result).toEqual({ success: succeeds, attempts: succeeds ? 3 : retryError === "exhausted" ? 20 : 1,
+      waits: Array(succeeds ? 2 : retryError === "exhausted" ? 19 : 0).fill(50) });
+    expect(report.after).toBe(report.before);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+  });
+}
+
 for (const runtimeRecord of ["absent", "invalid", "foreign"]) {
   test(`signal refuses restoration when its runtime record is ${runtimeRecord}`, async () => {
     const report = await runStop({ mode: "runtime", runtimeRecord, expectedFailure: true });
@@ -234,7 +245,7 @@ for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
   }, 20_000);
 }
 
-for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, { releaseFirst: false, hold: "home" }, { releaseFirst: true, hold: "catalog" }] as const) {
+for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, { releaseFirst: false, hold: "home" }, { releaseFirst: true, hold: "catalog" }, { releaseFirst: false, hold: "lock" }] as const) {
   test(`a separate sync ${releaseFirst ? "finishes before" : "cannot commit after"} signal restoration (${hold})`, async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-link-sync-stop-"));
     const home = join(root, "ocx"), codex = join(root, "codex");
@@ -276,6 +287,11 @@ for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, 
         expect(durable().catalog.models).toEqual([{ slug: "fixture/late-sync" }]);
       }
       release("signal-now");
+      if (hold === "lock") {
+        // Both immediate attempts see a real competing C transaction. Yielding lets it finish.
+        await Bun.sleep(150);
+        release("catalog-release");
+      }
       await waitFor("shutdown-drained");
       const restored = durable();
       expect(restored.config).toBe('model = "native"\n');
@@ -293,7 +309,7 @@ for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, 
       if (!releaseFirst) {
         release("catalog-release");
         expect(await held.exited).toBe(0);
-        expect(read("held-sync-result.json")).toMatchObject({ ok: false, fetched: true });
+        expect(read("held-sync-result.json")).toMatchObject(hold === "lock" ? { ok: true, lockHeld: true } : { ok: false, fetched: true });
       }
       // Read after BOTH processes exit; the runtime's own exit snapshot cannot prove this.
       expect(durable()).toEqual(restored);

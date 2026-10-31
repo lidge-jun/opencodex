@@ -3,8 +3,20 @@ import { mock } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const options = JSON.parse(readFileSync(0, "utf8")) as { hold: "catalog" | "home" | false; name: "held" | "fresh" };
+const options = JSON.parse(readFileSync(0, "utf8")) as { hold: "catalog" | "home" | "lock" | false; name: "held" | "fresh" };
 const home = process.env.OPENCODEX_HOME!;
+if (options.hold === "lock") {
+  const { Database } = await import("bun:sqlite");
+  const database = new Database(join(home, "config-mutation.sqlite"));
+  try {
+    database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    writeFileSync(join(home, "held-requested"), "ready");
+    while (!existsSync(join(home, "catalog-release"))) await Bun.sleep(10);
+    database.exec("ROLLBACK");
+  } finally { database.close(); }
+  writeFileSync(join(home, "held-sync-result.json"), JSON.stringify({ ok: true, lockHeld: true }));
+  process.exit(0);
+}
 const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync;
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,

@@ -1,6 +1,6 @@
 /** Cross-process admission for Link sync while its local runtime shuts down. */
 import { lstatSync } from "node:fs";
-import { withConfigMutationLockSync } from "../config";
+import { ConfigMutationLockError, withConfigMutationLockSync } from "../config";
 import { getRuntimePortPath, isValidRuntimePortState, writeRuntimePort, type RuntimePortState } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 
@@ -45,4 +45,21 @@ export function markClientRuntimeStopping(expected: Required<Pick<RuntimePortSta
     }
     if (!current.clientStopping) writeRuntimePort({ ...current, clientStopping: true });
   });
+}
+
+/** Yield only for proved SQLite contention; storage/identity failures remain immediate refusals. */
+export async function markClientRuntimeStoppingWithRetry(
+  expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>,
+  deps: { mark?: () => void; sleep?: (ms: number) => Promise<unknown> } = {},
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try { (deps.mark ?? (() => markClientRuntimeStopping(expected)))(); return true; }
+    catch (error) {
+      const cause = error instanceof ConfigMutationLockError ? error.cause : undefined;
+      const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
+      if ((code !== "SQLITE_BUSY" && code !== "SQLITE_LOCKED") || attempt === 19) return false;
+      await (deps.sleep ?? Bun.sleep)(50);
+    }
+  }
+  return false;
 }

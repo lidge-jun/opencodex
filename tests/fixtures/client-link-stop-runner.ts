@@ -11,7 +11,7 @@ import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contra
 import { claimPendingTeardown } from "../../src/config/pending-teardown";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
-  mode: "runtime" | "helper" | "api" | "parent" | "guard";
+  mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry";
   transport?: "link" | "hub";
   signal?: NodeJS.Signals;
   osSignal?: boolean;
@@ -19,6 +19,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   externalSignal?: boolean;
   holdShutdown?: boolean;
   runtimeRecord?: "absent" | "invalid" | "foreign";
+  retryError?: "busy" | "locked" | "exhausted" | "permission" | "unwrapped" | "identity";
   repeat?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
@@ -123,7 +124,24 @@ if (options.preserve === "service") process.env.OCX_SERVICE = "1";
 if (options.preserve === "desktop") takeDesktopSupervisedMarker({ OCX_DESKTOP_SUPERVISED: "1" });
 if (options.preserve === "receipt") claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact");
 if (options.preserve === "sibling") (await import("../../src/codex/sibling-start")).markSiblingStart(10100);
-if (options.mode === "guard") {
+if (options.mode === "retry") {
+  const { ConfigMutationLockError } = await import("../../src/config");
+  const { ClientSyncRuntimeError, markClientRuntimeStoppingWithRetry } = await import("../../src/client/sync-runtime");
+  let attempts = 0;
+  const waits: number[] = [];
+  const success = await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: config.port, attestationSecret: "unused-fixture-identity" }, {
+    mark: () => {
+      attempts += 1;
+      if ((options.retryError === "busy" || options.retryError === "locked") && attempts === 3) return;
+      if (options.retryError === "identity") throw new ClientSyncRuntimeError("client_runtime_changed");
+      const cause = Object.assign(new Error("fixture acquisition failure"), { code: options.retryError === "permission" ? "EACCES" : options.retryError === "locked" ? "SQLITE_LOCKED" : "SQLITE_BUSY" });
+      if (options.retryError === "unwrapped") throw cause;
+      throw new ConfigMutationLockError("fixture acquisition failure", { cause });
+    },
+    sleep: async ms => { waits.push(ms); },
+  });
+  report({ success, attempts, waits });
+} else if (options.mode === "guard") {
   const { stopRestoreWriteGuard } = await import("../../src/client/restore-ownership");
   const guard = stopRestoreWriteGuard(expected);
   const writes: string[] = [];
@@ -203,7 +221,8 @@ if (options.mode === "guard") {
   const result = options.mode === "api"
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=fixture"), { ownsReceipt: () => true })
     : options.mode === "parent" ? await (await import("../../src/cli/stop-restore")).restoreSharedClientStateAfterStop(() => {})
-    : (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected);
-  const repeated = options.repeat ? (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected) : undefined;
+    // The direct helper fixture has no runtime, async sync or other writer.
+    : (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected, { syncFenced: true });
+  const repeated = options.repeat ? (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected, { syncFenced: true }) : undefined;
   report(repeated ? { first: result, repeated } : result);
 }

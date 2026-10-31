@@ -32,7 +32,7 @@ import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
-import { markClientRuntimeStopping } from "./sync-runtime";
+import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
@@ -479,7 +479,7 @@ export async function startClientRuntime(
       if (restartController.hasHandoff()) await restartController.settled().catch(() => {});
       if (recycleFlight) await recycleFlight.catch(() => {});
       // A rollback may have republished its runtime record while shutdown joined it.
-      syncFenced = fenceSync();
+      syncFenced = !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret });
       credentialObservation?.stop();
       credentialObservation = null;
       activeReporter?.stop();
