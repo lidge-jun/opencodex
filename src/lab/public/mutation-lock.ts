@@ -30,6 +30,11 @@ function mutationLockDatabasePath(configDir?: string): string {
   return join(labRoot(configDir), PUBLIC_EVIDENCE_MUTATION_DB_NAME);
 }
 
+/** Lock bookkeeping entries an older build may leave in the community cache directory. */
+export function isMutationLockEntryName(name: string): boolean {
+  return name === LEGACY_MUTATION_LOCK_NAME || DETACHED_MUTATION_LOCK_RE.test(name);
+}
+
 function legacyMutationLockPath(configDir?: string): string {
   return join(labCommunityDir(configDir), LEGACY_MUTATION_LOCK_NAME);
 }

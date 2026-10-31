@@ -236,6 +236,9 @@ describe("community mutation lock", () => {
       { encoding: "utf8", mode: 0o600 });
     withPublicEvidenceMutationLock(config, () => {});
     expect(existsSync(join(live, "owner.json"))).toBe(true);
+    // A kept lock directory is lock bookkeeping, not a cache object: scans skip it.
+    expect(listCommunityEvidence(config)).toEqual([]);
+    expect(existsSync(join(live, "owner.json"))).toBe(true);
   });
 
   test("cleans an older build's detached lock quarantine before scanning community quota state", () => {
