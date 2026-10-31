@@ -23,7 +23,8 @@ export function ModelsProviderRail({ items, all, selected, onSelect }: {
 }) {
   const t = useT();
   return (
-    <aside className="ui-v2 models-workspace-rail" aria-label={t("nav.models")}>
+    // No `ui-v2` marker: its button reset sits in a layer above models.css, which styles these rows.
+    <aside className="models-workspace-rail" aria-label={t("nav.models")}>
       <div className="models-workspace-rail-header">
         <span className="models-workspace-rail-title">{t("models.workspace.providers")}</span>
         <span className="models-workspace-rail-count">{items.length}</span>

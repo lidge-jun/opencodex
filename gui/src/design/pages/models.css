@@ -211,8 +211,8 @@
   border-radius: 999px;
   background: var(--ocx-line);
 }
-.models-rail-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--ocx-fg-subtle); }
-.models-workspace-rail-row--selected .models-rail-meter > span { background: var(--ocx-fg-muted); }
+.models-rail-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--ocx-fg-subtle); opacity: 0.6; }
+.models-workspace-rail-row--selected .models-rail-meter > span { opacity: 0.9; }
 
 .models-workspace-shell .models-workspace-main { gap: 12px; }
 .models-collapse-controls { min-height: 32px; margin: 0; }
@@ -400,13 +400,20 @@
 .models-provider-body > .models-show-more:hover { background: var(--ocx-accent-soft); color: var(--ocx-fg); }
 .models-provider-body > p[role="status"] { padding: 10px 14px; margin: 0; }
 
+/* Narrow: the rail stacks above the list (the v1 container rule, restated at this layer so
+   the wider grid above cannot outrank it), and a row's actions drop under its name. */
 @container models-workspace (max-width: 720px) {
+  .models-workspace-shell .models-workspace-root { grid-template-columns: minmax(0, 1fr); }
+  .models-workspace-shell .models-workspace-rail { padding-bottom: 12px; border-bottom: 1px solid var(--ocx-line); }
   .models-provider-tools .models-cap-cluster { margin-left: 0; padding-left: 0; }
   .models-provider-body .models-model-row { flex-wrap: wrap; }
+  .models-model-main { flex-basis: 0; }
 }
 @media (max-width: 768px) {
+  .models-workspace-shell .models-workspace-root { grid-template-columns: minmax(0, 1fr); }
   .models-provider-tools .models-cap-cluster { margin-left: 0; padding-left: 0; }
   .models-provider-body .models-model-row { flex-wrap: wrap; }
+  .models-model-main { flex-basis: 0; }
 }
 
 /* ---- Combos tab (full-bleed workspace) ------------------------------------- */
