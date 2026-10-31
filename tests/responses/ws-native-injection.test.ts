@@ -5,6 +5,7 @@ import {
 } from "../helpers/native-injection-fixture";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import { resolveDataPlaneAdmissionSecret } from "../../src/server/auth-cors";
 import { createNativeSteeringLogObserver } from "../../src/server/responses/native-steering-log";
 import { NativeInjectionChannel } from "../../src/server/responses/native-injection";
 import { MAX_NATIVE_INJECTIONS, MAX_NATIVE_INJECTION_BYTES, injectionResults } from "../../src/server/responses/native-injection-protocol";
@@ -249,7 +250,15 @@ test("control failures are never sampled into the request log or counted as resp
 });
 
 test("accepted function results survive ordinary subsequent delta turns; no user message is invented", async () => {
-  const { socket, send, sent, ws, id } = await beginInjection();
+  const settings = injectionConfig();
+  const localKey = "synthetic-injection-replay-owner";
+  settings.apiKeys = [{ id: "injection-replay-owner", key: localKey,
+    name: "Injection replay owner", createdAt: "2026-10-01T00:00:00.000Z" }];
+  const admission = resolveDataPlaneAdmissionSecret(localKey, settings);
+  expect(admission).not.toBeNull();
+  // This handler fixture has no HTTP handshake; supply the admission that a real
+  // dedicated local key resolves to, separately from the upstream bearer.
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings, "test", admission!);
   const call = advertiseInjection(socket);
   send({ type: "response.inject", response_id: id, input: [savedResult("call-1", "accepted-result")] });
   acknowledgeInjection(socket); completeInjection(socket, { output: [call] });

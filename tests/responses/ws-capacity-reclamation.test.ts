@@ -16,6 +16,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
 const MODEL = "fixture/capacity-model";
+const REPLAY_API_KEY = "synthetic-capacity-replay-owner";
+const OTHER_REPLAY_API_KEY = "synthetic-capacity-other-owner";
 type Frame = Record<string, any>;
 type Client = { socket: WebSocket; frames: Frame[]; closed?: CloseEvent; error?: Event };
 let home: string;
@@ -27,6 +29,7 @@ let upstreamRequests = 0;
 let upstreamCancellations = 0;
 let heldUpstreamSignal: AbortSignal | undefined;
 const upstreamBodies: Frame[] = [];
+const upstreamHeaders: Headers[] = [];
 const clients: Client[] = [];
 const refusedHandshakes = new Map<string, { status: number; retryAfter: string | null }>();
 let closeReleaseDelayMs = 0;
@@ -52,6 +55,7 @@ beforeEach(() => {
   upstreamCancellations = 0;
   heldUpstreamSignal = undefined;
   upstreamBodies.length = 0;
+  upstreamHeaders.length = 0;
   finishStream = undefined;
   refusedHandshakes.clear();
   closeReleaseDelayMs = 0;
@@ -72,6 +76,7 @@ beforeEach(() => {
       const body = await request.json() as Frame;
       upstreamRequests++;
       upstreamBodies.push(body);
+      upstreamHeaders.push(request.headers);
       const id = `resp_capacity_${upstreamRequests}`;
       const tool = JSON.stringify(body.input).includes("request-fixture-tool");
       const hold = JSON.stringify(body.input).includes("hold-fixture-stream");
@@ -96,6 +101,10 @@ beforeEach(() => {
   });
   saveConfig({
     port: 0, hostname: "127.0.0.1", codexAutoStart: false, websockets: true,
+    apiKeys: [
+      { id: "capacity-replay-owner", key: REPLAY_API_KEY, name: "Replay owner", createdAt: "2026-10-01T00:00:00.000Z" },
+      { id: "capacity-other-owner", key: OTHER_REPLAY_API_KEY, name: "Other owner", createdAt: "2026-10-01T00:00:00.000Z" },
+    ],
     defaultProvider: "fixture", providers: { fixture: {
       adapter: "openai-responses", baseUrl: `${upstream.url}v1`, apiKey: "sk-capacity-fixture", upstreamWebsocket: false,
       allowPrivateNetwork: true, statelessResponses: true,
@@ -140,12 +149,12 @@ afterEach(async () => {
   }
 });
 
-async function connect(retriesRemaining = MAX_TRACKED_CODEX_WEBSOCKETS): Promise<Client> {
+async function connect(headers?: Record<string, string>, retriesRemaining = MAX_TRACKED_CODEX_WEBSOCKETS): Promise<Client> {
   const url = new URL("/v1/responses", proxy!.url);
   url.protocol = "ws:";
   const attempt = String(clients.length);
   url.searchParams.set("capacity-attempt", attempt);
-  const client: Client = { socket: new WebSocket(url), frames: [] };
+  const client: Client = { socket: new WebSocket(url, { headers }), frames: [] };
   clients.push(client);
   client.socket.addEventListener("message", event => client.frames.push(JSON.parse(String(event.data))));
   client.socket.addEventListener("close", event => { client.closed = event; });
@@ -156,7 +165,7 @@ async function connect(retriesRemaining = MAX_TRACKED_CODEX_WEBSOCKETS): Promise
     await until(() => codexWebSocketAdmissionMetrics().active < MAX_TRACKED_CODEX_WEBSOCKETS,
       "reclaimed socket releases admission before retry");
     expect(retriesRemaining).toBeGreaterThan(0);
-    return connect(retriesRemaining - 1);
+    return connect(headers, retriesRemaining - 1);
   }
   return client;
 }
@@ -297,7 +306,8 @@ test("failed HTTP upgrade releases its reservation before the next handshake", a
 });
 
 test.each([false, true])("stateless continuation after capacity reclamation preserves full history; expired=%s", async expired => {
-  const original = await connect();
+  const headers = { "x-opencodex-api-key": REPLAY_API_KEY, "thread-id": "capacity-replay-thread" };
+  const original = await connect(headers);
   const firstInput = { role: "user", content: [{ type: "input_text", text: "Remember the fixture number 47." }] };
   const first = await exchange(original, { input: [firstInput], store: false });
   const previousId = first.response.id;
@@ -305,7 +315,7 @@ test.each([false, true])("stateless continuation after capacity reclamation pres
   expect(previousId.length).toBeGreaterThan(0);
   await until(() => responseStateMetrics().count === 1, "first response retains real continuation state");
   for (let i = 1; i < MAX_TRACKED_CODEX_WEBSOCKETS; i++) await connect();
-  const reconnected = await connect();
+  const reconnected = await connect(headers);
   await until(() => original.closed?.code === 1001, "socket holding the response ID reclaimed");
   if (expired) {
     expect(sweepExpiredResponseStates(Date.now() + RESPONSE_TTL_MS + 60_000)).toBe(1);
@@ -324,5 +334,91 @@ test.each([false, true])("stateless continuation after capacity reclamation pres
   expect(upstreamBodies[1]!.input).toHaveLength(3);
   expect(upstreamBodies[1]!.input).toMatchObject([firstInput,
     { type: "message", role: "assistant", content: [{ type: "output_text", text: "capacity fixture completed" }] }, delta]);
+  for (const forwarded of upstreamHeaders) {
+    expect(forwarded.has("x-opencodex-api-key")).toBe(false);
+    expect(forwarded.get("authorization")).toBe("Bearer sk-capacity-fixture");
+    expect([...forwarded.values()].some(value => value.includes(REPLAY_API_KEY))).toBe(false);
+  }
   expectBounded();
 }, 15_000);
+
+test.each([
+  ["different caller", { "x-opencodex-api-key": OTHER_REPLAY_API_KEY, "thread-id": "owned-thread" }],
+  ["different own thread", { "x-opencodex-api-key": REPLAY_API_KEY, "thread-id": "other-thread" }],
+  ["parent thread only", { "x-opencodex-api-key": REPLAY_API_KEY, "x-codex-parent-thread-id": "owned-thread" }],
+  ["no caller key", { "thread-id": "owned-thread" }],
+] as const)("real WebSocket ingress refuses owned continuation for %s despite body identity claims", async (_label, headers) => {
+  const original = await connect({ "x-opencodex-api-key": REPLAY_API_KEY, "thread-id": "owned-thread" });
+  const first = await exchange(original, { input: "private owner history", store: false });
+  await until(() => responseStateMetrics().count === 1, "owner response is retained");
+  const intruder = await connect(headers);
+  const denied = await exchange(intruder, {
+    previous_response_id: first.response.id, input: "untrusted delta",
+    "thread-id": "owned-thread", "x-opencodex-api-key": REPLAY_API_KEY,
+    replayPrincipal: { clientPrincipalId: "claimed-principal" },
+    admission: { kind: "configured", keyId: "capacity-replay-owner", contextPrincipalId: "claimed-principal" },
+  }, "error");
+  expect(denied).toMatchObject({ status: 400, error: { code: "previous_response_not_found" } });
+  expect(upstreamRequests).toBe(1);
+  // Refusal does not consume or rebind the original owner's retained state.
+  await exchange(original, { previous_response_id: first.response.id, input: "authorized delta", store: false });
+  expect(upstreamRequests).toBe(2);
+  expect(JSON.stringify(upstreamBodies[1]!.input)).toContain("private owner history");
+});
+
+test("a revoked captured environment key cannot fall back to another handshake bearer", async () => {
+  const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+  try {
+    process.env.OPENCODEX_API_AUTH_TOKEN = "synthetic-capacity-environment-owner";
+    const headers = { "x-opencodex-api-key": process.env.OPENCODEX_API_AUTH_TOKEN,
+      authorization: `Bearer ${OTHER_REPLAY_API_KEY}`, "thread-id": "rotation-thread" };
+    const original = await connect(headers);
+    const first = await exchange(original, { input: "environment-owned history", store: false });
+    const bearerOwner = await connect({ authorization: headers.authorization, "thread-id": headers["thread-id"] });
+    const bearerFirst = await exchange(bearerOwner, { input: "other caller history", store: false });
+    await until(() => responseStateMetrics().count === 2, "both callers retain separately owned state");
+    process.env.OPENCODEX_API_AUTH_TOKEN = "synthetic-capacity-environment-replacement";
+    for (const id of [first.response.id, bearerFirst.response.id]) {
+      const refused = await exchange(original, { previous_response_id: id, input: "delta after revocation" }, "error");
+      expect(refused).toMatchObject({ status: 400, error: { code: "previous_response_not_found" } });
+    }
+    expect(upstreamRequests).toBe(2);
+    const replacement = await connect({ "x-opencodex-api-key": process.env.OPENCODEX_API_AUTH_TOKEN,
+      "thread-id": headers["thread-id"] });
+    const refused = await exchange(replacement, { previous_response_id: first.response.id, input: "new key delta" }, "error");
+    expect(refused).toMatchObject({ status: 400, error: { code: "previous_response_not_found" } });
+    expect(upstreamRequests).toBe(2);
+    await exchange(replacement, { input: "full conversation after rotation", store: false });
+    expect(upstreamRequests).toBe(3);
+    expect(upstreamHeaders.every(headers => !headers.has("x-opencodex-api-key"))).toBe(true);
+  } finally {
+    if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
+  }
+});
+
+test("a surviving bearer keeps per-turn identity resolution ahead of a dropped x-api-key", async () => {
+  const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+  try {
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    const original = await connect({ authorization: `Bearer ${REPLAY_API_KEY}`, "x-api-key": OTHER_REPLAY_API_KEY,
+      "thread-id": "bearer-thread" });
+    const first = await exchange(original, { input: "configured bearer history", store: false });
+    await until(() => responseStateMetrics().count === 1, "configured bearer response is retained");
+    // The same raw bearer now resolves to a different principal under the existing
+    // environment-before-configured precedence. No captured holder may freeze it.
+    process.env.OPENCODEX_API_AUTH_TOKEN = REPLAY_API_KEY;
+    const refused = await exchange(original, { previous_response_id: first.response.id, input: "old owner delta" }, "error");
+    expect(refused).toMatchObject({ status: 400, error: { code: "previous_response_not_found" } });
+    expect(upstreamRequests).toBe(1);
+    const current = await exchange(original, { input: "current environment bearer history", store: false });
+    const reconnected = await connect({ authorization: `Bearer ${REPLAY_API_KEY}`, "thread-id": "bearer-thread" });
+    await exchange(reconnected, { previous_response_id: current.response.id, input: "current owner delta", store: false });
+    expect(upstreamRequests).toBe(3);
+    expect(JSON.stringify(upstreamBodies[2]!.input)).toContain("current environment bearer history");
+    expect(upstreamHeaders.every(headers => !headers.has("x-api-key"))).toBe(true);
+  } finally {
+    if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
+  }
+});

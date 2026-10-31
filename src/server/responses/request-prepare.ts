@@ -1,3 +1,4 @@
+import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
@@ -414,12 +415,15 @@ export async function prepareResponsesRequest(
   // parent all present the same parent id. `codexConversationIdentity` already reads this header
   // for the same reason, and a surface that must tell siblings apart needs it too (#5033).
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
+  const replayPrincipal = options.replayPrincipal
+    ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
+  const replayOwnerKey = responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId);
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
-    body = expandPreviousResponseInput(body, inboundClientThreadId);
+    body = expandPreviousResponseInput(body, inboundOwnThreadId, replayOwnerKey);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
@@ -575,9 +579,10 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   options.onRequestBodyRead?.();
-  const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
+  const responseStateOptions = (force = false) => ({
+    replayOwnerKey,
     ...(force ? { force: true } : {}),
-    ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),
+    ...(inboundOwnThreadId ? { clientThreadId: inboundOwnThreadId } : {}),
   });
   const resolvedConversationId = conversationIdFromResponsesRequest({
     clientThreadId: parsed._clientThreadId,

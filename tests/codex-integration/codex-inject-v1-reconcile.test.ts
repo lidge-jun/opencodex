@@ -145,6 +145,36 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     expect(config).toContain("openai_base_url = ");
   });
 
+  test("a v2-plaintext injection also disables the global v2 override so catalog pins decide the surface", () => {
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = true\n', "utf8");
+    const script = `
+      const fs = require("node:fs");
+      const { join } = require("node:path");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { setCodexMultiAgentV2ToggleForTests } = require("./src/codex/inject/multi-agent-v2");
+      const path = join(process.env.CODEX_HOME, "config.toml");
+      setCodexMultiAgentV2ToggleForTests(enabled => {
+        const current = fs.readFileSync(path, "utf8");
+        fs.writeFileSync(path, current.replace("multi_agent_v2 = true", "multi_agent_v2 = " + enabled));
+      });
+      const result = await injectCodexConfig(10100, { multiAgentMode: "v2-plaintext" });
+      console.log(JSON.stringify(result));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ success: true });
+    const config = readFileSync(configPath, "utf8");
+    expect(config).toContain("multi_agent_v2 = false");
+    expect(config).toContain("openai_base_url = ");
+  });
+
   test("the published witness identifies the plan committed after v1 reconciliation", () => {
     const configPath = join(codexHome, "config.toml");
     writeFileSync(configPath, 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = true\n', "utf8");

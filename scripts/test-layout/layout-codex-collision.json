@@ -28,6 +28,7 @@
   "codex-cli-update-worker.test.ts": "codex-integration",
   "native-source-priority.test.ts": "codex-integration",
   "server-native-catalog-priority.test.ts": "server",
+  "codex-model-list-plaintext.test.ts": "server",
   "codex-catalog-heal-reanchor.test.ts": "codex-integration",
   "codex-quota-persistence.test.ts": "codex-integration",
   "codex-sync-user-edits.test.ts": "codex-integration",

@@ -965,12 +965,16 @@ export interface OcxConfig {
    */
   blockedModelRedirects?: Record<string, string>;
   /**
-   * 3-state multi-agent surface override:
+   * Multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)
    * - "default" | undefined: respect upstream model pins (sol/terra=v2, luna=v1, rest=codex flag)
    * - "v2": force ALL models to v2 surface (override upstream pins)
+   * - "v2-plaintext": force ALL models to v2 surface via catalog pins while the global
+   *   `multi_agent_v2` feature stays disabled. Selecting the mode is itself the explicit
+   *   opt-in to plaintext delivery of native v2 collaboration messages; the separate
+   *   `plaintextV2AgentMessages` flag is not required and is never rewritten by a mode change.
    */
-  multiAgentMode?: "v1" | "default" | "v2";
+  multiAgentMode?: "v1" | "default" | "v2" | "v2-plaintext";
   /**
    * Which revision of the sub-agent surface advisory this install has answered.
    * Absent means it has answered none. Written by the dashboard, never by a mode change.
@@ -979,6 +983,7 @@ export interface OcxConfig {
   /**
    * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
+   * Stored but inactive under `"v2-plaintext"`, which pins ChatGPT-native rows on v2.
    */
   keepNativeChatGptOnV1?: boolean;
   /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */

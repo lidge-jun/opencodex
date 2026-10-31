@@ -1,4 +1,4 @@
-import { handleResponses } from "../../src/server/responses";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import type { OcxConfig } from "../../src/types";
 import { afterEach, describe, expect, test } from "bun:test";
 import {

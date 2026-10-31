@@ -1,5 +1,5 @@
 import { loadConfig } from "../config";
-import { multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../config/multi-agent-surface";
+import { isPlaintextV2AgentMessagesEnabled, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../config/multi-agent-surface";
 import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getMultiAgentModeHintText,
   getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled } from "../codex/features";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../codex/multi-agent-mode-policy";
@@ -11,10 +11,11 @@ export function localV2State(isEnabled = isMultiAgentV2Enabled, hasMaxThreads = 
   const config = loadConfig();
   const enabled = isEnabled();
   return { enabled, agentsMaxThreadsConflict: enabled && hasMaxThreads(),
+    supportsPlaintextV2Mode: true, plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
     multiAgentMode: resolveMultiAgentMode(config), keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
     multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config), maxConcurrentThreadsPerSession: getLogicalMaxThreads(),
     agentsEnabled: getAgentsEnabled(), agentsMaxDepth: getAgentsMaxDepth(),
-    agentsMaxDepthAppliesWhenV2Disabled: !enabled, subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
+    agentsMaxDepthAppliesWhenV2Disabled: !enabled && config.multiAgentMode !== "v2-plaintext", subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
     multiAgentModeHintText: getMultiAgentModeHintText(), multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION };
 }
 

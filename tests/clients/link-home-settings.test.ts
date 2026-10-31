@@ -79,6 +79,15 @@ async function applied(): Promise<void> {
 }
 
 describe("Home Codex settings document", () => {
+  test("preserves the explicit plaintext V2 policy through projection, parse and overlay", () => {
+    const projected = projectHomeCodexSettings({ providers: {}, multiAgentMode: "v2-plaintext" } as OcxConfig, "fixture");
+    const parsed = parseHomeCodexSettingsDocument(projected);
+    expect(parsed?.settings.multiAgentMode).toBe("v2-plaintext");
+    const local = { providers: {}, multiAgentMode: "v1", plaintextV2AgentMessages: false } as OcxConfig;
+    expect(overlayHomeCodexSettings(local, parsed!.settings)).toMatchObject({ multiAgentMode: "v2-plaintext", plaintextV2AgentMessages: false });
+    expect(local.multiAgentMode).toBe("v1");
+  });
+
   test("projects only what the Child's injector writes, and only an effective sub-agent sync", () => {
     const projected = projectHomeCodexSettings({ port: 1, providers: {}, injectionModel: "x/y", syncCodexSubagentDefaults: false } as unknown as OcxConfig, "2.84.0");
     expect(projected.settings).toEqual({ fastMode: null, multiAgentMode: null, webSearchSidecarEnabled: true, subagentDefaults: null });

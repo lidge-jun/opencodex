@@ -21,8 +21,8 @@ import {
   type ProviderExecutedCallType,
 } from "../../src/server/responses-undeclared-tool-guard";
 import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
-import { handleResponses } from "../../src/server/responses";
-import { expandPreviousResponseInput } from "../../src/responses/state";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
+import { expandOwnedResponseInput as expandPreviousResponseInput } from "../helpers/response-replay-owner";
 import type { OcxConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";

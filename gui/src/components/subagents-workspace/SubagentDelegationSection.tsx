@@ -11,6 +11,7 @@ import { Select, Tooltip } from "../../ui";
 import { IconArrowDown, IconArrowUp, IconInfo, IconX } from "../../icons";
 import { useT, type TKey } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
+import { subagentSurfaceModes } from "../../subagent-surface";
 import type { DelegationPatch, DelegationModelOption } from "../../pages/use-subagent-delegation";
 import type { UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 import DelegationSuggest from "./DelegationSuggest";
@@ -278,10 +279,13 @@ export default function SubagentDelegationSection({
               {t("models.v2DocsLink")}
             </a>
           </div>
+          {ultraMode.plaintextAgentMessagesEnabled === true && (
+            <div className="muted setting-hint">{t("models.v2PlaintextOn")}</div>
+          )}
         </div>
         <div className="swi-delegation-controls">
           <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-            {(["v1", "default", "v2"] as const).map(mode => (
+            {subagentSurfaceModes(ultraMode.supportsPlaintextV2Mode === true).map(mode => (
               <button
                 key={mode}
                 type="button"

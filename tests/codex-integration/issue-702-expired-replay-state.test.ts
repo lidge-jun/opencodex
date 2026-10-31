@@ -11,7 +11,6 @@ import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
   flushPendingResponseSpillsForTests,
-  rememberResponseState,
   responseStateMetrics,
   RESPONSE_TTL_MS,
   setResponseStateByteCapForTests,
@@ -24,6 +23,8 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { rememberOwnedResponseState as rememberResponseState, responseReplayFixtureApiKeys,
+  responseReplayFixtureHeaders } from "../helpers/response-replay-owner";
 
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -70,6 +71,7 @@ function forwardConfig(): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    apiKeys: responseReplayFixtureApiKeys,
     defaultProvider: "openai",
     openaiProviderTierVersion: 2,
     providers: {
@@ -209,6 +211,7 @@ async function runForwardScenario(
     server = startServer(0);
     const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
     const requestHeaders = {
+      ...(mode === "ordinary" ? {} : responseReplayFixtureHeaders()),
       "content-type": "application/json",
       authorization: `Bearer ${token}`,
       "chatgpt-account-id": "acct-issue-702",
@@ -353,7 +356,7 @@ describe("routed replay recovery", () => {
         Date.now = realNow;
       }
       saveConfig({
-        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        port: 0, hostname: "127.0.0.1", apiKeys: responseReplayFixtureApiKeys, websockets: true, defaultProvider: "routed-test",
         providers: {
           "routed-test": {
             adapter: "adapter" in scenario ? scenario.adapter : "openai-responses",
@@ -370,13 +373,13 @@ describe("routed replay recovery", () => {
         input: [toolResult], tools, store: false,
       };
       const httpRejected = await originalFetch(new URL("/v1/responses", server.url), {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify(deltaRequest),
       });
       expect(httpRejected.status).toBe(400);
       expect(await httpRejected.json()).toMatchObject({ error: { code: "previous_response_not_found" } });
       expect(upstreamRequests).toHaveLength(0);
-      socket = await openResponseSocket(server.url, {});
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders());
       const rejected = await sendSocketTurn(socket, deltaRequest);
       expect(rejected).toMatchObject({
         type: "error", status: 400,
@@ -385,7 +388,7 @@ describe("routed replay recovery", () => {
       expect(upstreamRequests).toHaveLength(0);
 
       socket.close();
-      socket = await openResponseSocket(server.url, {});
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders());
       const recovered = await sendSocketTurn(socket, {
         model: "routed-test/test-model", input: [...history, toolResult], tools, store: false,
       });
@@ -465,6 +468,7 @@ describe("routed replay recovery", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "chat-test",
         providers: {
           "chat-test": {
@@ -482,7 +486,7 @@ describe("routed replay recovery", () => {
 
       const refused = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "chat-test/test-model",
           previous_response_id: FIRST_RESPONSE_ID,
@@ -499,7 +503,7 @@ describe("routed replay recovery", () => {
       // What the client does next: resend the whole conversation without the id.
       const recovered = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "chat-test/test-model",
           input: [inputMessage(HISTORICAL_USER_SENTINEL), inputMessage(CURRENT_USER_SENTINEL)],
@@ -545,6 +549,7 @@ describe("routed replay recovery", () => {
         saveConfig({
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           defaultProvider: "wire-test",
           providers: {
             "wire-test": {
@@ -560,7 +565,7 @@ describe("routed replay recovery", () => {
         server = startServer(0);
         const response = await originalFetch(new URL("/v1/responses", server.url), {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
           body: JSON.stringify({
             model: "wire-test/test-model",
             previous_response_id: FIRST_RESPONSE_ID,
@@ -612,6 +617,7 @@ describe("Issue #702 expired forward replay state", () => {
         config: {
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           openaiProviderTierVersion: 2,
           defaultProvider: "kiro-test",
           providers: {
@@ -630,6 +636,7 @@ describe("Issue #702 expired forward replay state", () => {
         config: {
           port: 0,
           hostname: "127.0.0.1",
+          apiKeys: responseReplayFixtureApiKeys,
           openaiProviderTierVersion: 2,
           defaultProvider: "test-openai",
           providers: {
@@ -653,7 +660,7 @@ describe("Issue #702 expired forward replay state", () => {
         try {
           const response = await originalFetch(new URL("/v1/responses", server.url), {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
             body: JSON.stringify({
               model: routeClass.model,
               previous_response_id: responseId,
@@ -735,6 +742,7 @@ describe("Issue #702 expired forward replay state", () => {
       saveConfig({ ...forwardConfig(), websockets: true });
       server = startServer(0);
       const headers = {
+        ...responseReplayFixtureHeaders(),
         authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" })}`,
         "chatgpt-account-id": "acct-issue-702",
       };
@@ -790,7 +798,7 @@ describe("Issue #702 expired forward replay state", () => {
   }, SERVER_BUDGET_MS);
 
   test("a task-scope mismatch refuses the delta before ordinary HTTP upstream I/O", async () => {
-    const scenario = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
+    const scenario = await runForwardScenario("fresh", { "thread-id": "other-task" });
 
     expect(scenario.firstStatus).toBe(200);
     expect(scenario.secondStatus).toBe(400);
@@ -803,12 +811,12 @@ describe("Issue #702 expired forward replay state", () => {
     // rather than inferred from the source strings - one spill deleted, one overwritten with
     // bytes that do not parse, and one entry retained under a different task.
     setResponseStateByteCapForTests(1_024);
-    const stored = async (id: string, threadId?: string): Promise<string> => {
+    const stored = async (id: string, threadId = "task-a"): Promise<string> => {
       rememberResponseState(
         { model: "gpt-5.5", input: "x".repeat(8_000), store: false },
         { id, status: "completed", output: [{ role: "assistant", content: "done" }] },
         undefined,
-        { force: true, ...(threadId ? { clientThreadId: threadId } : {}) },
+        { force: true, clientThreadId: threadId },
       );
       await flushPendingResponseSpillsForTests();
       const spillDir = responseSpillDirectory(testHome);
@@ -838,7 +846,7 @@ describe("Issue #702 expired forward replay state", () => {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
           "chatgpt-account-id": "acct-issue-702",
-          "x-codex-parent-thread-id": threadId,
+          ...responseReplayFixtureHeaders(threadId),
         },
         body: JSON.stringify({
           model: "gpt-5.5",
@@ -893,7 +901,7 @@ describe("Issue #702 expired forward replay state", () => {
         { force: true, clientThreadId: "task-a" },
       );
       saveConfig({
-        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        port: 0, hostname: "127.0.0.1", apiKeys: responseReplayFixtureApiKeys, websockets: true, defaultProvider: "routed-test",
         providers: {
           "routed-test": {
             adapter: "openai-responses", baseUrl: upstream.url.toString(), allowPrivateNetwork: true,
@@ -902,7 +910,7 @@ describe("Issue #702 expired forward replay state", () => {
         },
       } as OcxConfig);
       server = startServer(0);
-      socket = await openResponseSocket(server.url, { "x-codex-parent-thread-id": "task-b" });
+      socket = await openResponseSocket(server.url, responseReplayFixtureHeaders("task-b"));
       const refused = await sendSocketTurn(socket, {
         model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
         input: [inputMessage(CURRENT_USER_SENTINEL)], store: false,
@@ -959,6 +967,7 @@ describe("Issue #702 expired forward replay state", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "test-openai",
         providers: {
           "test-openai": {
@@ -982,7 +991,7 @@ describe("Issue #702 expired forward replay state", () => {
         new URL("/v1/responses", server!.url),
         {
           method: "POST",
-          headers: { "content-type": "application/json", "x-codex-parent-thread-id": threadId },
+          headers: { "content-type": "application/json", ...responseReplayFixtureHeaders(threadId) },
           body: JSON.stringify({
             model: "test-openai/gpt-5.5",
             previous_response_id: previousResponseId,
@@ -1028,6 +1037,7 @@ describe("Issue #702 expired forward replay state", () => {
       saveConfig({
         port: 0,
         hostname: "127.0.0.1",
+        apiKeys: responseReplayFixtureApiKeys,
         defaultProvider: "test-openai",
         providers: {
           "test-openai": {
@@ -1044,7 +1054,7 @@ describe("Issue #702 expired forward replay state", () => {
 
       const response = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
         body: JSON.stringify({
           model: "test-openai/gpt-5.5",
           previous_response_id: "resp_upstream_native_state",

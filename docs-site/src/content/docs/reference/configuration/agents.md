@@ -45,7 +45,7 @@ still depends on upstream support for your account.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. `v2-plaintext` also enables experimental plaintext task delivery and disables the global override. Catalog pins apply to new sessions; enabled compilation also affects subsequent eligible requests from existing V2 sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
 | `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
@@ -60,11 +60,11 @@ still depends on upstream support for your account.
 | `codexRoleCapability?` | `{ artificialAnalysis?: { apiKey?: string } }` | No measured source | Measured-score source for [role auto-assign](/guides/integrations/#auto-assign). Artificial Analysis uses your API key (literal, `${ENV}` or keychain reference) once per day; scores stay out of the response. Missing or unavailable data falls back to configured tiers and prices. A retired `huggingFace` key is ignored. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
-| `plaintextV2AgentMessages?` | `boolean` | — (unset) | Experimental opt-in. It runs only when explicitly set to `true` and asks eligible native ChatGPT v2 parents to emit `spawn_agent`, `send_message`, and `followup_task` message arguments as plaintext. See [Plaintext v2 agent messages](#plaintext-v2-agent-messages). |
+| `plaintextV2AgentMessages?` | `boolean` | — (unset) | Experimental opt-in. Explicit `true` or `multiAgentMode: "v2-plaintext"` asks eligible native ChatGPT v2 parents to emit `spawn_agent`, `send_message`, and `followup_task` message arguments as plaintext. See [Plaintext v2 agent messages](#plaintext-v2-agent-messages). |
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
 Manage the surface with the dashboard or
-`ocx v2 status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`.
+`ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`; entering `v2-plaintext` requires `--acknowledge-plaintext-agent-messages`.
 Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
@@ -194,7 +194,7 @@ on a mid-thread model switch.
 
 ## Plaintext v2 agent messages
 
-`plaintextV2AgentMessages` is unset in a fresh config and runs only when explicitly set to `true`.
+`plaintextV2AgentMessages` is unset in a fresh config. Explicit `true` or the separately selected `multiAgentMode: "v2-plaintext"` enables this experimental path. The mode also sets V2 catalog pins while disabling the global override; existing chat history is not rewritten. Enter through the dashboard confirmation or `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`. The mode does not overwrite the independent boolean, so leaving it restores that boolean's prior behavior. The compiler follows the current setting for subsequent eligible canonical ChatGPT requests, including existing V2 sessions. It does not decrypt existing ciphertext or rewrite stored history. Disabling it does not delete copies already retained in history, provider requests, or local response/debug state.
 The caller must use the Responses wire, and the final destination must use the canonical ChatGPT
 Codex forward transport: `adapter: "openai-responses"`, `authMode: "forward"`, and the exact base URL
 `https://chatgpt.com/backend-api/codex`. OpenAI API-key providers, custom OpenAI-compatible

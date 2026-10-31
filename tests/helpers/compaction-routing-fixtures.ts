@@ -6,6 +6,14 @@ import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { removeTreeAfterBackgroundWork } from "./remove-tree";
 
+/** HTTP compaction fixtures bind the physical send; global fetch alone cannot isolate WS/proxy paths. */
+export function installCompactionHttpMock(config: OcxConfig, mock: typeof fetch): void {
+  globalThis.fetch = mock;
+  for (const provider of Object.values(config.providers)) {
+    Object.assign(provider, { fetch: mock, upstreamWebsocket: false });
+  }
+}
+
 /**
  * Config, request and upstream-response fixtures for the compaction-routing suite.
  *

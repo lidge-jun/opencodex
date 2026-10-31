@@ -14,6 +14,7 @@ import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-res
 import { parseRequest } from "../../src/responses/parser";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { handleOwnedResponses } from "../helpers/response-replay-owner";
 
 const MODEL = "gpt-5.6-luna";
 const GO_RESPONSES_MODELS = [MODEL, "grok-4.6", "muse-spark-1.3-contributor"];
@@ -158,8 +159,9 @@ describe("OpenCode Go stateless reasoning and continuation routes", () => {
       const config = { providers: { "opencode-go": opencodeGo() } } as unknown as OcxConfig;
       const drive = async (body: Record<string, unknown>) => {
         takeSpendHome();
-        const response = await handleResponses(new Request("http://localhost/v1/responses", {
-          method: "POST", headers: { "content-type": "application/json" },
+        // Retained local IDs require an admitted caller and the same own thread on both turns.
+        const response = await handleOwnedResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json", "thread-id": `opencode-go-replay-${prefix}` },
           body: JSON.stringify({ model: `opencode-go/${model}`, stream: streaming, reasoning: { summary: continuation.summary },
             tools: [{ type: "function", name: "probe", parameters: { type: "object" } }], ...body }),
         }), config, { model: "", provider: "" }, { inboundWire: "responses" });

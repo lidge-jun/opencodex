@@ -9,7 +9,8 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
-import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
+import { SUBAGENT_SURFACE_GUIDE_URL, confirmsPlaintextV2Mode, type SubagentSurfaceMode } from "../subagent-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
@@ -66,7 +67,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
    * for. Switching endpoints with the dialog open must not apply one proxy's answer to another,
    * and tagging beats clearing it from an effect, which would be a cascading render.
    */
-  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
+  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2" | "v2-plaintext"; apiBase: string } | null>(null);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -84,10 +85,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const res = await fetch(`${apiBase}/api/v2`, { signal });
     const data = await readJsonOrThrow<{
       enabled?: boolean;
-      multiAgentMode?: "v1" | "default" | "v2";
+      multiAgentMode?: SubagentSurfaceMode;
       multiAgentModeHintText?: string | null;
       keepNativeChatGptOnV1?: boolean;
       multiAgentModeHintRecommendation?: { text?: unknown; revision?: unknown };
+      supportsPlaintextV2Mode?: boolean;
+      plaintextAgentMessagesEnabled?: boolean;
     }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return false;
     if (signal?.aborted || generation !== ultraLoadGeneration.current || currentUltraApiBase.current !== apiBase) return false;
@@ -109,8 +112,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       // Ultra mode replaces Codex's effort-derived policy for every model. The
       // `default` surface still preserves upstream V1 pins (for example luna),
       // so only an explicitly forced V2 catalog is an effective surface here.
-      multiAgentV2Enabled: data.enabled === true && data.multiAgentMode === "v2",
-      multiAgentMode: data.multiAgentMode ?? "default",
+      // 'v2-plaintext' is also a forced V2 surface: every catalog row is pinned v2
+      // while the global feature stays off.
+      multiAgentV2Enabled: (data.enabled === true && data.multiAgentMode === "v2")
+        || data.multiAgentMode === "v2-plaintext",
+      multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" || data.multiAgentMode === "v2-plaintext"
+        ? data.multiAgentMode
+        : "default",
+      supportsPlaintextV2Mode: data.supportsPlaintextV2Mode === true,
+      plaintextAgentMessagesEnabled: data.plaintextAgentMessagesEnabled === true,
     } });
     return true;
   }, [apiBase, t]);
@@ -140,7 +150,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      const receipt = await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      if (patch.multiAgentMode === "v2-plaintext" && !confirmsPlaintextV2Mode(receipt)) {
+        throw new Error(t("sub.ultraModeSaveFail"));
+      }
       if (currentUltraApiBase.current !== requestApiBase || !await loadUltraMode()) return;
       setOk(true);
       setStatus(t("sub.ultraModeSaved"));
@@ -393,8 +406,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           ultraSaving: ultraSaving || !ultraModeCurrent,
           // This page carries the same v1/base/v2 switch as Models and the Dashboard, so it
           // needs the same gate: base and v2 wait for an answer, everything else writes.
+          // 'v2-plaintext' also waits — for its own consent dialog, which stages the
+          // plaintext acknowledgement onto the same request as the mode.
           onUltraModeSave: patch => {
-            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2") {
+            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2" || patch.multiAgentMode === "v2-plaintext") {
               setPendingSurface({ mode: patch.multiAgentMode, apiBase });
               return;
             }
@@ -404,7 +419,20 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
-      {pendingSurface && pendingSurface.apiBase === apiBase && (
+      {pendingSurface && pendingSurface.apiBase === apiBase && pendingSurface.mode === "v2-plaintext" && (
+        <PlaintextV2ConsentModal
+          busy={ultraSaving}
+          onConfirm={() => {
+            setPendingSurface(null);
+            void saveUltraMode({
+              multiAgentMode: "v2-plaintext",
+              plaintextAgentMessagesAcknowledged: true,
+            });
+          }}
+          onDismiss={() => setPendingSurface(null)}
+        />
+      )}
+      {pendingSurface && pendingSurface.apiBase === apiBase && pendingSurface.mode !== "v2-plaintext" && (
         <SubagentSurfaceWarningModal
           reason="selection"
           mode={pendingSurface.mode}

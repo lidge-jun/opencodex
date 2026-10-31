@@ -5,6 +5,7 @@
  */
 import type { TFn, TKey } from "../i18n/shared";
 import type { StorageLike } from "./collapse-store";
+import type { SubagentSurfaceMode } from "../subagent-surface";
 import { fmtK } from "./models-shared";
 
 export const SETTINGS_OPEN_KEY = "ocx.models.settingsOpen.v1";
@@ -37,7 +38,7 @@ export function writeSettingsOpen(open: boolean, storage?: StorageLike): void {
 }
 
 export interface ModelsSettingsState {
-  multiAgentMode?: "v1" | "default" | "v2";
+  multiAgentMode?: SubagentSurfaceMode;
   /** Configured sub-agent limit as a logical child count; null/undefined means the runtime default. */
   v2Threads?: number | null;
   keepNativeOnV1?: boolean;

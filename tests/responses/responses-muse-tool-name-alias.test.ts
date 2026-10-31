@@ -8,7 +8,7 @@ import {
   restoreMuseToolNamesInJson,
   rewriteMuseToolNamesForUpstream,
 } from "../../src/responses/muse-tool-name-alias";
-import { expandPreviousResponseInput } from "../../src/responses/state";
+import { handleOwnedResponses, expandOwnedResponseInput as expandPreviousResponseInput } from "../helpers/response-replay-owner";
 import { GROK_REFUSED_TERMINAL_EVENT_TYPE } from "../../src/server/grok-responses-snapshot-repair";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
@@ -531,7 +531,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
     }) as typeof fetch;
     try {
       takeSpendHome();
-      const turn1 = await handleResponses(new Request("http://localhost/v1/responses", {
+      const turn1 = await handleOwnedResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -569,7 +569,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
         expect.objectContaining({ type: "function_call_output", call_id: "c1", output: "ok" }),
       ]));
 
-      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      const response = await handleOwnedResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

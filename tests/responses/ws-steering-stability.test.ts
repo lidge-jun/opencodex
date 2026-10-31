@@ -4,6 +4,7 @@ import { NativeSteeringChannel, NATIVE_STEERING_WAIT_MS as WAIT,
 import { NativeSteeringReplay, MAX_NATIVE_STEERING_REPLAY_BYTES as REPLAY_LIMIT } from "../../src/server/responses/native-steering-replay";
 import { beginInjection, injectionConfig, installInjectionFixture, InjectionSocket,
   waitForInjection, fallbackCalls, type Frame } from "../helpers/native-injection-fixture";
+import { resolveDataPlaneAdmissionSecret } from "../../src/server/auth-cors";
 
 installInjectionFixture();
 
@@ -223,7 +224,14 @@ test("merged sparse output still enforces the unchanged serialized replay budget
 
 test("real steering handler preserves sparse output through automatic and ordinary successors", async () => {
   const settings = { ...injectionConfig(), codexNativeInjection: false, codexNativeSteering: true };
-  const { ws, socket, send, sent, id } = await beginInjection({ multi_agent: undefined }, settings);
+  const localKey = "synthetic-steering-replay-owner";
+  settings.apiKeys = [{ id: "steering-replay-owner", key: localKey,
+    name: "Steering replay owner", createdAt: "2026-10-01T00:00:00.000Z" }];
+  const admission = resolveDataPlaneAdmissionSecret(localKey, settings);
+  expect(admission).not.toBeNull();
+  // Direct handler fixtures supply the verified local admission separately from
+  // their upstream bearer; the default fixture remains keyless.
+  const { ws, socket, send, sent, id } = await beginInjection({ multi_agent: undefined }, settings, "test", admission!);
   for (let index = 0; index < output.length; index++) {
     socket.emit({ type: "response.output_item.added", output_index: index, item: output[index] });
     socket.emit({ type: "response.output_item.done", output_index: index, item: output[index] });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   hasValidApiAuth,
   isDataPlaneAdmissionSecret,
+  isContextPrincipalCurrent,
   isProxyAdmissionSecret,
   requireResponsesApiAuth,
   resolveApiAuth,
@@ -132,6 +133,72 @@ describe("resolveDataPlaneAdmissionSecret", () => {
 
   test("a key that only shares a prefix does not match", () => {
     expect(resolveDataPlaneAdmissionSecret("ocx_data_first", remoteConfig())).toBeNull();
+  });
+});
+
+describe("retained loopback replay principal revalidation", () => {
+  const principalFor = (config: OcxConfig, key: string) => resolveContextPrincipal(
+    request({ "x-opencodex-api-key": key }), config, { kind: "loopback", source: "loopback" },
+  );
+
+  test("key replacement, key-id replacement and deletion revoke the captured identity", () => {
+    const config = loopbackConfig();
+    const key = config.apiKeys![0]!;
+    const original = principalFor(config, key.key);
+    expect(isContextPrincipalCurrent(original, config)).toBe(true);
+    key.name = "changed label";
+    expect(isContextPrincipalCurrent(original, config)).toBe(true);
+    key.key = "ocx_data_replacement";
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+    const replacement = principalFor(config, key.key);
+    expect(isContextPrincipalCurrent(replacement, config)).toBe(true);
+    key.id = "replacement-key-id";
+    expect(isContextPrincipalCurrent(replacement, config)).toBe(false);
+    const renamed = principalFor(config, key.key);
+    config.apiKeys = [];
+    expect(isContextPrincipalCurrent(renamed, config)).toBe(false);
+    expect(isContextPrincipalCurrent(undefined, config)).toBe(false);
+  });
+
+  test("pending rotation expires, while promotion preserves only the promoted secret", () => {
+    const config = loopbackConfig();
+    const key = config.apiKeys![0]!;
+    const original = principalFor(config, key.key);
+    key.pendingRotation = { id: "rotation", key: "ocx_data_pending",
+      createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const pending = principalFor(config, key.pendingRotation.key);
+    expect(isContextPrincipalCurrent(pending, config)).toBe(true);
+    key.pendingRotation.expiresAt = new Date(Date.now() - 1).toISOString();
+    expect(isContextPrincipalCurrent(pending, config)).toBe(false);
+    key.key = key.pendingRotation.key;
+    delete key.pendingRotation;
+    expect(isContextPrincipalCurrent(pending, config)).toBe(true);
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+  });
+
+  test("environment replacement and credential-shadowing follow the admission resolver", () => {
+    const config = loopbackConfig();
+    const secret = config.apiKeys![0]!.key;
+    const configured = principalFor(config, secret);
+    process.env.OPENCODEX_API_AUTH_TOKEN = secret;
+    const environment = principalFor(config, secret);
+    expect(environment).not.toBe(configured);
+    expect(isContextPrincipalCurrent(environment, config)).toBe(true);
+    expect(isContextPrincipalCurrent(configured, config)).toBe(false);
+    process.env.OPENCODEX_API_AUTH_TOKEN = "replacement-env-secret";
+    expect(isContextPrincipalCurrent(environment, config)).toBe(false);
+    expect(isContextPrincipalCurrent(configured, config)).toBe(true);
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    expect(isContextPrincipalCurrent(environment, config)).toBe(false);
+  });
+
+  test("an earlier configured duplicate cannot inherit the later key's identity", () => {
+    const config = loopbackConfig();
+    const second = config.apiKeys![1]!;
+    const original = principalFor(config, second.key);
+    config.apiKeys![0]!.key = second.key;
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+    expect(isContextPrincipalCurrent(principalFor(config, second.key), config)).toBe(true);
   });
 });
 

@@ -13,7 +13,7 @@ import { clearAccountQuotaCache } from "../../src/providers/quota";
 import { clearReasoningReplayCacheForTests, reasoningReplayOAuthCredentialIdentity } from "../../src/responses/reasoning-replay-cache";
 import { clearResponseStateForTests, clearResponseStateMemoryForTests, flushResponseState, previousResponseProviderState } from "../../src/responses/state";
 import { flushThoughtSignatureReplayForTests, resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
-import { handleResponses } from "../../src/server/responses/core";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -67,7 +67,7 @@ afterEach(async () => {
 function request(previousId?: string, stream = false): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
-    headers: { "content-type": "application/json", session_id: "kiro-refusal-composition" },
+    headers: { "content-type": "application/json", session_id: "kiro-refusal-composition", "thread-id": "kiro-refusal-composition" },
     body: JSON.stringify({
       model: "kiro/claude-sonnet-4.5", input: previousId ? "Continue the fixture." : "Seed the fixture.",
       stream, store: false, ...(previousId ? { previous_response_id: previousId } : {}),

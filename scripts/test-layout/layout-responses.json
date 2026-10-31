@@ -4,6 +4,9 @@
   "advisor-web-search.test.ts": "advisor",
   "passthrough-media-type.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
+  "response-replay-ownership.test.ts": "server",
+  "response-replay-combo-identity.test.ts": "server",
+  "responses-replay-owner-storage.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
   "passthrough-abort.test.ts": "responses"
 }

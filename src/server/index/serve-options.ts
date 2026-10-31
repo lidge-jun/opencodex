@@ -103,6 +103,7 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -616,16 +617,27 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const websocketLease = tryReserveCodexWebSocket();
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
+        const forwardHeaders = selectForwardHeaders(req.headers);
+        let replayPrincipal: WsData["replayPrincipal"];
+        if (admission.kind === "loopback"
+          && (req.headers.has("x-opencodex-api-key") || req.headers.has("x-api-key"))) {
+          const principal = resolveContextPrincipal(req, config, admission);
+          const forwardedPrincipal = resolveContextPrincipal(new Request(req.url, { headers: forwardHeaders }), config, admission);
+          // Only preserve identity that filtering actually removes. A surviving
+          // bearer keeps its existing per-frame resolution and key-rotation semantics.
+          if (principal && principal !== forwardedPrincipal) replayPrincipal = Object.freeze({ clientPrincipalId: principal });
+        }
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
         // request to the public server's upgrade would fail or cross sockets.
         if (requestServer.upgrade(req, {
           data: buildResponsesWsData(
-            selectForwardHeaders(req.headers),
+            forwardHeaders,
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
+            replayPrincipal,
           ),
         })) return undefined as unknown as Response;
         websocketLease.release();

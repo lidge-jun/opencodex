@@ -344,7 +344,7 @@ describe("root dispatch compatibility", () => {
     native(true); writeFileSync(path, readFileSync(path, "utf8") + '\n[agents]\nenabled = false\nmax_depth = 2\n');
     expect(await cmdV2(["status"])).toBe(0);
     expect(out.join("\n")).toContain("agents.enabled: false");
-    expect(out.join("\n")).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
+    expect(out.join("\n")).toContain("agents.max_depth: 2 (V1-only — ignored by V2 sessions)");
     expect(out.join("\n")).toContain("subagent_developer_instructions: (unset — children inherit)");
   });
 });
@@ -362,11 +362,18 @@ describe("local V2 action-specific human feedback", () => {
     expect(out.join("\n")).toContain(`keep_native_chatgpt_on_v1 already ${enabled ? "ON" : "OFF"} — catalog re-synced.`);
     expect(local.syncPorts).toEqual([undefined]);
   });
-  test("mode output names the effective hybrid surface", async () => {
+  test.each(["v2", "v2-plaintext"])("mode output distinguishes the effective surface from request scope: %s", async mode => {
     config({ keepNativeChatGptOnV1: true }); const local = localDeps();
-    expect(await cmdV2(["mode", "v2"], local.deps)).toBe(0);
-    expect(out.join("\n")).toContain("multi_agent_mode: v2 hybrid — ChatGPT-native models use v1; routed models use v2");
-    expect(out.join("\n")).toContain("Applies to NEW sessions");
+    const args = ["mode", mode, ...(mode === "v2-plaintext" ? ["--acknowledge-plaintext-agent-messages"] : [])];
+    expect(await cmdV2(args, local.deps)).toBe(0);
+    expect(out[0]).toBe(mode === "v2"
+      ? "multi_agent_mode: v2 hybrid — ChatGPT-native models use v1; routed models use v2"
+      : "multi_agent_mode: v2-plaintext — new sessions select V2; subsequent eligible canonical ChatGPT requests, including existing V2 sessions, use experimental plaintext over HTTPS; global override stays OFF");
+    expect(out.join("\n")).toContain("Catalog pins apply to NEW sessions; running sessions keep their pinned multi-agent version.");
+    expect(out.join("\n")).toContain("Plaintext compilation follows the current setting for subsequent eligible canonical ChatGPT requests, including existing V2 sessions.");
+    expect(out.join("\n")).toContain("Existing ciphertext is not decrypted, stored history is not rewritten, and disabling does not delete retained copies.");
+    expect(JSON.parse(readFileSync(ocxConfigPath(), "utf8")).multiAgentMode).toBe(mode);
+    expect(isMultiAgentV2Enabled()).toBe(false);
   });
   test.each([true, false])("changed native toggle names the switch and new-session scope %s", async enabled => {
     native(!enabled); const local = localDeps();

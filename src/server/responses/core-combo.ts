@@ -1,3 +1,4 @@
+import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
@@ -427,7 +428,9 @@ export async function executeComboResponses(
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
+  const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
+  const replayOwnerKey = responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId);
+  const body = expandPreviousResponseInput(rawBody, inboundOwnThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
   if (replayFailure?.reason === "scope_mismatch") {
     console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
@@ -446,9 +449,9 @@ export async function executeComboResponses(
   // object (still carrying previous_response_id) and must not be treated as
   // unresolved — text-only stored continuations remain allowed.
   const requestedPreviousId = typeof (rawBody as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
-    ? (rawBody as { previous_response_id: string }).previous_response_id.trim()
+    ? (rawBody as { previous_response_id: string }).previous_response_id
     : "";
-  const unresolvedPrevious = requestedPreviousId.length > 0 && body === rawBody;
+  const unresolvedPrevious = requestedPreviousId.trim().length > 0 && body === rawBody;
   if (combo.imageInput === "disabled" && unresolvedPrevious) {
     return formatErrorResponse(
       400,
