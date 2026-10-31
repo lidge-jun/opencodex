@@ -29,6 +29,11 @@
 
 /* v1 classes repainted with v2 tokens while pages migrate (see bridge.css) */
 @import "./bridge.css" layer(bridge);
+@import "./pages/models.css" layer(bridge);
+@import "./pages/accounts.css" layer(bridge);
+@import "./pages/subagents.css" layer(bridge);
+@import "./pages/usage.css" layer(bridge);
+@import "./pages/logs.css" layer(bridge);
 
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";

@@ -1,5 +1,10 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -124,6 +129,11 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   ...shellV2Copy("tr"),
+  ...modelsV2Copy("tr"),
+  ...accountsV2Copy("tr"),
+  ...subagentsV2Copy("tr"),
+  ...usageV2Copy("tr"),
+  ...logsV2Copy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",

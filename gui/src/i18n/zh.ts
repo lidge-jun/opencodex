@@ -1,5 +1,10 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
+import { modelsV2Copy } from "./v2-pages/models-copy";
+import { accountsV2Copy } from "./v2-pages/accounts-copy";
+import { subagentsV2Copy } from "./v2-pages/subagents-copy";
+import { usageV2Copy } from "./v2-pages/usage-copy";
+import { logsV2Copy } from "./v2-pages/logs-copy";
 import type { TKey } from "./en";
 
 /**
@@ -123,6 +128,11 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
   ...shellV2Copy("zh"),
+  ...modelsV2Copy("zh"),
+  ...accountsV2Copy("zh"),
+  ...subagentsV2Copy("zh"),
+  ...usageV2Copy("zh"),
+  ...logsV2Copy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",
