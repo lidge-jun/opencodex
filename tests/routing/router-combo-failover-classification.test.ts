@@ -78,6 +78,13 @@ describe("combo failure cooldown scope", () => {
     )).toBe("none");
   });
 
+  test.each([400, 422])("HTTP %s per-request free-tier cap still hops without cooldown scope", status => {
+    const message = "This prompt is longer than the free tier allows for a single request.";
+    const options = { code: "free_rate_limited" };
+    expect(comboFailureDecision(status, message, options)).toBe("hop");
+    expect(comboFailureCooldownScope(status, message, options)).toBe("none");
+  });
+
   test("a per-request free-tier cap does not cool the whole provider", () => {
     // `free_rate_limited` is evaluated per request, so provider-wide cooldown punished every
     // other combo for one oversized free-tier prompt.
