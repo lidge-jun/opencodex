@@ -306,6 +306,8 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `GET, POST, PATCH, DELETE /api/keys` | Veri düzlemi kabul anahtarlarını listeleyin, oluşturun, düzenleyin veya silin | 400 geçersiz gövde/kimlik; 404 anahtar eksik |
 
+Kaydedilen hesapla yönlendirme sıfırlaması yeniden denenemiyorsa pano bunu bildirir. Hesap listesi yüklenirken veya yüklenemediğinde ve etkin hesap denemesi duraklatma ya da yeniden giriş gereksinimi nedeniyle engellendiğinde yeniden deneme korunur. Yeniden denemeden önce hesabı devam ettirin veya tekrar oturum açın. Yalnızca başarıyla yüklenen liste hesabın bulunmadığını doğruladığında yeniden deneme silinir; duraklatma denemeleri kaydedilmiş durumu korur.
+
 Kimlik bilgisi listesi yanıtları kasıtlı olarak maskelenir. OAuth erişim
 belirteçleri ve eksiksiz sağlayıcı API anahtarları kontrol paneli istemcilerine
 döndürülmez.

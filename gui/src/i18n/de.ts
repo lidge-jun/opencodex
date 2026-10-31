@@ -397,6 +397,7 @@ export const de: Record<TKey, string> = {
   "common.loading": "Lädt…",
   "common.retry": "Wiederholen",
   "prov.affinityResetPending": "Die Kontoänderung wurde gespeichert, aber die Aktualisierung der Gesprächszuordnung ist noch nicht abgeschlossen. Versuchen Sie es erneut.",
+  "prov.affinityResetRetryUnavailable": "Für dieses Konto ist derzeit kein erneuter Versuch möglich. Aktualisieren Sie die Kontoliste und aktivieren Sie das Konto bei Bedarf wieder oder melden Sie sich erneut an.",
   "common.undo": "Rückgängig",
   "auth.adminTokenTitle": "OpenCodex-Admin-Token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Konto",

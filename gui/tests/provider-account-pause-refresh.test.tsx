@@ -120,6 +120,85 @@ test("unrelated successful pause preserves reset retry after server state may ha
   expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "active", accountId: "b" });
 });
 
+test.each(["active", "pause"] as const)("%s retry survives unavailable rosters until absence is confirmed", async action => {
+  let writes = 0;
+  respond = async (_url, init) => {
+    if (init?.method !== "PUT") return Response.json({ activeAccountId: "b", accounts: [row("a", false, action === "pause"), row("b", true)] });
+    writes++;
+    return Response.json({ code: "affinity_reset_not_persisted", retryable: true, activeAccountId: "b",
+      ...(action === "active" ? { selectionCommitted: true } : { pauseCommitted: true }) }, { status: 503 });
+  };
+  await act(async () => {
+    if (action === "active") await pools.switchAccount("fixture", row("b", false));
+    else await pools.pauseAccount("fixture", row("a", true), true);
+  });
+  await act(async () => { root!.render(null); });
+  await act(async () => { root!.render(<Harness />); });
+  notices = [];
+  const expectRetained = () => {
+    expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: action, accountId: action === "active" ? "b" : "a" });
+    expect(notices.at(-1)).toEqual({ key: "prov.affinityResetRetryUnavailable", ok: false });
+    expect(writes).toBe(1);
+  };
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expectRetained(); // Not fetched yet is not proof the account was deleted.
+  let settle!: (response: Response) => void;
+  let loading!: Promise<boolean>;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") { writes++; return Response.json({ ok: true }); }
+    return new Promise(resolve => { settle = resolve; });
+  };
+  try {
+    await act(async () => { loading = pools.fetchAccountSets(["fixture"]); });
+    expect(pools.accountLoadStates.fixture).toBe("loading");
+    await act(async () => { await pools.retryAffinityReset("fixture"); });
+    expectRetained();
+  } finally {
+    await act(async () => { settle(new Response(null, { status: 500 })); await loading; });
+  }
+  expect(pools.accountLoadStates.fixture).toBe("error");
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expectRetained();
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") writes++;
+    return Response.json({ activeAccountId: null, accounts: [] });
+  };
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  expect(pools.accountLoadStates.fixture).toBe("ready");
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  expect(notices).toEqual(Array.from({ length: 4 }, () => ({ key: "prov.affinityResetRetryUnavailable", ok: false })));
+  expect(writes).toBe(1);
+});
+
+test.each(["paused", "needsReauth"] as const)("active retry reports %s and succeeds after the account recovers", async blocked => {
+  const writes: unknown[] = [];
+  let confirmed = false;
+  let unavailable = false;
+  respond = async (_url, init) => {
+    if (init?.method === "PUT") {
+      writes.push(JSON.parse(String(init.body)));
+      return confirmed ? Response.json({ ok: true, activeAccountId: "b" })
+        : Response.json({ code: "affinity_reset_not_persisted", retryable: true, selectionCommitted: true, activeAccountId: "b" }, { status: 503 });
+    }
+    return Response.json({ activeAccountId: "b", accounts: [row("a", false), { ...row("b", true), [blocked]: unavailable }] });
+  };
+  await act(async () => { await pools.switchAccount("fixture", row("b", false)); });
+  unavailable = true;
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  notices = [];
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(writes).toHaveLength(1);
+  expect(pools.pendingAffinityResets.fixture).toMatchObject({ kind: "active", accountId: "b" });
+  expect(notices).toEqual([{ key: "prov.affinityResetRetryUnavailable", ok: false }]);
+  unavailable = false;
+  confirmed = true;
+  await act(async () => { await pools.fetchAccountSets(["fixture"]); });
+  await act(async () => { await pools.retryAffinityReset("fixture"); });
+  expect(writes).toEqual(Array.from({ length: 2 }, () => ({ provider: "fixture", accountId: "b" })));
+  expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+});
+
 test("pending reset survives page navigation and remains scoped to its server", async () => {
   let confirmed = false;
   const writes: string[] = [];

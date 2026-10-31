@@ -594,8 +594,17 @@ export function useProviderAccountPools(deps: {
 
   const retryAffinityReset = async (provider: string) => {
     const pending = pendingAffinityResets[provider];
-    const account = accountSets[provider]?.accounts.find(row => row.id === pending?.accountId);
-    if (!pending || serverRef.current !== apiBase || !account) return;
+    if (!pending || serverRef.current !== apiBase) return;
+    const account = accountSets[provider]?.accounts.find(row => row.id === pending.accountId);
+    if (!account) {
+      if (accountLoadStates[provider] === "ready") clearPendingAffinityReset(provider);
+      notify(t("prov.affinityResetRetryUnavailable"), false);
+      return;
+    }
+    if (pending.kind === "active" && (account.paused || account.needsReauth)) {
+      notify(t("prov.affinityResetRetryUnavailable"), false);
+      return;
+    }
     if (pending.kind === "active") await switchAccount(provider, account, true);
     else await pauseAccount(provider, account, pending.paused, true);
   };

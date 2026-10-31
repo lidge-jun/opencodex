@@ -266,6 +266,8 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `GET, POST, PATCH, DELETE /api/keys` | 데이터 평면 admission key를 나열, 생성, 수정, 또는 삭제합니다 | 400 잘못된 본문/id; 404 key 없음 |
 
+대시보드는 저장된 계정으로 대화 연결 초기화를 재시도할 수 없으면 안내합니다. 계정 목록이 로딩 중이거나 로드에 실패한 경우, 활성 계정 재시도가 일시정지·재인증 때문에 막힌 경우에는 재시도를 보존합니다. 계정을 재개하거나 다시 로그인한 뒤 재시도하세요. 목록 로드에 성공해 계정이 없다고 확인된 경우에만 재시도를 정리하며, 일시정지 재시도는 저장된 정지 상태를 유지합니다.
+
 자격 증명 목록 응답은 의도적으로 마스킹됩니다. OAuth access token과 완전한 provider API key는 대시보드 클라이언트에 반환되지 않습니다.
 
 #### Anthropic OAuth: `pause` / `resume`

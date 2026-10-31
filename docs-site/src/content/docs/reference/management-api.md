@@ -626,6 +626,8 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
 
+The dashboard reports when an affinity-reset retry cannot use its saved account. It retains the retry while the account list is loading or has failed to load, and for active-account retries blocked by pause or reauthentication. Resume the account or sign in again before retrying. Only a successfully loaded list confirming that the account is absent discards the retry; pause retries keep the saved pause state.
+
 `POST /api/oauth/login/cancel` can also dismiss the selected settled failed login attempt. It leaves stored credentials and successful login results intact; status then reports the remaining flow or idle. Cancelling an in-progress attempt still records its cancelled outcome.
 
 

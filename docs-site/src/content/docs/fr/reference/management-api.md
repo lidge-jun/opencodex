@@ -289,6 +289,8 @@ Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT va
 | `PUT /api/providers/keys/alias` | Définir ou supprimer un alias de clé de fournisseur | 400 saisie invalide ; 404 provider/key manquant |
 | `GET, POST, PATCH, DELETE /api/keys` | Répertorier, créer, modifier ou supprimer les clés d'admission du plan de données | 400 corps ou identifiant invalide ; 404 clé manquante |
 
+Le tableau de bord signale lorsqu’une réinitialisation du routage ne peut pas être réessayée avec le compte enregistré. La tentative est conservée pendant le chargement de la liste ou après son échec, ainsi que lorsque le compte actif est suspendu ou nécessite une réauthentification. Réactivez le compte ou reconnectez-vous avant de réessayer. La tentative n’est supprimée que si une liste chargée avec succès confirme l’absence du compte ; les nouvelles tentatives de suspension conservent l’état enregistré.
+
 Les réponses qui répertorient les identifiants sont délibérément masquées. Les jetons d'accès OAuth et les clés API complètes des
 fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
 
