@@ -36,6 +36,10 @@ export function claudeUsageStatePath(statePath?: string): string {
 
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 
+/**
+ * The admission file, or undefined when it is missing or any field fails validation. A rejected
+ * file reads as "never checked", so a corrupt cache can neither admit nor refuse a launch.
+ */
 export function loadClaudeUsageSnapshot(path: string): ClaudeUsageSnapshot | undefined {
   try {
     const saved = JSON.parse(readFileSync(path, "utf8"));
@@ -57,6 +61,10 @@ export function loadClaudeUsageSnapshot(path: string): ClaudeUsageSnapshot | und
   return undefined;
 }
 
+/**
+ * Records the snapshot in memory first, then atomically on disk (temp file plus rename, mode 0600).
+ * A failed disk write is swallowed: the in-memory copy still gates this process's launches.
+ */
 export function saveClaudeUsageSnapshot(path: string, snapshot: ClaudeUsageSnapshot): void {
   memory.set(path, snapshot);
   try {
