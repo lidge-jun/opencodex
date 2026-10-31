@@ -18,7 +18,7 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
  */
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-test("the sidebar is six group rows in three tiers, owning every sidebar page once", async () => {
+test("the sidebar is eleven group rows in three tiers, owning every sidebar page once", async () => {
   const { NAV_GROUPS, NAV_TIERS, groupForPage } = await import("../src/nav-groups");
   const { VALID_PAGES } = await import("../src/app-routing");
 
@@ -27,32 +27,38 @@ test("the sidebar is six group rows in three tiers, owning every sidebar page on
   expect(NAV_TIERS.map(entry => entry.tier)).toEqual(["daily", "setup", "advanced"]);
   // The exact rows, in order. A count alone would pass if a row were swapped for another.
   expect(NAV_GROUPS.map(group => [group.id, group.tier])).toEqual([
-    ["home", "daily"], ["models", "daily"], ["accounts", "daily"], ["usage-logs", "daily"],
-    ["setup", "setup"], ["advanced", "advanced"],
+    ["home", "daily"], ["models", "daily"], ["accounts", "daily"], ["subagents", "daily"], ["usage-logs", "daily"],
+    ["connect", "setup"], ["startup", "setup"], ["remote", "setup"],
+    ["proxy", "advanced"], ["advisor", "advanced"], ["advanced", "advanced"],
   ]);
   expect(Object.fromEntries(NAV_GROUPS.map(group => [group.id, [...group.pages]]))).toEqual({
     home: ["home"],
     models: ["models"],
     // Codex's account pool and every provider's quota answer the same daily question.
     accounts: ["codex-set", "providers"],
+    subagents: ["subagents"],
     // Usage leads, so the row opens Usage first.
     "usage-logs": ["usage", "logs", "storage"],
-    // Everything done once; Claude is a tab inside the Connect page, owned through `embedded`.
-    setup: ["setup", "integrations", "startup", "remote", "remote-workspace"],
-    // The Advanced hub leads; the old dashboard and the helper-agent pages are members.
-    advanced: ["advanced", "dashboard", "subagents", "advisor"],
+    // Claude is a tab inside the Connect page, owned through `embedded`.
+    connect: ["integrations", "setup"],
+    startup: ["startup"],
+    remote: ["remote", "remote-workspace"],
+    // Fine-tuning surfaces stay one click away instead of hiding behind the hub.
+    proxy: ["dashboard"],
+    advisor: ["advisor"],
+    advanced: ["advanced"],
   });
-  expect(NAV_GROUPS.find(group => group.id === "setup")?.embedded).toEqual(["claude"]);
+  expect(NAV_GROUPS.find(group => group.id === "connect")?.embedded).toEqual(["claude"]);
 
   // Every routable page belongs to exactly one row; a page in two rows would light both up.
   const owned = NAV_GROUPS.flatMap(group => [...group.pages, ...(group.embedded ?? [])]);
   expect(new Set(owned).size).toBe(owned.length);
   expect(new Set(owned)).toEqual(new Set(VALID_PAGES));
-  expect(groupForPage("startup")?.id).toBe("setup");
+  expect(groupForPage("setup")?.id).toBe("connect");
   expect(groupForPage("storage")?.id).toBe("usage-logs");
-  expect(groupForPage("advisor")?.id).toBe("advanced");
-  expect(groupForPage("claude")?.id).toBe("setup");
-  expect(groupForPage("remote-workspace")?.id).toBe("setup");
+  expect(groupForPage("dashboard")?.id).toBe("proxy");
+  expect(groupForPage("claude")?.id).toBe("connect");
+  expect(groupForPage("remote-workspace")?.id).toBe("remote");
 
   // App renders the table, one tier at a time, rather than a copy of it.
   expect(src).toContain("NAV_TIERS.map(");
