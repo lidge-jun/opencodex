@@ -99,7 +99,7 @@ export function clientRuntimeRecord(
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
 ): RuntimePortState {
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField() };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}) };
 }
 
 export function standaloneRecycleEnv(
@@ -370,7 +370,7 @@ export async function startClientRuntime(
       supervisor?.start();
       credentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
-      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), ...(clientStopping ? { clientStopping: true as const } : {}) });
+      writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
