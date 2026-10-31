@@ -607,9 +607,13 @@ export function useProviderAccountPools(deps: {
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+      if (!res.ok) {
+        if (currentRetry()) notify(t("prov.affinityResetPending"), false);
+        return;
+      }
       const result = (await res.json().catch(() => ({})) ?? {}) as { affinityResetConfirmed?: boolean };
       if (!currentRetry()) return;
-      if (res.ok && result.affinityResetConfirmed === true) {
+      if (result.affinityResetConfirmed === true) {
         clearPendingAffinityReset(provider);
         notify(t("prov.affinityResetComplete"), true);
       }
@@ -764,10 +768,16 @@ export function useProviderAccountPools(deps: {
     let committed = false;
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
-      const result = (await res.json().catch(() => ({})) ?? {}) as { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
+      let result: { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
+      let partial = false;
+      if (res.ok) result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
+      else {
+        result = (await res.json().catch(() => ({})) ?? {}) as typeof result;
+        if (!current()) return;
+        partial = result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
+        if (!partial) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
+      }
       if (!current()) return;
-      const partial = !res.ok && result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
-      if (!res.ok && !partial) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
       committed = true;
       if (partial) {
         const latest = affinityResetRetries(apiBase)[provider];

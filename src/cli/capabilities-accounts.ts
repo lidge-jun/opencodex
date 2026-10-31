@@ -3,6 +3,14 @@ import type { Capability } from "./capability-types";
 /** Account pool operations and physical native-login profiles have separate owners. */
 export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["account", "reset-affinity"], summary: "Confirm a provider-wide Anthropic session-affinity reset.",
+    usage: "ocx account reset-affinity <anthropic|anthropic2> [--json]",
+    routes: [{ method: "PUT", path: "/api/oauth/accounts/affinity-reset" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the confirmed reset or failure receipt." }],
+    mutates: true, json: "envelope",
+    details: ["Clears all provider session bindings, including bindings formed after an earlier failed reset. Works with an empty roster; never selects or resumes an account. Sends once and requires an explicit durable confirmation."],
+  },
+  {
     command: ["account", "preserve-signed-in"], summary: "Prefer other Codex identities and reserve the native sign-in as fallback.",
     usage: "ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]",
     routes: [{ method: "GET", path: "/api/codex-auth/preserve-signed-in" }, { method: "PUT", path: "/api/codex-auth/preserve-signed-in" }],

@@ -246,7 +246,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、创建、编辑或删除数据平面准入密钥 | 400 请求体/id 无效；404 密钥缺失 |
-| `PUT /api/oauth/accounts/affinity-reset` | 无需账户即可确认 provider 全部会话绑定的重置已保存。Body `{ provider }`；成功返回 `affinityResetConfirmed: true` | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+| `PUT /api/oauth/accounts/affinity-reset` | 无需账户即可确认 provider 全部会话绑定的重置已保存。Body `{ provider }`；成功返回 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
 即使保存的账户已消失，仪表板也会保留未确认的重置警告。列表加载失败、账户暂停或需要重新认证时，会保留重试并提示。列表确认账户不存在后，重试使用 `{ provider }` 调用 `PUT /api/oauth/accounts/affinity-reset`，只有收到 `affinityResetConfirmed: true` 才清除警告。该操作会清除所有绑定，包括首次失败后创建的绑定，但不会选择或恢复账户，账户列表为空时也可执行。存在待完成重置时，删除请求发送 `retryAffinityReset=true`；保存失败返回 503 `affinity_reset_not_persisted`、`deletionCommitted: true` 和 `retryable: true`。账户已经删除，请重试专用重置接口而非删除。普通删除保留其他账户的绑定。专用清理仅适用于注册的 Anthropic OAuth 实例，并保留原有管理认证和来源检查。
 

@@ -265,7 +265,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `PUT /api/providers/keys/active` | provider의 활성 key를 선택합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `GET, POST, PATCH, DELETE /api/keys` | 데이터 평면 admission key를 나열, 생성, 수정, 또는 삭제합니다 | 400 잘못된 본문/id; 404 key 없음 |
-| `PUT /api/oauth/accounts/affinity-reset` | 계정 없이 provider 전체의 대화 연결 초기화 저장을 확인합니다. Body `{ provider }`; 성공 시 `affinityResetConfirmed: true` | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+| `PUT /api/oauth/accounts/affinity-reset` | 계정 없이 provider 전체의 대화 연결 초기화 저장을 확인합니다. Body `{ provider }`; 성공 시 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
 
 대시보드는 저장된 계정이 사라져도 초기화 저장이 확인되기 전에는 경고를 보존합니다. 목록 로드 실패나 활성 계정의 일시정지·재인증 상태에서도 안내와 재시도를 유지합니다. 로드된 목록에서 계정 부재가 확인되면 재시도는 `{ provider }`로 `PUT /api/oauth/accounts/affinity-reset`을 호출하고, `affinityResetConfirmed: true`를 받아야 경고를 지웁니다. 이 작업은 최초 실패 이후 생성된 연결까지 모두 지우지만 계정을 선택·재개하지 않으며 빈 목록에서도 가능합니다. 초기화가 남은 상태의 계정 삭제는 `retryAffinityReset=true`를 보내고, 게시 실패 시 503 `affinity_reset_not_persisted`, `deletionCommitted: true`, `retryable: true`를 반환합니다. 계정은 이미 삭제됐으므로 삭제 대신 초기화 전용 API를 재시도하세요. 일반 삭제는 남은 계정의 연결을 보존합니다. 초기화 전용 정리는 등록된 Anthropic OAuth 인스턴스만 지원하며 기존 관리 인증·출처 검사를 유지합니다.
 

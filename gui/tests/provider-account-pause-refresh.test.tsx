@@ -228,6 +228,24 @@ test.each(["partial", "legacy", "empty", "confirmed"] as const)("delete %s ackno
   } finally { consent.mockRestore(); }
 });
 
+test("a rejected deletion without a committed receipt preserves the roster and retry", async () => {
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  await act(async () => { rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "active", accountId: "b" }); });
+  const requests: string[] = [];
+  respond = async (url, init) => {
+    requests.push(`${init?.method ?? "GET"} ${url}`);
+    return Response.json({ code: "affinity_reset_not_persisted", retryable: true, deletionCommitted: false }, { status: 503 });
+  };
+  try {
+    await act(async () => { await pools.removeAccount("fixture", row("a", true)); });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toStartWith("DELETE ");
+    expect(pools.accountSets.fixture.accounts.map(account => account.id)).toEqual(["a", "b"]);
+    expect(pools.pendingAffinityResets.fixture).toEqual({ kind: "active", accountId: "b" });
+    expect(notices).toEqual([{ key: "prov.accountRemoveFail", ok: false }]);
+  } finally { consent.mockRestore(); }
+});
+
 test("late global reset confirmation cannot clear a newer pending intent", async () => {
   await act(async () => { rememberAffinityResetRetry("/pause-hook", "fixture", { kind: "reset", accountId: "gone" }); });
   let settle!: (response: Response) => void;

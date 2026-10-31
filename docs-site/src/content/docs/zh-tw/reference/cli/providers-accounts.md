@@ -86,7 +86,7 @@ ocx login anthropic
 透過執行中的代理列出並切換供應商帳號與 API-key 池。隨附的說明介面如下：
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex 帳號池、OAuth 帳號與 API 金鑰（識別碼依 API 回傳遮罩顯示）。
 history openai <pool-account-id> [--limit <1-200>]  單一 Codex 帳號池帳號的近期路由決策。
@@ -101,6 +101,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。
