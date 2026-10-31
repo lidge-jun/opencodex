@@ -36,6 +36,17 @@ identical at this layer and are checked differently.
 | Upstream ChatGPT plan window | The account quota section shows a 5-hour or weekly window at or near its limit while the lock reports `ready` or `off`. | Wait for the window to reset, inspect any reset option ChatGPT offers ([banked reset rules](https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work), [plan windows](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)), or serve the request on another account with `ocx account use openai <id>`. For explicitly authorized paid-credit use after the limit, see [account credit policy](/reference/cli/providers-accounts/#pool-policy-account-thresholds-and-paid-credit-intent). The credit-balance rediscovery defect in [#6845](https://github.com/lidge-jun/opencodex/issues/6845) was fixed by [#6886](https://github.com/lidge-jun/opencodex/pull/6886). |
 | Provider incident or transport failure | Quota stays low, the lock stays released, and `ocx doctor` reports transport or ChatGPT reachability problems. | Retry after the incident clears or reroute through an existing combo. Changing lock or threshold policy is not a cure for a transport failure. |
 
+A proxy-generated `upstream_reset_replay_refused` response also uses status 429:
+upstream execution is unknown, so OCX refuses an automatic resend. Its log cause
+is `transport-ambiguous`, not provider rate limiting. This applies to direct provider
+routes and combo child failures on client HTTP and WebSocket ingress independently
+of `upstreamWebsocket`. Synthetic refusals do not cool combo targets or count as
+account rate limits; genuine upstream 429s retain their rate-limit handling. Older builds can
+misrecord a WebSocket or combo refusal as `rate-limit` / `rate_limit_exceeded`;
+that combination alone does not establish exhausted quota. `headers-only` is a
+response-progress stage, not proof that the provider returned headers. Correct
+attribution does not diagnose or repair the original connection reset.
+
 A locked main credential closes request admission; it does not reserve the
 account's remaining quota, and a predicted reset never releases the block on
 its own. The thresholds (by default `short` 90, `long` 98) are visible in the

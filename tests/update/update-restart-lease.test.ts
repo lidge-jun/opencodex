@@ -1,3 +1,4 @@
+import { sameHomeRestartIo } from "../helpers/update-home-fixtures";
 /**
  * #5760's other half. A service-manager start child is not a descendant of the
  * updater: Task Scheduler, launchd and systemd spawn `ocx start` with the stored
@@ -495,6 +496,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       async lease => {
         await restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
           platform: "win32",
+          ...sameHomeRestartIo,
           serviceInstalledFn: () => true,
           serviceViableFn: () => true,
           // `ocx service repair` only exits 0 after ITS own 45s serving probe, so the
@@ -550,6 +552,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     const outcome = await runUpdateRestartWithOwnershipLease(resolve, async lease =>
       restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
         platform: "win32",
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
         // The refresh ran (and failed) while the lease was released; a desktop
@@ -599,6 +602,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       async lease => {
         await restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
           platform: "win32",
+          ...sameHomeRestartIo,
           serviceInstalledFn: () => true,
           serviceViableFn: () => true,
           runService: () => {
@@ -649,6 +653,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       async lease =>
         restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
           platform: "win32",
+          ...sameHomeRestartIo,
           serviceInstalledFn: () => true,
           serviceViableFn: () => true,
           // A claimant that acquired the freed lease during the refresh window and

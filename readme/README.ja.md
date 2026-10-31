@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex — Codex、Claude Code、Claude Desktop、Grok Build のための汎用プロバイダープロキシ" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — Codex、Claude Code、Claude Desktop、Grok Build などのための一つのローカルゲートウェイ" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>OpenAI Codex、Claude Code、Claude Desktop、Grok Build のための汎用プロバイダープロキシ</b><br>
-コマンド 2 つで、そのすべてが好きな LLM で動きます。</p>
+<h3 align="center">AI コーディングツールとモデルをつなぐ、一つのローカルゲートウェイ。</h3>
+<p align="center"><b>Codex、Claude Code、Claude Desktop、Grok Build で好きなモデルを使い、<br>管理対象の設定で OpenCode、Pi、Qoder、WorkBuddy、Kilo、Cline、T3 Code などを接続できます。</b><br>
+<a href="https://opencodex.me/ja/reference/client-support/">対応ツールをすべて見る →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X で @claudeebum をフォロー"></a>
@@ -80,12 +80,7 @@ Sol がセッションを進め、Kimi K3 のサブエージェントを呼び�
   <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ja/"><b>完全なドキュメント →</b></a>
 </p>
 
-opencodex は、Codex の Responses API をプロバイダーが話すプロトコルへ変換する軽量なローカルプロキシ
-です。ストリーミング、ツール呼び出し、reasoning トークン、画像を双方向で扱います。Claude、Gemini、
-Grok、GLM、DeepSeek、Kimi、Qwen、Ollama をはじめとするどの LLM でも、Codex、Claude Code、Claude
-Desktop、Grok Build から使えます。Codex 認証用の **ChatGPT アカウントプール**も管理できます。アカウント
-を追加し、ダッシュボードでクォータを更新すれば、新しいセッションは使用量が最も少ない健全なアカウント
-へ自動的に振り分けられ、既存のスレッドは開始したアカウントに固定されたままになります。
+opencodex は、コーディングツールとモデルプロバイダーをつなぐ軽量なローカルゲートウェイです。Responses、Chat Completions、Anthropic Messages API のリクエストを受け取り、プロバイダーのプロトコルに変換します。クライアント、モデル、プロバイダーが対応する場合は、ストリーミング、ツール呼び出し、推論、画像を中継します。Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama などのプロバイダーを、Codex、Claude Code、Claude Desktop、Grok Build や[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載のツールで使えます。Codex 認証用の **ChatGPT アカウントプール**も管理できます。アカウントを追加し、ダッシュボードでクォータを更新すると、新規セッションは使用量が最も少ない正常なアカウントに自動振り分けされ、既存のスレッドは開始時のアカウントに固定されます。
 
 ## クイックスタート
 
@@ -101,6 +96,21 @@ ocx start                         # プロキシとダッシュボードが loca
 **http://localhost:10100** を開き、Web ダッシュボードですべて設定します。プロバイダーの追加（40 以上の
 組み込み、または任意の OpenAI 互換エンドポイント）、モデルの選択、アカウントの管理はここで行います。
 `ocx gui` でいつでもダッシュボードを開き直せます。
+
+### ツールを接続する
+
+いま使っているツールを接続します。
+
+| ツール | 接続方法 |
+|---|---|
+| Codex | ダッシュボードの **Connect** ページで Codex スイッチをオンにし、通常どおり `codex` を実行します。ローカルリスナーでは Codex の組み込みプロバイダーがプロキシを指すようになります。ターミナルからは、ダッシュボードでプロバイダーを追加する前に `ocx init` を実行し、Codex の確認に同意します。 |
+| Claude Code | `claude` CLI をインストールした状態で `ocx claude` を実行します。必要に応じてプロキシを起動し、そこを経由して Claude Code を起動します。 |
+| Claude Desktop | `ocx claude desktop` を実行します。新規インストールではアプリ全体にゲートウェイプロファイルを設定します。既存の first-party 設定は維持され、`ocx claude desktop apply --gateway` で明示的に切り替えられます。[Claude Code ガイド](https://opencodex.me/ja/guides/claude-code/)を参照してください。 切り替えた後は Claude Desktop を完全に終了してから開き直してください。 |
+| Grok Build | ローカルリスナーで Grok 連携が有効かつ `~/.grok` が存在する場合、`ocx start` がモデルを登録します。Grok Build で `ocx-*` モデルを選択してください。リモート設定は [Grok Build ガイド](https://opencodex.me/ja/guides/grok-build/)を参照してください。プロバイダーを追加した後は、プロキシを再起動する（または Codex 自動起動が有効なら `ocx ensure` を実行する）と一覧を更新できます。 |
+| 管理対象の統合があるツール | ダッシュボードの **Connect** ページか `ocx integration client enable --client <id>` を使います。 |
+| その他のツール | カスタムの OpenAI 互換ベース URL に `http://localhost:10100/v1` を、または Anthropic ベース URL に `http://localhost:10100` を設定します。 |
+
+各ツールの接続方法と対応プロトコルは[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載しています。
 
 <details>
 <summary><b>デスクトップアプリ（ベータ版）</b></summary>

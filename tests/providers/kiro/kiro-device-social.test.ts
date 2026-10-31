@@ -3,6 +3,7 @@ import { kiroDeviceConfigBaseline, kiroDeviceFlowCountForTests, startKiroDeviceL
 import { getAccountSet } from "../../../src/oauth/store";
 import { kiroDeviceFixture, profileArn, response, socialAuthorization } from "../../helpers/kiro-device-fixture";
 import type { OcxConfig } from "../../../src/types";
+import { STORE_BUDGET_MS } from "../../helpers/test-budget";
 
 let fixture: ReturnType<typeof kiroDeviceFixture> | undefined;
 afterEach(async () => { await fixture?.close(); fixture = undefined; });
@@ -81,5 +82,5 @@ describe("Kiro social device grant", () => {
       expect(await statusKiroDeviceLogin(started.flowId, "admin-token")).toBeNull();
       expect(kiroDeviceFlowCountForTests()).toBeLessThanOrEqual(16);
     }
-  });
+  }, STORE_BUDGET_MS);
 });

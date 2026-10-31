@@ -235,6 +235,51 @@
   white-space: nowrap;
 }
 
+/* ── Shadow-call source toggles (Dashboard + Models) ───── */
+.shadow-source-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+
+.shadow-source-toggle-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.shadow-source-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 2px 6px 2px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.shadow-source-toggle.on {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+}
+
+.shadow-source-toggle .switch { flex: 0 0 auto; }
+.shadow-source-id { font-size: 11.5px; white-space: nowrap; }
+.shadow-source-role { white-space: nowrap; }
+.shadow-source-reason { white-space: normal; line-height: 1.2; }
+.shadow-source-hint { display: block; line-height: 1.4; }
+.models-shadow-sources { grid-column: 1 / -1; margin: 0 0 var(--space-3); }
+.dash-shadow-sources { margin-top: var(--space-2); }
+
+@media (max-width: 560px) {
+  .shadow-source-toggle-list { gap: var(--space-1); }
+  .shadow-source-toggle { padding-right: 4px; }
+}
+
 .models-v2-detail-row {
   gap: var(--space-2);
   margin-bottom: var(--space-2);

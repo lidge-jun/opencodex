@@ -32,6 +32,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import { pinnedNativeModelRows } from "./pinned-models";
+import { isPlainObject } from "../../lib/plain-data";
 
 
 import type { RawEntry } from "./parsing";
@@ -117,15 +118,14 @@ export function configuredNativeAliasSlugs(
 }
 
 /**
- * Bare native rows that must be absent, rather than merely hidden, while Desktop native-alias
- * compatibility is active. Codex Desktop's remote allowlist can ignore `visibility: "hide"`;
- * omitting disabled native rows is therefore part of the explicit native-alias opt-in.
+ * Bare native rows omitted by native-alias compatibility or explicit native-omission opt-in.
+ * Codex Desktop's remote allowlist can ignore `visibility: "hide"`.
  */
 export function desktopAllowlistSuppressedNativeSlugs(
-  config: Pick<OcxConfig, "combos" | "disabledModels">,
+  config: Pick<OcxConfig, "combos" | "disabledModels" | "omitDisabledNativeModels">,
 ): Set<string> {
   const suppressed = configuredNativeAliasSlugs(config);
-  if (suppressed.size === 0) return suppressed;
+  if (suppressed.size === 0 && config.omitDisabledNativeModels !== true) return suppressed;
   const disabled = disabledNativeSlugs(config);
   for (const slug of NATIVE_OPENAI_MODELS) {
     if (disabled.has(slug)) suppressed.add(slug);
@@ -858,11 +858,11 @@ export function observedAccountBoundNativeEntries(
  */
 export function accountBoundNativeOpenAiSlugs(
   observedEntries: readonly RawEntry[] = [
-    ...(readCurrentCodexModelsCache()?.models ?? []),
+    ...(readCurrentCodexModelsCache()?.models ?? []).filter(isPlainObject),
     // Existing generated rows are also safe to reuse after a process starts without a cache
     // invalidation pass; bare user-authored catalog rows are intentionally not trusted here.
     ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
-      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+      isPlainObject(entry) && trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ],
 ): string[] {
   const observed = observedEntries.flatMap(entry => {
@@ -883,9 +883,9 @@ export function accountBoundNativeOpenAiSlugs(
 export function accountBoundNativeOpenAiSlugsBySelector(
   config: AccountSelectorConfig,
   observedEntries: readonly RawEntry[] = [
-    ...(readCurrentCodexModelsCache()?.models ?? []),
+    ...(readCurrentCodexModelsCache()?.models ?? []).filter(isPlainObject),
     ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
-      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+      isPlainObject(entry) && trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ],
 ): ReadonlyMap<string, readonly string[]> {
   const selectors = visibleCodexAccountSelectors(config);
@@ -926,7 +926,7 @@ export function observedAccountBoundNativeOpenAiSlugs(
 
 function catalogNativeSlugs(): string[] {
   const cat = readCurrentCatalogOrCache();
-  const models = cat?.models ?? [];
+  const models = (cat?.models ?? []).filter(isPlainObject);
   const live = models.flatMap(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
     return !slug.includes("/") && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];

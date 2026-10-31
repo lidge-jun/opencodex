@@ -1,7 +1,21 @@
 {
+  "advisor-caller-policy.test.ts": "advisor",
+  "advisor-caller-policy-sidecar-authority.test.ts": "advisor",
+  "advisor-caller-policy-vision.test.ts": "advisor",
+  "advisor-caller-policy-replay.test.ts": "advisor",
+  "advisor-caller-policy-compact.test.ts": "advisor",
+  "advisor-caller-policy-ingress.test.ts": "advisor",
+  "advisor-caller-policy-http.test.ts": "advisor",
+  "advisor-caller-policy-jev.test.ts": "advisor",
+  "advisor-caller-policy-routing.test.ts": "advisor",
+  "advisor-caller-policy-host-key.test.ts": "advisor",
+  "advisor-caller-policy-self-fetch.test.ts": "advisor",
   "windows-native-principal.test.ts": "windows",
+  "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "agent-assertion-auth.test.ts": "server",
   "agent-assertion-routes.test.ts": "responses",
   "authorization-scheme.test.ts": "lib",
-  "server-antigravity-model-roster-routing.test.ts": "server"
+  "server-antigravity-model-roster-routing.test.ts": "server",
+  "antigravity-routing-carry.test.ts": "adapters/google",
+  "server-antigravity-model-denial-recovery.test.ts": "server"
 }

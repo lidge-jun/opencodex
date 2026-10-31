@@ -1,5 +1,10 @@
 # Inbound Compatibility Surfaces
 
+Native Chat/Messages and Claude passthrough use the
+[local timeout contract](../transports/timeouts.md):
+local JSON inactivity is independent of header arrival and total generation; public JSON defaults
+retain their previous allowance. No disabled header clock detaches client cancellation.
+
 Thinking enablement is separate from strength: `src/responses/schema.ts` accepts the OCX `reasoning.enabled` boolean and `src/responses/parser.ts` retains it as `options.thinkingEnabled`, independently of `options.reasoning`. Chat `thinking.type` and Anthropic `thinking.type` preserve this choice through their inbound translators; the existing Anthropic disabled-effort sentinel remains for legacy destinations. `src/clients/reasoning-controls.ts` decodes effort-only client aliases for declared toggle-only models before strength caps run. Route fallback restores the original choice alongside effort in `src/server/effort-policy.ts`; a cleared strength list does not clear a thinking switch. Regression coverage lives in `tests/responses/responses-parser.test.ts`, `tests/responses/chat-inbound-reasoning-none.test.ts`, `tests/claude-integration/claude-inbound.test.ts`, and `tests/codex-integration/effort-policy.test.ts`.
 
 The names used for these paths (native, translated, legacy bridge) and the declared per-feature
@@ -24,9 +29,9 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 `src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of
 Responses and Chat conversion. `src/server/audio-upstream.ts` resolves explicit data-plane keys
 on both listeners and substitutes stored OpenAI credentials. Direct stored-main access claims
-the enclosing admission lease and derives its account header only from that stored credential;
+the enclosing admission lease, asynchronously resolves the current file or Codex-owned keyring credential under the request signal, and derives its account header only from that credential;
 caller-supplied account selection is never retained. Pool uses the existing sidecar account resolver. A selected
-ChatGPT authentication failure never falls through to the paid OpenAI provider.
+ChatGPT authentication failure never falls through to the paid OpenAI provider; transient native-main lookup failures retain the shared retryable 503 response.
 
 The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
 body, required model, and optional prompt, language and JSON/text response format. Unknown or

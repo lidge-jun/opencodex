@@ -10,10 +10,10 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 - Home peut se connecter à Child avec une clé OpenSSH.
 - Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
 - OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
-- Les deux ordinateurs utilisent macOS ou Linux.
+- Les ordinateurs peuvent utiliser macOS, Linux ou Windows x64. Windows nécessite OpenSSH Server et Windows PowerShell, sans Git Bash ni curl.
 - Le tableau de bord qui ajoute un Child depuis Home est ouvert sur Home ou via une session Hub appairée. Transformer l’ordinateur actuel en Child exige une session de tableau de bord appairée par l’opérateur ; une session locale sans identifiant ne peut pas valider ce changement de routage.
 
-SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut être lancée des deux côtés : depuis Home, comme décrit ci-dessous, ou depuis Child, comme décrit dans la section « Connecter cet ordinateur comme Child ».
+SSH par mot de passe n'est pas pris en charge. Une liaison peut être lancée depuis Home ou Child. Windows utilise PowerShell via la même connexion OpenSSH vérifiée.
 
 ## Ajouter un Child depuis `#remote`
 

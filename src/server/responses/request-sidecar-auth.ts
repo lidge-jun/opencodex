@@ -131,6 +131,7 @@ export async function prepareResponsesSidecarAuth(
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy,
     });
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {

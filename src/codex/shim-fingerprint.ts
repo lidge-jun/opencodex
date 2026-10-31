@@ -13,6 +13,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { posix, win32 } from "node:path";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../lib/file-identity";
 import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER } from "./shim-templates";
 import type { ShimFileState } from "./shim-state-file";
 
@@ -21,6 +22,7 @@ const CODEX_SHIM_PROBE_BYTES = 16 * 1024;
 interface ShimPathFingerprint {
   dev: number;
   ino: number;
+  identity: FileIdentity;
   kind: "file" | "symlink";
   mode: number;
   size: number;
@@ -48,16 +50,17 @@ function readShimProbePrefix(path: string): string {
 
 function statFingerprint(path: string, follow: boolean): Omit<ShimPathFingerprint, "target"> | null {
   try {
-    const stat = follow ? statSync(path) : lstatSync(path);
+    const stat = follow ? statSync(path, { bigint: true }) : lstatSync(path, { bigint: true });
     if (follow ? !stat.isFile() : (!stat.isFile() && !stat.isSymbolicLink())) return null;
     return {
-      dev: stat.dev,
-      ino: stat.ino,
+      dev: Number(stat.dev),
+      ino: Number(stat.ino),
+      identity: { dev: stat.dev, ino: stat.ino },
       kind: stat.isSymbolicLink() ? "symlink" : "file",
-      mode: stat.mode,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      ctimeMs: stat.ctimeMs,
+      mode: Number(stat.mode),
+      size: Number(stat.size),
+      mtimeMs: statTimeMs(stat.mtimeNs),
+      ctimeMs: statTimeMs(stat.ctimeNs),
     };
   } catch {
     return null;
@@ -68,8 +71,7 @@ function sameFingerprint(
   left: ShimPathFingerprint | Omit<ShimPathFingerprint, "target">,
   right: ShimPathFingerprint | Omit<ShimPathFingerprint, "target">,
 ): boolean {
-  return left.dev === right.dev
-    && left.ino === right.ino
+  return !!left.identity && !!right.identity && sameFileIdentity(left.identity, right.identity)
     && left.kind === right.kind
     && left.mode === right.mode
     && left.size === right.size

@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import { extname, join, posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
+import { sameFileIdentity } from "../lib/file-identity";
 import { fileErrorCode, readStateResult, stateFiles } from "./shim-state-file";
 import {
   isHealthyShimProbe,
@@ -111,7 +112,7 @@ export function inspectCodexShimBackingForCommand(
   const sameEffectiveIdentity = (fingerprint: ShimPathFingerprint | null): boolean => {
     if (!fingerprint) return false;
     const identity = fingerprint.target ?? fingerprint;
-    return identity.dev === selectedIdentity.dev && identity.ino === selectedIdentity.ino;
+    return sameFileIdentity(identity.identity, selectedIdentity.identity);
   };
   const matches = files.flatMap(file => {
     const backingPath = file.realPath ?? file.backupPath;
@@ -151,7 +152,7 @@ export function inspectCodexShimBackingForCommand(
     });
   }
   const wrapperIdentity = wrapperProbe.fingerprint.target ?? wrapperProbe.fingerprint;
-  if (backing.dev === wrapperIdentity.dev && backing.ino === wrapperIdentity.ino) {
+  if (sameFileIdentity(backing.identity, wrapperIdentity.identity)) {
     return Object.freeze({ status: "unknown" as const, reason: "backing_mismatch" as const });
   }
   const wrapperExt = extname(file.wrapperPath).toLowerCase();

@@ -7,6 +7,8 @@ description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, Open
 конфигурации клиента и при необходимости удаляет его. Так работают следующие
 клиенты, у каждого свой переключатель:
 
+В Windows переопределение, требующее абсолютного пути, должно содержать букву диска (`C:\Users\me\client`) или ресурс UNC (`\\server\share\client`). Формы `\Users\me\client` и `/client/config` отклоняются, поскольку зависят от текущего диска. Селекторы с документированной поддержкой `~` раскрывают его относительно действующего домашнего каталога; Gentle Shell не раскрывает `~`.
+
 | Клиент | Файл конфигурации | Формат | Когда изменение начинает действовать | Учётные данные |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | при следующем прямом запуске | `OPENCODEX_OPENCODE_API_KEY` |
@@ -555,6 +557,16 @@ OpenCodex требует явного `--overwrite-conflict`. Отключени
 поддерживает удалённую настройку допуска и требует loopback-доступа без
 аутентификации.
 
+## Диалект Responses для omo (на базе Pi)
+
+Управляемый блок omo на базе Pi по умолчанию использует диалект Chat (`api: "openai-completions"`). Chat отбрасывает рассуждения предыдущего шага между вызовами инструментов, и в длинных циклах инструментов omo это заметно. Чтобы подключение и каждое обновление записывали диалект Responses, добавьте в конфигурацию opencodex этот ключ, который задаётся только в файле конфигурации:
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+Перезапустите прокси, чтобы он загрузил изменённую конфигурацию (`ocx service restart` для установки как службы, иначе `ocx stop`, затем `ocx start`), и обновите интеграцию omo в **Connect → omo** на дашборде. Одно обновление использует конфигурацию запущенного прокси и не перечитывает файл. Настройка действует только для omo: Pi, Gentle Shell и другие клиенты формата Pi остаются на `openai-completions`. Чтобы вернуться к Chat, удалите ключ, так же перезапустите прокси и обновите **Connect → omo**. Неизвестное значение игнорируется. opencodex по-прежнему владеет только `providers.opencodex` в `~/.omo/agent/models.json`, остальные провайдеры в этом файле не меняются.
+
 ## Уровень рассуждений ролей omo (Codex / LazyCodex)
 
 Когда обнаружен LazyCodex, в разделе **omo (Codex / LazyCodex)** на вкладке omo можно выбрать модель и уровень рассуждений для каждой роли из `$CODEX_HOME/agents/*.toml` и нажать **Сохранить**. Строка роли без закреплённой модели может сохранить только уровень; роль при этом продолжает наследовать модель. opencodex меняет в файле роли только корневые ключи `model` и `model_reasoning_effort`, а отсутствующие значения добавляет ближе к началу файла. Инструкции роли, остальные комментарии и ключи остаются без изменений. Сохранение, которое меняет только модель, не отправляет `effort`, поэтому оба значения уровня сохраняются. Выбор уровня добавляет или заменяет `model_reasoning_effort` в файле роли и, если LazyCodex поддерживает этот уровень, записывает его в `[codex].agents.<role>.reasoning` в `~/.omo/omo.jsonc` (`ultra` остаётся только в файле роли, а прежний `reasoning` удаляется). В командной строке то же самое делает `ocx agent roles set <role> <model> --effort <level>`.
@@ -610,3 +622,19 @@ ocx export --client kilo --out ./kilo.jsonc
 ## Factory Droid
 
 Factory Droid использует `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` в Windows). Явно включите интеграцию командой `ocx integration client enable --client droid`, затем выберите пользовательскую модель через `/model`. Управляемые записи не содержат ключа и работают только через loopback. Отключение удаляет управляемые записи, а Undo восстанавливает сохранённые байты. Если в прежнем `config.json` есть записи OpenCodex или `settings.local.json` переопределяет `customModels`, устраните конфликт до включения. См. [документацию Factory BYOK](https://docs.factory.ai/model-independence/byok).
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

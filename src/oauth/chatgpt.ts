@@ -28,7 +28,7 @@ const CHATGPT_SUCCESS_BODY_MAX_BYTES = 64 * 1024;
 
 /** One deadline covers headers and body; every settled call detaches its caller. */
 async function chatGptTokenRequest(
-  body: URLSearchParams,
+  body: URLSearchParams | Record<string, string>,
   label: "ChatGPT refresh" | "ChatGPT token exchange",
   options: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<OAuthCredentials> {
@@ -41,10 +41,14 @@ async function chatGptTokenRequest(
   let endpointError: ChatGptTokenError | undefined;
   try {
     controller.signal.throwIfAborted();
+    const isForm = body instanceof URLSearchParams;
     const response = await fetch(TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
+      headers: {
+        "Content-Type": isForm ? "application/x-www-form-urlencoded" : "application/json",
+        Accept: "application/json",
+      },
+      body: isForm ? body.toString() : JSON.stringify(body),
       signal: controller.signal,
     });
     const result = await readBoundedResponseBytes(response, {
@@ -115,7 +119,7 @@ const TOKEN_URL = CHATGPT_TOKEN_URL;
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
-const ORIGINATOR = "opencodex";
+const ORIGINATOR = "codex_cli_rs";
 
 /**
  * Three-way answer to "is this token marked as belonging to the ChatGPT account domain".
@@ -269,15 +273,13 @@ export async function loginChatGPT(
   return flow.login();
 }
 
-// Note: uses form-urlencoded per OAuth 2.0 spec (RFC 6749 §6).
-// Codex-rs uses JSON for refresh — intentional divergence; both accepted by auth.openai.com.
 export async function refreshChatGPTToken(
   refreshToken: string,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<OAuthCredentials> {
-  return chatGptTokenRequest(new URLSearchParams({
-    grant_type: "refresh_token",
+  return chatGptTokenRequest({
     client_id: CLIENT_ID,
+    grant_type: "refresh_token",
     refresh_token: refreshToken,
-  }), "ChatGPT refresh", options);
+  }, "ChatGPT refresh", options);
 }

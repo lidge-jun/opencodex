@@ -18,7 +18,7 @@ function terminalGuard(required: boolean): (event: AdapterEvent) => AdapterEvent
   let failed = false;
   return event => {
     if (event.type === "tool_call_start") pending = true;
-    if (event.type === "tool_call_end") { fulfilled ||= pending; pending = false; }
+    if (event.type === "tool_call_end") { fulfilled ||= pending && !event.incomplete; pending = false; }
     if (event.type === "error" || event.type === "incomplete") failed = true;
     if (event.type !== "done" || !required || fulfilled || failed || isTruncatedStopReason(event.stopReason)) return event;
     // Preserve delivered output and consumption. A mandatory call is a contract, not a hint
@@ -40,9 +40,9 @@ export function withRequiredChatToolResult(adapter: ProviderAdapter): ProviderAd
       required = requiresClientCall(parsed);
       return adapter.buildRequest(parsed, incoming);
     },
-    async *parseStream(response, budget, tierMetadata) {
+    async *parseStream(response, budget, tierMetadata, streamContext) {
       const guard = terminalGuard(required);
-      for await (const event of adapter.parseStream(response, budget, tierMetadata)) yield guard(event);
+      for await (const event of adapter.parseStream(response, budget, tierMetadata, streamContext)) yield guard(event);
     },
     ...(adapter.parseResponse ? {
       async parseResponse(response: Response, budget: TranslatorBudget, tierMetadata?: AdapterTierMetadata) {

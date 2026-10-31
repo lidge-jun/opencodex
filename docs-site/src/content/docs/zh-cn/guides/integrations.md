@@ -5,6 +5,8 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 
 **连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下客户端都采用这种方式，各有独立开关：
 
+在 Windows 上，要求绝对路径的覆盖值必须包含盘符（`C:\Users\me\client`）或 UNC 共享（`\\server\share\client`）。`\Users\me\client` 和 `/client/config` 依赖当前驱动器，因此会被拒绝。明确支持 `~` 的选择器仍以有效主目录展开；Gentle Shell 不展开 `~`。
+
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接启动时 | `OPENCODEX_OPENCODE_API_KEY` |
@@ -219,6 +221,16 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
 
+## omo（基于 Pi）的 Responses 方言
+
+托管的基于 Pi 的 omo 配置块默认使用 Chat 方言（`api: "openai-completions"`）。Chat 会在工具调用之间丢弃上一步的推理，较长的 omo 工具循环会受到影响。要让启用和每次刷新都写入 Responses 方言，请在 opencodex 配置中添加以下仅能在配置文件中设置的键：
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+重启代理以加载修改后的配置（服务安装使用 `ocx service restart`，否则先 `ocx stop` 再 `ocx start`），然后在仪表盘的 **Connect → omo** 中刷新 omo 集成。仅刷新会使用运行中代理的配置，不会重新读取配置文件。该设置只对 omo 生效；Pi、Gentle Shell 等其他 Pi 格式客户端仍使用 `openai-completions`。要改回 Chat，请删除该键，按同样方式重启代理，再刷新 **Connect → omo**。未知值会被忽略。opencodex 仍只管理 `~/.omo/agent/models.json` 中的 `providers.opencodex`，该文件中的其他提供商保持不变。
+
 ## omo (Codex / LazyCodex) 角色推理强度
 
 检测到 LazyCodex 后，可以在 omo 标签页的 **omo (Codex / LazyCodex)** 部分为 `$CODEX_HOME/agents/*.toml` 中的每个角色选择模型和推理强度，然后点击 **保存**。没有固定模型的角色所在行可以只保存推理强度，该角色仍继承其模型。opencodex 只更新该角色文件根级的 `model` 和 `model_reasoning_effort` 键，缺少的固定值会插入到文件开头附近；角色的指令、其他注释和其他键保持不变。只更改模型的保存不会发送 `effort`，两个文件中的推理强度都保持原样。选择某个级别会插入或替换角色文件中的 `model_reasoning_effort`；如果 LazyCodex 支持该级别，还会写入 `~/.omo/omo.jsonc` 的 `[codex].agents.<role>.reasoning`（`ultra` 只保留在角色文件中，并移除旧的 `reasoning`）。在命令行中可以用 `ocx agent roles set <role> <model> --effort <level>` 完成同样的操作。
@@ -274,3 +286,19 @@ GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提�
 ## Factory Droid
 
 Factory Droid 使用 `~/.factory/settings.json`（Windows 上为 `%USERPROFILE%\.factory\settings.json`）。使用 `ocx integration client enable --client droid` 明确启用，然后在 `/model` 中选择自定义模型。托管条目不含密钥，且仅支持回环连接。禁用会移除托管条目；Undo 会恢复保存的原始字节。如果旧版 `config.json` 含有 OpenCodex 条目，或 `settings.local.json` 覆盖了 `customModels`，请先解决冲突再启用。参见 [Factory BYOK 文档](https://docs.factory.ai/model-independence/byok)。
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

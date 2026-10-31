@@ -84,13 +84,22 @@ ocx start --socks5-off
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
-On a connected client (a Remote Link Child or a hub client), `ocx stop` leaves Codex routing, its
+On a connected hub client, `ocx stop` leaves Codex routing, its
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
 client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
-A connected stop verifies the local runtime before changing its service: a client-role listener
-with the matching PID is supported, while an ordinary proxy must explicitly advertise preservation
-across API, signal and service shutdown. Older or unverified ordinary runtimes are refused before
+An explicit stop on a Remote Link Child restores native Codex routing, catalog and backed-up
+resume-history metadata and removes the managed Grok configuration when shared restoration succeeds.
+The saved Home connection is kept; `ocx disconnect` removes it. To use Home from Codex again,
+start the Child with `ocx start` (or `ocx service start` for an installed service), then run
+`ocx sync --restart-codex`. Starting alone does not reapply routing; sync does not recreate the Grok block.
+If connection ownership cannot be confirmed before service stop, the stop API returns HTTP 409 with
+`sharedTeardown: "refused"` and keeps the proxy and service manager running. Let any pending
+connect or disconnect finish, then retry.
+A connected stop verifies the listener against the protected local runtime record before changing
+its service. Both client-role listeners and ordinary proxies must prove that identity; an ordinary
+proxy must also advertise preservation across API, signal and service shutdown in an authenticated
+read. Older or unverified runtimes are refused before
 stop actions. Update/restart that runtime through its supervisor and retry; use `ocx disconnect`
 only when you intend to release the connection-owned integrations.
 Repeated stops of an already-stopped client confirm service-manager inactivity and absence at the
@@ -911,6 +920,22 @@ so the summary remains readable across Windows code pages. Transactional-backup 
 logs a fixed success message rather than the backup directory name; backup names containing
 shell metacharacters do not become commands in that log message.
 
+On Windows, uninstalling an elevated-registered `opencodex-proxy` task can require an
+elevated terminal. If deletion is denied, or exits with code 1 while the task is still
+present, OpenCodex reports the elevation requirement and preserves the service assets.
+Open PowerShell or Terminal with **Run as administrator** and run:
+
+```powershell
+schtasks /delete /tn opencodex-proxy /f
+```
+
+Then rerun `ocx service uninstall` from the original account to finish cleanup, and check
+`ocx service status`. Access-denied start/stop commands name their corresponding elevated
+`schtasks` command. Scheduler failures use stable diagnostics and exit codes rather than
+echoing localized child stderr, which may use a different Windows code page. An absent or
+unreadable task after a failed delete keeps exit code 1 alone from confirming an access
+denial; recognized access-denied text from the delete is still classified as one.
+
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
 access-denied text keeps the existing guidance path. If that text is unreadable, the fallback
 requires the owned command shape `/create /tn opencodex-proxy /xml <non-empty-path> /f`, status 1,
@@ -1107,7 +1132,7 @@ When a newer package version is known, the tray adds a blue dot to its online, w
 
 ### `ocx gui`
 
-Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>` — or at
+Open the [web dashboard](/guides/web-dashboard/) at `http://127.0.0.1:<port>` — or at
 `http://127.0.0.1:<management port>` when hub management ingress is enabled — auto-starting the proxy
 if it is not running.
 
@@ -1212,6 +1237,20 @@ On the Home, every row of `ocx link status --json` carries what that Child last 
 starts and then once a minute; the Home keeps reports in memory only, so after a Home restart the
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
+
+## Remote Link Child attestations
+
+A peer that sends work through a Remote Link Child can check two more facts in the Child's
+`ocx status --json`. Both fields are omitted, never `null`, when they cannot be proven.
+
+| Field | Meaning |
+| --- | --- |
+| `localCredentials` | `{count, generation}`. `count` is the number of provider credentials this installation stores on this machine: OAuth accounts, provider API-key slots (including disabled entries and keychain or environment references), Codex account-pool records, the native Codex `auth.json` and inactive native Codex profiles. Link keys, management tokens and incoming API keys do not count, and neither do the accounts a Home serves. `generation` is opaque and changes whenever a stored credential is added, replaced or removed, even when the count ends where it started. Reported only while an OpenCodex runtime on this machine is running and every store reads completely. A native Codex configuration whose `cli_auth_credentials_store` is not `file` omits it. |
+| `link.connectionGeneration` | On a Child: opaque, and changes whenever the tunnel to its Home connects (including a reconnect that keeps the same link) and whenever either runtime restarts. Reported only while the Child's runtime is ready. For a link started from Home, the Child learns it from the Home's signed answer, so a Home on an older release leaves it out. |
+
+A Child that reports `localCredentials.count` 0, with `localCredentials.generation` and
+`link.connectionGeneration` unchanged across a request, had no local provider credential during it
+and observed no tunnel reconnect.
 
 For a link the Home added, each row also carries `tunnel`: `attempt` (ssh attempts since the link
 was last connected), `nextRetryAt` (ISO time of the next scheduled retry, `null` while one runs or

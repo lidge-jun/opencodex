@@ -23,8 +23,14 @@ import { spawn } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
+import { clearableDeadline, type ClearableDeadline } from "../lib/abort";
 import { parseCatalogJson, readCodexCatalogPathForHome, type RawCatalog, type RawEntry } from "./catalog/parsing";
-import { codexExecInvocation } from "./exec-invocation";
+import {
+  CodexExecTrustError,
+  validatedCodexExecInvocationAsync,
+  type CodexExecBoundaryAsyncDeps,
+} from "./exec-boundary";
+import type { SpawnInvocation } from "../lib/win-exec";
 import { resolveCodexHomeDir } from "./home";
 import {
   CODEX_PROGRAM_NOT_FOUND_REASON,
@@ -430,11 +436,21 @@ type SharedPromptProbeOutcome =
   | { kind: "failed"; failure?: PromptProbeFailure }
   | { kind: "busy" };
 
+/**
+ * The fixed phrase that distinguishes a deadline expiry from every other
+ * termination. The shared flight's timer and a caller's own deadline both
+ * report it, so a waiter can tell "the budget ran out" from "the probe was
+ * stopped" without reading process output - which this response never carries.
+ */
+const PROMPT_PROBE_TIMEOUT_PHRASE = "codex prompt probe timed out";
+
 let activePromptProbe: PromptProbeFlight | null = null;
 let probeCommandForTests: { binary: string; args: string[] } | null = null;
 let probeRuntimeForTests: { command: string; source: CodexRuntimeSource } | null | undefined;
 let probeSpawnAttemptsForTests = 0;
 let probeCloseBarrierForTests: Promise<void> | null = null;
+let probeExecBoundaryDepsForTests: CodexExecBoundaryAsyncDeps | null = null;
+let probeMetadataBarrierForTests: Promise<void> | null = null;
 
 function commandKey(command: ProbeCommand): string {
   return JSON.stringify([
@@ -513,9 +529,10 @@ function classifyRuntimeFailure(result: ResolveCodexRuntimeResult): PromptProbeF
 
 function runProbe(
   command: ProbeCommand,
-  signal: AbortSignal,
+  controller: AbortController,
   onStopping: () => void,
 ): PromptProbeExecution {
+  const signal = controller.signal;
   if (signal.aborted) return completedExecution({ raw: null, failure: null });
   let resolveResult!: (value: PromptProbeExecutionResult | null) => void;
   let resolveClosed!: () => void;
@@ -535,17 +552,98 @@ function runProbe(
     resolveClosed();
   };
 
-  try {
+  // One deadline covers trust verification AND the probe child. The timer
+  // aborts the flight controller rather than terminating directly, so the
+  // signal reaches an in-flight trust check (which must stop and reap its own
+  // helper) exactly like it reaches the probe child. The slot is never
+  // released while a verification promise is still unsettled.
+  let child: ReturnType<typeof spawn> | undefined;
+  let settled = false;
+  let stopping = false;
+  let stoppingFailure: PromptProbeFailure | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const finish = (value: PromptProbeExecutionResult) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+    finishResult(value);
+    finishClosed();
+  };
+
+  // Keep the flight admitted until `close`: kill() only requests termination
+  // and does not prove the exact child has released its process and stdio.
+  const terminate = (
+    failure = probeFailure(
+      command,
+      "execution-failed",
+      // The flight timer aborts with a TimeoutError; every other abort reason
+      // is a stop, not an expired budget. Callers match on the fixed phrase to
+      // report "timed out" instead of a generic termination.
+      signal.reason instanceof DOMException && signal.reason.name === "TimeoutError"
+        ? `${PROMPT_PROBE_TIMEOUT_PHRASE}: ${commandDescription(command)}`
+        : `codex probe was terminated: ${commandDescription(command)}`,
+    ),
+  ) => {
+    if (settled || stopping) return;
+    stopping = true;
+    stoppingFailure = failure;
+    onStopping();
+    if (timer) clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+    child?.stdout?.destroy();
+    // The caller is bounded even if OS termination later fails. Admission is
+    // retained separately by `closed`, and later probes fail soft while this
+    // exact execution remains unproven terminal.
+    finishResult({ raw: null, failure });
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Exact child state is ambiguous. Keep admission non-joinable until its
+      // own `close` proves terminal instead of targeting a reusable numeric PID.
+    }
+  };
+  const onAbort = () => terminate();
+
+  const start = async () => {
+    // The flight owns trust verification too: it runs under the shared
+    // deadline and the controller's abort, and a rejected target becomes this
+    // flight's shared failure instead of spawning beside the single slot.
+    let invocation: SpawnInvocation;
+    try {
+      invocation = await validatedCodexExecInvocationAsync(command.binary, command.args, {
+        env: process.env,
+        cwd: command.cwd,
+        signal,
+        ...(probeExecBoundaryDepsForTests ?? {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({
+        raw: null,
+        failure: probeFailure(
+          command,
+          error instanceof CodexExecTrustError
+            ? "execution-failed"
+            : /ENOENT|not found/i.test(message) ? "program-not-found" : "execution-failed",
+          `codex probe could not start: ${commandDescription(command)}`,
+        ),
+      });
+      return;
+    }
+    if (stopping || settled) {
+      // Terminated while verification was in flight; its await has now settled
+      // and no probe child exists, so the slot can be released.
+      finishClosed();
+      return;
+    }
     // A probe must never hang OR balloon the management API: it is bounded in
-    // time AND in bytes, and every failure degrades to "unavailable" rather than
-    // an error page.
-    let child: ReturnType<typeof spawn>;
+    // time AND in bytes, and every failure degrades to "unavailable" rather
+    // than an error page.
     try {
       if (probeCommandForTests) probeSpawnAttemptsForTests += 1;
-      // Route through the shared invocation helper: on Windows a resolved
-      // `codex.cmd` cannot be spawned directly and must go through cmd.exe,
-      // which `commandInvocation` does with correct metacharacter escaping.
-      const invocation = codexExecInvocation(command.binary, command.args, process.platform);
       child = spawn(invocation.file, invocation.args, {
         cwd: command.cwd,
         stdio: ["ignore", "pipe", "pipe"],
@@ -554,7 +652,7 @@ function runProbe(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      finishResult({
+      finish({
         raw: null,
         failure: probeFailure(
           command,
@@ -562,71 +660,26 @@ function runProbe(
           `codex probe could not start: ${commandDescription(command)}`,
         ),
       });
-      finishClosed();
-      return { result, closed };
+      return;
     }
+    const proc = child;
     const chunks: Buffer[] = [];
     const errorChunks: Buffer[] = [];
     let size = 0;
     let errorSize = 0;
-    let settled = false;
-    let stopping = false;
-    let stoppingFailure: PromptProbeFailure | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const finish = (value: PromptProbeExecutionResult) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      finishResult(value);
-      finishClosed();
-    };
-
-    // Keep the flight admitted until `close`: kill() only requests termination
-    // and does not prove the exact child has released its process and stdio.
-    const terminate = (
-      failure = probeFailure(
-        command,
-        "execution-failed",
-        `codex probe was terminated: ${commandDescription(command)}`,
-      ),
-    ) => {
-      if (settled || stopping) return;
-      stopping = true;
-      stoppingFailure = failure;
-      onStopping();
-      if (timer) clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      child.stdout?.destroy();
-      // The caller is bounded even if OS termination later fails. Admission is
-      // retained separately by `closed`, and later probes fail soft while this
-      // exact child remains unproven terminal.
-      finishResult({ raw: null, failure });
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Exact child state is ambiguous. Keep admission non-joinable until its
-        // own `close` proves terminal instead of targeting a reusable numeric PID.
-      }
-    };
-    const onAbort = () => terminate();
-
-    timer = setTimeout(terminate, command.timeoutMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-    child.stdout?.on("data", (chunk: Buffer) => {
+    proc.stdout?.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_PROBE_OUTPUT_BYTES) { terminate(); return; }
       chunks.push(chunk);
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
+    proc.stderr?.on("data", (chunk: Buffer) => {
       errorSize += chunk.length;
       if (errorSize <= MAX_PROBE_STDERR_BYTES) errorChunks.push(chunk);
     });
-    child.on("error", error => {
+    proc.on("error", error => {
       // No PID means spawn itself failed, so there is no live child to drain.
-      if (child.pid === undefined) {
+      if (proc.pid === undefined) {
         const message = error instanceof Error ? error.message : String(error);
         finish({
           raw: null,
@@ -643,7 +696,7 @@ function runProbe(
         `codex probe process error: ${commandDescription(command)}`,
       ));
     });
-    child.on("close", code => {
+    proc.on("close", code => {
       // Decode once, at the end: `String(chunk)` per chunk corrupts any UTF-8
       // character that straddles a chunk boundary.
       const recordClose = () => {
@@ -671,8 +724,17 @@ function runProbe(
     });
     // Close the race between the pre-spawn check and listener registration.
     if (signal.aborted) terminate();
-  } catch {
-    finishResult({
+  };
+
+  timer = setTimeout(() => {
+    // Abort rather than terminate directly so the signal also reaches a trust
+    // check that is still running: it must stop and reap its helper before the
+    // flight releases the slot.
+    controller.abort(new DOMException("prompt probe timed out", "TimeoutError"));
+  }, command.timeoutMs);
+  signal.addEventListener("abort", onAbort, { once: true });
+  void start().catch(() => {
+    finish({
       raw: null,
       failure: probeFailure(
         command,
@@ -680,8 +742,7 @@ function runProbe(
         `codex probe failed: ${commandDescription(command)}`,
       ),
     });
-    finishClosed();
-  }
+  });
   return { result, closed };
 }
 
@@ -697,7 +758,7 @@ function startPromptProbeFlight(command: ProbeCommand): PromptProbeFlight {
     resultSettled: false,
     settled: false,
   };
-  const execution = runProbe(command, controller.signal, () => {
+  const execution = runProbe(command, controller, () => {
     flight.joinable = false;
   });
   flight.result = execution.result
@@ -722,6 +783,9 @@ async function runSharedPromptProbe(
   if (signal?.aborted) return { kind: "failed" };
   const active = activePromptProbe;
   if (!active) {
+    // The new flight claims the sole slot synchronously, before any await:
+    // trust verification runs inside it under the probe deadline, and a
+    // rejected target becomes the flight's shared failure for every joiner.
     const result = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
     if (!result) return { kind: "failed" };
     if (result.failure) return { kind: "failed", failure: result.failure };
@@ -860,6 +924,39 @@ export async function probePromptText(
   signal?: AbortSignal,
   promptStateFingerprint: string | null = null,
 ): Promise<PromptTextProbe> {
+  // Metadata time counts against the caller budget; synchronous reads cannot
+  // be interrupted, so expiry blocks admission after they return. Waiting and
+  // trust verification are cancellable. The flight keeps its fixed deadline:
+  // caller expiry ends only that wait, without extending the shared backstop.
+  // The child also stops on output overflow, process errors or last-waiter exit.
+  const deadlineAt = Date.now() + timeoutMs;
+  const deadline = clearableDeadline(timeoutMs, signal);
+  try {
+    const result = await probePromptTextWithinDeadline(timeoutMs, deadlineAt, deadline, promptStateFingerprint);
+    if (!deadline.didExpire()) return result;
+    const command = `${result.runtime?.command ?? "codex"} debug prompt-input`;
+    return {
+      ...result,
+      ok: false,
+      detail: "prompt probe timed out",
+      failure: {
+        kind: "execution-failed",
+        command,
+        detail: `${PROMPT_PROBE_TIMEOUT_PHRASE}: ${command}`,
+      },
+    };
+  } finally {
+    deadline.clear();
+  }
+}
+
+async function probePromptTextWithinDeadline(
+  timeoutMs: number,
+  deadlineAt: number,
+  deadline: ClearableDeadline,
+  promptStateFingerprint: string | null,
+): Promise<PromptTextProbe> {
+  const signal = deadline.signal;
   // The probe runs in CODEX_HOME, never in a caller-supplied directory. A `cwd`
   // parameter let an authenticated request read any readable folder's AGENTS.md,
   // and it also described a prompt that depends on where Codex happened to run.
@@ -927,6 +1024,37 @@ export async function probePromptText(
     timeoutMs,
     promptStateFingerprint,
   };
+  // The absolute check complements the abort signal: a synchronous metadata
+  // read that consumed the whole budget starves the timer callback, so the
+  // signal can still be quiet here after the absolute deadline passed. An
+  // expired caller must never start a flight.
+  const metadataBarrier = probeMetadataBarrierForTests;
+  if (metadataBarrier) await metadataBarrier;
+  if (signal.aborted && !deadline.didExpire()) {
+    return {
+      ok: false,
+      codexHome,
+      layers: { ...baseLayers },
+      base,
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
+      detail: "prompt probe cancelled",
+    };
+  }
+  if (deadline.didExpire() || Date.now() >= deadlineAt) {
+    return {
+      ok: false,
+      codexHome,
+      layers: { ...baseLayers },
+      base,
+      ...(reportedRuntime ? { runtime: reportedRuntime } : {}),
+      detail: "prompt probe timed out",
+      failure: probeFailure(
+        command,
+        "execution-failed",
+        `${PROMPT_PROBE_TIMEOUT_PHRASE}: ${commandDescription(command)}`,
+      ),
+    };
+  }
   const outcome = await runSharedPromptProbe(command, signal);
   if (outcome.kind !== "output") {
     return {
@@ -940,7 +1068,9 @@ export async function probePromptText(
         ? "prompt probe cancelled"
         : outcome.kind === "busy"
           ? "another prompt probe is still finishing; retry shortly"
-          : "codex debug prompt-input failed",
+          : outcome.kind === "failed" && outcome.failure?.detail.startsWith(PROMPT_PROBE_TIMEOUT_PHRASE)
+            ? "prompt probe timed out"
+            : "codex debug prompt-input failed",
     };
   }
   const raw = outcome.raw;
@@ -1015,6 +1145,16 @@ export function setPromptTextProbeCloseBarrierForTests(barrier: Promise<void> | 
   probeCloseBarrierForTests = barrier;
 }
 
+/** Test-only metadata-phase barrier; models elapsed work before flight admission. */
+export function setPromptTextProbeMetadataBarrierForTests(barrier: Promise<void> | null): void {
+  probeMetadataBarrierForTests = barrier;
+}
+
+/** Test-only exec-boundary dep seam; production resolves the real environment. */
+export function setPromptTextProbeExecBoundaryDepsForTests(deps: CodexExecBoundaryAsyncDeps | null): void {
+  probeExecBoundaryDepsForTests = deps;
+}
+
 /** Test-only fail-closed drain so one failed lifecycle case cannot poison another. */
 export async function resetPromptTextProbeForTests(): Promise<void> {
   const active = activePromptProbe;
@@ -1031,4 +1171,6 @@ export async function resetPromptTextProbeForTests(): Promise<void> {
   probeRuntimeForTests = undefined;
   probeSpawnAttemptsForTests = 0;
   probeCloseBarrierForTests = null;
+  probeExecBoundaryDepsForTests = null;
+  probeMetadataBarrierForTests = null;
 }

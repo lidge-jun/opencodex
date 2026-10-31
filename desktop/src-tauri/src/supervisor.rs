@@ -383,7 +383,7 @@ fn on_exit(app: &AppHandle, pid: u32, exit: SidecarExit) {
     ));
     match verdict {
         Verdict::Ignore(_) => {}
-        Verdict::Defer => supervisor.state().owed = true,
+        Verdict::Defer => defer_recovery(app, &supervisor),
         Verdict::RespawnAfter(delay) => {
             // The child is gone: let go of its handle without signalling anything, so nothing
             // later reads it as a runtime this app still owns.
@@ -394,6 +394,12 @@ fn on_exit(app: &AppHandle, pid: u32, exit: SidecarExit) {
             schedule(app, delay);
         }
     }
+}
+
+fn defer_recovery(app: &AppHandle, supervisor: &Supervisor) {
+    let mut state = supervisor.state();
+    state.owed = true;
+    crate::recovery::defer_recovery(app);
 }
 
 fn describe(verdict: Verdict, attempts: u32) -> String {
@@ -413,19 +419,23 @@ fn schedule(app: &AppHandle, delay: Duration) {
     let Some(supervisor) = app.try_state::<Supervisor>() else {
         return;
     };
-    {
+    let reservation = {
         let mut state = supervisor.state();
         if state.pending {
             return;
         }
+        // A duplicate scheduler must not see pending before its recovery credit exists.
+        let reservation = crate::recovery::reserve(app);
         state.pending = true;
         state.attempts = state.attempts.saturating_add(1);
         state.streak = 0;
         state.healthy_since = None;
         state.parked = None;
-    }
+        reservation
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let _reservation = reservation;
         sleep(delay).await;
         let Some(supervisor) = app.try_state::<Supervisor>() else {
             return;
@@ -439,10 +449,10 @@ fn schedule(app: &AppHandle, delay: Duration) {
         match decide(input(&app, false, false, attempts)) {
             Verdict::RespawnAfter(_) => {
                 if !startup::begin_with(&app, Mode::Recover) {
-                    supervisor.state().owed = true;
+                    defer_recovery(&app, &supervisor);
                 }
             }
-            Verdict::Defer => supervisor.state().owed = true,
+            Verdict::Defer => defer_recovery(&app, &supervisor),
             Verdict::Ignore(reason) => supervisor.note(&format!("recovery skipped: {reason}")),
         }
     });
@@ -452,8 +462,15 @@ fn schedule(app: &AppHandle, delay: Duration) {
 /// [`follow_up`] says: another attempt after the backoff, a parked watch when a listener this app
 /// cannot use holds the port, or nothing until the person retries. `detail` is the run's own last
 /// word, for the log.
-pub fn run_finished(app: &AppHandle, mode: Mode, outcome: RunOutcome, detail: Option<&str>) {
+pub fn run_finished(
+    app: &AppHandle,
+    generation: u64,
+    mode: Mode,
+    outcome: RunOutcome,
+    detail: Option<&str>,
+) {
     let Some(supervisor) = app.try_state::<Supervisor>() else {
+        crate::recovery::finish_run(app, generation, false);
         return;
     };
     let ready = outcome == RunOutcome::Ready;
@@ -468,6 +485,7 @@ pub fn run_finished(app: &AppHandle, mode: Mode, outcome: RunOutcome, detail: Op
         (owed, state.attempts)
     };
     if ready {
+        crate::recovery::finish_run(app, generation, true);
         if mode == Mode::Recover {
             supervisor.note("recovery run ready");
         }
@@ -498,6 +516,7 @@ pub fn run_finished(app: &AppHandle, mode: Mode, outcome: RunOutcome, detail: Op
             }
         }
     }
+    crate::recovery::finish_run(app, generation, false);
 }
 
 /// The watchdog's one question: who answers the endpoint, if anything.

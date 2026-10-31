@@ -5,16 +5,17 @@ const ADMIN_TOKEN_USERNAME = "OpenCodex";
 const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding-the-admin-token";
 
 export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
-export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
+export type AdminTokenVerifier = (token: string, rememberDevice?: boolean) => Promise<AdminTokenValidation>;
 
 /**
  * Ask for the management credential with a real sign-in form so browsers and
  * password managers can offer save/autofill. OpenCodex itself still keeps the
- * submitted token in memory only; persistence remains entirely browser-owned.
+ * submitted token in memory only; Remember requests an HttpOnly server session.
  */
 export function promptForAdminToken(
   verifyToken: AdminTokenVerifier,
   locale: Locale = getActiveLocale(),
+  rememberAllowed = true,
 ): Promise<string | null> {
   const messages = DICTS[locale];
   const titleText = messages["auth.adminTokenTitle"];
@@ -91,6 +92,18 @@ export function promptForAdminToken(
     help.append(" ", docsLink);
     tokenField.append(help);
 
+    const rememberLabel = document.createElement("label");
+    rememberLabel.className = "field-label";
+    const remember = document.createElement("input");
+    remember.type = "checkbox";
+    remember.name = "remember-device";
+    remember.disabled = !rememberAllowed;
+    rememberLabel.append(remember, " ", messages["auth.rememberDevice"]);
+    const rememberHint = document.createElement("p");
+    rememberHint.className = "hint";
+    rememberHint.textContent = messages["auth.rememberDeviceHint"];
+    tokenField.append(rememberLabel, rememberHint);
+
     const validationError = document.createElement("div");
     validationError.className = "notice notice-err";
     validationError.setAttribute("role", "alert");
@@ -142,9 +155,10 @@ export function promptForAdminToken(
       }
       password.disabled = true;
       submit.disabled = true;
+      remember.disabled = true;
       setValidationError(null);
 
-      void verifyToken(token).then((result) => {
+      void verifyToken(token, rememberAllowed && remember.checked).then((result) => {
         if (settled) return;
         if (result === "accepted") {
           finish(token);
@@ -153,6 +167,7 @@ export function promptForAdminToken(
         password.value = "";
         password.disabled = false;
         submit.disabled = false;
+        remember.disabled = !rememberAllowed;
         setValidationError(result === "rejected"
           ? messages["auth.adminTokenRejected"]
           : messages["auth.adminTokenUnavailable"]);
@@ -162,6 +177,7 @@ export function promptForAdminToken(
         password.value = "";
         password.disabled = false;
         submit.disabled = false;
+        remember.disabled = !rememberAllowed;
         setValidationError(messages["auth.adminTokenUnavailable"]);
         password.focus();
       });

@@ -25,6 +25,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "kilo",
   "droid",
   "gentle-shell",
+  "t3code",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -290,6 +291,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "models.providers.opencodex",
   "models.*",
   "modelConfigs.customModels.*",
+  "providerInstances.opencodex",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
   "providers.[id=opencodex]",

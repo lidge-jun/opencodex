@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   ClientPathError,
   EXPORT_CLIENTS,
@@ -14,6 +15,7 @@ import {
   type PiGeneratedConfig,
 } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { configSchema } from "../../src/config/schema/config-schema";
 import type { OcxConfig } from "../../src/types";
 
 const CONFIG = {
@@ -37,6 +39,25 @@ function context(): ExportContext {
 }
 
 describe("omo client config", () => {
+  test("defaults to the Chat dialect and opts into Responses on both paths without touching Pi (#7431)", () => {
+    expect((buildClientConfig("omo", context()) as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.api).toBe("openai-completions");
+    const optedIn = { ...context(), config: { ...CONFIG, omoClientExport: { api: "openai-responses" } } as OcxConfig };
+    const document = buildClientConfig("omo", optedIn) as PiGeneratedConfig;
+    expect(document.providers[OPENCODE_PROVIDER_ID]!.api).toBe("openai-responses");
+    expect(document.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true, supportsDeveloperRole: false });
+    expect(buildClientContribution("omo", optedIn).fragments[0]!.value).toEqual(document.providers[OPENCODE_PROVIDER_ID]);
+    expect((buildClientConfig("pi", optedIn) as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.api).toBe("openai-completions");
+  });
+
+  test("an unknown omo dialect is dropped by the config schema, leaving the default", () => {
+    const providers = { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } };
+    const parsed = configSchema.safeParse({ ...CONFIG, providers, omoClientExport: { api: "openai-realtime" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect((parsed.data as OcxConfig).omoClientExport?.api).toBeUndefined();
+    const kept = configSchema.safeParse({ ...CONFIG, providers, omoClientExport: { api: "openai-responses" } });
+    expect(kept.success && (kept.data as OcxConfig).omoClientExport?.api).toBe("openai-responses");
+  });
+
   /**
    * The opposite of Prime's assertion, deliberately.
    *
@@ -103,24 +124,24 @@ describe("omo client config", () => {
     expect(omoAgentDir({}, "/home/u")).toBe(join("/home/u", ".omo", "agent"));
     expect(omoConfigPath({}, "/home/u")).toBe(join("/home/u", ".omo", "agent", "models.json"));
 
-    expect(omoConfigPath({ OMO_CODING_AGENT_DIR: "/from-omo" }, "/home/u")).toBe(join("/from-omo", "models.json"));
-    expect(omoConfigPath({ SENPI_CODING_AGENT_DIR: "/from-senpi" }, "/home/u")).toBe(join("/from-senpi", "models.json"));
-    expect(omoConfigPath({ PI_CODING_AGENT_DIR: "/from-pi" }, "/home/u")).toBe(join("/from-pi", "models.json"));
+    expect(omoConfigPath({ OMO_CODING_AGENT_DIR: join(tmpdir(), "from-omo") }, "/home/u")).toBe(join(join(tmpdir(), "from-omo"), "models.json"));
+    expect(omoConfigPath({ SENPI_CODING_AGENT_DIR: join(tmpdir(), "from-senpi") }, "/home/u")).toBe(join(join(tmpdir(), "from-senpi"), "models.json"));
+    expect(omoConfigPath({ PI_CODING_AGENT_DIR: join(tmpdir(), "from-pi") }, "/home/u")).toBe(join(join(tmpdir(), "from-pi"), "models.json"));
 
     // Precedence, not merely recognition.
     expect(omoConfigPath({
-      OMO_CODING_AGENT_DIR: "/from-omo",
-      SENPI_CODING_AGENT_DIR: "/from-senpi",
-      PI_CODING_AGENT_DIR: "/from-pi",
-    }, "/home/u")).toBe(join("/from-omo", "models.json"));
+      OMO_CODING_AGENT_DIR: join(tmpdir(), "from-omo"),
+      SENPI_CODING_AGENT_DIR: join(tmpdir(), "from-senpi"),
+      PI_CODING_AGENT_DIR: join(tmpdir(), "from-pi"),
+    }, "/home/u")).toBe(join(join(tmpdir(), "from-omo"), "models.json"));
     expect(omoConfigPath({
-      SENPI_CODING_AGENT_DIR: "/from-senpi",
-      PI_CODING_AGENT_DIR: "/from-pi",
-    }, "/home/u")).toBe(join("/from-senpi", "models.json"));
+      SENPI_CODING_AGENT_DIR: join(tmpdir(), "from-senpi"),
+      PI_CODING_AGENT_DIR: join(tmpdir(), "from-pi"),
+    }, "/home/u")).toBe(join(join(tmpdir(), "from-senpi"), "models.json"));
 
     // omo trims and then tests truthiness, so a blank value is not a path.
-    expect(omoConfigPath({ OMO_CODING_AGENT_DIR: "   ", PI_CODING_AGENT_DIR: "/from-pi" }, "/home/u"))
-      .toBe(join("/from-pi", "models.json"));
+    expect(omoConfigPath({ OMO_CODING_AGENT_DIR: "   ", PI_CODING_AGENT_DIR: join(tmpdir(), "from-pi") }, "/home/u"))
+      .toBe(join(join(tmpdir(), "from-pi"), "models.json"));
     expect(omoConfigPath({ OMO_CODING_AGENT_DIR: "" }, "/home/u"))
       .toBe(join("/home/u", ".omo", "agent", "models.json"));
 
@@ -148,7 +169,7 @@ describe("omo client config", () => {
     const spec = INTEGRATION_CLIENTS.omo;
     expect(spec.detectDir({}, "/home/u")).toBe(join("/home/u", ".omo", "agent"));
     expect(spec.detectDir({}, "/home/u")).not.toBe(join("/home/u", ".omo"));
-    expect(spec.detectDir({ OMO_CODING_AGENT_DIR: "/elsewhere" } as NodeJS.ProcessEnv, "/home/u")).toBe("/elsewhere");
+    expect(spec.detectDir({ OMO_CODING_AGENT_DIR: join(tmpdir(), "elsewhere") } as NodeJS.ProcessEnv, "/home/u")).toBe(join(tmpdir(), "elsewhere"));
   });
 
   test("ships as a loopback-only integration with no env var to export", () => {

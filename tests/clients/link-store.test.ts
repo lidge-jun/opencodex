@@ -109,3 +109,13 @@ test("hasLinks reports false for a corrupted store", () => {
   writeFileSync(path, JSON.stringify({ version: 2, listenerPort: null, links: [] }));
   expect(hasLinks(path)).toBe(false);
 });
+
+test("old link records remain readable and explicit remote platforms survive serialization", () => {
+  const original = validStore();
+  expect(parseLinkStore(JSON.stringify(original))).toEqual(original);
+  for (const remotePlatform of ["windows", "posix"] as const) {
+    const store = { ...original, links: original.links.map(record => ({ ...record, remotePlatform })) };
+    expect(parseLinkStore(JSON.stringify(store))).toEqual(store);
+  }
+  expect(() => parseLinkStore(JSON.stringify({ ...original, links: original.links.map(record => ({ ...record, remotePlatform: "unknown" })) }))).toThrow(LinkStoreError);
+});

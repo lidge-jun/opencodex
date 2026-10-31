@@ -7,18 +7,23 @@ accepts only an optional boolean; malformed reads disable the leaf, while live
 writes reject malformed values and unknown fields.
 
 The launcher under the config directory re-enters the current CLI using
-`process.execPath` and `selfLaunchArgv()`. Its hidden internal filter command stays
+`process.execPath` and `selfLaunchArgv()`. Its hidden filter and executable-validation commands stay
 out of the public command registry and generated skill surface. Source installs
 include the CLI entry argument; compiled builds use only the executable and
 internal command arguments.
 
-The launcher checks macOS, executable presence and a successful filter self-test,
-then replaces itself with the bundled app-server using shell exec. Only stdout
+The launcher uses macOS and a successful filter self-test to select stdout filtering.
+Every invocation, including a Desktop respawn and the unfiltered branch, re-enters
+`internal codex-exec-target --bundle-root <root> -- <path>` immediately before shell exec. The helper applies
+the execution trust contract below to the recorded discovered root, regardless of its name,
+and returns the exact target to execute; the shell
+does not use `uname` as execution authority. Only stdout
 passes through the filter. Stdin, stderr, process identity and the real server's
 exit status retain the direct app/server relationship.
 
-When the platform is not macOS, the runtime is missing, or the filter self-test fails,
-the launcher runs the original binary with untouched stdout. A missing bundled binary
+When filtering is unavailable or its self-test fails, the launcher runs the validated
+target with untouched stdout. An unavailable validator, failed trust check or empty
+target exits 126 without executing the recorded binary; a missing bundled binary
 exits 127 instead (see below). A filter that passes the self-test and then exits
 mid-session closes the server's stdout pipe; the filter's passthrough mode limits this
 to an exit/crash case.
@@ -52,18 +57,32 @@ The app is discovered and confirmed by bundle identifier through
 `darwinDesktopAppAdapter.discover` (`src/codex/desktop-app/darwin.ts`). Launch derives
 the bundled app-server binary from that root (`resolveChatgptCodexBinary`) and refuses
 when none exists or when `untrustedChatgptBundleReason`
-(`src/chatgpt/app-server-shim/bundle-trust.ts`) reports the bundle or binary as owned
+(`src/chatgpt/app-server-shim/bundle-trust.ts`; the signal-aware async twin in
+`bundle-trust-async.ts` serves the exec boundary) reports the bundle or binary as owned
 by another user, group/other-writable, unsigned, or signed by a team other than
 OpenAI's. It writes the mode-0755 executable through an exclusive temp file and a
 rename (never through a symbolic link), quits the bundle by id, waits for this user's
 instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
 The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
+The discovered root is a quoted literal in the launcher itself, with no metadata sidecar.
+Before publication, the writer checks its parent/ancestor replacement permissions and the
+new file's ownership, type and permissions using the shared POSIX filesystem policy.
+An unsafe path refuses publication. The strict helper mode refuses a missing or empty root,
+failed canonicalization or a target outside the recorded root's canonical `Contents/`.
+It always verifies that root and binary, even if the bundle is renamed or its identifier changes.
+Same-user processes, the installed CLI/runtime and the launcher code remain trusted; these
+checks do not attest extended ACLs or make verification and exec an atomic operation.
 Restore uses the same trust policy for the bundle and its main app executable before
 quit or open. Both relaunch paths check ancestor ownership and POSIX replacement permissions
 through the filesystem root. Ancestors must be owned by this user or root; group/other write
 is accepted only for trusted sticky ancestors or root-owned, non-world-writable containers
 whose group matches the local directory service's admin group. An unreadable admin-group lookup
 does not grant that exception. These checks do not attest ACL or mount-policy restrictions.
+Both drivers share filesystem/signature policy and dependency types from
+`src/chatgpt/app-server-shim/bundle-trust-policy.ts`, which imports neither driver and starts no subprocess.
+The selected executable must be strictly inside the bundle's `Contents/`; both the ChatGPT CLI
+layout and Codex.app's `Contents/Resources/codex-aarch64-apple-darwin` layout use this policy.
+
 Restore does not require the experimental flag or a bundled
 app-server binary. It relaunches without that override and removes the launcher only after open succeeds; when no
 `com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
@@ -84,3 +103,32 @@ Tests cover rewriting, byte framing, passthrough degradation, source/compiled
 launcher text, stub launcher execution, hidden preflight, and strict config writes
 in tests/clients/desktop-*.test.ts. Pipe-crash behavior is mock evidence only;
 no bundled-app respawn guarantee is asserted.
+
+## Codex app execution trust
+
+`src/codex/mac-app-bundle.ts` classifies lexical and canonical ancestors named
+`Codex.app` or `ChatGPT.app` at any location, including relocated bundles and executable aliases.
+The name only routes to verification. `src/codex/exec-boundary.ts` requires a canonical bundle/binary
+pair with the binary strictly inside that bundle's `Contents/`, then applies the same synchronous
+or asynchronous OpenAI signature and POSIX filesystem policy before returning an invocation.
+Canonicalization or verification failure refuses execution. This covers environment/configured
+commands and catalog, prompt, login, refresh and remote-workspace consumers. The
+`src/cli/codex-launcher.ts` handoff validates the selected shim backing on routed,
+passthrough and help/version fast paths, preserving the validated invocation's argv,
+environment and Windows interpreter options. This CLI handoff additionally verifies every
+enclosing `.app` at the lexical or canonical executable location, independent of its name or mutable
+bundle identifier. A lexical app member must remain inside that root's canonical `Contents/`,
+including through executable, directory or whole-bundle aliases. Nested apps use the outer canonical
+bundle root so its signature is checked too; failed canonicalization refuses. Generated app-server launchers use the
+hidden validator in `src/cli/internal-command.ts` on each execution; this command skips
+root shim auto-repair, its stdout is a single path, and newline-bearing input or
+canonical output is refused. Ordinary non-bundle CLI paths retain their existing policy;
+third-party app paths retain their policy outside the stricter CLI handoff. Conventional automatic discovery remains
+limited to the two ChatGPT installation roots. Regression coverage is in
+`tests/codex-integration/exec-known-app-bundles.test.ts`,
+`tests/codex-integration/exec-launcher-boundary.test.ts`,
+`tests/codex-integration/exec-cli-renamed-app-bundle.test.ts`,
+`tests/codex-integration/exec-cli-bundle-containment.test.ts`,
+`tests/codex-integration/exec-renamed-app-bundle.test.ts` and
+`tests/clients/desktop-app-server-exec-boundary.test.ts`. Portable injected-verifier and
+shell tests do not establish native macOS signature or real Desktop respawn acceptance.

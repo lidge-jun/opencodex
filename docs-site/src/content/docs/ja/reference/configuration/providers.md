@@ -43,6 +43,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `providers` | `Record<string, OcxProviderConfig>` | — |プロバイダー名からプロバイダー設定へのマップ。 |
 | `openaiProviderTierVersion?` | `2` |移行によって設定される |単一のオプション対応 OpenAI プロジェクションを完了としてマークします。 |
 | `disabledModels?` | `string[]` | — | Codex catalog と `/v1/models` から非表示にする model。直接の proxy 呼び出しはブロックしません。routed id は一覧から削除されます。account-qualified native id は該当する selector row だけを非表示にし、bare native GPT id は bare row とその model の全 account-selector row を非表示にします。Models ページに表示されるのは bare native 行と routed 行だけです。selector-qualified 行を 1 つだけ非表示にするには、この設定フィールドを直接編集してください。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 既定値は `false` です。`config.json` に `"omitDisabledNativeModels": true` を設定して `ocx sync` を実行すると、無効な native 行を catalog、cache、Codex 形式の HTTP モデル一覧から除外します。除外前に検証した継承テンプレートを保持するため routed 行のメタデータは変わりません。直接リクエストのルーティングも変わりません。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | プロバイダーごとの有効なコンテキスト上限。通常のウィンドウは縮小されます。長いウィンドウに対応したネイティブモデルは、そのモデルが対応する上限まで拡張できます。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | プロバイダーごとに最後に選択した上限。無効にしても保持され、この値だけで上限が有効になることはありません。有効な値が保存済みの値より優先されます。 |
 | `contextCapValue?` | `number` | `350000` | 初回の有効化で使う既定値。再び有効にすると、そのプロバイダーの選択値を復元します。`setAll: true` とともにグローバル値を変更すると、有効な上限だけを更新します。値を指定せずに `setAll: true` を送ると、設定済みの全プロバイダーの上限を現在のグローバル値で有効にします。 |
@@ -62,6 +63,8 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動ピンが劣化したとき、`hold` は警告を出して使い続け、`detour-new-threads` は新しいスレッドだけを別アカウントへ置きます。送信済みのターンは再送しません。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 受信する JSON 本文 1 件のデコード後のサイズを制限するバイト単位の設定です。省略または `0` でデフォルトの 256 MiB を維持し、設定値は 1〜512 MiB に制限されます。変更後は再起動が必要です。超過時はコード `inbound_body_too_large` のローカル HTTP 413 を返します。適用される上限が 256 MiB を超えると `maxConcurrentInboundBodyBytes` の共有ゲートも有効になり、リクエスト単位の上限だけを上げても共有予算は増えません。対象ルートと詳細は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | バイト単位の任意のトップレベル共有受け入れ予算です。適用される `maxInboundBodyBytes` が 256 MiB を超える場合にのみ有効です。省略、`0`、無効な値は従来のデフォルト 512 MiB を使います。有効な正の整数は使用時に 512 MiB〜2 GiB (`536870912`〜`2147483648`) に制限されます。再起動が必要で、同一プロセス内のすべてのリスナーが 1 つの予算を共有します。受け入れの計上用であり、メモリの事前割り当て、RSS 上限、RAM に応じた自動調整ではありません。2 GiB には運用者の明示的な選択が必要です。設定例、キューとレスポンスのライフサイクルに伴う制約、デフォルトで解析前の完全な 512 MiB アップロードが 1 件だけになる理由は[受信リクエスト本文の受け入れ](/ja/reference/inbound-body-admission/)を参照してください。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
@@ -115,7 +118,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `models?` | `string[]` | 初期／フォールバックモデル一覧。`liveModels: false` で `models` が空でなければ、その後に `retainModels` を追加します。`models` が空または省略されている場合は、設定済みの `defaultModel`、`retainModels` の順に初期一覧を作り、重複 ID は最初の出現だけを残します。 |
 | `liveModels?` | `boolean` |開始/同期時にライブ カタログをフェッチします (デフォルトは `true`)。カスタムプロバイダーは `${baseUrl}/models` を使用します。組み込みはレジストリ URL とフィルターを使用する場合があります。 |
 | `selectedModels?` | `string[]` |検出後のカタログ許可リスト。空でない場合は、それらの ID のみが公開されます。空または省略すると、検出されたすべてのモデルが公開されます。 |
-| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。マップは検出上限と同じ 2,000 件までです。 |
+| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。例外として、直接の `provider/model` セレクターが既知の ID、エイリアス、`retainModels` のいずれにも一致しない場合（ライブ一覧がまだ取得されていない間など）、エンコード形が一致するキーをネイティブ ID として送信します。マップは検出上限と同じ 2,000 件までです。 |
 | `contextWindow?` | `number` | アップストリームのメタデータが無い場合に使うプロバイダー全体のコンテキスト値。メタデータがある場合は上限として働き、より小さいライブ値をそのまま残します。Models ダッシュボードでは `providerContextCaps` とは別に設定します。 |
 | `modelContextWindows?` | `Record<string, number>` | モデルごとのコンテキスト値および上限。`contextWindow` より優先され、ウィンドウが不明なら設定値を使い、より小さいライブメタデータがあればそちらが優先されます。 |
 | `inferContextWindow?` | `boolean` | カスタムプロバイダーのみ、既定は無効。`true` で欠けたウィンドウを同梱モデルメタデータから補完します。推定値であり、中継の容量を検証したものではありません。 |
@@ -151,7 +154,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` プリセットが DeepSeek 経路に既定で載せます。 |
-| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。いずれの場合もメッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
+| `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。`singleLeadingSystemMessage` が有効でない場合、メッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
 | `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
@@ -177,23 +180,26 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 プロバイダーの登録・置換（`POST /api/providers`）では、メモリやファイルの設定を変更する前に `responsesPath` と `chatCompletionsPath` を検証します。`PATCH /api/providers?name=<provider>` はリクエスト本文を保存済みのプロバイダーにマージします。`disabled` 以外のフィールドを変更する更新（`requestPacing` のみの更新を除く）では、保存前にマージ後のプロバイダーのパスを同じ方法で検証し、保持されているパスが無効な場合は `400` を返して設定を変更しません。設定ファイルの読み込みにも同じ経路の規則が適用されます。
 
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/ja/reference/configuration/server/#claude-code-claudecode) で構成されます。
 
 ### プロバイダーの保存で保持されるもの
 
-既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 8 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 11 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
 
-| 保存 | 8 つの設定 | 保存済みの `apiKeyPool` |
+| 保存 | 11 つの設定 | 保存済みの `apiKeyPool` |
 | --- | --- | --- |
 | 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
 | 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
 | リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
 
-宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 8 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 10 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
 
-`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。8 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。10 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 

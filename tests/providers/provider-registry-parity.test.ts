@@ -1102,13 +1102,12 @@ describe("provider registry parity", () => {
     expect(moonshot?.allowBaseUrlOverride).toBe(true);
     expect(moonshot?.baseUrlChoices?.map(c => c.id)).toEqual(["international", "china", "custom"]);
     expect(moonshot?.baseUrlChoices?.find(c => c.id === "china")?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    // 261025 (#7653): platform.kimi.ai/docs/models.md lists kimi-k3.1-pro and its highspeed
-    // variant as current models; the K2 ids and the kimi-k2.7-code default stay (owner decision).
+    // 261028 (#7653): the vendor recommends K3.1 Pro; only the discontinued K2.5 leaves now.
     expect(moonshot?.models).toEqual([
       "kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
-      "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5",
+      "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6",
     ]);
-    expect(moonshot?.defaultModel).toBe("kimi-k2.7-code");
+    expect(moonshot?.defaultModel).toBe("kimi-k3.1-pro");
     expect(moonshot?.models).not.toContain("k3");
     expect(moonshot?.models).not.toContain("kimi-for-coding");
     expect(moonshot?.modelContextWindows).toEqual({
@@ -1118,10 +1117,14 @@ describe("provider registry parity", () => {
       "kimi-k2.7-code": 262_144,
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
-      "kimi-k2.5": 262_144,
     });
     expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
     expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
+    expect(moonshot?.noReasoningModels).toEqual(["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]);
+    for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+      expect(moonshot?.[field]).toEqual(moonshot?.models);
+    }
+    expect(moonshot?.modelReasoningEfforts).not.toHaveProperty("kimi-k2.5");
     // kimi-k3 keeps its launch-time max-only list; no default or wire map is seeded for it.
     expect(moonshot?.modelReasoningEfforts?.["kimi-k3"]).toEqual(["max"]);
     expect(moonshot?.modelDefaultReasoningEfforts?.["kimi-k3"]).toBeUndefined();

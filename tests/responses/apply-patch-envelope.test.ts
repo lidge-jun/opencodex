@@ -4,6 +4,7 @@ import {
   mayBecomePatchEnvelope,
   normalizeApplyPatchDelimiters,
   repairFreeformToolInput,
+  stableCanonicalPatchPrefix,
 } from "../../src/responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../../src/responses/code-mode-helper-compat";
 
@@ -231,5 +232,20 @@ describe("raw exec patch envelope recognition", () => {
     for (const partial of ["", "const x = 1;", "await tools.exec_command({"]) {
       expect(mayBecomePatchEnvelope(partial)).toBe(false);
     }
+  });
+
+  test("exposes only completion-stable bytes from canonically opened patches", () => {
+    expect(stableCanonicalPatchPrefix("*** Begin Pat")).toBe("");
+    expect(stableCanonicalPatchPrefix("*** Begin Patch ***\nbody")).toBeNull();
+    expect(stableCanonicalPatchPrefix("```diff\n*** Begin Patch\n")).toBeNull();
+    expect(stableCanonicalPatchPrefix("*** Begin Patch\nbody")).toBe("*** Begin Patch\nbody");
+    expect(stableCanonicalPatchPrefix("*** Begin Patch\r\nbody\r\n*** End Patch\r\n"))
+      .toBe("*** Begin Patch\r\nbody\r\n*** End Patch\r\n");
+    expect(stableCanonicalPatchPrefix("*** Begin Patch\nbody\n*** End Patch **"))
+      .toBe("*** Begin Patch\nbody\n*** End Patch");
+    expect(stableCanonicalPatchPrefix("*** Begin Patch\nbody\n*** End Patch ***\n"))
+      .toBe("*** Begin Patch\nbody\n*** End Patch");
+    expect(stableCanonicalPatchPrefix("*** Begin Patch\nbody\n*** End Patch ***\ninterior"))
+      .toBe("*** Begin Patch\nbody\n*** End Patch ***\ninterior");
   });
 });

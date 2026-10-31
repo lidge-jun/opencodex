@@ -68,6 +68,7 @@ import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";
 import { linkAbortSignal } from "./responses";
 import {
   noteProviderAttemptSend,
@@ -326,7 +327,8 @@ export async function runNativeChatAttempt(
     streamTurnRegistered = false;
     unregisterTurn(upstream);
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
+  // Set only at the final send boundary; queued refresh can replace the destination.
+  let localUpstream = false;
   // Native chat is its own entry path -- chat-completions.ts routes here directly and never
   // through the Responses core -- so the pre-dispatch key preference is applied again here
   // rather than inherited. Assigned before the adapter binds below, for the same reason it is
@@ -483,7 +485,7 @@ export async function runNativeChatAttempt(
             body: request.body,
           }, effectiveRecovery),
           upstream.signal,
-          connectMs,
+          0, // Final physical send owns the header clock after queued credential/destination refresh.
           requestedStream,
           providerFetch(activeProvider, undefined, {
             providerName: route.providerName,
@@ -545,19 +547,21 @@ export async function runNativeChatAttempt(
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
-                dispatched = await sendWithConnectionPolicy(
+                const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                   distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
                     route.providerName, activeProvider, request.url),
+                  String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
+                )) as typeof fetch;
+                localUpstream = isLocalUpstream(request.url);
+                dispatched = await fetchWithHeaderTimeout(
                   request.url,
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
                     ...physicalSendObserverInit(observeAutoPause, request.url),
                   }, transportRecovery),
-                  // Reselection can replace the provider transport and the wire shape, so the
-                  // egress route is bound to the provider this send actually uses. Omitting it
-                  // here would let a provider transport bypass its configured route entirely,
-                  // because that transport wins over the executor that carries the binding.
-                  { providerName: route.providerName, provider: activeProvider },
+                  init.signal ?? upstream.signal,
+                  resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
+                  requestedStream, physicalFetch,
                 );
               } finally {
                 try { if (physicalBudget.spendEnforced) spendReport(1); }
@@ -816,7 +820,7 @@ export async function runNativeChatAttempt(
       translatorBudget,
       signal: upstream.signal,
       stallTimeoutSec: config.stallTimeoutSec,
-      localUpstream: isLocalUpstream(activeProvider.baseUrl),
+      localUpstream,
       clientDeclaredEmptyToolCatalog,
       declaredLegacyFunctionNames,
       onFirstOutput,
@@ -888,11 +892,12 @@ export async function runNativeChatAttempt(
 
   let body;
   try {
+    const jsonBodyReadMs = resolveJsonBodyReadTimeoutMs(config.stallTimeoutSec, { localUpstream }, config.connectTimeoutMs);
     body = await readBoundedResponseBody(response, {
       signal: upstream.signal,
       maxBytes: MAX_NATIVE_CHAT_JSON_BYTES,
-      totalTimeoutMs: Math.max(connectMs, 5_000),
-      inactivityTimeoutMs: Math.max(connectMs, 5_000),
+      totalTimeoutMs: localUpstream ? 0 : jsonBodyReadMs,
+      inactivityTimeoutMs: jsonBodyReadMs,
     });
   } catch (error) {
     cleanupAbort();

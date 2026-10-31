@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  carriesCodexCliUpdateInspectionContext,
   codexCliInspectionLookupSeeds,
   isCodexCliUpdateInspectionArgv,
   NODE_LAUNCH_CONTEXT_MAX_CHARS,
@@ -21,6 +22,13 @@ describe("Codex CLI updater launcher policy", () => {
     expect(isCodexCliUpdateInspectionArgv(["node", "ocx", "system", "update"])).toBe(false);
   });
 
+  test("published start carries only the proof-bound updater snapshot, without becoming a one-shot inspection", () => {
+    expect(carriesCodexCliUpdateInspectionContext(["node", "ocx", "start", "--port", "12345"])).toBe(true);
+    expect(carriesCodexCliUpdateInspectionContext(["node", "ocx", "--ocx-internal-launch-proof=bad", "start"])).toBe(true);
+    expect(carriesCodexCliUpdateInspectionContext(["node", "ocx", "status"])).toBe(false);
+    expect(isCodexCliUpdateInspectionArgv(["node", "ocx", "start", "--port", "12345"])).toBe(false);
+  });
+
   test("launcher skips boot repair and lazy Bun installation for this namespace", () => {
     const source = readFileSync(repoPath("bin", "ocx.mjs"), "utf8");
     // Read the guard that actually wraps the probe rather than a fixed pair of adjacent
@@ -35,7 +43,7 @@ describe("Codex CLI updater launcher policy", () => {
     expect(source).toContain("resolveBun({ allowInstall: !codexCliUpdateInspection })");
     // A missing bundle makes installJs nullable; allowInstall still gates its execution.
     expect(source).toContain(
-      'if (allowInstall && installJs && existsSync(installJs)) {\n    const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });',
+      'if (allowInstall && installJs && existsSync(installJs)) {\n    const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });',
     );
   });
 
@@ -71,5 +79,7 @@ describe("Codex CLI updater launcher policy", () => {
     expect(capture).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,');
     expect(capture).toContain("...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())");
     expect(capture).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
+    expect(source).toContain("|| (process.platform !== \"win32\" && carriesCodexCliUpdateInspectionContext(process.argv))");
+    expect(capture).toContain("codexCliInspectionEnv: codexCliUpdateInspectionContext ? {");
   });
 });

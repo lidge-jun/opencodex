@@ -1,3 +1,4 @@
+import { publishCredentialSync } from "../local-credentials/generation";
 /**
  * OAuth token store at ~/.opencodex/auth.json, keyed by provider name.
  *
@@ -34,6 +35,7 @@ import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, ha
 import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { statTimeMs } from "../lib/file-identity";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
 import { publishAccountSelection, publishOAuthAccountPauseChange, publishOAuthAccountRoutingPolicyChange } from "../lib/account-selection-events";
 import {
@@ -423,23 +425,23 @@ function persist(store: AuthStore): void {
     try { chmodSync(dir, 0o700); } catch { /* best-effort on existing dir */ }
   }
   hardenConfigDir();
-  atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  publishCredentialSync(() => atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n"));
   notifyAuthStoreLoaded(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
-interface LockSnapshot { bytes: string; dev: number; ino: number; mtimeMs: number; size: number }
+interface LockSnapshot { bytes: string; dev: bigint; ino: bigint; mtimeMs: number; mtimeNs: bigint; size: bigint }
 export interface OAuthFileLockOptions { path: string; waitTimeoutMs?: number; staleAfterMs?: number; pollMinMs?: number; pollMaxMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; random?: () => number; beforeStaleUnlink?: () => void; beforeReleaseUnlink?: () => void; beforeFailedCreateUnlink?: () => void; writeMetadata?: (fd: number, bytes: string) => void }
 export interface OAuthFileLockGuard { readonly ownerId: string; release(): void }
 function errorCode(error: unknown): string | undefined { return error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined; }
-function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:s.mtimeMs, size:s.size }; }
-function sameSnapshot(a: LockSnapshot,b: LockSnapshot): boolean { return a.bytes===b.bytes&&a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
-function sameFd(a: LockSnapshot,b: ReturnType<typeof fstatSync>): boolean { return a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
+function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path, { bigint: true }); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:statTimeMs(s.mtimeNs), mtimeNs:s.mtimeNs, size:s.size }; }
+function sameSnapshot(a: LockSnapshot,b: LockSnapshot): boolean { return a.bytes===b.bytes&&a.dev===b.dev&&a.ino===b.ino&&a.mtimeNs===b.mtimeNs&&a.size===b.size; }
+function sameFd(a: LockSnapshot,b: import("node:fs").BigIntStats): boolean { return a.dev===b.dev&&a.ino===b.ino&&a.mtimeNs===b.mtimeNs&&a.size===b.size; }
 export function createOAuthFileLock(options: OAuthFileLockOptions): { acquire(): Promise<OAuthFileLockGuard> } {
  const wait=options.waitTimeoutMs??5000, stale=options.staleAfterMs??120000, min=options.pollMinMs??25,max=options.pollMaxMs??100,sleep=options.sleep??(ms=>Bun.sleep(ms)),now=options.now??Date.now,random=options.random??Math.random,write=options.writeMetadata??((fd,b)=>writeFileSync(fd,b,"utf8"));
  if(wait<0||stale<=0||min<0||max<min) throw new OAuthFileLockError("Invalid OAuth file-lock timing options");
- return { async acquire() { hardenConfigDir(); recordOwnedConfigPath(getConfigDir(),options.path); if(!existsSync(getConfigDir())) mkdirSync(getConfigDir(),{recursive:true,mode:0o700}); const ownerId=randomUUID(),started=now(); for(;;){ let fd:number|undefined; try { fd=openSync(options.path,"wx",0o600); const bytes=`${JSON.stringify({version:1,ownerId,pid:process.pid,createdAt:now()})}\n`; write(fd,bytes); const fs=fstatSync(fd); closeSync(fd); fd=undefined; const owned=snapshot(options.path); if(owned.bytes!==bytes||!sameFd(owned,fs)) throw new OAuthFileLockError("OAuth lock changed during creation"); let released=false; return {ownerId,release(){if(released)return;released=true;try{const a=snapshot(options.path);if(!sameSnapshot(owned,a))return;options.beforeReleaseUnlink?.();const b=snapshot(options.path);if(sameSnapshot(owned,b))unlinkSync(options.path);}catch(e){if(errorCode(e)!=="ENOENT")console.warn(`[oauth] lock release failed: ${e instanceof Error?e.message:String(e)}`);}}}; } catch(e) { if(fd!==undefined){let fs;try{fs=fstatSync(fd);}catch{}try{closeSync(fd);}catch{}if(fs)try{const a=snapshot(options.path);if(sameFd(a,fs)){options.beforeFailedCreateUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b)&&sameFd(b,fs))unlinkSync(options.path);}}catch{}} if(errorCode(e)!=="EEXIST")throw e instanceof OAuthFileLockError?e:new OAuthFileLockError("Could not create OAuth file lock",{cause:e}); }
- try{const a=snapshot(options.path);let created=a.mtimeMs;try{const p=JSON.parse(a.bytes);if(typeof p.createdAt==="number")created=Math.max(created,p.createdAt);}catch{}if(now()-created>stale){options.beforeStaleUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b))unlinkSync(options.path);continue;}}catch(e){if(errorCode(e)==="ENOENT")continue;throw new OAuthFileLockError("Could not inspect OAuth file lock",{cause:e});} const elapsed=now()-started;if(elapsed>=wait)throw new OAuthFileLockError(`Timed out after ${wait}ms waiting for OAuth file lock`);await sleep(Math.min(wait-elapsed,min+Math.floor(random()*(max-min+1)))); } } };
+ return { async acquire() { hardenConfigDir(); recordOwnedConfigPath(getConfigDir(),options.path); if(!existsSync(getConfigDir())) mkdirSync(getConfigDir(),{recursive:true,mode:0o700}); const ownerId=randomUUID(),started=now(); for(;;){ let fd:number|undefined; try { fd=openSync(options.path,"wx",0o600); const bytes=`${JSON.stringify({version:1,ownerId,pid:process.pid,createdAt:now()})}\n`; write(fd,bytes); const fs=fstatSync(fd,{bigint:true}); closeSync(fd); fd=undefined; const owned=snapshot(options.path); if(owned.bytes!==bytes||!sameFd(owned,fs)) throw new OAuthFileLockError("OAuth lock changed during creation"); let released=false; return {ownerId,release(){if(released)return;released=true;try{const a=snapshot(options.path);if(!sameSnapshot(owned,a))return;options.beforeReleaseUnlink?.();const b=snapshot(options.path);if(sameSnapshot(owned,b))unlinkSync(options.path);}catch(e){if(errorCode(e)!=="ENOENT")console.warn(`[oauth] lock release failed: ${e instanceof Error?e.message:String(e)}`);}}}; } catch(e) { if(fd!==undefined){let fs;try{fs=fstatSync(fd,{bigint:true});}catch{/* best effort: no identity, no cleanup */}try{closeSync(fd);}catch{/* best effort */}if(fs)try{const a=snapshot(options.path);if(sameFd(a,fs)){options.beforeFailedCreateUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b)&&sameFd(b,fs))unlinkSync(options.path);}}catch{/* best-effort cleanup of our own failed create */}} if(errorCode(e)!=="EEXIST")throw e instanceof OAuthFileLockError?e:new OAuthFileLockError("Could not create OAuth file lock",{cause:e}); }
+ try{const a=snapshot(options.path);let created=a.mtimeMs;try{const p=JSON.parse(a.bytes);if(typeof p.createdAt==="number")created=Math.max(created,p.createdAt);}catch{/* unparsable metadata: fall back to mtime */}if(now()-created>stale){options.beforeStaleUnlink?.();const b=snapshot(options.path);if(sameSnapshot(a,b))unlinkSync(options.path);continue;}}catch(e){if(errorCode(e)==="ENOENT")continue;throw new OAuthFileLockError("Could not inspect OAuth file lock",{cause:e});} const elapsed=now()-started;if(elapsed>=wait)throw new OAuthFileLockError(`Timed out after ${wait}ms waiting for OAuth file lock`);await sleep(Math.min(wait-elapsed,min+Math.floor(random()*(max-min+1)))); } } };
 }
 /** Wait long enough for slow IdP refreshes (e.g. Cursor 15s × 3 attempts) before timing out. */
 export const OAUTH_REFRESH_LOCK_WAIT_MS = 60_000;
@@ -466,7 +468,7 @@ function backupLegacyOnce(): void {
   // alone, and the copy is exclusive, so credentials are never written through a link.
   if (!existsSync(path) || directoryEntryExists(backup)) return;
   try {
-    copyFileSync(path, backup, fsConstants.COPYFILE_EXCL);
+    publishCredentialSync(() => copyFileSync(path, backup, fsConstants.COPYFILE_EXCL));
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
     try {
       // Register only the copy we just created. An unowned home still needs downgrade recovery.
@@ -497,8 +499,10 @@ function scrubLegacyBackup(providers: readonly string[]): void {
   try {
     const remaining = readLegacyBackupEntries(backup);
     for (const provider of providers) delete remaining[provider];
-    if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
-    else unlinkSync(backup);
+    publishCredentialSync(() => {
+      if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
+      else unlinkSync(backup);
+    });
   } catch (error) {
     if (errorCode(error) !== "ENOENT") {
       console.warn(`[oauth] could not remove deleted credentials from the legacy credential backup: ${error instanceof Error ? error.message : String(error)}`);
@@ -696,6 +700,31 @@ function normalizeAccountSet(raw: unknown): { set: ProviderAccountSet | null; wa
   if (!cred) return { set: null, wasLegacy: false };
   const id = newAccountId(cred);
   return { set: { activeAccountId: id, accounts: [{ id, credential: cred }] }, wasLegacy: true };
+}
+
+export function countLocalOAuthCredentialSlots(raw: Record<string, unknown> | null): number {
+  if (raw === null) return 0;
+  let count = 0;
+  for (const value of Object.values(raw)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid OAuth provider row");
+    const row = value as Record<string, unknown>;
+    if (Object.hasOwn(row, "accounts")) {
+      if (!Array.isArray(row.accounts) || typeof row.activeAccountId !== "string") throw new Error("Invalid OAuth account set");
+      const ids = new Set<string>();
+      for (const entry of row.accounts) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Invalid OAuth account");
+        const account = entry as Record<string, unknown>;
+        if (typeof account.id !== "string" || !account.id || ids.has(account.id)
+          || !normalizeCredential(account.credential)) throw new Error("Invalid OAuth credential slot");
+        ids.add(account.id);
+        count += 1;
+      }
+    } else {
+      if (!normalizeCredential(row)) throw new Error("Invalid legacy OAuth credential");
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function normalizeAuthStore(raw: unknown): { store: AuthStore; hadLegacy: boolean } {
@@ -1086,7 +1115,8 @@ export async function appendKiroAccountFromDeviceLogin(
   return await mutateStore(store => {
     const set = store.kiro;
     const id = distinctAccountId(safe, set?.accounts ?? []);
-    const warning = safe.kiro?.profileArn && set?.accounts.some(a => a.credential.kiro?.profileArn === safe.kiro?.profileArn)
+    const warning = safe.kiro?.profileArn && set?.accounts.some(a => a.credential.kiro?.profileArn === safe.kiro?.profileArn
+      && (!safe.email || !a.credential.email || a.credential.email.toLowerCase() === safe.email.toLowerCase()))
       ? "duplicate_profile_arn" as const : undefined;
     const account: ProviderAccount = { id, credential: safe, addedAt: Date.now(), loginId: randomUUID(), loginOrigin: "kiro-device" };
     if (set) set.accounts.push(account);

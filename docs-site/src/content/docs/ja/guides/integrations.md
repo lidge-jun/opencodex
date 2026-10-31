@@ -5,6 +5,8 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 
 **接続** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。以下のクライアントは、それぞれのスイッチで管理できます。
 
+Windows で絶対パスが必要なオーバーライドには、ドライブ文字（`C:\Users\me\client`）または UNC 共有（`\\server\share\client`）が必要です。現在のドライブに依存する `\Users\me\client` と `/client/config` は拒否されます。`~` 対応と明記されたセレクターは有効なホームを基準に展開します。Gentle Shell は `~` を展開しません。
+
 | クライアント | 設定ファイル | 形式 | 変更が反映される時点 | 認証情報 |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | 次回の直接起動時 | `OPENCODEX_OPENCODE_API_KEY` |
@@ -221,6 +223,16 @@ Undo は、もともと存在しなかったファイルも含め、**元の両�
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
 
+## omo (Pi ベース) の Responses 方言
+
+管理対象の Pi ベース omo ブロックは、既定で Chat 方言 (`api: "openai-completions"`) を使います。Chat はツール呼び出しをまたいで前のステップの推論を落とすため、長い omo のツールループで影響が出ます。有効化とすべての更新で Responses 方言を書き込むには、opencodex の設定ファイルにだけ設定できる次のキーを追加します。
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+編集した設定を読み込むためにプロキシを再起動し (サービスとしてインストールした場合は `ocx service restart`、それ以外は `ocx stop` の後に `ocx start`)、ダッシュボードの **Connect → omo** から omo 統合を更新してください。更新だけでは実行中のプロキシの設定を使い、設定ファイルは読み直しません。この設定は omo にだけ適用され、Pi、Gentle Shell などほかの Pi 形式のクライアントは `openai-completions` のままです。Chat に戻すには、キーを削除して同じ手順で再起動し、**Connect → omo** を更新します。不明な値は無視されます。opencodex が所有するのは引き続き `~/.omo/agent/models.json` の `providers.opencodex` だけで、ほかのプロバイダーはそのまま残ります。
+
 ## omo (Codex / LazyCodex) のロール別推論負荷
 
 LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セクションで、`$CODEX_HOME/agents/*.toml` にある各ロールのモデルと推論負荷を選んで **保存** できます。モデルが固定されていないロールの行では推論負荷だけを保存でき、そのロールは引き続きモデルを継承します。opencodex はそのロールファイルのルートにある `model` と `model_reasoning_effort` のキーだけを更新し、存在しない固定値はファイルの先頭付近に追加します。ロールの指示、ほかのコメントやキーはそのまま残ります。モデルだけを変えて保存すると `effort` を送らないため、両方のファイルの推論負荷は変わりません。段階を選ぶとロールファイルの `model_reasoning_effort` を追加または置き換え、LazyCodex がその段階に対応していれば `~/.omo/omo.jsonc` の `[codex].agents.<role>.reasoning` にも書き込みます（`ultra` はロールファイルにだけ残り、以前の `reasoning` は削除されます）。コマンドラインでは `ocx agent roles set <role> <model> --effort <level>` で同じ操作ができます。
@@ -276,3 +288,19 @@ GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換�
 ## Factory Droid
 
 Factory Droid は `~/.factory/settings.json`（Windows では `%USERPROFILE%\.factory\settings.json`）を使用します。`ocx integration client enable --client droid` で明示的に有効化し、`/model` でカスタムモデルを選択します。管理対象の行はキーを使わず、ループバックでのみ動作します。無効化すると管理対象の行が削除され、Undo で保存済みのバイト列が復元されます。従来の `config.json` に OpenCodex の行がある場合や、`settings.local.json` が `customModels` を上書きする場合は、有効化する前に競合を解消してください。[Factory BYOK のドキュメント](https://docs.factory.ai/model-independence/byok)も参照してください。
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

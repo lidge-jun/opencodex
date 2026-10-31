@@ -180,8 +180,7 @@ Les fournisseurs OAuth dont les identifiants comportent un identifiant de compte
 peuvent conserver plusieurs connexions. La page **Fournisseurs** affiche ces comptes dans une liste déroulante,
 permet d'en ajouter un autre et de changer de compte actif sans déconnecter les autres. Une connexion ordinaire
 avec un identifiant Kimi qui ne contient aucune information d'identité remplace l'emplacement actif, tandis que l'action explicite **Ajouter un
-compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro sont indexés par ARN de
-profil. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
+compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro utilisent l’ARN du profil avec l’adresse e-mail de l’utilisateur connecté lorsqu’elle est disponible ; plusieurs utilisateurs peuvent conserver des identifiants distincts pour un même profil d’organisation. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
 registre distinct. Les jetons restent dans `~/.opencodex/auth.json` ; `/api/oauth/accounts` ne renvoie que des
 métadonnées masquées.
 
@@ -254,6 +253,8 @@ dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau d
 [`ocx status` / `ocx doctor`](/fr/reference/cli/) dans la référence CLI.
 
 ### Importation des identifiants Kiro
+
+Dans le tableau de bord, choisissez **AWS IAM Identity Center**, puis indiquez l’URL du portail d’accès AWS et la région SSO de votre organisation. Autorisez le code d’appareil dans votre navigateur et choisissez le profil Kiro à enregistrer si plusieurs sont proposés. Aucun CLI ni accès SSH n’est nécessaire. Les instructions CLI ci-dessous concernent le choix **Kiro CLI**.
 
 La connexion Kiro nécessite la CLI Kiro : sous Unix, installez-la avec `curl -fsSL https://cli.kiro.dev/install | bash` ;
 sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1' | iex`, puis connectez-vous avec `kiro-cli login`.
@@ -359,7 +360,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. L’API `moonshot` utilise `kimi-k3.1-pro` par défaut ; les sélections `kimi-k2.5` enregistrées pour les adresses API officielles migrent vers ce modèle. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
@@ -396,7 +397,7 @@ La relance exige `store: false` explicite, une entrée complète et uniquement d
 
 Sur les routes officielles `https://opencode.ai/zen/v1` et `https://opencode.ai/inference/v1` du fournisseur canonique `opencode-zen` avec authentification par clé API, Gemini utilise automatiquement l’API native Google en mode `googleMode: ai-studio` (par défaut). Les identifiants Zen sont conservés, y compris Flash sans suffixe `-tiered`. Claude utilise automatiquement Anthropic Messages, quel que soit `googleMode`. Au chargement des configurations enregistrées, seules les anciennes surcharges Chat/Responses admissibles de ces modèles natifs sont ignorées, ainsi que les préférences admissibles de l’outil hébergé `image_generation` propres à Responses. Les fournisseurs personnalisés, les routes sans authentification par clé et les autres préférences restent inchangés.
 
-**La prise en charge de `opencode-free` a été supprimée** : tous les modèles renvoient désormais `403 permission_denied` à cause du contrôle du niveau gratuit en amont chez OpenCode ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Le chargement d’une configuration existante désactive en mémoire les entrées concernées et leurs références de modèles, avertit une fois par processus et ne modifie pas le fichier. Si ce fournisseur était le défaut, la route OpenAI OAuth standard devient le défaut. Utilisez `opencode-go`, `opencode-zen` avec clé ou un autre fournisseur. [Conditions OpenCode Zen](https://opencode.ai/docs/zen/).
+**La prise en charge de `opencode-free` a été supprimée** : tous les modèles renvoient désormais `403 permission_denied` à cause du contrôle du niveau gratuit en amont chez OpenCode ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Le chargement d’une configuration existante désactive en mémoire les entrées concernées et leurs références de modèles, avertit une fois par processus et ne modifie pas le fichier lors du chargement. Le prochain enregistrement supprime ces entrées et références de config.json. Avant cet enregistrement, le fichier original est automatiquement conservé dans `config.json.pre-opencode-free-removal.bak`, à côté de config.json, ou sous un nom unique si ce nom est occupé. Une copie indépendante, identique octet par octet, est réutilisée uniquement si sa protection réservée au propriétaire peut être vérifiée ; sinon, une nouvelle copie protégée est créée à côté. Aucun fichier existant n’est écrasé. Des premiers chargements simultanés peuvent laisser plusieurs copies identiques et protégées ; l’avertissement indique ce chemin. Pour restaurer la configuration, recopiez ce fichier sur config.json, par exemple après une rétrogradation. Si la copie échoue, l’avertissement demande de copier config.json immédiatement. Si ce fournisseur était le défaut, la route OpenAI OAuth standard devient le défaut. Utilisez `opencode-go`, `opencode-zen` avec clé ou un autre fournisseur. [Conditions OpenCode Zen](https://opencode.ai/docs/zen/). Les lectures passives appliquent uniquement la désactivation en mémoire, sans copie ni avertissement.
 
 Les affectations et valeurs par défaut valides de Claude Desktop sont conservées. Les règles dont la liste de modèles sources autorisés devient vide sont désactivées, ainsi que la synchronisation native des sous-agents si son modèle d’injection est supprimé. Les sauvegardes suivantes ne rétablissent pas les références supprimées et préservent les modifications simultanées valides.
 

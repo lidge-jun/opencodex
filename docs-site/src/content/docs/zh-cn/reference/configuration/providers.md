@@ -43,6 +43,7 @@ ocx models provider openrouter on
 | `providers` | `Record<string, OcxProviderConfig>` | — | 提供者名称到提供者配置的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由迁移设置 | 标记单一、可感知选项的 OpenAI 投影已完成。 |
 | `disabledModels?` | `string[]` | — | 从 Codex catalog 和 `/v1/models` 中隐藏、但不阻止直接 proxy 调用的 model。routed id 会从列表中移除。account-qualified native id 只隐藏对应 selector row；bare native GPT id 会隐藏 bare row 以及该 model 的所有 account-selector row。Models 页面只显示裸原生行和路由行；若只隐藏一个 selector-qualified 行，请直接设置此配置字段。 |
+| `omitDisabledNativeModels?` | `boolean` | `false` | 默认值为 `false`。在 `config.json` 中设置 `"omitDisabledNativeModels": true` 并运行 `ocx sync`，即可从目录、缓存和 Codex 格式的 HTTP 模型列表中移除已禁用的 native 行。移除前经过验证的继承模板会单独保留，因此 routed 行的元数据不变，直接请求的路由也不变。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供商设置的有效上下文上限。普通窗口只能缩小；支持长窗口的原生模型可以扩展到该模型支持的上限。 |
 | `providerContextCapValues?` | `Record<string, number>` | `{}` | 各提供商最后选择的上限，关闭后仍保留。仅保存这些值不会启用上限。有效值优先于保存的选择值。 |
 | `contextCapValue?` | `number` | `350000` | 首次开启时使用的默认值。再次开启时恢复该提供商的选择值。修改全局值时附带 `setAll: true` 只会更新已开启的上限；不带值的 `setAll: true` 会按当前全局值开启所有已配置提供商的上限。 |
@@ -62,6 +63,8 @@ ocx models provider openrouter on
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手动固定的账号降级时，`hold` 继续使用并记录警告；`detour-new-threads` 只把新线程放到其他账号。不会改派进行中的请求，也不会在已发送后重发。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
+| `maxInboundBodyBytes?` | `number` | `0` | 单个入站 JSON 请求体解码后大小的字节上限。省略或设为 `0` 会保留 256 MiB 默认值；配置值限制在 1 至 512 MiB。修改后需要重启。超限会返回本地 HTTP 413，错误代码为 `inbound_body_too_large`。生效上限大于 256 MiB 时，还会启用 `maxConcurrentInboundBodyBytes` 共享门槛；仅提高单请求上限不会提高共享预算。受约束的路径与详情见[入站请求体准入](/zh-cn/reference/inbound-body-admission/)。 |
+| `maxConcurrentInboundBodyBytes?` | `number` | `536870912` (512 MiB) | 可选的顶层共享准入预算，单位为字节，仅在生效的 `maxInboundBodyBytes` 大于 256 MiB 时启用。省略、`0` 或无效值均使用不变的 512 MiB 默认值。有效的正整数在使用时限制在 512 MiB 至 2 GiB（`536870912` 至 `2147483648`）范围内。修改后需要重启；同一进程内的所有监听器共享一个预算。这是准入计量，并非预先分配的内存、RSS 上限或按 RAM 自动调整的容量。2 GiB 必须由运营者明确选择。配置示例、队列及响应生命周期的取舍，以及默认预算为何在解析前只允许一个完整 512 MiB 上传，见[入站请求体准入](/zh-cn/reference/inbound-body-admission/)。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端点：`"long"`；其他 Anthropic 兼容端点：`"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。未设置时，发往 `api.anthropic.com`（API 密钥或 OAuth 账号池）的请求使用 1 小时 TTL，兼容网关和厂商端点保持 5 分钟 TTL。显式设置的值始终优先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
@@ -117,7 +120,7 @@ selector，而不是分配一个新名称。
 | `models?` | `string[]` | 初始/回退模型列表。`liveModels: false` 时，非空 `models` 后接 `retainModels`；若 `models` 为空或省略，则按已配置的 `defaultModel`、`retainModels` 顺序构建初始列表，重复 ID 仅保留首次出现的位置。 |
 | `liveModels?` | `boolean` | 启动/同步时获取实时目录（默认 `true`）。自定义提供者使用 `${baseUrl}/models`；内置项可能使用注册表 URL 并进行过滤。 |
 | `selectedModels?` | `string[]` | 发现之后的目录允许列表。非空时只暴露这些 id；为空或省略时则暴露全部发现到的模型。 |
-| `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
+| `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。例外：当直接的 `provider/model` 选择器不匹配任何已知 id、别名或 `retainModels`（例如实时目录尚未获取时），编码形式相同的键会作为原生 id 发送。该映射最多可包含 2,000 个条目，与发现上限相同。 |
 | `contextWindow?` | `number` | 上游缺少元数据时使用的提供者级上下文数值；有元数据时作为上限，保留更小的实时数值。Models 面板中与 `providerContextCaps` 分开设置。 |
 | `modelContextWindows?` | `Record<string, number>` | 按模型设置的上下文数值与上限。优先于 `contextWindow`：窗口未知时采用所配置的数值，而更小的实时元数据仍然优先。 |
 | `inferContextWindow?` | `boolean` | 仅限自定义渠道，默认关闭。设为 `true` 时用内置模型元数据补全缺失窗口；这是估计值，不代表中转的实测容量。 |
@@ -153,7 +156,7 @@ selector，而不是分配一个新名称。
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 内置 `xai` 预设在此列出 xAI 文档说明会拒绝这些参数的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；非推理模型保留调用方的 penalty。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 端点拒绝 `response_format` 的精确模型 ID。仅当请求模型与条目完全匹配时才省略该字段；其他 `openai-chat` 模型仍启用 structured-output 转换。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 端点拒绝 `json_schema` 形式但仍接受 `json_object` 的精确模型 ID。这类请求会降级为 `json_object` 而不是被丢弃，因此请求 JSON 的调用方仍能拿到 JSON。同一模型同时出现在两个列表时，以 `noStructuredOutputModels` 为准。`opencode go`、`opencode zen` 预设已为其 DeepSeek 路由内置该项。 |
-| `foldDeveloperRoleToSystem?` | `boolean` | 记录某个 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未设置时按 `system` 发送，`true` 时按 `system` 发送，`false` 时按 `developer` 发送。未设置表示尚未记录该目的地的情况；`true` 记录上游拒绝该角色；`false` 记录其接受该角色。无论哪种情况，消息都保留在对话中的原有位置，只有角色改变。拒绝该角色的目的地会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，这就是未记录状态默认折叠的原因。 |
+| `foldDeveloperRoleToSystem?` | `boolean` | 记录某个 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未设置时按 `system` 发送，`true` 时按 `system` 发送，`false` 时按 `developer` 发送。未设置表示尚未记录该目的地的情况；`true` 记录上游拒绝该角色；`false` 记录其接受该角色。未启用 `singleLeadingSystemMessage` 时，消息保留在对话中的原有位置，只有角色改变。拒绝该角色的目的地会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，这就是未记录状态默认折叠的原因。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
 | `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
@@ -179,23 +182,26 @@ selector，而不是分配一个新名称。
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
 
+LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
+
+
 注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。`PATCH /api/providers?name=<provider>` 会将请求体与已保存的提供商合并；除仅更新 `requestPacing` 的请求外，凡是修改 `disabled` 以外字段的更新，都会在保存前以同样方式验证合并后提供商的路径，若保留的既有路径无效则返回 `400`，且不更改配置。加载配置文件时也适用同样的路径规则。
 
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/zh-cn/reference/configuration/server/#claude-code-claudecode) 下配置。
 
 ### 保存提供方时会保留什么
 
-用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中八个记录的是某个上游的行为：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
+用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中十一个记录的是某个上游的行为：`preserveReasoningContentModels`, `preserveResponsesReasoningContent`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `singleLeadingSystemMessage`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `promoteAdditionalTools`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
 
-| 保存 | 八项设置 | 已存储的 `apiKeyPool` |
+| 保存 | 十一项设置 | 已存储的 `apiKeyPool` |
 | --- | --- | --- |
 | 目的地相同，字段省略 | 保留已存储的值，包括显式的 `[]` 或 `false` | 保留 |
 | 新目的地，字段省略 | 不保留；可能套用新目的地的注册表默认值 | 不保留 |
 | 请求中发送了该字段 | 请求中的值 | 请求中的值 |
 
-目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的八项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
+目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的十项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
 
-`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部八项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
+`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部十项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
 
 ### 响应服务等级的可信度
 

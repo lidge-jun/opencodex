@@ -15,6 +15,7 @@ import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/rel
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
+import { createRoutedCustomToolRestoreBlockRewrite } from "../../src/server/responses-custom-tool-repair";
 
 import { watchdogMs } from "../helpers/ci-watchdog";
 const enc = new TextEncoder();
@@ -904,6 +905,29 @@ describe("relaySseEagerBounded — side-effect parity", () => {
     expect(rec.terminals).toEqual([{ status: "completed" }]);
     expect(rec.synthetics).toEqual([]);
     expect(rec.dones).toBe(1);
+  });
+
+  test("malformed progressive apply_patch fails before executable completion reaches the client", async () => {
+    const { hooks } = makeHooks();
+    hooks.rewriteBlocks = createRoutedCustomToolRestoreBlockRewrite(new Set(["apply_patch"]));
+    const first = '{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch",';
+    const second = '"input":"replacement"}';
+    const events = [
+      ["response.output_item.added", { output_index: 0, item: { type: "function_call", id: "fc_patch", call_id: "call_patch", name: "apply_patch", arguments: "", status: "in_progress" } }],
+      ["response.function_call_arguments.delta", { output_index: 0, item_id: "fc_patch", delta: first }],
+      ["response.function_call_arguments.delta", { output_index: 0, item_id: "fc_patch", delta: second }],
+      ["response.function_call_arguments.done", { output_index: 0, item_id: "fc_patch", arguments: first + second }],
+    ].map(([type, value]) => `event: ${type}\ndata: ${JSON.stringify({ type, ...(value as object) })}\n\n`).join("");
+    const up = controlledUpstream();
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks);
+    up.push(enc.encode(events));
+    up.close();
+
+    const text = await readAll(relayed);
+    expect(text.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(text).not.toContain("response.custom_tool_call_input.done");
+    expect(text).not.toContain("response.output_item.done");
+    expect(text).not.toContain("response.completed");
   });
 
   test("terminal rewrite fallback aborts and cancels a still-open upstream", async () => {
