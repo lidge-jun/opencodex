@@ -39,6 +39,22 @@ function stripMarkdownCodeFence(text: string, toolName: string): string {
   return match ? match[1] : text;
 }
 
+/** Repair one extra canonical wrapper inside an already unwrapped executable body. */
+function repairUnwrappedBody(text: string, toolName: string): string {
+  if (toolName !== "exec" && toolName !== "apply_patch") return text;
+  try {
+    const nested: unknown = JSON.parse(text);
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const record = nested as Record<string, unknown>;
+      const keys = Object.keys(record);
+      if (keys.length === 1 && keys[0] === "input" && typeof record.input === "string") text = record.input;
+    }
+  } catch {
+    // Ordinary JavaScript and patches are not JSON wrappers.
+  }
+  return stripMarkdownCodeFence(text, toolName);
+}
+
 /** Unwrap the `{input:string}` function-call wrapper used for freeform tools. */
 export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): string {
   if (typeof argumentsText !== "string") return "";
@@ -48,13 +64,13 @@ export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): 
       const record = parsed as Record<string, unknown>;
       if (Object.prototype.hasOwnProperty.call(record, "input")) {
         return typeof record.input === "string"
-          ? stripMarkdownCodeFence(record.input, toolName)
+          ? repairUnwrappedBody(record.input, toolName)
           : argumentsText;
       }
       const fallbackKeys = freeformFallbackKeys(toolName);
       const candidates = fallbackKeys.filter(key => typeof record[key] === "string");
       if (candidates.length === 1) {
-        return stripMarkdownCodeFence(record[candidates[0]] as string, toolName);
+        return repairUnwrappedBody(record[candidates[0]] as string, toolName);
       }
     }
   } catch {

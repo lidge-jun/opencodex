@@ -125,6 +125,9 @@ Function-call wrappers around freeform bodies are restored by
 `exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+An already unwrapped executable body may carry exactly one extra complete JSON object with only
+an input string; that layer is removed once, never recursively. Extra members and non-string
+values remain literal. A decoded object-leading body holds its preview until completion.
 
 #### Schema-bound flat shell repair
 
@@ -147,9 +150,9 @@ Which wrapper applies is decided by scanning the prefix as JSON rather than matc
 a literal opening. `JSON.parse` decides the completed input, and it cares about neither property
 order nor how a name is spelled, so a canonical key arriving after other properties or written
 with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
-follows is: an own `input` with a string value streams progressively, because completion gives
-it precedence over everything else in the object whatever its position; an `input` with a
-non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
+follows is: an own string `input` streams progressively unless its decoded executable body
+could still be a nested wrapper; completion gives that field precedence over other properties.
+An `input` with a non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
 all publish their own bytes, because that is what completion returns for them; every other
 object HOLDS until it closes, because a key that has not arrived yet can still change the
 answer. Fallback fields decide at that close rather than from a parse: they only unwrap as the
