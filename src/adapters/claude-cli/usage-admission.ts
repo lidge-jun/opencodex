@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { getConfigDir } from "../../config/paths";
+import { join } from "node:path";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { detectClaudeCodeTokenAsync } from "../../oauth/local-token-detect";
 import { readAnthropicUsageQuota } from "../../providers/claude-cli-usage";
+import {
+  claudeUsageStatePath,
+  loadClaudeUsageSnapshot,
+  readClaudeUsageSnapshots,
+  recordClaudeSignedInIdentity,
+  saveClaudeUsageSnapshot,
+  type ClaudeUsageSnapshot,
+} from "../../providers/claude-cli-usage-state";
 import type { ProviderQuota } from "../../providers/quota-types";
 
 export type ClaudeAdmission = {
@@ -14,7 +21,6 @@ export type ClaudeAdmission = {
   resetAt?: number;
   message?: string;
 };
-type Snapshot = { identity: string; checkedAt: number; quota?: ProviderQuota; refusalUntil?: number };
 type Identity = { key: string; access: string };
 export type AdmissionDeps = {
   now?: () => number;
@@ -24,9 +30,11 @@ export type AdmissionDeps = {
   statePath?: string;
 };
 const CACHE_MS = 60_000;
-const inflight = new Map<string, Promise<Snapshot | null>>();
-const memory = new Map<string, Snapshot>();
+const inflight = new Map<string, Promise<ClaudeUsageSnapshot | null>>();
 let identityCache: { scope: string; at: number; value: Promise<Identity | null> } | undefined;
+let identityOverride: ((fresh?: boolean) => Identity | null | Promise<Identity | null>) | undefined;
+let identityReads = 0;
+let recordedIdentityRead = 0;
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -50,49 +58,43 @@ async function readLocalIdentity(): Promise<Identity | null> {
 /**
  * The signed-in Claude Code account, read through the CLI's own secure storage. Cached briefly so
  * a burst of turns costs one Keychain lookup; an account switch is noticed within the cache window.
+ * Every read is recorded, newest read wins, so a published quota row can tell it was superseded.
  */
 function localIdentity(fresh = false): Promise<Identity | null> {
   const scope = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
   const now = Date.now();
   if (!fresh && identityCache && identityCache.scope === scope && now - identityCache.at < CACHE_MS) return identityCache.value;
-  const value = readLocalIdentity().catch(() => null);
+  const read = ++identityReads;
+  const override = identityOverride;
+  const value = (override ? Promise.resolve().then(() => override(fresh)) : readLocalIdentity())
+    .catch(() => null)
+    .then(identity => {
+      if (read > recordedIdentityRead) {
+        recordedIdentityRead = read;
+        recordClaudeSignedInIdentity(identity?.key ?? null);
+      }
+      return identity;
+    });
   identityCache = { scope, at: now, value };
   return value;
 }
+
+/** Test seam for the signed-in account; call with no argument to restore the real sign-in read. */
+export function setClaudeIdentityForTests(fn?: (fresh?: boolean) => Identity | null | Promise<Identity | null>): void {
+  identityOverride = fn;
+  identityCache = undefined;
+  recordClaudeSignedInIdentity(null);
+}
+
+/**
+ * The signed-in account's hashed key, or null when signed out or the sign-in cannot be read. Only
+ * the key leaves this module, never the access token. `fresh` bypasses the identity cache.
+ */
+export async function currentClaudeIdentityKey(fresh = false): Promise<string | null> {
+  return (await resolveIdentity({}, fresh))?.key ?? null;
+}
 async function resolveIdentity(deps: AdmissionDeps, fresh = false): Promise<Identity | null> {
   try { return await (deps.identity ?? localIdentity)(fresh); } catch { return null; }
-}
-function statePath(deps: AdmissionDeps): string {
-  return deps.statePath ?? join(getConfigDir(), "claude-usage-admission.json");
-}
-function load(path: string): Snapshot | undefined {
-  try {
-    const saved = JSON.parse(readFileSync(path, "utf8"));
-    if (typeof saved.identity !== "string" || !Number.isFinite(saved.checkedAt)) return;
-    if (saved.refusalUntil !== undefined && !finite(saved.refusalUntil)) return;
-    if (saved.quota !== undefined) {
-      const q = saved.quota;
-      if (!q || typeof q !== "object" || !finite(q.updatedAt)) return;
-      for (const field of ["fiveHourPercent", "fiveHourResetAt", "weeklyPercent", "weeklyResetAt"])
-        if (q[field] !== undefined && !finite(q[field])) return;
-      if (q.customWindows !== undefined && (!Array.isArray(q.customWindows) || !q.customWindows.every((w: unknown) => {
-        if (!w || typeof w !== "object") return false;
-        const row = w as Record<string, unknown>;
-        return typeof row.label === "string" && finite(row.percent) && (row.resetAt === undefined || finite(row.resetAt));
-      }))) return;
-    }
-    return saved;
-  } catch { /* Missing or malformed cache is unknown, never proof of capacity. */ }
-  return undefined;
-}
-function save(path: string, snapshot: Snapshot): void {
-  memory.set(path, snapshot);
-  try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const temp = `${path}.${process.pid}.tmp`;
-    writeFileSync(temp, JSON.stringify(snapshot) + "\n", { mode: 0o600 });
-    renameSync(temp, path);
-  } catch { /* Memory still suppresses launches; no secrets or upstream text are persisted. */ }
 }
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 /** Windows that gate this model: the plan windows plus custom windows in scope for its family. */
@@ -111,7 +113,7 @@ export function formatClaudeReset(resetAt: number, timeZone?: string): string {
   }).format(resetAt);
 }
 function full(w: { percent?: number }): boolean { return finite(w.percent) && w.percent >= 100; }
-function admission(snapshot: Snapshot, model: string, now: number): ClaudeAdmission {
+function admission(snapshot: ClaudeUsageSnapshot, model: string, now: number): ClaudeAdmission {
   const quota = snapshot.quota;
   const exhausted = applicableWindows(quota, model).filter(w => full(w) && (!finite(w.resetAt) || w.resetAt > now));
   if (finite(snapshot.refusalUntil) && snapshot.refusalUntil > now) exhausted.push({ percent: 100, resetAt: snapshot.refusalUntil });
@@ -140,10 +142,10 @@ export async function checkClaudeUsageAdmission(model = "", deps: AdmissionDeps 
 async function checkAdmission(model: string, deps: AdmissionDeps, now: number): Promise<ClaudeAdmission> {
   const identity = await resolveIdentity(deps);
   if (!identity) return { state: "unknown", checkedAt: now };
-  const path = statePath(deps);
-  const disk = load(path);
-  const local = memory.get(path);
-  const cached = [disk, local].filter((s): s is Snapshot => s?.identity === identity.key).sort((a, b) => b.checkedAt - a.checkedAt || (b.refusalUntil ?? 0) - (a.refusalUntil ?? 0))[0];
+  const path = claudeUsageStatePath(deps.statePath);
+  const cached = readClaudeUsageSnapshots(path)
+    .filter(s => s.identity === identity.key)
+    .sort((a, b) => b.checkedAt - a.checkedAt || (b.refusalUntil ?? 0) - (a.refusalUntil ?? 0))[0];
   if (cached) {
     const status = admission(cached, model, now);
     if (status.state === "exhausted" && status.resetAt! > now) return status;
@@ -164,13 +166,13 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
       // Merge the newest refusal at commit time. Nothing awaits between this read and the write,
       // so a refusal the CLI reported while the probe was in flight is never overwritten.
       const at = (deps.now ?? Date.now)();
-      const refusals = [load(path), memory.get(path)]
-        .filter((s): s is Snapshot => s?.identity === identity.key)
+      const refusals = readClaudeUsageSnapshots(path)
+        .filter(s => s.identity === identity.key)
         .map(s => s.refusalUntil)
         .filter((until): until is number => finite(until) && until > at);
       const refusalUntil = refusals.length ? Math.max(...refusals) : undefined;
-      const snapshot: Snapshot = { identity: identity.key, checkedAt: at, ...(quota ? { quota } : {}), ...(refusalUntil ? { refusalUntil } : {}) };
-      save(path, snapshot);
+      const snapshot: ClaudeUsageSnapshot = { identity: identity.key, checkedAt: at, ...(quota ? { quota } : {}), ...(refusalUntil ? { refusalUntil } : {}) };
+      saveClaudeUsageSnapshot(path, snapshot);
       return snapshot;
     })().finally(() => inflight.delete(requestKey));
     inflight.set(requestKey, probe);
@@ -182,19 +184,6 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
 
 let preflightOverride: ((model: string) => Promise<ClaudeAdmission>) | undefined;
 
-/** The last usage the admission recorded, as `/api/quota-pool` reports it. */
-export type ClaudeUsageObservation = Readonly<Snapshot>;
-
-/**
- * The newest recorded usage snapshot, from memory or the admission file. Read-only: it resolves
- * no sign-in (no Keychain read), runs no probe and writes nothing. `identity` is the admission's
- * own SHA-256 account key, never the account uuid itself.
- */
-export function peekClaudeUsageObservation(deps: Pick<AdmissionDeps, "statePath"> = {}): ClaudeUsageObservation | null {
-  const path = statePath(deps);
-  const rows = [load(path), memory.get(path)].filter((s): s is Snapshot => s !== undefined);
-  return rows.sort((a, b) => b.checkedAt - a.checkedAt)[0] ?? null;
-}
 /** Test seam for the pre-dispatch check in the Responses executor; call with no argument to restore. */
 export function setClaudeUsagePreflightForTests(fn?: (model: string) => Promise<ClaudeAdmission>): void { preflightOverride = fn; }
 /** The pre-dispatch check the Responses executor runs before a claude-cli turn. */
@@ -249,8 +238,8 @@ export async function recordClaudeUsageRefusal(message: string, deps: AdmissionD
   if (!until) return;
   const identity = await resolveIdentity(deps);
   if (!identity) return;
-  const path = statePath(deps);
-  const old = load(path);
+  const path = claudeUsageStatePath(deps.statePath);
+  const old = loadClaudeUsageSnapshot(path);
   const same = old?.identity === identity.key ? old : undefined;
-  save(path, { identity: identity.key, checkedAt: now, ...(same?.quota ? { quota: same.quota } : {}), refusalUntil: Math.max(until, same?.refusalUntil ?? 0) });
+  saveClaudeUsageSnapshot(path, { identity: identity.key, checkedAt: now, ...(same?.quota ? { quota: same.quota } : {}), refusalUntil: Math.max(until, same?.refusalUntil ?? 0) });
 }
