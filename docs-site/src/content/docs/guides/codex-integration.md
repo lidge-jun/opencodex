@@ -26,6 +26,13 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+When Pool selects an added account, OpenCodex replaces installation identifiers already present in
+the request headers or client metadata with a stable identifier for that account and OpenCodex home.
+Token refresh keeps the identifier; switching accounts changes it. Direct mode and the native main
+account keep your original values. Missing installation metadata stays absent. OpenCodex does not
+change Codex's own `installation_id` file when switching native profiles. If the local installation
+secret cannot be read safely, the request returns a retryable 503 before reaching ChatGPT.
+
 Within Pool mode, a request carrying a validated native Codex login can use that login when the
 selected stored account is cooling down and no eligible stored alternative or recovery probe is
 available. This also covers a new request blocked before sending, following the same caller

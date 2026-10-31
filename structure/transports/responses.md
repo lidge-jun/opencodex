@@ -1,4 +1,6 @@
 # Responses Transport
+
+Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
 WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 

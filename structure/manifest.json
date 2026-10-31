@@ -705,6 +705,13 @@
       "documents": ["src/codex/auth-api/pool-mode-gate.ts"]
     },
     {
+      "path": "providers/codex-installation-identity.md",
+      "tier": 3,
+      "title": "Codex Installation Identity",
+      "scope": "Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery.",
+      "documents": ["src/codex/installation-id.ts", "src/codex/auth-context-provider.ts", "src/codex/forward-transport-headers.ts", "src/adapters/openai-responses/transport.ts", "src/adapters/openai-responses/passthrough.ts", "src/server/ws-bridge.ts", "src/server/responses/codex-ws-request.ts", "src/server/responses/codex-ws-pool.ts", "src/server/responses/compact.ts", "src/server/context-history.ts", "src/codex/affinity-debug.ts"]
+    },
+    {
       "path": "providers/openai-accounts.md",
       "tier": 4,
       "title": "OpenAI Account Identity And Pool Operations",
