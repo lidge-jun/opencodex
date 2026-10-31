@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 42.
+Declared capabilities: 43.
 
 ### `ocx account login`
 
@@ -330,6 +330,24 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Without --account the existing pool-wide operation remains. OpenAI per-account status reads override plus effective threshold; on writes80, off0, inherit null, threshold a validated0–100 integer.
 - New OpenAI policy writes require successful unambiguous roster evidence and never fall back to a raw unresolved selector. These are routing thresholds, not pool enablement or paid-credit permission.
+
+### `ocx account reset-affinity`
+
+Usage: `ocx account reset-affinity <anthropic|anthropic2> [--json]`
+
+Confirm a provider-wide Anthropic session-affinity reset.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/oauth/accounts/affinity-reset` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the confirmed reset or failure receipt. |
+
+- Clears all provider session bindings, including bindings formed after an earlier failed reset. Works with an empty roster; never selects or resumes an account. Sends once and requires an explicit durable confirmation.
 
 ### `ocx account preserve-signed-in`
 

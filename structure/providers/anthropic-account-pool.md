@@ -486,7 +486,7 @@ session digest, opaque account ID, last-use timestamp and hashed persistent logi
 without `loginId` retain runtime-only affinity. Token refresh preserves the fence; replacement login,
 removal/re-add, pause and reauthentication invalidate it. Invalid, oversized, future and expired rows are ignored;
 the newest 2,000 entries survive, with a 24-hour idle lifetime. A restored binding precedes the startup active
-preference; an explicit runtime selection clears bindings and persists the reset.
+preference; an acknowledged management selection clears bindings and persists the reset.
 
 Temporary throttle and model-route/family detours retain a valid original binding and refresh its idle timestamp.
 Commit preserves a binding excluded by the route, an active admission pause or family rejection, or a transient
@@ -498,8 +498,13 @@ touched row; ordinary publication does not reread auth or revalidate every bindi
 ACL settlement barrier and private no-follow atomic publisher; bounded hydration rejects final-entry symlinks,
 junctions and non-regular files with identifier-free warnings. Aliases above the config root remain supported.
 Memory and pending writes belong to the resolved config home; reset or an observed home change retires that scope.
-Timestamp-only updates coalesce for at most one second, with a best-effort shutdown flush. Failures emit identifier-free warnings
-and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
+Ordinary routing mutations coalesce behind a one-second publication timer so caller-selected session keys cannot trigger
+synchronous snapshot writes. Manual management selection and pause-induced selection changes explicitly await confirmed
+reset publication before reporting success. A failed publication leaves the account mutation committed and returns
+503 `affinity_reset_not_persisted` with `selectionCommitted` or `pauseCommitted` and `retryable: true`; repeating the
+selection request finishes the pending reset; pause retries preserve the account and desired state and add `retryAffinityReset: true` to rebuild reset intent even after restart. The synchronous routing-reset API is preserved. Account deletion with that explicit retry flag and the provider-only affinity-reset endpoint re-arm and confirm a global reset independently of the removed account, including an empty roster; failure after deletion reports `deletionCommitted` while retaining a retryable warning. This explicit retry also clears bindings formed since the first failure but never selects or resumes an account. Plain deletion preserves surviving bindings and only flushes an already pending reset. UI absence is not proof of durable publication, and a reset-only response must carry `affinityResetConfirmed: true` before its warning clears.
+Explicit best-effort and shutdown flushes remain distinct from confirmed operator publication. Failures emit identifier-free
+warnings and preserve the previous snapshot. `tests/adapters/anthropic/anthropic-affinity-restart.test.ts` and
 `tests/adapters/anthropic/anthropic-affinity-store.test.ts` exercise routing and persistence boundaries.
 
 ## JEV advisory publication

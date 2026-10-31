@@ -365,6 +365,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/oauth/logout", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/affinity-reset", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/pause", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/auto-switch", module: "server/management/oauth-account-routes", mutates: true },

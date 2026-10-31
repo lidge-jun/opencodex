@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -15,6 +15,22 @@ let clock: ReturnType<typeof spyOn> | undefined;
 const config = { providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } },
   anthropicAccountPool: { enabled: true, autoSwitchThreshold: 0 } } as unknown as OcxConfig;
 const session = "private-session-L7-never-persist-raw";
+async function accountMutation(path: "active" | "pause" | "affinity-reset", body: unknown) {
+  const { handleOauthAccountRoutes } = await import("../../../src/server/management/oauth-account-routes");
+  const req = new Request(`http://127.0.0.1:10100/api/oauth/accounts/${path}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return handleOauthAccountRoutes({
+    req, url: new URL(req.url), config, deps: {}, version: "test", principal: "gui-session",
+    syncClaudeAgentDefsBestEffort: async () => {},
+  });
+}
+async function deleteAccount(id: string, retryAffinityReset = false) {
+  const { handleOauthAccountRoutes } = await import("../../../src/server/management/oauth-account-routes");
+  const req = new Request(`http://127.0.0.1:10100/api/oauth/accounts?provider=anthropic&id=${encodeURIComponent(id)}${retryAffinityReset ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
+  return handleOauthAccountRoutes({ req, url: new URL(req.url), config, deps: {}, version: "test", principal: "gui-session",
+    syncClaudeAgentDefsBestEffort: async () => {} });
+}
 async function flush() {
   // This owner exists with the implementation; keeping the regression runnable on dev
   // proves the behavioral failure rather than a missing-export failure.
@@ -67,6 +83,169 @@ test("runtime manual selection overrides binding", async () => {
   resetAnthropicRoutingForManualSelection(b);
   expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
 });
+
+test("manual selection success survives restart without a shutdown flush", async () => {
+  const { b } = await seed();
+  await flush();
+  const response = await accountMutation("active", { provider: "anthropic", accountId: b });
+  expect(response?.status).toBe(200);
+  expect(await response!.json()).toMatchObject({ ok: true, activeAccountId: b });
+  // Drop process-local state immediately after the success response. No explicit
+  // flush or shutdown hook may repair disk state before hydration is checked.
+  clearAnthropicAccountPoolState();
+  expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+}, 20_000);
+
+for (const action of ["active", "pause"] as const) {
+  test(`${action} reports an unpersisted reset and an unchanged retry completes it`, async () => {
+    const { a, b } = await seed();
+    await flush();
+    const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+    const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+    let attempts = 0;
+    const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+      .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+        return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+      });
+    const body = action === "active" ? { provider: "anthropic", accountId: b }
+      : { provider: "anthropic", accountId: a, paused: true };
+    try {
+      const failed = await accountMutation(action, body);
+      expect(failed?.status).toBe(503);
+      expect(await failed!.json()).toMatchObject({ code: "affinity_reset_not_persisted", activeAccountId: b,
+        retryable: true, ...(action === "active" ? { selectionCommitted: true } : { pauseCommitted: true }) });
+      expect(getAccountSet("anthropic")?.activeAccountId).toBe(b);
+      const retry = await accountMutation(action, body);
+      expect(retry?.status).toBe(200);
+      const completed = await retry!.json();
+      if (action === "pause") expect(completed).toMatchObject({ activeAccountChanged: false, paused: true });
+      expect(attempts).toBe(2);
+      expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+      clearAnthropicAccountPoolState();
+      expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+    } finally { confirmation.mockRestore(); }
+  }, 20_000);
+}
+
+test("explicit pause reset retry survives loss of process-local pending state", async () => {
+  const { a, b } = await seed();
+  await saveCredential("anthropic", { access: "fixture-access-C", refresh: "fixture-refresh-C",
+    expires: Date.now() + 3_600_000, accountId: "C" });
+  const c = getAccountSet("anthropic")!.accounts.find(row => row.id !== a && row.id !== b)!.id;
+  await setActiveAccount("anthropic", a);
+  bindAnthropicSessionAffinity(session, c);
+  await flush();
+  const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+  let attempts = 0;
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+    .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+      return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+    });
+  try {
+    const body = { provider: "anthropic", accountId: a, paused: true };
+    expect((await accountMutation("pause", body))?.status).toBe(503);
+    clearAnthropicAccountPoolState(); // Abrupt restart: no graceful flush repairs the snapshot.
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    expect((await accountMutation("pause", { ...body, retryAffinityReset: "true" }))?.status).toBe(400);
+    expect((await accountMutation("pause", body))?.status).toBe(200);
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    const retry = await accountMutation("pause", { ...body, retryAffinityReset: true });
+    expect(retry?.status).toBe(200);
+    expect(await retry!.json()).toMatchObject({ activeAccountId: b, activeAccountChanged: false });
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+  } finally { confirmation.mockRestore(); }
+}, 20_000);
+
+test("pausing an unrelated inactive account confirms an outstanding selection reset", async () => {
+  const { a, b } = await seed();
+  await flush();
+  const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+  let attempts = 0;
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+    .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+      return ++attempts === 1 ? Promise.resolve(false) : original.call(this);
+    });
+  try {
+    const selection = await accountMutation("active", { provider: "anthropic", accountId: b });
+    expect(selection?.status).toBe(503);
+    const unrelated = await accountMutation("pause", { provider: "anthropic", accountId: a, paused: true });
+    expect(unrelated?.status).toBe(200);
+    expect(await unrelated!.json()).toMatchObject({ activeAccountId: b, activeAccountChanged: false });
+    expect(attempts).toBe(2);
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+  } finally { confirmation.mockRestore(); }
+}, 20_000);
+test.each([false, true])("deleted reset target remains retryable across publication failure and restart (restart before delete: %p)", async restartBeforeDelete => {
+  const { a, b } = await seed();
+  await saveCredential("anthropic", { access: "fixture-access-C", refresh: "fixture-refresh-C",
+    expires: Date.now() + 3_600_000, accountId: "C" });
+  const c = getAccountSet("anthropic")!.accounts.find(row => row.id !== a && row.id !== b)!.id;
+  await setActiveAccount("anthropic", a);
+  bindAnthropicSessionAffinity(session, c);
+  await flush();
+  const { AnthropicSessionAffinityStore, anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const original = AnthropicSessionAffinityStore.prototype.flushConfirmed;
+  let fail = true;
+  const confirmation = spyOn(AnthropicSessionAffinityStore.prototype, "flushConfirmed")
+    .mockImplementation(function (this: InstanceType<typeof AnthropicSessionAffinityStore>) {
+      if (!fail) return original.call(this);
+      // Retire the failed scope as on abrupt exit; a timer must not repair this fixture.
+      this.resetMemory();
+      return Promise.resolve(false);
+    });
+  try {
+    expect((await accountMutation("pause", { provider: "anthropic", accountId: a, paused: true }))?.status).toBe(503);
+    if (restartBeforeDelete) clearAnthropicAccountPoolState();
+    const deleted = await deleteAccount(a, restartBeforeDelete);
+    expect(deleted?.status).toBe(503);
+    expect(await deleted!.json()).toMatchObject({ code: "affinity_reset_not_persisted", deletionCommitted: true, retryable: true });
+    expect(getAccountSet("anthropic")!.accounts.some(row => row.id === a)).toBe(false);
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    const failedRetry = await accountMutation("affinity-reset", { provider: "anthropic" });
+    expect(failedRetry?.status).toBe(503);
+    expect(await failedRetry!.json()).toMatchObject({ code: "affinity_reset_not_persisted", retryable: true });
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(c);
+    fail = false;
+    const completed = await accountMutation("affinity-reset", { provider: "anthropic" });
+    expect(completed?.status).toBe(200);
+    expect(await completed!.json()).toMatchObject({ affinityResetConfirmed: true });
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(b);
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(session, config).accountId).toBe(b);
+  } finally { confirmation.mockRestore(); }
+}, 20_000);
+
+test("ordinary deletion preserves surviving affinity, while reset-only confirmation also works with no accounts", async () => {
+  const { a, b } = await seed();
+  bindAnthropicSessionAffinity(session, b);
+  await flush();
+  expect((await deleteAccount(a))?.status).toBe(200);
+  const { anthropicAffinityPath } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toHaveLength(1);
+  expect((await deleteAccount(b))?.status).toBe(200);
+  const reset = await accountMutation("affinity-reset", { provider: "anthropic" });
+  expect(reset?.status).toBe(200);
+  expect(await reset!.json()).toMatchObject({ affinityResetConfirmed: true });
+  expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+}, 20_000);
+
+test("reset-only rejects malformed bodies and unrelated providers without selecting an account", async () => {
+  const { a, b } = await seed();
+  const selected = getAccountSet("anthropic")!.activeAccountId;
+  for (const body of [null, [], {}, { provider: 1 }, { provider: "openai" }, { provider: "anthropic-api-key" }]) {
+    expect((await accountMutation("affinity-reset", body))?.status).toBe(400);
+  }
+  expect(getAccountSet("anthropic")!.activeAccountId).toBe(selected);
+  expect(getAccountSet("anthropic")!.accounts.map(row => row.id)).toEqual([a, b]);
+});
+
 test("normal transient detour returns to the original and refreshes idle lifetime", async () => {
   const { a, b } = await seed();
   let now = Date.now(); clock = spyOn(Date, "now").mockImplementation(() => now);
