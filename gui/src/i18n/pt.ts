@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +124,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...shellV2Copy("pt"),
   "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
   "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",
   "claude.tierDefaults.title": "Modelos padrão da CLI",

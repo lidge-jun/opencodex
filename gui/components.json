@@ -1,0 +1,35 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/design/theme.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "registries": {
+    "@reactbits-starter": {
+      "url": "https://pro.reactbits.dev/api/r/starter/{name}.json",
+      "headers": { "Authorization": "Bearer ${REACTBITS_LICENSE_KEY}" }
+    },
+    "@reactbits-pro": {
+      "url": "https://pro.reactbits.dev/api/r/pro/{name}.json",
+      "headers": { "Authorization": "Bearer ${REACTBITS_LICENSE_KEY}" }
+    },
+    "@aceternity": {
+      "url": "https://ui.aceternity.com/registry/{name}.json",
+      "headers": { "Authorization": "Bearer ${ACETERNITY_TOKEN}" }
+    }
+  }
+}

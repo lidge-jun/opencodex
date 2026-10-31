@@ -1,0 +1,207 @@
+/* ============================================================================
+   v1 -> v2 bridge
+   Repaints the v1 stylesheet with design system v2 while pages migrate to the
+   ui-v2 components. Lives in the `bridge` layer: above `legacy`, below
+   `components`/`utilities`, so a migrated component always wins.
+   Delete a rule here once nothing renders its v1 class any more.
+   ============================================================================ */
+
+/* ---- v1 tokens, re-pointed at the v2 palette ------------------------------ */
+:root {
+  --bg: var(--ocx-bg);
+  --rail: light-dark(#fafafa, #0c0c0e);
+  --surface: var(--ocx-raised);
+  --raised: var(--ocx-surface);
+  --raised-hover: var(--ocx-surface-2);
+  --border: var(--ocx-line-strong);
+  --border-soft: var(--ocx-line);
+  --hover: light-dark(rgb(9 9 11 / 0.035), rgb(255 255 255 / 0.04));
+  --text: var(--ocx-fg);
+  --muted: var(--ocx-fg-muted);
+  --faint: light-dark(#71717a, #8b8b94);
+
+  /* the single accent is now the blue; neutral selection uses --accent-soft */
+  --accent: var(--ocx-accent);
+  --accent-hover: light-dark(#1f5ae6, #5a95ff);
+  --accent-ink: var(--ocx-on-accent);
+  --accent-soft: light-dark(rgb(9 9 11 / 0.05), rgb(255 255 255 / 0.07));
+  --accent-ring: light-dark(rgb(38 103 255 / 0.55), rgb(90 149 255 / 0.6));
+
+  --green: var(--ocx-success);
+  --green-soft: var(--ocx-success-soft);
+  --red: var(--ocx-danger);
+  --red-soft: var(--ocx-danger-soft);
+  --amber: var(--ocx-warning);
+  --amber-soft: var(--ocx-warning-soft);
+  --blue: var(--ocx-accent);
+  --blue-soft: var(--ocx-accent-soft);
+
+  --radius-xs: 8px;
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 20px;
+
+  --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-code: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
+
+  --toggle-off-bg: light-dark(#d4d4d8, #3f3f46);
+  --toggle-on-bg: var(--ocx-accent);
+  --toggle-dot-color: #ffffff;
+
+  --shadow-sm: var(--ocx-shadow-sm);
+  --shadow: var(--ocx-shadow-md);
+  --glass-rail: light-dark(rgb(250 250 250 / 0.72), rgb(12 12 14 / 0.72));
+  --glass-panel: light-dark(rgb(255 255 255 / 0.86), rgb(24 24 27 / 0.86));
+}
+/* per-locale v1 stacks pinned OpenAI Sans first; v2 is one self-hosted stack */
+:root:lang(zh), :root:lang(zh-CN), :root:lang(zh-TW), :root:lang(ja), :root:lang(ko) {
+  --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+/* ---- surfaces: borderless soft cards ------------------------------------- */
+.card,
+.panel {
+  border-color: transparent;
+  background: var(--ocx-surface);
+  border-radius: var(--radius);
+}
+.panel-accent {
+  border-color: transparent;
+  background: var(--ocx-accent-soft);
+}
+
+/* ---- buttons: Aceternity primary, quiet neutrals ------------------------- */
+.btn {
+  border-radius: 0.625rem;
+  transition: background-color 0.2s, box-shadow 0.2s, color 0.2s, scale 0.15s;
+}
+.btn:active:not(:disabled) { scale: 0.97; }
+.btn-primary {
+  background: linear-gradient(to bottom, var(--ocx-accent-top), var(--ocx-accent-bottom));
+  color: var(--ocx-on-accent);
+  box-shadow: var(--ocx-glow), inset 0 0 0 1px rgb(255 255 255 / 0.2);
+}
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(to bottom, var(--ocx-accent-top), var(--ocx-accent-bottom));
+  box-shadow: var(--ocx-glow-hover), inset 0 0 0 1px rgb(255 255 255 / 0.4);
+}
+
+/* ---- segmented controls: recessed track, raised selected pill ------------- */
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 0.625rem;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn) {
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  font-weight: 500;
+  transition: color 0.2s, background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s;
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn):hover {
+  color: var(--ocx-fg-muted);
+}
+:is(.segmented, .usage-segmented, .daybar-seg, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]) {
+  background: var(--ocx-raised);
+  color: var(--ocx-fg);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+
+/* The v2 SegmentedControl slides its thumb with motion. The v1 groups get the same
+   motion without a markup change: the checked option names itself the anchor, and one
+   pill per track follows whichever option holds the name. Without anchor positioning
+   the raised option above is the fallback. */
+@supports (anchor-name: --a) and (anchor-scope: --a) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg) {
+    position: relative;
+    isolation: isolate;
+    anchor-scope: --ocx-seg;
+  }
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg)::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    position-anchor: --ocx-seg;
+    top: anchor(top);
+    bottom: anchor(bottom);
+    left: anchor(left);
+    right: anchor(right);
+    border-radius: 0.5rem;
+    background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+    box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+    transition: left 0.32s cubic-bezier(0.22, 1, 0.36, 1), right 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* no option checked: no anchor, so the pill must not paint at a stale place */
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg):not(:has(> :is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"])))::before {
+    display: none;
+  }
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]) {
+    anchor-name: --ocx-seg;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg)::before { transition: none; }
+}
+
+/* ---- page heads: the same title scale as the v2 hubs ---------------------- */
+.page-head > :is(h1, h2) {
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+@media (max-width: 640px) {
+  .page-head > :is(h1, h2) { font-size: 22px; }
+}
+
+/* ---- page tabs: pill tabs instead of an underline ------------------------- */
+.page-tabs {
+  gap: 4px;
+  border-bottom: 0;
+  margin-bottom: 18px;
+}
+.page-tab {
+  border-bottom: 0;
+  margin-bottom: 0;
+  padding: 6px 12px;
+  border-radius: 0.625rem;
+  color: var(--ocx-fg-subtle);
+  transition: color 0.2s, background-color 0.2s;
+}
+.page-tab:hover { color: var(--ocx-fg); background: var(--ocx-surface); }
+.page-tab--active {
+  color: var(--ocx-fg);
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+
+/* ---- sidebar -------------------------------------------------------------- */
+.nav-item {
+  border-radius: 0.625rem;
+  transition: background-color 0.2s, color 0.2s;
+}
+.nav-item.active {
+  background: var(--ocx-raised);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 0 0 1px var(--ocx-line);
+}
+.nav-item.active svg { color: var(--ocx-accent); }
+
+/* ---- sidebar tiers (Everyday / Set up / Fine-tuning) ---------------------- */
+.nav-tier { display: flex; flex-direction: column; gap: 2px; }
+.nav-tier + .nav-tier { margin-top: 14px; }
+.nav-tier-label {
+  padding: 4px 10px 6px;
+  color: var(--ocx-fg-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.app--nav-collapsed .nav-tier-label { visibility: hidden; }

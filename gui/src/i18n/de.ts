@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -122,6 +123,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...shellV2Copy("de"),
   "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
   "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
   "claude.tierDefaults.title": "CLI-Standardmodelle",

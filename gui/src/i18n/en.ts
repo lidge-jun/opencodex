@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -123,6 +124,7 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...shellV2Copy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
   "claude.tierDefaults.title": "CLI tier defaults",

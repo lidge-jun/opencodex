@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -122,6 +123,7 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...shellV2Copy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
   "claude.tierDefaults.title": "CLI varsayılan modelleri",

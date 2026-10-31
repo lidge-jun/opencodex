@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +122,7 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Impossible d'enregistrer les limites de workflow.",
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
+  ...shellV2Copy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",

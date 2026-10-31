@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -123,6 +124,7 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...shellV2Copy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
   "claude.tierDefaults.title": "Mô hình mặc định CLI",

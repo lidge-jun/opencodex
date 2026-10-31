@@ -47,15 +47,16 @@ afterEach(() => {
 for (const [locale, dict] of [["en", en], ["ko", ko]] as const) {
   test(`theme choices have ordered ${locale} accessible names and decorative icons`, () => {
     const { host } = mount("system", () => {}, locale);
-    const group = host.querySelector('[role="group"]');
-    expect(group?.classList.contains("theme-switch")).toBe(true);
+    // Design system v2: a segmented control with radio semantics (one mode is always chosen).
+    const group = host.querySelector('[role="radiogroup"]');
+    expect(group).not.toBeNull();
     expect(group?.getAttribute("aria-label")).toBe(dict["theme.label"]);
     const buttons = Array.from(group!.querySelectorAll("button"));
     expect(buttons).toHaveLength(3);
     expect(buttons.map(button => button.getAttribute("aria-label"))).toEqual(modes.map(mode => dict[`theme.${mode}`]));
     buttons.forEach((button, index) => {
       expect(button.type).toBe("button");
-      expect(button.classList.contains("theme-switch__btn")).toBe(true);
+      expect(button.getAttribute("role")).toBe("radio");
       expect(button.title).toBe(dict[`theme.${modes[index]!}`]);
       expect(button.textContent?.trim()).toBe("");
       expect(button.querySelectorAll("svg")).toHaveLength(1);
@@ -69,8 +70,10 @@ test("exactly the controlled theme is pressed, including after re-render", () =>
   for (const mode of modes) {
     render(mode);
     const buttons = Array.from(host.querySelectorAll("button"));
-    expect(buttons.map(button => button.getAttribute("aria-pressed"))).toEqual(modes.map(choice => String(choice === mode)));
-    expect(host.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
+    expect(buttons.map(button => button.getAttribute("aria-checked"))).toEqual(modes.map(choice => String(choice === mode)));
+    expect(host.querySelectorAll('[aria-checked="true"]')).toHaveLength(1);
+    // Roving focus: only the chosen mode is in the tab order.
+    expect(buttons.map(button => button.tabIndex)).toEqual(modes.map(choice => (choice === mode ? 0 : -1)));
   }
 });
 
@@ -81,6 +84,20 @@ test("dark, system and light clicks report their own mode", () => {
   for (const button of [dark, system, light]) act(() => { button!.click(); });
   expect(calls).toEqual(["dark", "system", "light"]);
   // Selection stays controlled by the prop until the parent re-renders.
-  expect(light!.getAttribute("aria-pressed")).toBe("true");
-  expect(host.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
+  expect(light!.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelectorAll('[aria-checked="true"]')).toHaveLength(1);
+});
+
+test("arrow keys move the choice like a native radio group", () => {
+  const calls: ThemeMode[] = [];
+  const { host } = mount("light", mode => calls.push(mode));
+  const group = host.querySelector('[role="radiogroup"]')!;
+  const press = (key: string) => act(() => {
+    group.dispatchEvent(new (window as never as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent("keydown", { key, bubbles: true }) as never);
+  });
+  press("ArrowRight");
+  press("End");
+  press("ArrowLeft");
+  // Controlled: the prop stays "light", so each key moves from light (ArrowLeft wraps to the end).
+  expect(calls).toEqual(["dark", "system", "system"]);
 });

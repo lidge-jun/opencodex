@@ -1,0 +1,158 @@
+/* ============================================================================
+   opencodex UI — design system v2 (Tailwind v4 layer)
+   Runtime source of truth for the v2 tokens; see design-system/foundations.md
+   and ADR 0006. Loaded before styles.css so the legacy v1 stylesheet keeps
+   working while pages migrate:
+   - only Tailwind's theme + utilities are imported (no preflight reset);
+   - the v1 stylesheets live in the `legacy` layer, below `utilities`, so a
+     migrated component's utilities always win over v1 element/class rules.
+   ============================================================================ */
+
+@layer theme, legacy, bridge, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* v1 stylesheets, below the utilities layer until each page migrates */
+@import "../styles.css" layer(legacy);
+@import "../styles/usage-chart-accessibility.css" layer(legacy);
+@import "../styles/sidebar-brand.css" layer(legacy);
+@import "../styles/fast-rows-setting.css" layer(legacy);
+@import "../styles/claude-desktop-mode-picker.css" layer(legacy);
+@import "../styles/claude-first-party-bindings.css" layer(legacy);
+@import "../styles/lazycodex-role-models.css" layer(legacy);
+@import "../styles/claude-desktop-picker.css" layer(legacy);
+@import "../styles/anthropic-reset-grants.css" layer(legacy);
+@import "../styles/star-onboarding.css" layer(legacy);
+@import "../styles/sidebar-zoom.css" layer(legacy);
+@import "../styles/protocol-evidence.css" layer(legacy);
+@import "../pages/tray.css" layer(legacy);
+
+/* v1 classes repainted with v2 tokens while pages migrate (see bridge.css) */
+@import "./bridge.css" layer(bridge);
+
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "wanted-sans/fonts/webfonts/variable/split/WantedSansVariable.css";
+
+@source "../";
+
+/* Dark mode follows the GUI theme switch: data-theme pins a side, no
+   attribute means "follow the OS". */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme]), :root:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+/* ---- semantic tokens ------------------------------------------------------
+   Neutrals are a zinc ramp; one blue carries primary actions and focus;
+   status hues are reserved for state. Authored once with light-dark(). */
+:root {
+  color-scheme: light dark;
+
+  --ocx-bg: light-dark(#ffffff, #09090b);
+  --ocx-surface: light-dark(#f4f4f5, #121214);
+  --ocx-surface-2: light-dark(#e9e9ec, #1b1b1f);
+  --ocx-raised: light-dark(#ffffff, #18181b);
+  --ocx-line: light-dark(rgb(9 9 11 / 0.08), rgb(255 255 255 / 0.08));
+  --ocx-line-strong: light-dark(rgb(9 9 11 / 0.14), rgb(255 255 255 / 0.14));
+  --ocx-fg: light-dark(#09090b, #fafafa);
+  --ocx-fg-muted: light-dark(#52525b, #a1a1aa);
+  --ocx-fg-subtle: light-dark(#a1a1aa, #63636b);
+
+  /* primary blue: the Aceternity gradient pair (top -> bottom) */
+  --ocx-accent: light-dark(#2667ff, #3b7bff);
+  --ocx-accent-top: light-dark(#3f8efc, #5a95ff);
+  --ocx-accent-bottom: light-dark(#2176ff, #2563eb);
+  --ocx-accent-soft: light-dark(rgb(38 103 255 / 0.1), rgb(59 123 255 / 0.16));
+  --ocx-on-accent: #ffffff;
+
+  --ocx-success: light-dark(#0e9f6e, #34d399);
+  --ocx-success-soft: light-dark(rgb(14 159 110 / 0.1), rgb(52 211 153 / 0.14));
+  --ocx-warning: light-dark(#c2410c, #fbbf24);
+  --ocx-warning-soft: light-dark(rgb(194 65 12 / 0.1), rgb(251 191 36 / 0.14));
+  --ocx-danger: light-dark(#dc2626, #f87171);
+  --ocx-danger-soft: light-dark(rgb(220 38 38 / 0.1), rgb(248 113 113 / 0.14));
+
+  /* React Bits App UI blocks read these; keep them on the same palette */
+  --rb-accent: var(--ocx-fg);
+  --rb-accent-fg: var(--ocx-bg);
+  --rb-radius: 10px;
+
+  --ocx-shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
+  --ocx-shadow-md: 0 1px 2px rgb(16 24 40 / 0.05), 0 12px 32px -16px rgb(16 42 67 / 0.25);
+  --ocx-shadow-lg: 0 24px 48px -24px rgb(16 42 67 / 0.35);
+  /* the primary button's inner glow (Aceternity button) */
+  --ocx-glow: inset 0 0 10px 0 rgb(255 255 255 / 0.2);
+  --ocx-glow-hover: inset 0 0 20px 0 rgb(255 255 255 / 0.4);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* ---- Tailwind theme mapping: bg-surface, text-fg-muted, rounded-control … */
+@theme inline {
+  --font-sans: "Geist Variable", "Wanted Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
+
+  --color-bg: var(--ocx-bg);
+  --color-surface: var(--ocx-surface);
+  --color-surface-2: var(--ocx-surface-2);
+  --color-raised: var(--ocx-raised);
+  --color-line: var(--ocx-line);
+  --color-line-strong: var(--ocx-line-strong);
+  --color-fg: var(--ocx-fg);
+  --color-fg-muted: var(--ocx-fg-muted);
+  --color-fg-subtle: var(--ocx-fg-subtle);
+  --color-accent: var(--ocx-accent);
+  --color-accent-top: var(--ocx-accent-top);
+  --color-accent-bottom: var(--ocx-accent-bottom);
+  --color-accent-soft: var(--ocx-accent-soft);
+  --color-on-accent: var(--ocx-on-accent);
+  --color-success: var(--ocx-success);
+  --color-success-soft: var(--ocx-success-soft);
+  --color-warning: var(--ocx-warning);
+  --color-warning-soft: var(--ocx-warning-soft);
+  --color-danger: var(--ocx-danger);
+  --color-danger-soft: var(--ocx-danger-soft);
+
+  --radius-control: 0.625rem;
+  --radius-card: 1rem;
+  --radius-panel: 1.25rem;
+  --radius-sheet: 1.5rem;
+
+  --shadow-sm: var(--ocx-shadow-sm);
+  --shadow-md: var(--ocx-shadow-md);
+  --shadow-lg: var(--ocx-shadow-lg);
+  --shadow-glow: var(--ocx-glow);
+  --shadow-glow-hover: var(--ocx-glow-hover);
+
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-quick: cubic-bezier(0.55, 0, 1, 0.45);
+}
+
+/* ---- v2 component base ------------------------------------------------------
+   Tailwind's preflight stays off so v1 pages keep their look; v2 components
+   carry the `ui-v2` marker and get the slice of preflight they rely on.
+   Zero specificity, in `components` (above legacy, below utilities). */
+@layer components {
+  :where(.ui-v2, .ui-v2 *, .ui-v2 ::before, .ui-v2 ::after) {
+    box-sizing: border-box;
+    border: 0 solid;
+  }
+  :where(button.ui-v2, .ui-v2 button) {
+    appearance: none;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    line-height: inherit;
+  }
+  :where(.ui-v2 svg) { display: block; }
+}

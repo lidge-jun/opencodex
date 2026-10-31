@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
+import Home from "./pages/Home";
+import SetupHub from "./pages/SetupHub";
+import AdvancedHub from "./pages/AdvancedHub";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Advisor from "./pages/Advisor";
@@ -18,7 +21,7 @@ import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
 import { IconMenu, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
-import { NAV_GROUPS, groupForPage, visibleGroupPages } from "./nav-groups";
+import { NAV_GROUPS, NAV_TIERS, groupForPage, visibleGroupPages } from "./nav-groups";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
@@ -38,13 +41,19 @@ import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { useDesktopZoom } from "./use-desktop-zoom";
 import { DesktopZoomControl } from "./components/desktop-zoom-control";
 import { ThemeSwitch, type ThemeMode } from "./components/theme-switch";
+import { ProxyControls } from "./components/ui-v2/proxy-controls";
+import { BrandMark } from "./components/ui-v2/brand-mark";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
 import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
 
 type Theme = ThemeMode;
 
 const PAGE_TKEY: Record<Page, TKey> = {
-  dashboard: "nav.dashboard",
+  home: "shellV2.navHome",
+  setup: "shellV2.pageChecklist",
+  advanced: "shellV2.pageAllSettings",
+  // The old dashboard is now the "Proxy details" member of the Advanced row.
+  dashboard: "shellV2.pageProxyDetails",
   startup: "nav.startup",
   providers: "nav.providers",
   models: "nav.models",
@@ -391,12 +400,12 @@ export default function App() {
     <button
       type="button"
       className="brand brand-home"
-      onClick={() => { navigateToPage("dashboard"); setNavOpen(false); }}
+      onClick={() => { navigateToPage("home"); setNavOpen(false); }}
       aria-label={t("nav.goHome")}
       title={t("nav.goHome")}
-      {...(page === "dashboard" ? { "aria-current": "page" as const } : {})}
+      {...(page === "home" ? { "aria-current": "page" as const } : {})}
     >
-      <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
+      <BrandMark className="ui-v2 brand-logo-v2 h-[24px] w-[27px]" label={t("app.logoAria")} />
       <span className="name">opencodex</span>
       <span className="ver" title={displayedVersion}>v{displayedVersion}</span>
     </button>
@@ -473,25 +482,30 @@ export default function App() {
             page it owns, so #logs/debug highlights Usage & Logs, and a click opens the
             group's first page.
           */}
-          {NAV_GROUPS.map(group => {
-            const { id, tkey, Icon } = group;
-            const active = activeGroup?.id === id;
-            return (
-              <div key={id} className="nav-entry">
-                <button type="button" className={`nav-item${active ? " active" : ""}`}
-                  data-page={group.pages[0]}
-                  data-group={id}
-                  onClick={() => {
-                    // Deliberate sidebar navigation — push a history entry.
-                    navigateToPage(group.pages[0]);
-                    setNavOpen(false);
-                  }}
-                  aria-current={active ? "page" : undefined}>
-                  <Icon /> {t(tkey)}
-                </button>
-              </div>
-            );
-          })}
+          {NAV_TIERS.map(({ tier, tkey: tierKey }) => (
+            <div key={tier} className="nav-tier" data-tier={tier}>
+              <div className="nav-tier-label" aria-hidden="true">{t(tierKey)}</div>
+              {NAV_GROUPS.filter(group => group.tier === tier).map(group => {
+                const { id, tkey, Icon } = group;
+                const active = activeGroup?.id === id;
+                return (
+                  <div key={id} className="nav-entry">
+                    <button type="button" className={`nav-item${active ? " active" : ""}`}
+                      data-page={group.pages[0]}
+                      data-group={id}
+                      onClick={() => {
+                        // Deliberate sidebar navigation — push a history entry.
+                        navigateToPage(group.pages[0]);
+                        setNavOpen(false);
+                      }}
+                      aria-current={active ? "page" : undefined}>
+                      <Icon /> {t(tkey)}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-foot">
           <div className="lang-toggle">
@@ -518,30 +532,24 @@ export default function App() {
               {themeSwitch}
             </div>
           )}
-          <div className="sidebar-action-row">
-            <span className="sidebar-action-label">{t("dash.actions")}</span>
-            <div className="sidebar-action-orbs">
-              {(targets.connected || deviceForgetAvailable) && sharedSessionReady && (
-                <button type="button" className="sidebar-orb" onClick={() => { void handleSessionLogout(); }} disabled={sessionLoggingOut}
-                  aria-label={sessionLoggingOut ? t("connection.sessionLoggingOut") : endSessionLabel}
-                  title={endSessionLabel}>
-                  <IconX />
-                </button>
-              )}
-              <button type="button" className="sidebar-orb sidebar-orb--danger"
-                onClick={handleStop} disabled={stopping}
-                aria-label={stopping ? t("dash.stopping") : t(targets.connected ? "connection.disconnect" : "dash.stop")}
-                title={stopping ? t("dash.stopping") : t(targets.connected ? "connection.disconnect" : "dash.stop")}>
-                <IconPower />
-              </button>
-              <button type="button" className="sidebar-orb"
-                onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
-                aria-label={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
-                title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
-                <IconRefresh />
-              </button>
-            </div>
-          </div>
+          <ProxyControls
+            label={t("dash.actions")}
+            statusLabel={t("dash.online")}
+            stopLabel={t(targets.connected ? "connection.disconnect" : "dash.stop")}
+            stoppingLabel={t("dash.stopping")}
+            restartLabel={t("dash.codexRestart")}
+            restartingLabel={t("dash.codexRestarting")}
+            stopping={stopping}
+            restarting={codexRestarting}
+            onStop={() => { void handleStop(); }}
+            onRestart={() => { void handleCodexRestart(); }}
+            session={(targets.connected || deviceForgetAvailable) && sharedSessionReady ? {
+              label: endSessionLabel,
+              busyLabel: t("connection.sessionLoggingOut"),
+              busy: sessionLoggingOut,
+              onClick: () => { void handleSessionLogout(); },
+            } : undefined}
+          />
           <SidebarGithubRow
             apiBase={sharedBase}
             onOpenUpdate={() => {
@@ -623,6 +631,10 @@ export default function App() {
                     setSharedSessionEpoch(epoch => epoch + 1);
                   }} />
                 )}
+                {page === "home" && <Home apiBase={sharedBase} navigate={navigateToPage}
+                  onReloadCodex={() => { void handleCodexRestart(); }} reloadingCodex={codexRestarting} />}
+                {page === "setup" && <SetupHub apiBase={sharedBase} navigate={navigateToPage} />}
+                {page === "advanced" && <AdvancedHub navigate={navigateToPage} />}
                 {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}

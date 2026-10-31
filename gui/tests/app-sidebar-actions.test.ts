@@ -12,15 +12,17 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 // Comments describe the controls by name; matching prose is not evidence about code.
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+const proxyControls = await Bun.file(new URL("../src/components/ui-v2/proxy-controls.tsx", import.meta.url)).text();
 
 test("the sidebar foot pairs stop with restart-Codex", () => {
-  const row = src.slice(src.indexOf('className="sidebar-action-row"'), src.indexOf("</div>", src.indexOf('className="sidebar-action-orbs"')));
-  expect(row).toContain("handleStop");
-  expect(row).toContain("handleCodexRestart");
-  expect(row).toContain("IconPower");
-  expect(row).toContain("IconRefresh");
-  // The destructive control keeps its danger marking as an orb.
-  expect(row).toContain("sidebar-orb--danger");
+  // Design system v2: the sidebar foot renders one ProxyControls card instead of loose orbs.
+  const card = src.slice(src.indexOf("<ProxyControls"), src.indexOf("/>", src.indexOf("<ProxyControls")));
+  expect(card).toContain("handleStop");
+  expect(card).toContain("handleCodexRestart");
+  expect(proxyControls).toContain("IconPower");
+  expect(proxyControls).toContain("IconRefresh");
+  // The destructive control keeps its danger marking.
+  expect(proxyControls).toContain('variant="danger"');
 });
 
 test("the mobile top bar carries the same pair", () => {
@@ -40,10 +42,13 @@ test("every action orb carries an accessible name", () => {
   // Icon-only buttons have no text content, so aria-label is the only name.
   // Splitting on the tag start is more robust than matching to a closing angle
   // bracket: arrow functions inside JSX attributes contain ">" themselves.
-  const chunks = src.split("<button").slice(1);
-  const orbs = chunks.filter(chunk => chunk.slice(0, 400).includes("sidebar-orb"));
-  expect(orbs.length).toBeGreaterThanOrEqual(4);
+  const orbs = src.split("<button").slice(1).filter(chunk => chunk.slice(0, 400).includes("sidebar-orb"));
+  expect(orbs.length).toBeGreaterThanOrEqual(2);
   for (const orb of orbs) expect(orb.slice(0, 400)).toContain("aria-label");
+  // The sidebar card's icon buttons are v2 <Button>s; each one is named too.
+  const buttons = proxyControls.split("<Button").slice(1);
+  expect(buttons.length).toBeGreaterThanOrEqual(3);
+  for (const button of buttons) expect(button.slice(0, 400)).toContain("aria-label");
 });
 
 test("the restart action comes from the shared hook, not an inline duplicate", () => {

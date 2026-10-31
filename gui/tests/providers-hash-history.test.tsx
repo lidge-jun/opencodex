@@ -80,8 +80,8 @@ describe("route resolution", () => {
     expect(action.replaceTo).toBe("logs/debug");
   });
 
-  test("an unknown page falls back to the dashboard", () => {
-    expect(readPageFromHash("#nonsense")).toBe("dashboard");
+  test("an unknown page falls back to Home", () => {
+    expect(readPageFromHash("#nonsense")).toBe("home");
   });
 });
 

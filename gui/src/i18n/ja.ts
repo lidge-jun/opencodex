@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +122,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saveFailed": "ワークフロー上限を保存できませんでした。",
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
+  ...shellV2Copy("ja"),
   "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
   "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
   "claude.tierDefaults.title": "CLIのティア既定モデル",

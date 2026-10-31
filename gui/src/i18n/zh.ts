@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +122,7 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...shellV2Copy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",
   "claude.tierDefaults.title": "CLI 层级默认模型",

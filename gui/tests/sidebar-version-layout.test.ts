@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 const css = await Bun.file(new URL("../src/styles/sidebar-brand.css", import.meta.url)).text();
-const entry = await Bun.file(new URL("../src/main.tsx", import.meta.url)).text();
+const themeEntry = await Bun.file(new URL("../src/design/theme.css", import.meta.url)).text();
 
 function block(selector: string): string {
   const start = css.indexOf(`${selector} {`);
@@ -13,11 +13,13 @@ function block(selector: string): string {
 // ellipsis lets a long version paint over the drawer close control. The header
 // must wrap the badge, and the badge must also bound unbroken build identifiers.
 test("the sidebar brand rules are loaded after the shared stylesheet", () => {
-  const shared = entry.indexOf('import "./styles.css";');
-  const sidebar = entry.indexOf('import "./styles/sidebar-brand.css";');
+  // Design system v2 loads every v1 stylesheet from design/theme.css, in one `legacy`
+  // layer, so source order inside that file is what decides precedence.
+  const shared = themeEntry.indexOf('@import "../styles.css" layer(legacy);');
+  const sidebar = themeEntry.indexOf('@import "../styles/sidebar-brand.css" layer(legacy);');
   expect(shared).toBeGreaterThan(-1);
   expect(sidebar).toBeGreaterThan(shared);
-  expect(entry.match(/import "\.\/styles\/sidebar-brand\.css";/g)).toHaveLength(1);
+  expect(themeEntry.match(/@import "\.\.\/styles\/sidebar-brand\.css"/g)).toHaveLength(1);
 });
 
 test("the sidebar header wraps versions rather than squeezing the badge", () => {

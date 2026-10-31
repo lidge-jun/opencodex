@@ -49,14 +49,14 @@ test("registering Dashboard tabs does not disturb the Logs or Providers contract
   expect(hashBelongsToPage("logs/debug", "dashboard")).toBe(false);
 });
 
-test("Connect sits directly after Dashboard, then Codex", async () => {
+test("Home leads the sidebar and the old dashboard lives under Advanced", async () => {
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
-  const { NAV_GROUPS } = await import("../src/nav-groups");
+  const { NAV_GROUPS, groupForPage } = await import("../src/nav-groups");
   const order = NAV_GROUPS.map((group) => group.id);
-  expect(order[0]).toBe("dashboard");
-  expect(order[1]).toBe("connect");
-  expect(order[2]).toBe("codex-set");
-  // Order only — no divider markup was introduced (Q3).
+  expect(order[0]).toBe("home");
+  // The dashboard's sidecar, memory and compaction controls are fine-tuning in v2.
+  expect(groupForPage("dashboard")?.id).toBe("advanced");
+  // Tiers are headings, not divider rules.
   expect(app).not.toContain("nav-divider");
 });
 

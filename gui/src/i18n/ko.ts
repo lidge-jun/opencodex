@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { shellV2Copy } from "./shell-v2-copy";
 import type { TKey } from "./en";
 
 /**
@@ -121,6 +122,7 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saveFailed": "워크플로 한도를 저장하지 못했습니다.",
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
+  ...shellV2Copy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",
   "claude.tierDefaults.title": "CLI 티어 기본 모델",

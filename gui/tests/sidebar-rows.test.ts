@@ -18,44 +18,45 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
  */
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-test("the sidebar is eight group rows, in order, owning every sidebar page once", async () => {
-  const { NAV_GROUPS, groupForPage } = await import("../src/nav-groups");
+test("the sidebar is six group rows in three tiers, owning every sidebar page once", async () => {
+  const { NAV_GROUPS, NAV_TIERS, groupForPage } = await import("../src/nav-groups");
   const { VALID_PAGES } = await import("../src/app-routing");
 
-  // The exact rows, in order. A count alone would pass if a row were swapped for
-  // another, and Routing folding into Models is precisely that kind of change.
-  expect(NAV_GROUPS.map(group => group.id)).toEqual([
-    "dashboard", "connect", "codex-set", "providers", "models", "subagents", "usage-logs", "remote",
+  // Design system v2 sorts rows by how often people touch them. The tiers print in this
+  // order, and every row belongs to exactly one of them.
+  expect(NAV_TIERS.map(entry => entry.tier)).toEqual(["daily", "setup", "advanced"]);
+  // The exact rows, in order. A count alone would pass if a row were swapped for another.
+  expect(NAV_GROUPS.map(group => [group.id, group.tier])).toEqual([
+    ["home", "daily"], ["models", "daily"], ["accounts", "daily"], ["usage-logs", "daily"],
+    ["setup", "setup"], ["advanced", "advanced"],
   ]);
   expect(Object.fromEntries(NAV_GROUPS.map(group => [group.id, [...group.pages]]))).toEqual({
-    dashboard: ["dashboard"],
-    // Claude is a tab inside the Connect page, owned through `embedded`.
-    connect: ["integrations"],
-    "codex-set": ["codex-set"],
-    providers: ["providers"],
+    home: ["home"],
     models: ["models"],
-    // Advisor is a switcher member beside Subagents, not a row of its own.
-    subagents: ["subagents", "advisor"],
+    // Codex's account pool and every provider's quota answer the same daily question.
+    accounts: ["codex-set", "providers"],
     // Usage leads, so the row opens Usage first.
     "usage-logs": ["usage", "logs", "storage"],
-    // Last row, by request.
-    remote: ["remote", "remote-workspace"],
+    // Everything done once; Claude is a tab inside the Connect page, owned through `embedded`.
+    setup: ["setup", "integrations", "startup", "remote", "remote-workspace"],
+    // The Advanced hub leads; the old dashboard and the helper-agent pages are members.
+    advanced: ["advanced", "dashboard", "subagents", "advisor"],
   });
-  expect(NAV_GROUPS.find(group => group.id === "connect")?.embedded).toEqual(["claude"]);
+  expect(NAV_GROUPS.find(group => group.id === "setup")?.embedded).toEqual(["claude"]);
 
-  // Every routable page except Startup belongs to exactly one row; a page in two rows
-  // would light both up.
+  // Every routable page belongs to exactly one row; a page in two rows would light both up.
   const owned = NAV_GROUPS.flatMap(group => [...group.pages, ...(group.embedded ?? [])]);
   expect(new Set(owned).size).toBe(owned.length);
-  expect(new Set(owned)).toEqual(new Set([...VALID_PAGES].filter(page => page !== "startup")));
-  expect(groupForPage("startup")).toBeNull();
+  expect(new Set(owned)).toEqual(new Set(VALID_PAGES));
+  expect(groupForPage("startup")?.id).toBe("setup");
   expect(groupForPage("storage")?.id).toBe("usage-logs");
-  expect(groupForPage("advisor")?.id).toBe("subagents");
-  expect(groupForPage("claude")?.id).toBe("connect");
-  expect(groupForPage("remote-workspace")?.id).toBe("remote");
+  expect(groupForPage("advisor")?.id).toBe("advanced");
+  expect(groupForPage("claude")?.id).toBe("setup");
+  expect(groupForPage("remote-workspace")?.id).toBe("setup");
 
-  // App renders the table rather than a copy of it.
-  expect(src).toContain("NAV_GROUPS.map(");
+  // App renders the table, one tier at a time, rather than a copy of it.
+  expect(src).toContain("NAV_TIERS.map(");
+  expect(src).toContain("NAV_GROUPS.filter(group => group.tier === tier)");
   expect(src).not.toContain("const NAV: NavEntry[]");
 });
 
