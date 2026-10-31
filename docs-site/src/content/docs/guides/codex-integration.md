@@ -750,6 +750,11 @@ Codex. Native custom calls and converted function calls use the same completion 
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
 
+When a routed model double-wraps an executable freeform body, opencodex removes one extra
+JSON object containing only an input string. This repair applies to local exec and apply_patch
+bodies, leaves other tool grammars and ambiguous objects unchanged, and does not decode recursively.
+Possible nested wrappers hold their streamed preview until the completed input is available.
+
 A routed model can also mistakenly send a shell-argument object such as
 `{"cmd":"git status --short"}` to code-mode `exec`. For a verified code-mode catalog,
 opencodex converts an unambiguous shell object into `tools.exec_command(...)` JavaScript

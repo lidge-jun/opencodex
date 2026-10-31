@@ -77,7 +77,8 @@ function decodeJsonStringPrefix(body: string): string | null {
  *
  * `input` is decidable from its prefix: `unwrapFreeformToolInput` returns it whenever the
  * key is present, whatever else the object carries, so its value can be unescaped
- * progressively and never retracted.
+ * progressively and never retracted, except for executable bodies that may contain one
+ * extra canonical wrapper. Those object-leading bodies hold until authoritative completion.
  *
  * One case escapes that claim and is accepted rather than fixed: a duplicate `input` key.
  * `JSON.parse` keeps the last one, so `{"input":"a","input":"b"}` streams a and completes with
@@ -111,6 +112,9 @@ export function progressiveFreeformInput(args: string, toolName: string): string
   if (scan.kind === "input") {
     const decoded = decodeJsonStringPrefix(args.slice(scan.valueStart));
     if (decoded === null) return null;
+    // Completion may remove one extra {input:string} body wrapper. A later member can still
+    // disqualify it, so hold the whole object-shaped preview rather than decode recursively.
+    if ((toolName === "exec" || toolName === "apply_patch") && decoded.trimStart().startsWith("{")) return null;
     return mayBecomeFencedBody(decoded, toolName) ? null : decoded;
   }
   if (scan.kind === "raw") return mayBecomeFencedBody(args, toolName) ? null : args;

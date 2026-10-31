@@ -47,6 +47,28 @@ const emissions = (body: string, toolName: string) => stream(body, toolName).del
 const published = (body: string, toolName: string) => emissions(body, toolName).join("");
 
 describe("freeform wrapper keys the literal matcher could not see", () => {
+  test.each(["exec", "apply_patch"])("holds a possible extra %s wrapper at every prefix", tool => {
+    const source = tool === "exec" ? 'text("nested");' : "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch";
+    for (const body of [
+      JSON.stringify({ input: JSON.stringify({ input: source }) }),
+      JSON.stringify({ code: JSON.stringify({ input: source }) }),
+      JSON.stringify({ input: ' \n { "\\u0069nput": ' + JSON.stringify(source) + " }" }),
+    ]) {
+      // The alternate field is recognized only by exec; apply_patch uses patch.
+      const args = tool === "apply_patch" ? body.replace('{"code":', '{"patch":') : body;
+      expect(unwrapFreeformToolInput(args, tool)).toBe(source);
+      expect(stream(args, tool)).toEqual({ deltas: [], retractions: [] });
+      expect(progressiveFreeformInput(args, tool)).toBeNull();
+    }
+    const foreign = JSON.stringify({ input: JSON.stringify({ input: source }) });
+    expect(published(foreign, "")).toBe(JSON.stringify({ input: source }));
+    // A valid JS block can begin like an object too: only its preview is sacrificed.
+    const block = "{ let x = 1; return x; }";
+    const wrappedBlock = JSON.stringify({ input: block });
+    expect(unwrapFreeformToolInput(wrappedBlock, tool)).toBe(block);
+    expect(published(wrappedBlock, tool)).toBe("");
+  });
+
   // `progressive` records whether the value can be previewed before the object closes. It is
   // the liveness half of the contract and it is asserted, because holding everything until
   // completion would satisfy the agreement half on its own while quietly ending progressive
