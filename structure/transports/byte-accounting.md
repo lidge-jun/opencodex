@@ -140,6 +140,13 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
+and truncates the queue, or clears it when no bytes remain. No deleted-chunk
+result array is allocated. Partial head slices and later
+frames retain their order without one `shift()` per chunk. `tests/providers/devin-stream-queue.test.ts`
+bounds prefix-removal calls and discarded-array slots on fragmented frames and covers split/coalesced headers and payloads,
+Unicode, empty frames and gzip. Existing frame/inflation caps, EOS handling and teardown remain in force.
+
 `src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
 and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
 gates subsequent socket input even when the decoder would accept more coded bytes.
