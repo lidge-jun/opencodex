@@ -526,3 +526,24 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
 .remote-link-switch { display: inline-flex; align-items: center; padding: 2px; }
 .remote-link-switch::after { width: 14px; height: 14px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
 .remote-link-switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--toggle-dot-color); }
+
+/* ---- control sizes: two heights, and neighbours match ------------------------
+   Every button, field, select and segmented track is 34px (md) or 28px (sm);
+   see foundations.md "Control sizes". v1 padded its controls to whatever their
+   text produced (31.5px selects, 26px small buttons, 35.5px buttons), so a select
+   and the button beside it never lined up. Heights are now set, padding-block is
+   zero and content centres. Pairing rule: a small button that shares a row with a
+   field or a select grows to md, because the row reads as one control. */
+:root { --control-md: var(--ocx-control-h); --control-sm: var(--ocx-control-h-sm); }
+.btn { min-height: var(--ocx-control-h); padding-block: 0; }
+.btn.btn-sm { min-height: var(--ocx-control-h-sm); }
+:is(.select-trigger, .input:not(textarea)):not(.lang-toggle *) { min-height: var(--ocx-control-h); padding-block: 0; }
+.select-sm { min-height: var(--ocx-control-h-sm); padding-block: 0; }
+:has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > .btn.btn-sm {
+  min-height: var(--ocx-control-h);
+}
+/* segmented tracks: 2px padding + (control - 4px) children = one control height */
+:is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher) > :is(button, .btn, .section-switcher-btn) {
+  min-height: calc(var(--ocx-control-h) - 4px);
+  padding-block: 0;
+}

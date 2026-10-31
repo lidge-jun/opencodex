@@ -96,6 +96,11 @@
   --rb-accent-fg: var(--ocx-bg);
   --rb-radius: 10px;
 
+  /* control heights: every button, field, select and segmented track is one of these two,
+     so controls that sit side by side line up (foundations.md, "Control sizes") */
+  --ocx-control-h: 34px;
+  --ocx-control-h-sm: 28px;
+
   --ocx-shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
   --ocx-shadow-md: 0 1px 2px rgb(16 24 40 / 0.05), 0 12px 32px -16px rgb(16 42 67 / 0.25);
   --ocx-shadow-lg: 0 24px 48px -24px rgb(16 42 67 / 0.35);

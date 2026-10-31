@@ -18,9 +18,10 @@ const VARIANTS = {
 } as const;
 
 const SIZES = {
-  sm: "h-8 gap-1.5 px-3 text-[13px]",
-  md: "h-9 gap-2 px-4 text-sm",
-  icon: "size-8 p-0",
+  // Heights are the two control tokens (theme.css), shared with every v1 field and button.
+  sm: "h-[var(--ocx-control-h-sm)] gap-1.5 px-3 text-[13px]",
+  md: "h-[var(--ocx-control-h)] gap-2 px-4 text-[13px]",
+  icon: "size-[var(--ocx-control-h)] p-0",
 } as const;
 
 export type ButtonVariant = keyof typeof VARIANTS;
