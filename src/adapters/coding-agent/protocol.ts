@@ -724,7 +724,7 @@ function textPart(text: string): WireContentPart {
 }
 
 /** Encode an OpenCodex image content part as an Anthropic base64/url image block; never drop it. */
-function imagePart(imageUrl: string): WireContentPart | undefined {
+export function imagePart(imageUrl: string): WireContentPart | undefined {
   const match = /^data:([^;]+);base64,(.+)$/s.exec(imageUrl);
   if (match) return { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } };
   if (/^https?:\/\//i.test(imageUrl)) return { type: "image", source: { type: "url", url: imageUrl } };

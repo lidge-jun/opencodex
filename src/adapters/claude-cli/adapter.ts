@@ -149,22 +149,6 @@ export function buildArgs(
 }
 
 /**
- * Refuse image input the way the Qoder presets do.
- *
- * The CLI parses an image frame in its stream-json input without complaint (verified against
- * 2.1.270), but nothing verifies that a headless turn hands those bytes to the model, and an image
- * the harness drops produces a confident answer to the wrong question. v1 therefore publishes
- * text-only models — `noVisionModels` on the registry row — and refuses a direct image here; an
- * operator with the vision sidecar on the request path still gets images captioned into text before
- * they reach this adapter.
- */
-function hasImageInput(parsed: OcxParsedRequest): boolean {
-  return parsed.context.messages.some(message =>
-    Array.isArray(message.content) && message.content.some(part => part.type === "image"),
-  );
-}
-
-/**
  * Turn the CLI's unauthenticated turn into the one action a subscription user can take.
  *
  * An unauthenticated `claude` does not fail the process: it emits an ordinary terminal `result`
@@ -213,15 +197,11 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
         emit({ type: "error", message: admission.message ?? "Claude subscription usage is exhausted; launches are paused until the reset.", status: 429, errorType: "rate_limit_error", code: "claude_subscription_cooldown", retryable: false });
         return;
       }
-      if (hasImageInput(parsed)) {
-        emit({
-          type: "error",
-          message: "Claude Code CLI image input is not enabled because the CLI provider route has no verified multimodal contract.",
-          status: 400,
-          errorType: "invalid_request_error",
-          code: "unsupported_input_modality",
-          retryable: false,
-        });
+      // Developer instructions are folded into a text-only system prompt, not replayed as user data.
+      if (parsed.context.messages.some(message => message.role === "developer"
+        && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
+        emit({ type: "error", message: "Claude Code CLI does not support images in developer instructions.",
+          status: 400, errorType: "invalid_request_error", code: "unsupported_input_modality", retryable: false });
         return;
       }
       let bridge;

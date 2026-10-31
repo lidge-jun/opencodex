@@ -160,6 +160,31 @@ describe("stale vision classification migration", () => {
 });
 
 describe("stale whole-list noVisionModels seed (#6906)", () => {
+  test("repairs Claude's released seed while preserving edited lists and per-model choices", () => {
+    // Independent released v2.94.0 fixture: a typo in the migration must not repair its own test data.
+    const seed = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
+    const ordinary = { adapter: "claude-cli", baseUrl: "https://api.anthropic.com", noVisionModels: [...seed] };
+    const initial = { providers: { "claude-cli": ordinary } } as unknown as OcxConfig;
+    expect(requiresVisionPreprocessing(initial, ordinary, "claude-fable-5-1", "claude-cli")).toBe(true);
+    const upgraded = projectStartupConfigRepairs(initial);
+    const upgradedRow = upgraded.config.providers!["claude-cli"]!;
+    expect(upgraded.changed).toBe(true);
+    expect(upgradedRow.noVisionModels).toBeUndefined();
+    expect(requiresVisionPreprocessing(upgraded.config, upgradedRow, "claude-fable-5-1", "claude-cli")).toBe(false);
+    const row = (list: readonly string[]) => ({ adapter: "claude-cli", baseUrl: "https://api.anthropic.com", noVisionModels: [...list],
+      modelCapabilities: { "claude-fable-5-1": { inputModalities: ["text" as const] } } });
+    const saved = row(seed);
+    const config = { providers: { "claude-cli": saved } } as unknown as OcxConfig;
+    expect(projectStaleNoVisionSeeds(config).changed).toBe(true);
+    expect(saved.noVisionModels).toBeUndefined();
+    expect(requiresVisionPreprocessing(config, saved, "claude-fable-5-1", "claude-cli")).toBe(true);
+    for (const list of [seed.slice(1), [...seed].reverse(), []]) {
+      const edited = row(list);
+      expect(projectStaleNoVisionSeeds({ providers: { "claude-cli": edited } } as unknown as OcxConfig).changed).toBe(false);
+      expect(edited.noVisionModels).toEqual(list);
+    }
+  });
+
   const QODER_SEED = ["Qwen3.8-Max", "Qwen3.7-Max", "Qwen3.7-Plus", "Kimi-K3", "Kimi-K2.7-Code", "GLM-5.3", "GLM-5.2"];
   const qoderRow = (noVisionModels: string[] | undefined, overrides: Record<string, unknown> = {}) => ({
     adapter: "qoder",
