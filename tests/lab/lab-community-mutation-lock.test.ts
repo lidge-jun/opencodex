@@ -198,6 +198,46 @@ describe("community mutation lock", () => {
     expect(publicEvidenceLegacyMutationLockBlocksForTests(config)).toBe(true);
   });
 
+  test("a lock file replaced between inspection and locking is refused before protected work", () => {
+    const config = configDir();
+    const lockDb = join(labRoot(config), "public-evidence-mutation.sqlite");
+    const original = fs.lstatSync;
+    let observations = 0;
+    const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
+      if (String(path) !== lockDb) return stats;
+      // Adjacent NTFS-sized identities: equal as numbers, distinct as bigints.
+      const ino = 9_007_199_254_740_992n + BigInt(Math.min(observations++, 1));
+      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { ino: options?.bigint ? ino : Number(ino) });
+    }) as typeof fs.lstatSync);
+    let ran = false;
+    try {
+      expect(() => withPublicEvidenceMutationLock(config, () => { ran = true; })).toThrow(/changed while opening/);
+    } finally { spy.mockRestore(); }
+    expect(observations).toBe(2);
+    expect(ran).toBe(false);
+    let after = false;
+    withPublicEvidenceMutationLock(config, () => { after = true; });
+    expect(after).toBe(true);
+  });
+
+  test.skipIf(process.platform === "win32")("the lock file is created private to the user", () => {
+    const config = configDir();
+    withPublicEvidenceMutationLock(config, () => {});
+    expect(lstatSync(join(labRoot(config), "public-evidence-mutation.sqlite")).mode & 0o777).toBe(0o600);
+  });
+
+  test("detached cleanup keeps an older build's moved lock whose owner is alive", () => {
+    const config = configDir();
+    const live = join(labCommunityDir(config), ".mutation-lock-release-123-11111111-1111-4111-8111-111111111111");
+    mkdirSync(live, { mode: 0o700 });
+    writeFileSync(join(live, "owner.json"),
+      JSON.stringify({ pid: process.pid, token: "11111111-1111-4111-8111-111111111111", createdAt: Date.now() }),
+      { encoding: "utf8", mode: 0o600 });
+    withPublicEvidenceMutationLock(config, () => {});
+    expect(existsSync(join(live, "owner.json"))).toBe(true);
+  });
+
   test("cleans an older build's detached lock quarantine before scanning community quota state", () => {
     const config = configDir();
     const quarantinePath = join(

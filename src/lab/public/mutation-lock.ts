@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { statTimeMs } from "../../lib/file-identity";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../../lib/file-identity";
 import { ensureLabDirs, labCommunityDir, labRoot } from "../paths";
 import { readPrivateRegularFile } from "./file-safety";
 import { PublicEvidenceValidationError } from "./validate";
@@ -91,31 +91,47 @@ function legacyMutationLockBlocks(lockPath: string, nowMs: number): boolean {
   return nowMs - statTimeMs(stat.mtimeNs) <= LEGACY_MUTATION_LOCK_INCOMPLETE_STALE_MS;
 }
 
-function cleanupDetachedMutationLocks(configDir?: string): void {
+function cleanupDetachedMutationLocks(configDir: string | undefined, nowMs: number): void {
   const dir = labCommunityDir(configDir);
   for (const name of readdirSync(dir)) {
     if (!DETACHED_MUTATION_LOCK_RE.test(name)) continue;
+    const detachedPath = join(dir, name);
     // Older builds moved a released or reclaimed lock directory to one of these UUID-scoped
-    // names before deleting it. Removing leftovers keeps them from leaking storage or being
-    // mistaken for community cache objects.
-    rmSync(join(dir, name), { recursive: true, force: true });
+    // names before deleting it. One that still records a live owner may belong to a running
+    // older-build holder, so it is left alone. Removing the rest keeps them from leaking
+    // storage or being mistaken for community cache objects.
+    const owner = readLegacyMutationLockOwner(detachedPath);
+    if (owner && !pidDefinitelyDead(owner.pid) && nowMs - owner.createdAt <= LEGACY_MUTATION_LOCK_ABSOLUTE_STALE_MS) continue;
+    rmSync(detachedPath, { recursive: true, force: true });
   }
 }
 
-function openMutationLockDatabase(configDir?: string): Database {
-  const path = mutationLockDatabasePath(configDir);
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-      throw new PublicEvidenceValidationError("community_cache_lock", "community cache mutation lock is unsafe");
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+/** The lock file's identity, after proving it is a single-link regular file. */
+function mutationLockFileIdentity(path: string): FileIdentity {
+  const stat = lstatSync(path, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) {
+    throw new PublicEvidenceValidationError("community_cache_lock", "community cache mutation lock is unsafe");
   }
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+/**
+ * Open the lock database on a file this module created as a private regular file.
+ *
+ * The Lab root is owner-only, so the processes that can replace this pathname are the user's own,
+ * the same trust boundary as the config mutation lock. Within it, the file is created exclusively
+ * with mode 0600 (never chmod-ed through the pathname), and the caller re-proves after locking
+ * that the pathname still names the file inspected before the open.
+ */
+function openMutationLockDatabase(path: string): { database: Database; identity: FileIdentity } {
   try {
-    const database = new Database(path, { create: true });
-    try { chmodSync(path, 0o600); } catch { /* the platform may ignore chmod */ }
-    return database;
+    writeFileSync(path, "", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const identity = mutationLockFileIdentity(path);
+  try {
+    return { database: new Database(path, { create: false, readwrite: true }), identity };
   } catch {
     // The SQLite error text can name local paths; the stable code is what callers act on.
     throw new PublicEvidenceValidationError("community_cache_lock", "community cache mutation lock is unavailable");
@@ -135,7 +151,8 @@ export function withPublicEvidenceMutationLock<T>(
   run: () => T,
 ): T {
   ensureLabDirs(configDir);
-  const database = openMutationLockDatabase(configDir);
+  const path = mutationLockDatabasePath(configDir);
+  const { database, identity } = openMutationLockDatabase(path);
   let transactionOpen = false;
   try {
     try {
@@ -148,10 +165,14 @@ export function withPublicEvidenceMutationLock<T>(
       }
       throw new PublicEvidenceValidationError("community_cache_lock", "community cache mutation lock is unavailable");
     }
-    if (legacyMutationLockBlocks(legacyMutationLockPath(configDir), Date.now())) {
+    if (!sameFileIdentity(mutationLockFileIdentity(path), identity)) {
+      throw new PublicEvidenceValidationError("community_cache_lock", "community cache mutation lock changed while opening");
+    }
+    const nowMs = Date.now();
+    if (legacyMutationLockBlocks(legacyMutationLockPath(configDir), nowMs)) {
       throw new PublicEvidenceValidationError("community_cache_busy", "community cache is busy");
     }
-    cleanupDetachedMutationLocks(configDir);
+    cleanupDetachedMutationLocks(configDir, nowMs);
     return run();
   } finally {
     if (transactionOpen) {
