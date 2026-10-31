@@ -163,7 +163,7 @@ function expectTableLoaded(container: HTMLElement, model: string): void {
   expect(container.textContent).toContain(model);
 }
 
-test("Logs: renders the ordered ten-column layout schema", async () => {
+test("Logs: renders the ordered column layout schema (time, status, provider · model, metrics, details)", async () => {
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     return jsonResponse([sampleLog]);
@@ -174,18 +174,22 @@ test("Logs: renders the ordered ten-column layout schema", async () => {
 
   const colgroup = container.querySelector(".logs-table > colgroup");
   expect(colgroup).not.toBeNull();
-  expect([...colgroup!.children].map(column => column.className)).toEqual([
+  // Provider and request id now live in the provider · model cell; every column stays visible by default.
+  expect([...colgroup!.children].map(column => column.className.split(" ")[0])).toEqual([
     "logs-col-time",
+    "logs-col-status",
+    "logs-col-model",
+    "logs-col-effort",
     "logs-col-tokens",
     "logs-col-rate",
     "logs-col-cost",
-    "logs-col-model",
-    "logs-col-effort",
-    "logs-col-provider",
-    "logs-col-status",
-    "logs-col-request",
     "logs-col-duration",
+    "logs-col-actions",
   ]);
+  const headers = [...container.querySelectorAll(".logs-table thead th")];
+  expect(headers).toHaveLength(9);
+  const firstRow = container.querySelector<HTMLTableRowElement>(".logs-table tbody tr[data-index]");
+  expect(firstRow?.children).toHaveLength(9);
 
   await act(async () => { root.unmount(); });
 });

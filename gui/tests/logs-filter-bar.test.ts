@@ -183,3 +183,35 @@ test("LogsFilterBar rendered radios move selection, focus and the single tab sto
     expect(document.activeElement).toBe(radio("all"));
   });
 });
+
+test("LogsFilterBar folds the secondary filters behind a Filters disclosure that keeps them mounted", async () => {
+  await withFilterBar({ ...DEFAULT_LOG_FILTER_STATE }, async ui => {
+    const toggle = [...ui.container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")]
+      .find(button => button.textContent?.includes("logsV2.filters"))!;
+    expect(toggle).toBeDefined();
+    const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(panel.hidden).toBe(true);
+    // Folded fields stay reachable by label so their state survives the fold.
+    expect(panel.querySelector('select[aria-label="logs.filter.provider.label"]')).not.toBeNull();
+    await act(async () => { toggle.click(); });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.hidden).toBe(false);
+  });
+});
+
+test("LogsFilterBar shows each folded filter as a chip that clears only itself", async () => {
+  await withFilterBar({
+    ...DEFAULT_LOG_FILTER_STATE, provider: "xai", status: "errors", minTokPerSec: 50, conversationId: "conversation-a",
+  }, async ui => {
+    const chips = () => [...ui.container.querySelectorAll<HTMLButtonElement>('button[aria-label^="logsV2.removeFilter"]')];
+    expect(chips()).toHaveLength(3);
+    const toggle = [...ui.container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")]
+      .find(button => button.textContent?.includes("logsV2.filters"))!;
+    expect(toggle.textContent).toContain("3");
+    const statusChip = chips().find(chip => chip.textContent?.includes("logs.filter.status.label"))!;
+    await act(async () => { statusChip.click(); });
+    expect(ui.filters()).toMatchObject({ status: "all", provider: "xai", minTokPerSec: 50, conversationId: "conversation-a" });
+    expect(chips()).toHaveLength(2);
+  });
+});

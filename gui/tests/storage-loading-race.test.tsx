@@ -133,7 +133,8 @@ test("an aborted Storage fetch must not clear loading while its replacement is i
     await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
   });
 
-  const refresh = container.querySelector<HTMLButtonElement>("button.btn");
+  // The rescan action in the page head (a quiet v2 button, not a v1 `.btn`).
+  const refresh = container.querySelector<HTMLButtonElement>(".storage-page-head-actions button");
   expect(container.textContent).toContain("Scanning storage");
   expect(refresh?.disabled).toBe(true);
   expect(container.textContent).not.toContain("/tmp/a");
