@@ -21,7 +21,9 @@ function maxValue(timeline: UsageTimeline, chartStyle: "line" | "stackedBar"): n
 }
 
 function dateLabels(timeline: UsageTimeline, locale: Locale): string[] {
-  const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+  // A window of three days or less reads by the hour; a week reads by the day.
+  const shortWindow = timeline.buckets * timeline.bucketSeconds <= 72 * 3600;
+  const formatter = new Intl.DateTimeFormat(locale, shortWindow ? { hour: "2-digit", minute: "2-digit" } : { month: "short", day: "numeric" });
   const interval = Math.max(1, Math.floor((timeline.buckets - 1) / 3));
   return [0, 1, 2, 3].map(index => {
     const bucket = Math.min(timeline.buckets - 1, index * interval);

@@ -8,7 +8,7 @@ async function read(path: string): Promise<string> {
 
 // D3: the usage page exposes the grok surface next to all/codex/claude, with its icon.
 test("the Usage filter includes grok with its icon", async () => {
-  const page = await read("../src/pages/Usage.tsx");
+  const page = await read("../src/components/v2-usage/usage-toolbar.tsx");
   expect(page).toContain('"grok"');
   expect(page).toContain('(["all", "codex", "claude", "grok"]');
   expect(page).toContain("/provider-icons/grok.svg");

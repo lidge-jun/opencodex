@@ -9,7 +9,7 @@ import { interpolate } from "../src/i18n/shared";
 import { ru } from "../src/i18n/ru";
 import Usage from "../src/pages/Usage";
 
-test("Usage renders every section in one scrollable column with a sticky strip", async () => {
+test("Usage reads top to bottom: headline figures, the daily chart, then the breakdowns", async () => {
   const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
@@ -18,20 +18,18 @@ test("Usage renders every section in one scrollable column with a sticky strip",
   expect(page).not.toContain("readViewMode");
   expect(page).not.toContain("ocx-usage-view");
   expect(page).toContain("UsageWorkspaceBody");
-  expect(page).toContain("UsageWorkspaceSection");
   expect(page).toContain("usage-workspace-");
   expect(page).toContain("usw-");
   // Sections are anchors in one document, not a swapped panel: the old `selectedSection`
   // state rendered exactly one section, which is why the page could not be read by scrolling.
   expect(page).not.toContain("selectedSection");
-  expect(page).toContain("<SectionTabs");
+  // The jump strip is gone: the report leads with its figures instead of a second tab row,
+  // and every section keeps its `#usage-section-<id>` anchor so links still land.
+  expect(page).not.toContain("<SectionTabs");
   expect(page).toContain("sectionAnchorId");
 
   expect(app).toContain('<Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />');
   expect(css).toContain("styles-usage-workspace.css");
-  // The strip has to stay reachable while reading down the page.
-  expect(css).toContain(".section-tabs");
-  expect(css).toContain("position: sticky");
 });
 
 test("Usage report section strip excludes companion settings", async () => {
@@ -43,7 +41,7 @@ test("Usage report section strip excludes companion settings", async () => {
 });
 
 test("the usage models table scrolls sideways with model and provider pinned", async () => {
-  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const page = await Bun.file(new URL("../src/components/v2-usage/usage-breakdown.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles-usage-workspace.css", import.meta.url)).text();
 
   // The table opts into the rules below by class. Without it `.tbl`'s `width: 100%` divides the
@@ -68,9 +66,12 @@ test("the usage models table scrolls sideways with model and provider pinned", a
 
 test("connected Usage defaults to the exact machine key and can toggle hub-wide without local fallback", async () => {
   const src = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const toolbar = await Bun.file(new URL("../src/components/v2-usage/usage-toolbar.tsx", import.meta.url)).text();
   expect(src).toContain('useState<UsageScope>("machine")');
   expect(src).toContain('query.set("apiKeyId", apiKeyId)');
-  expect(src).toContain('setScope("hub")');
+  // The scope switch lives in the toolbar and only renders when connected.
+  expect(src).toContain("{connected && <div className=\"ml-auto\"><UsageScopeControl scope={scope} onScope={setScope}");
+  expect(toolbar).toContain('(["machine", "hub"] as const)');
   expect(src).toContain('connected ? "connected" : "standalone"');
   expect(src).toContain('t("usage.hubOffline")');
   expect(src).not.toContain("/api/machine/usage");
@@ -406,7 +407,7 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
 });
 
 test("Usage source marks keep brand colors and invert only the monochrome Grok mark", async () => {
-  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const page = await Bun.file(new URL("../src/components/v2-usage/usage-toolbar.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
 
   // Claude and Codex ship brand-colored SVGs and must not carry the mono modifier.

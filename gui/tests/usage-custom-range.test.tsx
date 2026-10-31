@@ -562,7 +562,7 @@ test("throughput renders in summary, Models and Providers with honest missing-sa
   };
   await act(async () => { requests[0].resolve(Response.json(data)); });
   const note = en["usage.throughput.title"].replace("{samples}", "2");
-  expect(container.querySelector(`.usage-cost-row[title]`)?.textContent).toContain("20.0");
+  expect(container.querySelector(`.usage-fact[title="${note}"] .usage-fact-value`)?.textContent).toBe("20.0");
   for (const section of ["models", "providers"]) {
     const rows = container.querySelectorAll(`#usage-section-${section} tbody tr`);
     expect(rows[0]?.textContent).toContain("20.0 tok/s");
@@ -584,7 +584,7 @@ for (const invalid of [null, "20", "Infinity", NaN, Infinity, -Infinity, 0, -5])
     response.json = async () => data;
     await act(async () => { requests[0].resolve(response); });
     const title = en["usage.throughput.unmeasured"];
-    expect(container.querySelector(`.usage-cost-row[title="${title}"] .stat-value`)?.textContent).toBe("—");
+    expect(container.querySelector(`.usage-fact[title="${title}"] .usage-fact-value`)?.textContent).toBe("—");
     for (const section of ["models", "providers"]) {
       const cell = container.querySelector(`#usage-section-${section} tbody td[title="${title}"]`);
       expect(cell?.textContent).toBe("—");
