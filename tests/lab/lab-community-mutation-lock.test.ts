@@ -42,7 +42,124 @@ function createLiveOwnerLock(config: string): string {
   return lockPath;
 }
 
+const SUCCESSOR_TOKEN = "11111111-1111-4111-8111-111111111111";
+
+/** Put a different live owner's lock directory at the canonical path and return its identity. */
+function installSuccessorLock(lockPath: string): { dev: bigint; ino: bigint } {
+  fs.rmSync(lockPath, { recursive: true, force: true });
+  mkdirSync(lockPath, { mode: 0o700 });
+  writeFileSync(join(lockPath, "owner.json"),
+    JSON.stringify({ pid: process.pid, token: SUCCESSOR_TOKEN, createdAt: Date.now() }),
+    { encoding: "utf8", mode: 0o600 });
+  const stat = lstatSync(lockPath, { bigint: true });
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function expectSuccessorIntact(lockPath: string, identity: { dev: bigint; ino: bigint }): void {
+  const stat = lstatSync(lockPath, { bigint: true });
+  expect([stat.dev, stat.ino]).toEqual([identity.dev, identity.ino]);
+  expect(JSON.parse(readFileSync(join(lockPath, "owner.json"), "utf8")).token).toBe(SUCCESSOR_TOKEN);
+}
+
+/**
+ * Replace the canonical lock with a successor's directory immediately before the first rename
+ * that moves the canonical lock to a detached name matching `detached`: the state a paused
+ * process finds after its checks when another process replaced the lock in between.
+ */
+function replaceLockBeforeDetach(lockPath: string, detached: RegExp, afterMove?: () => void) {
+  const realRename = fs.renameSync;
+  const state: { successor: { dev: bigint; ino: bigint } | null } = { successor: null };
+  const spy = spyOn(fs, "renameSync").mockImplementation(((from, to) => {
+    if (!state.successor && samePath(from, lockPath) && detached.test(String(to))) {
+      state.successor = installSuccessorLock(lockPath);
+      realRename(from, to);
+      afterMove?.();
+      return;
+    }
+    return realRename(from, to);
+  }) as typeof fs.renameSync);
+  return { spy, state };
+}
+
+function detachedLockNames(config: string): string[] {
+  return fs.readdirSync(labCommunityDir(config)).filter(name => name.startsWith(".mutation-lock-"));
+}
+
 describe("community mutation lock", () => {
+  test("release leaves a successor lock that replaced the checked directory in place", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/);
+    try {
+      withPublicEvidenceMutationLock(config, () => {});
+    } finally { spy.mockRestore(); }
+    expect(state.successor).not.toBeNull();
+    expectSuccessorIntact(lockPath, state.successor!);
+    expect(detachedLockNames(config)).toEqual([]);
+  });
+
+  test("stale reclaim leaves a successor lock that replaced the claimed directory in place", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    mkdirSync(lockPath, { mode: 0o700 });
+    const stale = new Date(Date.now() - (25 * 60 * 60 * 1000));
+    utimesSync(lockPath, stale, stale);
+    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-stale-/);
+    let reclaimed: boolean;
+    try {
+      reclaimed = publicEvidenceTryReclaimMutationLockForTests(config);
+    } finally { spy.mockRestore(); }
+    expect(reclaimed).toBe(false);
+    expectSuccessorIntact(lockPath, state.successor!);
+    expect(existsSync(join(lockPath, ".reclaim.json"))).toBe(false);
+    expect(detachedLockNames(config)).toEqual([]);
+  });
+
+  test("discarding a failed acquisition leaves a successor lock that replaced it in place", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    const realWrite = fs.writeFileSync;
+    const write = spyOn(fs, "writeFileSync").mockImplementation(((path, data, options) => {
+      if (/\.owner-[0-9a-f-]{36}\.tmp$/.test(String(path))) throw new Error("injected owner publication failure");
+      return realWrite(path, data, options);
+    }) as typeof fs.writeFileSync);
+    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/);
+    try {
+      expect(() => withPublicEvidenceMutationLock(config, () => {})).toThrow("injected owner publication failure");
+    } finally { spy.mockRestore(); write.mockRestore(); }
+    expectSuccessorIntact(lockPath, state.successor!);
+    expect(detachedLockNames(config)).toEqual([]);
+  });
+
+  test("release never deletes a moved successor lock when the canonical path is taken again", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    const third = { identity: null as { dev: bigint; ino: bigint } | null };
+    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/, () => {
+      mkdirSync(lockPath, { mode: 0o700 });
+      const stat = lstatSync(lockPath, { bigint: true });
+      third.identity = { dev: stat.dev, ino: stat.ino };
+    });
+    try {
+      withPublicEvidenceMutationLock(config, () => {});
+    } finally { spy.mockRestore(); }
+    const canonical = lstatSync(lockPath, { bigint: true });
+    expect([canonical.dev, canonical.ino]).toEqual([third.identity!.dev, third.identity!.ino]);
+    const detached = detachedLockNames(config);
+    expect(detached).toHaveLength(1);
+    expectSuccessorIntact(join(labCommunityDir(config), detached[0]!), state.successor!);
+  });
+
+  test("release removes its own lock directory and leaves no detached copy", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    let held = false;
+    withPublicEvidenceMutationLock(config, () => { held = existsSync(join(lockPath, "owner.json")); });
+    expect(held).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(detachedLockNames(config)).toEqual([]);
+  });
+
   test("does not publish into a lock replaced with an adjacent NTFS-sized identity", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");

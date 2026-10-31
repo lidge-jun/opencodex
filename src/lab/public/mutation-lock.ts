@@ -159,6 +159,67 @@ function cleanupDetachedMutationLocks(lockPath: string): void {
   }
 }
 
+type DetachedMutationLockOutcome = "removed" | "absent" | "restored" | "retained";
+
+/**
+ * Move the canonical lock to a unique detached name, then decide on what was actually moved.
+ *
+ * A pathname rename cannot be conditioned on the directory a caller checked earlier: another
+ * process can replace the canonical lock between that check and the rename. Checking after the
+ * move, under a name only this process uses, binds removal to the checked directory. Anything
+ * else goes back to the canonical name when that name is still free; when it is taken it stays
+ * detached, where it is never removed by this call.
+ */
+function detachVerifiedMutationLock(
+  lockPath: string,
+  kind: "release" | "stale",
+  isExpected: (detachedPath: string) => boolean,
+): DetachedMutationLockOutcome {
+  const detachedPath = join(
+    dirname(lockPath),
+    `.mutation-lock-${kind}-${process.pid}-${randomUUID()}`,
+  );
+  try {
+    renameSync(lockPath, detachedPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw error;
+  }
+  let expected = false;
+  try {
+    expected = isExpected(detachedPath);
+  } catch {
+    // An unreadable or non-directory entry is not proof of ownership; treat it as foreign.
+  }
+  if (expected) {
+    rmSync(detachedPath, { recursive: true, force: true });
+    return "removed";
+  }
+  try {
+    lstatSync(lockPath);
+    return "retained";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "retained";
+  }
+  try {
+    renameSync(detachedPath, lockPath);
+    return "restored";
+  } catch {
+    // The canonical name was taken again; the foreign directory stays detached and intact.
+    return "retained";
+  }
+}
+
+function detachedOwnerMatches(
+  detachedPath: string,
+  owner: MutationLockOwner,
+  expectedDirectory: MutationLockDirectoryIdentity,
+): boolean {
+  if (!sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), expectedDirectory)) return false;
+  const current = readMutationLockOwner(detachedPath);
+  return current?.pid === owner.pid && current.token === owner.token;
+}
+
 function publishMutationLockOwner(
   lockPath: string,
   owner: MutationLockOwner,
@@ -288,22 +349,13 @@ function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
     ) return false;
     if (!reclaimClaimStillOwned(lockPath, claim)) return false;
 
-    const quarantinePath = join(
-      dirname(lockPath),
-      `.mutation-lock-stale-${process.pid}-${randomUUID()}`,
-    );
-    try {
-      // Rename the exact claimed directory away from the canonical pathname before
-      // deleting it. A successor can create a new lock immediately afterwards, but
-      // cleanup is confined to this unique quarantine path and cannot delete it.
-      renameSync(lockPath, quarantinePath);
-      moved = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-      throw error;
-    }
-    rmSync(quarantinePath, { recursive: true, force: true });
-    return true;
+    // The claim file lives inside the stale directory, so finding this claim's token in the
+    // moved directory, with the identity captured before claiming, proves it is the one claimed.
+    const outcome = detachVerifiedMutationLock(lockPath, "stale", detachedPath =>
+      sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), staleDirectory)
+      && reclaimClaimStillOwned(detachedPath, claim));
+    moved = outcome === "removed";
+    return outcome === "removed" || outcome === "absent";
   } finally {
     if (!moved) releaseReclaimClaim(lockPath, claim);
   }
@@ -315,12 +367,8 @@ function discardUncommittedMutationLock(
 ): void {
   try {
     if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), expectedDirectory)) return;
-    const quarantinePath = join(
-      dirname(lockPath),
-      `.mutation-lock-release-${process.pid}-${randomUUID()}`,
-    );
-    renameSync(lockPath, quarantinePath);
-    rmSync(quarantinePath, { recursive: true, force: true });
+    detachVerifiedMutationLock(lockPath, "release", detachedPath =>
+      sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), expectedDirectory));
   } catch {
     // Preserve the owner-publication error. An unrecoverable cleanup witness stays
     // ownerless and can be reclaimed by the long incomplete-acquisition fallback.
@@ -342,18 +390,8 @@ function releaseMutationLock(
   if (!sameDirectoryIdentity(currentDirectory, expectedDirectory)) return;
   const current = readMutationLockOwner(lockPath);
   if (!current || current.pid !== owner.pid || current.token !== owner.token) return;
-
-  const quarantinePath = join(
-    dirname(lockPath),
-    `.mutation-lock-release-${process.pid}-${randomUUID()}`,
-  );
-  try {
-    renameSync(lockPath, quarantinePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  rmSync(quarantinePath, { recursive: true, force: true });
+  detachVerifiedMutationLock(lockPath, "release", detachedPath =>
+    detachedOwnerMatches(detachedPath, owner, expectedDirectory));
 }
 
 /** Serialize public-evidence mutations across CLI/server processes with ownership-safe stale recovery. */

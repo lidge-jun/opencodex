@@ -175,6 +175,13 @@ code `community_cache_busy` without running the protected work, and
 public-evidence validation failures stay 400. Rejection leaves the owner's lock bytes and directory
 identity untouched.
 
+Release, stale reclaim and failed-acquisition cleanup first move the canonical lock directory to a
+unique detached name and remove it only when the moved directory is the one they checked: the same
+directory identity, plus the caller's owner token on release or reclaim token on reclaim. Any other
+directory is moved back to the canonical name when that name is free, and otherwise stays detached
+and intact. `tests/lab/lab-community-mutation-lock.test.ts` replaces the lock between each path's
+checks and its move.
+
 Sensitive purge removes a community cache pathname that durable local provenance marks as locally
 originated, even when the cached object is oversized, hardlinked, symlinked or otherwise unreadable
 as a community object. It unlinks the pathname only: it never follows a symlink and never removes a
