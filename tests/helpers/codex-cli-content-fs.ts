@@ -8,9 +8,8 @@ import type { CodexCliInstallProvenanceDeps } from "../../src/codex/cli-install-
  * Every path is absolute and lexical; only regular files and final-component
  * symlinks exist (directories are implied by path prefixes, which is all the
  * provenance inspection ever stats). stat follows the whole link chain, lstat
- * reports the final component as written. Inode and mtime fields are plain
- * numbers so a test can model a mid-observation identity change by mutating
- * them between calls.
+ * reports the final component as written. Observations honor the bigint option;
+ * tests can mutate inode and timestamp fields between calls.
  */
 export interface VirtualFileSpec {
   readonly data?: string | Buffer;
@@ -42,8 +41,8 @@ const enoent = (): never => {
 
 export interface VirtualPosixFs {
   readonly exists: (path: string) => boolean;
-  readonly lstat: (path: string) => unknown;
-  readonly stat: (path: string) => unknown;
+  readonly lstat: (path: string, options?: { bigint?: boolean }) => unknown;
+  readonly stat: (path: string, options?: { bigint?: boolean }) => unknown;
   readonly readFile: (path: string) => Buffer;
   readonly realpath: (path: string) => string;
   /** Replace a regular file's bytes in place, keeping inode and timestamps. */
@@ -92,17 +91,28 @@ export function virtualPosixFs(initial: Record<string, VirtualFileSpec>): Virtua
     }
   };
 
-  const statLike = (entry: VirtualEntry) => ({
-    isFile: () => entry.kind === "file",
-    isSymbolicLink: () => entry.kind === "symlink",
-    isDirectory: () => false,
-    mode: entry.kind === "file" ? entry.mode : 0o777,
-    size: entry.kind === "file" ? entry.bytes.length : entry.target.length,
-    dev: 42,
-    ino: entry.kind === "file" ? entry.ino : 0,
-    mtimeMs: entry.kind === "file" ? entry.mtimeMs : 0,
-    ctimeMs: entry.kind === "file" ? entry.ctimeMs : 0,
-  });
+  // Fractional milliseconds to nanoseconds without requiring an integral value.
+  const nanoseconds = (ms: number): bigint => BigInt(Math.trunc(ms)) * 1_000_000n + BigInt(Math.round((ms % 1) * 1e6));
+  // Same field types as node:fs Stats and BigIntStats: bigint observations carry bigint mode,
+  // truncated bigint *Ms and exact *Ns; numeric observations carry no *Ns fields.
+  const statLike = (entry: VirtualEntry, options?: { bigint?: boolean }) => {
+    const mode = entry.kind === "file" ? entry.mode : 0o777;
+    const size = entry.kind === "file" ? entry.bytes.length : entry.target.length;
+    const ino = entry.kind === "file" ? entry.ino : 0;
+    const mtimeMs = entry.kind === "file" ? entry.mtimeMs : 0;
+    const ctimeMs = entry.kind === "file" ? entry.ctimeMs : 0;
+    const kind = {
+      isFile: () => entry.kind === "file",
+      isSymbolicLink: () => entry.kind === "symlink",
+      isDirectory: () => false,
+    };
+    if (!options?.bigint) return { ...kind, mode, size, dev: 42, ino, mtimeMs, ctimeMs };
+    return {
+      ...kind, mode: BigInt(mode), size: BigInt(size), dev: 42n, ino: BigInt(ino),
+      mtimeMs: BigInt(Math.trunc(mtimeMs)), ctimeMs: BigInt(Math.trunc(ctimeMs)),
+      mtimeNs: nanoseconds(mtimeMs), ctimeNs: nanoseconds(ctimeMs),
+    };
+  };
 
   const fileAt = (path: string): VirtualFileEntry => {
     const resolved = entries.get(resolvePath(path));
@@ -112,12 +122,12 @@ export function virtualPosixFs(initial: Record<string, VirtualFileSpec>): Virtua
 
   return {
     exists: path => entries.get(resolvePath(path))?.kind === "file",
-    lstat: path => {
+    lstat: (path, options) => {
       const entry = entries.get(norm(path));
       if (!entry) enoent();
-      return statLike(entry);
+      return statLike(entry, options);
     },
-    stat: path => statLike(fileAt(path)),
+    stat: (path, options) => statLike(fileAt(path), options),
     readFile: path => fileAt(path).bytes,
     realpath: path => {
       const resolved = resolvePath(path);

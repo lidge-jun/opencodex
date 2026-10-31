@@ -60,13 +60,13 @@ function readRecords(): DeviceRecord[] {
   try { fd = openSync(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK)); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   try {
-    const stat = fstatSync(fd);
-    const entry = lstatSync(path);
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > STORE_LIMIT || entry.isSymbolicLink()
+    const stat = fstatSync(fd, { bigint: true });
+    const entry = lstatSync(path, { bigint: true });
+    if (!stat.isFile() || stat.nlink !== 1n || stat.size > STORE_LIMIT || entry.isSymbolicLink()
       || stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("unsafe dashboard session store");
     // Size the read from the stat we validated: a store that grows mid-read overflows
     // the +1 sentinel byte and is rejected instead of silently truncated at a fixed limit.
-    const bytes = Buffer.alloc(stat.size + 1);
+    const bytes = Buffer.alloc(Number(stat.size) + 1);
     let length = 0;
     while (length < bytes.length) { const count = readSync(fd, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
     if (length > stat.size) throw new Error("dashboard session store changed during read");

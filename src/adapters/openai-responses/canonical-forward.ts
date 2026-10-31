@@ -1,4 +1,11 @@
-import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
+import {
+  namespacedToolName,
+  type AdapterEvent,
+  type OcxParsedRequest,
+  type OcxProviderConfig,
+  type OcxUsage,
+  type TierDecision,
+} from "../../types";
 import { stripItemIdsWhenUnstored } from "./request-strips";
 import { isPlainObject } from "./internal";
 import { stripPromptCacheBreakpoints } from "./prompt-cache";
@@ -15,13 +22,21 @@ import { stripPromptCacheBreakpoints } from "./prompt-cache";
  *   unexpanded requests: the platform `/v1/responses` supports real server-side storage.
  */
 export function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
-  if (!strip || !isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, "previous_response_id")) return body;
+  if (
+    !strip ||
+    !isPlainObject(body) ||
+    !Object.prototype.hasOwnProperty.call(body, "previous_response_id")
+  )
+    return body;
   const { previous_response_id: _previousResponseId, ...rest } = body;
   return rest;
 }
 
 /** Apply the settled tier only to a fresh outbound object; `_rawBody` remains caller-owned. */
-export function applyTierDecisionToResponsesBody(body: unknown, decision: TierDecision | undefined): unknown {
+export function applyTierDecisionToResponsesBody(
+  body: unknown,
+  decision: TierDecision | undefined,
+): unknown {
   if (!decision || decision.kind === "forward-caller" || !isPlainObject(body)) return body;
   const next: Record<string, unknown> = { ...body };
   if (decision.kind === "set") next.service_tier = decision.value;
@@ -54,8 +69,14 @@ export function applyTierDecisionToResponsesBody(body: unknown, decision: TierDe
  */
 export function stripStatefulResponsesParams(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  const drop = ["previous_response_id", "conversation", "background", "metadata", "prompt"] as const;
-  const present = drop.some(key => Object.prototype.hasOwnProperty.call(body, key));
+  const drop = [
+    "previous_response_id",
+    "conversation",
+    "background",
+    "metadata",
+    "prompt",
+  ] as const;
+  const present = drop.some((key) => Object.prototype.hasOwnProperty.call(body, key));
   if (!present && body.store === false) return body;
   const next: Record<string, unknown> = { ...body };
   for (const key of drop) delete next[key];
@@ -77,11 +98,19 @@ export function stripStatefulResponsesParams(body: unknown): unknown {
  * self-hosted or third-party gateway may honour it — dropping it there silently
  * removes the cap. Only the canonical ChatGPT backend rejects it outright, so only
  * `canonical` callers strip it.
+ *
+ * `safety_identifier` is the third canonical-only drop: a public OpenAI-platform
+ * parameter some BYOK clients (droid's registry-matched models) attach from the
+ * model name alone. The official API-key surface accepts it, but the canonical
+ * ChatGPT backend rejects it with the same strict-allowlist envelope, so only
+ * `canonical` callers strip it.
  */
 export function stripUnsupportedForwardParams(body: unknown, canonical: boolean): unknown {
   if (!isPlainObject(body)) return body;
-  const drop = canonical ? (["metadata", "max_output_tokens"] as const) : (["metadata"] as const);
-  if (!drop.some(key => Object.hasOwn(body, key))) return body;
+  const drop = canonical
+    ? (["metadata", "max_output_tokens", "safety_identifier"] as const)
+    : (["metadata"] as const);
+  if (!drop.some((key) => Object.hasOwn(body, key))) return body;
   const next: Record<string, unknown> = { ...body };
   for (const key of drop) delete next[key];
   return next;
@@ -104,7 +133,11 @@ const CANONICAL_FORWARD_UNSUPPORTED_SAMPLING = ["temperature", "top_p", "stop", 
  */
 export function stripCanonicalForwardSamplingParams(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  if (!CANONICAL_FORWARD_UNSUPPORTED_SAMPLING.some(key => Object.prototype.hasOwnProperty.call(body, key))) {
+  if (
+    !CANONICAL_FORWARD_UNSUPPORTED_SAMPLING.some((key) =>
+      Object.prototype.hasOwnProperty.call(body, key),
+    )
+  ) {
     return body;
   }
   const next: Record<string, unknown> = { ...body };
@@ -130,9 +163,11 @@ function canonicalForwardSystemText(item: Record<string, unknown>): string | nul
 
 /** Only message items may carry privileged system instructions. */
 function isCanonicalForwardSystemMessage(item: unknown): item is Record<string, unknown> {
-  return isPlainObject(item)
-    && (item.type === undefined || item.type === "message")
-    && item.role === "system";
+  return (
+    isPlainObject(item) &&
+    (item.type === undefined || item.type === "message") &&
+    item.role === "system"
+  );
 }
 
 /**
@@ -172,7 +207,7 @@ export function normalizeCanonicalForwardPromptEnvelope(body: unknown): unknown 
   const next: Record<string, unknown> = { ...body };
   if (stripTruncation) delete next.truncation;
   if (sawSystemMessage && canFoldAllSystemMessages) {
-    next.input = input.filter(item => !isCanonicalForwardSystemMessage(item));
+    next.input = input.filter((item) => !isCanonicalForwardSystemMessage(item));
     const folded = foldedText.join("\n\n");
     if (folded !== "") {
       const existing = typeof body.instructions === "string" ? body.instructions : "";
@@ -193,7 +228,9 @@ export function normalizeCanonicalForwardContinuationEnvelope(body: unknown): un
   let input: unknown[] = body.input;
   let changed = false;
   if (body.store === false) {
-    const withoutReferences = input.filter(item => !isPlainObject(item) || item.type !== "item_reference");
+    const withoutReferences = input.filter(
+      (item) => !isPlainObject(item) || item.type !== "item_reference",
+    );
     if (withoutReferences.length !== input.length) {
       input = withoutReferences;
       changed = true;

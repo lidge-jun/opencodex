@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { delimiter, extname, join, posix, win32 } from "node:path";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import type { FileIdentity } from "../lib/file-identity";
 import { assertSelectedRuntimeWritable, RuntimePreflightError, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { getConfigDir } from "../config";
 import { isWslRuntime, wslAutomountRoot } from "./home";
@@ -264,7 +265,7 @@ interface FreshShimInstallJournalEntry {
   writtenWrapperFingerprint?: ShimPathFingerprint;
   wrapperWriteStarted: boolean;
   /** dev/ino of the file our `writeShim()` created, recorded before anything can fail. */
-  writtenWrapperInode?: { dev: number; ino: number };
+  writtenWrapperInode?: FileIdentity;
 }
 
 function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry[]): void {

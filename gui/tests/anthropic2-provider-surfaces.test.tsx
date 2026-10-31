@@ -16,7 +16,7 @@ import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuth
 import CatalogAccountRow from "../src/components/provider-catalog/CatalogAccountRow";
 import type { OAuthAccountRow, ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
-import { useProviderAccountPools } from "../src/hooks/useProviderAccountPools";
+import { useProviderAccountPools, type Config as PoolHookConfig } from "../src/hooks/useProviderAccountPools";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import { buildAddModalAccountRows } from "../src/pages/providers-page-utils";
 import type { OAuthAccount, OAuthStatus, ProvidersConfig } from "../src/pages/providers-shared";
@@ -306,10 +306,16 @@ test("UX-05: an unmarked custom anthropic2 row receives neither pool's settings 
   expect(requests).toEqual([]);
 });
 
-function PoolsHarness({ onPools }: { onPools: (pools: ReturnType<typeof useProviderAccountPools>) => void }) {
+function PoolsHarness({ onPools, config = null, onNotice }: {
+  onPools: (pools: ReturnType<typeof useProviderAccountPools>) => void;
+  config?: PoolHookConfig | null;
+  onNotice?: (message: string) => void;
+}) {
   const aliveRef = useRef(true);
-  const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: {},
-    notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+  const t = useT();
+  const pools = useProviderAccountPools({ apiBase: "", config, aliveRef,
+    t: onNotice ? (key, ...args) => t(key as keyof typeof en, args[0] as Record<string, string>) : key => key, oauthStatus: {},
+    notify: message => onNotice?.(message), fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
     codexActiveNeedsReauth: false });
   useLayoutEffect(() => { onPools(pools); }, [onPools, pools]);
   return null;
@@ -356,3 +362,44 @@ test("UX-05: equal account IDs keep pool-keyed rosters and thresholds in the acc
   expect(pools.accountSets.anthropic?.accounts.map(row => row.autoSwitchThreshold)).toEqual([70, 70]);
   expect(requests.slice(mutationStart).every(request => request.provider === "anthropic2")).toBe(true);
 });
+
+for (const item of [POOL_A, POOL_B]) {
+  test(`${item.name} reset-grant dialog keeps the ordinal account label`, async () => {
+    respond = async request => request.path === "/api/pool/settings"
+      ? Response.json(poolSettings(item.name, false, 55))
+      : Response.json(grantSnapshot(item.name, 1));
+    await render(<ProviderAuthPanel item={item} apiBase="" accounts={accounts(item.name)} authHandlers={recordingHandlers([])} />);
+    await tick();
+    await click(host.querySelector("[data-anthropic-grant-badge]"));
+    expect(win.document.body.textContent).toContain("Account 1");
+    expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
+  });
+}
+
+for (const item of [POOL_A, POOL_B, CUSTOM_B, { ...POOL_A, name: "cursor", adapter: "cursor" } as WorkspaceItem]) {
+  for (const deleteOk of [false, true]) {
+    test(`${item.name}/${item.adapter} remove and pause interactions preserve scoped label privacy (${deleteOk})`, async () => {
+      let pools!: ReturnType<typeof useProviderAccountPools>;
+      const notices: string[] = [];
+      const config = { port: 0, defaultProvider: item.name, providers: { [item.name]: item } } as PoolHookConfig;
+      respond = async request => request.method === "GET"
+        ? Response.json({ activeAccountId: "shared", accounts: accounts(item.name) })
+        : new Response(null, { status: request.method === "DELETE" && deleteOk ? 200 : 500 });
+      await render(<PoolsHarness config={config} onPools={next => { pools = next; }} onNotice={message => notices.push(message)} />);
+      await act(async () => { await pools.fetchAccountSets([item.name]); });
+      const target = pools.accountSets[item.name]!.accounts[0]!;
+      await act(async () => { await pools.pauseAccount(item.name, target, true); });
+      let pending!: Promise<void>;
+      await act(async () => { pending = pools.removeAccount(item.name, target); await Promise.resolve(); });
+      const expected = item === POOL_A || item === POOL_B ? "Account 1" : `shared@${item.name}.test`;
+      expect(win.document.querySelector("dialog")?.textContent).toContain(expected);
+      if (item === POOL_A || item === POOL_B) expect(win.document.body.textContent).not.toContain(`shared@${item.name}.test`);
+      const confirm = [...win.document.querySelectorAll("dialog button")].find(button => button.textContent === en["common.remove"]);
+      expect(confirm).toBeTruthy();
+      await act(async () => { (confirm as unknown as HTMLElement).click(); await pending; });
+      expect(notices).toHaveLength(2);
+      expect(notices.every(message => message.includes(expected))).toBe(true);
+      if (item === POOL_A || item === POOL_B) expect(notices.join(" ")).not.toContain(`shared@${item.name}.test`);
+    });
+  }
+}

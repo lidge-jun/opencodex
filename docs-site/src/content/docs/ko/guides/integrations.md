@@ -255,6 +255,8 @@ LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$
 
 **자동 배정**은 필요한 능력과 추론 강도를 판정한 역할 가운데 선택된 모델의 강도 단계 목록이 비어 있지 않은 모든 역할에 추론 강도를 제안하며, **적용**, **모두 적용** 또는 `ocx agent roles suggest --apply`는 그 역할의 `model_reasoning_effort` 값을 추가하거나 바꿉니다. 강도는 선택된 모델 자체의 단계에서 정하며, 가장 낮은 단계, 기본 단계, 기본보다 한 단계 높은 단계, 가장 높은 단계 중 하나입니다. 단계 목록이 비어 있으면 강도를 제안하지 않고(`proposedEffort: null`), 적용할 때 `effort`를 보내지 않아 기존 강도 고정을 그대로 둡니다. `null` 제안은 고정값을 지우지 않습니다.
 
+CLI의 `ocx agent roles suggest --apply`는 한 이력 묶음에 **변경할 역할을 최대 50개** 적용합니다. 이미 같은 값으로 설정됐거나 평가·배정되지 않은 역할은 세지 않습니다. 50개를 넘으면 역할 업데이트를 하나도 보내지 않고 종료 코드 5로 거부합니다. `--apply` 없이 미리 확인한 뒤, 개별 변경에는 `ocx agent roles set <role> <model> [--effort <level>]`을 사용하세요. 도중에 실패했을 때 확인된 쓰기와 미확인 요청을 구분하고 재시도하는 방법은 [CLI 적용·복구 규칙](/reference/cli/agents/)을 참고하세요.
+
 ## Kilo
 
 Kilo CLI, VS Code, JetBrains는 전역 설정을 공유합니다. 이 연동은 `~/.config/kilo` 아래의 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` 중 먼저 존재하는 파일에 `provider.opencodex`를 씁니다. `XDG_CONFIG_HOME`로 이 디렉터리를 옮길 수 있습니다. 후보 파일이 없으면 `kilo.jsonc`를 만듭니다. 프로젝트 설정은 수정하지 않습니다.

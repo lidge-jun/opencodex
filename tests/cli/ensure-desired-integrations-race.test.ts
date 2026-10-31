@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ensureGrokFenceMatchesDesired,
   reconcileEnsureDesiredIntegrations,
   type EnsureDesiredIntegrationsDeps,
 } from "../../src/cli/ensure-desired-integrations";
 import type { OcxConfig } from "../../src/types";
 import type { GrokInjectResult } from "../../src/grok/inject";
 import type { Desktop3pRemovalResult } from "../../src/claude/desktop-3p";
+import { syncGrokConfig } from "../../src/grok/sync";
+import type { CatalogModel } from "../../src/codex/catalog";
 
 function config(overrides: {
   grok?: boolean;
@@ -159,6 +162,22 @@ test("CLI intent with disabled intercept retains the env through Desktop-off cle
 });
 
 describe("ensure desired-state races", () => {
+  test("Grok disabled during catalog fetch cannot be reinjected by ensure", async () => {
+    const h = harness(config());
+    let finishCatalog!: (models: CatalogModel[]) => void;
+    const catalog = new Promise<CatalogModel[]>(resolve => { finishCatalog = resolve; });
+    let injectCalls = 0;
+    h.deps.syncGrokConfig = (port, current, opts) => syncGrokConfig(port, current, opts, {
+      fetchAllModels: () => catalog,
+      injectGrokConfig: () => { injectCalls++; return okGrok(true); },
+    });
+    const pending = ensureGrokFenceMatchesDesired(10100, {}, h.deps);
+    h.flip(config({ grok: false }));
+    finishCatalog([]);
+    await pending;
+    expect(injectCalls).toBe(0);
+  });
+
   test("live-proxy OFF→ON uses the current ON snapshot instead of stripping", async () => {
     const staleOff = config({ grok: false, desktop: false, hostname: "stale-host", fingerprint: "fp-off" });
     const currentOn = config({ hostname: "fresh-host", fingerprint: "fp-on" });
