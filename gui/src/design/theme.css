@@ -52,8 +52,7 @@
 /* ---- semantic tokens ------------------------------------------------------
    Neutrals are a zinc ramp. The primary is the inverse of the page — white on
    dark, near-black on light — and carries primary actions and every selected
-   state; sky blue is the highlight for hover glows, focus, links and active
-   markers. Status hues are reserved for state. Authored once with light-dark(). */
+   state; sky blue is the highlight for focus rings and links. Status hues are reserved for state. Authored once with light-dark(). */
 :root {
   color-scheme: light dark;
 
@@ -74,10 +73,9 @@
   --ocx-accent-soft: light-dark(rgb(9 9 11 / 0.06), rgb(255 255 255 / 0.1));
   --ocx-on-accent: light-dark(#ffffff, #09090b);
 
-  /* highlight: sky blue for hover glows, focus rings, links and active markers */
+  /* highlight: sky blue for focus rings and links */
   --ocx-highlight: light-dark(#0284c7, #38bdf8);
   --ocx-highlight-soft: light-dark(rgb(2 132 199 / 0.12), rgb(56 189 248 / 0.16));
-  --ocx-highlight-glow: light-dark(rgb(2 132 199 / 0.35), rgb(56 189 248 / 0.45));
 
   --ocx-success: light-dark(#0e9f6e, #34d399);
   --ocx-success-soft: light-dark(rgb(14 159 110 / 0.1), rgb(52 211 153 / 0.14));
@@ -94,9 +92,9 @@
   --ocx-shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
   --ocx-shadow-md: 0 1px 2px rgb(16 24 40 / 0.05), 0 12px 32px -16px rgb(16 42 67 / 0.25);
   --ocx-shadow-lg: 0 24px 48px -24px rgb(16 42 67 / 0.35);
-  /* the primary button's glow (Aceternity button): a top sheen at rest, a sky halo on hover */
+  /* the primary button's sheen (Aceternity button): a top highlight that firms up on hover */
   --ocx-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(0 0 0 / 0.2);
-  --ocx-glow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 0 0 3px var(--ocx-highlight-soft), 0 0 18px -2px var(--ocx-highlight-glow);
+  --ocx-glow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.3), 0 1px 3px rgb(0 0 0 / 0.24);
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }

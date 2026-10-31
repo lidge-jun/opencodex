@@ -29,7 +29,7 @@ interface ProxyControlsProps {
  * detail and the actions. While the proxy runs, a thin white beam travels the body's edge
  * (Aceternity's moving border, done in CSS so the sidebar runs no per-frame script); it stops
  * with the proxy and under reduced motion. Restart spins while in flight and flashes a check
- * when it settles; stop stays quiet until hovered, when it turns red.
+ * when it settles. Both are bare icons until hovered; stop's plate turns red.
  */
 export function ProxyControls({
   label,
@@ -115,12 +115,11 @@ function TrayButton({ onClick, disabled, label, title, danger, children }: {
       aria-label={label}
       title={title}
       className={cn(
-        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-bg text-fg-muted",
-        "shadow-[0_1px_2px_-1px_rgb(0_0_0/0.16)] ring-1 ring-line ring-inset",
-        "transition-[background-color,color,box-shadow,scale] duration-150 ease-soft active:scale-95 active:shadow-[inset_0_1px_2px_rgb(0_0_0/0.18)]",
+        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent text-fg-muted",
+        "transition-[background-color,color,scale] duration-150 ease-soft active:scale-95",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5",
-        danger ? "hover:bg-danger-soft hover:text-danger hover:ring-danger/30" : "hover:text-fg hover:ring-line-strong",
+        danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-accent-soft hover:text-fg",
       )}
     >
       {children}

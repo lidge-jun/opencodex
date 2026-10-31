@@ -3,13 +3,13 @@ import { cn } from "@/lib/utils";
 
 /*
  * Design system v2 button. The primary variant is the Aceternity studio
- * button: a blue top-to-bottom gradient with a soft inner glow and an inset
- * ring that brighten on hover. The rest are quiet neutrals so one primary
- * action per surface stands out.
+ * button in the inverse primary: a top-to-bottom gradient with a top sheen;
+ * hover only dims it a touch, no glow. The rest are quiet neutrals so one
+ * primary action per surface stands out.
  */
 const VARIANTS = {
   primary:
-    "bg-linear-to-b from-accent-top to-accent-bottom text-on-accent shadow-glow ring-1 ring-inset ring-white/20 hover:shadow-glow-hover hover:ring-white/40",
+    "bg-linear-to-b from-accent-top to-accent-bottom text-on-accent shadow-glow ring-1 ring-inset ring-white/20 hover:shadow-glow-hover hover:brightness-[0.94]",
   outline:
     "bg-raised text-fg shadow-sm ring-1 ring-inset ring-line-strong hover:bg-surface",
   ghost: "bg-transparent text-fg-muted hover:bg-surface hover:text-fg",

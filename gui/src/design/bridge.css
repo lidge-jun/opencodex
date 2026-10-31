@@ -191,7 +191,7 @@
   background: var(--ocx-raised);
   box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 0 0 1px var(--ocx-line);
 }
-.nav-item.active svg { color: var(--ocx-highlight); }
+.nav-item.active svg { color: var(--ocx-fg); }
 
 /* ---- sidebar tiers (Everyday / Set up / Fine-tuning) ---------------------- */
 .nav-tier { display: flex; flex-direction: column; gap: 2px; }
@@ -335,3 +335,22 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 @media (prefers-reduced-motion: reduce) {
   .ocx-beam--on::before { animation: none; opacity: 0; }
 }
+
+/* ---- sidebar foot orbs: bare icons, a soft plate only on hover -------------
+   Theme, star, update and terminal sit in text rows, so at rest they are icons
+   like the globe and GitHub mark beside them. The phone top bar keeps its
+   bordered 44px targets (it is not in .sidebar-foot). */
+.sidebar-foot .sidebar-orb,
+.sidebar-foot .sidebar-orb--update {
+  border-color: transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+}
+.sidebar-foot .sidebar-orb:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--ocx-accent-soft);
+  color: var(--ocx-fg);
+  filter: none;
+}
+.sidebar-foot .sidebar-orb--update:hover:not(:disabled) { color: var(--blue); }
+.sidebar-foot .sidebar-orb svg { width: 15px; height: 15px; }
