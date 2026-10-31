@@ -19,7 +19,7 @@ const prefix = locale ? `${base}${locale}/` : base;
 type NavLink = { label: string; href: string };
 type NavGroup = { label: string; links: NavLink[]; more?: NavLink };
 
-// Cloudlight sub-link rows: every dropdown entry gets a tinted icon tile.
+// Dropdown rows: every entry gets an icon tile.
 // Lucide outline paths (24x24, stroke), keyed by the link's slug.
 const ICONS: Record<string, string> = {
 	'getting-started/installation/': 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
@@ -397,8 +397,7 @@ const contributing: NavLink = {
 		flex-shrink: 0;
 	}
 	/* GitHub star button: [mark + Star | count] in one rounded control.
-	   Hover throws a burst of tiny stars from the mark (React Bits star-burst,
-	   in CSS) and lifts the count; the script speed-blurs the count in. */
+	   Hover throws a burst of tiny stars from the mark and lifts the count; the script speed-blurs the count in. */
 	.github-link {
 		display: inline-flex;
 		align-items: stretch;
@@ -613,7 +612,7 @@ const contributing: NavLink = {
 		}
 	}
 
-	/* ---- Cloudlight dropdown nav (desktop only) ----
+	/* ---- dropdown nav (desktop only) ----
 	   Panels rise 6px with the soft ease and fall back with the quick ease
 	   after a 120ms hover-intent delay, so crossing the gap never closes them. */
 	.glass-nav {
@@ -818,7 +817,7 @@ const contributing: NavLink = {
 	}
 
 	/* icon tile: a neutral rounded square with a hairline ring that inverts
-	   to the foreground colour when its row is active (React Bits nav cards) */
+	   to the foreground colour when its row is active */
 	.nav-tile {
 		display: inline-flex;
 		flex: none;
@@ -855,7 +854,7 @@ const contributing: NavLink = {
 	}
 
 	/* ---- splash menu (below the desktop-nav breakpoint) ----
-	   Cloudlight mobile menu: a full-screen sheet under the bar, big rows,
+	   Mobile menu: a full-screen sheet under the bar, big rows,
 	   accordion groups, rows staggering in; the burger morphs into an X. */
 	.lp-menu { display: none; }
 	@media (max-width: 71.99rem) {
@@ -1036,7 +1035,7 @@ const contributing: NavLink = {
 		});
 	}
 
-	// Cloudlight docking nav: on the landing page the bar starts transparent
+	// Docking nav: on the landing page the bar starts transparent
 	// inside the hero card and scrolls away with it; once the hero has left the
 	// viewport a solid bar slides down from the top. Docs pages are always docked.
 	const root = document.documentElement;
@@ -1080,7 +1079,7 @@ const contributing: NavLink = {
 		localStorage.setItem(storageKey, theme === 'auto' ? '' : theme);
 		updateThemeButton(button, theme);
 	};
-	// Theme switch transition, ported from teamwicked's AnimatedThemeToggler:
+	// Theme switch transition:
 	// the new theme opens as a circle from the tap (or the button centre for
 	// keyboard use) over 520ms. Browsers without a usable View Transition,
 	// and reduced motion, switch instantly.
@@ -1221,7 +1220,7 @@ const contributing: NavLink = {
 	if (topNav && topHl) glide(topNav, topHl, Array.from(topNav.querySelectorAll<HTMLElement>(':scope > ul > li > .nav-link')));
 
 	// Star count speeds in once per session with a horizontal motion blur
-	// that tracks how fast the number is moving (React Bits speeding-text).
+	// that tracks how fast the number is moving.
 	const ghCount = document.querySelector<HTMLElement>('.github-link [data-gh-stars]');
 	const ghTotal = Number(ghCount?.dataset.ghStars);
 	const seen = (() => {

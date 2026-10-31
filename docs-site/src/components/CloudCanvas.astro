@@ -1,11 +1,11 @@
 ---
-// Animated WebGL2 cloud sky (Cloudlight hero grammar). Renders into an
+// Animated WebGL2 cloud sky for the hero and closing panel. Renders into an
 // absolutely positioned host that fills its nearest positioned ancestor.
 // Without WebGL2 the host keeps its CSS sky colour, so the section still reads.
 // Under reduced motion one still frame is drawn and re-drawn on theme change.
 interface Props {
 	class?: string;
-	/** `sky` paints the full Cloudlight sky; `overlay` draws only the clouds,
+	/** `sky` paints a full daylight sky; `overlay` draws only the clouds,
 	 *  dusk-lit and translucent, over whatever sits behind the canvas. */
 	variant?: 'sky' | 'overlay';
 }

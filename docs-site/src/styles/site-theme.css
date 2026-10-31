@@ -1,5 +1,5 @@
 /* ============================================================================
-   Cloudlight skin — loaded after custom.css and only overrides its look.
+   Site theme — loaded after custom.css and only overrides its look.
    Grammar: white / near-black neutrals, one blue ring accent, hairline
    borders, normal-weight display type, a WebGL cloud sky on the hero card,
    framed content rails, and grain-tinted feature cards. Every class and
@@ -60,7 +60,7 @@
   --ocx-radius: 1rem;
   --ocx-radius-sm: 0.75rem;
 
-  /* card tints (Cloudlight lib/tints.ts, dark values) */
+  /* card tints (dark values) */
   --cl-tint-sky: radial-gradient(140% 120% at 10% 0%, #0d1c26 0%, #10283a 60%, #133447 100%);
   --cl-tint-peach: radial-gradient(140% 120% at 10% 0%, #241912 0%, #33231a 60%, #402c1f 100%);
   --cl-tint-mint: radial-gradient(140% 120% at 10% 0%, #0e2119 0%, #133226 60%, #183f30 100%);
@@ -137,7 +137,7 @@
 html { background-color: var(--cl-bg); font-synthesis: none; }
 
 /* theme switch: the new theme opens as a circle from the click point
-   (teamwicked AnimatedThemeToggler); the header script drives the clip */
+   the header script drives the clip */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -160,7 +160,7 @@ html[data-theme-vt] *::after {
 html[data-theme-vt] header.header > .header::before { background: var(--cl-bg); }
 body::before { display: none; }
 
-/* ---- header: Cloudlight docking nav, React Bits navbar-12 float -----------
+/* ---- header: docking nav with a floating rounded bar --------------------
    Docked (every docs page, and the landing once the hero is gone): a
    rounded glass bar floating a few pixels inside the viewport edges.
    Landing at the top: the same row sits transparent inside the hero card
@@ -286,7 +286,7 @@ button[data-open-modal] {
 }
 dialog[aria-label] { border-radius: 1rem; border-color: var(--cl-hair); }
 
-/* content headings: Cloudlight display weight */
+/* content headings: display weight */
 .sl-markdown-content :is(h1, h2, h3) { font-weight: 600; letter-spacing: -0.025em; }
 :where(.content-panel) h1#_top { font-weight: var(--cl-display-weight); letter-spacing: var(--cl-display-tracking); }
 /* Hangul reads crowded at Latin tracking; ease it back and keep words whole */
@@ -297,7 +297,7 @@ article.card,
 .sl-link-card:hover { border-color: var(--cl-muted-fg); }
 
 /* ---- landing frame -------------------------------------------------------
-   The page sits in one 1200px rail (Cloudlight <Rail>): hairline side rules
+   The page sits in one 1200px rail: hairline side rules
    run beside every section below the hero, sections split on dashed rules. */
 .lp {
   max-width: var(--cl-rail);
@@ -320,7 +320,7 @@ article.card,
 .lp-bento,
 .lp-next { border-top: 1px dashed var(--cl-border); }
 
-/* section titles: Cloudlight SectionHeading */
+/* section titles */
 .lp-download-title,
 .lp-bento-title,
 .lp-scrub-title,
@@ -335,7 +335,7 @@ article.card,
 .lp-download-sub,
 .lp-scrub-caption { color: var(--cl-muted-fg); font-size: 1.125rem; line-height: 1.75rem; }
 
-/* ---- hero: dusk photo + drifting cloud layer, Cloudlight card ------------
+/* ---- hero: dusk photo + drifting cloud layer, rounded card -------------
    The hero card starts under the transparent nav (pulled up by one nav
    height) and is no longer pinned, so the nav can live inside it. Its photo
    and cloud layers drift apart with the pointer (--px/--py) and scroll (--sy). */
@@ -504,7 +504,7 @@ main:has(.lp) .sl-container { max-width: none; }
 .lp-chip-more a { padding: 0.3rem 0.7rem; color: #9cc3ff; }
 .lp-chip-more a:hover { color: #c4dcff; text-decoration: underline; text-underline-offset: 3px; }
 
-/* product stage: Cloudlight app mockup window */
+/* product stage: app window rising from the card edge */
 .lp-stage-in { padding-top: clamp(2.5rem, 7vh, 4rem); }
 .lp-stage-in img {
   border-radius: 0.875rem 0.875rem 0 0;
@@ -569,7 +569,7 @@ main:has(.lp) .sl-container { max-width: none; }
   border-radius: 1.5rem;
   background: var(--cl-surface);
 }
-/* the detected platform becomes the inverted focal card (features-12) */
+/* the detected platform becomes the inverted focal card */
 .lp-dl-card[data-recommended] {
   --cl-fg: var(--cl-inv-fg);
   --cl-bg: var(--cl-inv-bg);
@@ -603,7 +603,7 @@ main:has(.lp) .sl-container { max-width: none; }
 .lp-dl-foot code { border-radius: 0.5rem; background-color: var(--cl-muted); }
 .lp-dl-more > summary { border-radius: 0.75rem; }
 
-/* ---- feature bento (React Bits features-6 + features-12) ----------------
+/* ---- feature bento ------------------------------------------------------
    Borderless soft surfaces with a large radius, a bare stroke icon above a
    bold statement, one inverted focal card, and a per-card colour glow that
    blooms up from the bottom edge on hover and follows the cursor. */
@@ -676,7 +676,7 @@ main:has(.lp) .sl-container { max-width: none; }
 .lp-cell:hover::before { opacity: 0.55; transform: translateX(-50%) scale(1); }
 :root[data-theme='light'] .lp-cell:not(.lp-cell-providers):hover::before { opacity: 0.45; }
 
-/* ---- closing CTA: GitHub star on a cloud panel (Cloudlight FinalCta) ----- */
+/* ---- closing CTA: GitHub star on a cloud panel -------------------------- */
 .lp-github-row {
   position: relative;
   display: block;
@@ -740,7 +740,7 @@ footer.sl-flex { border-top: 1px dashed var(--cl-border); }
 }
 
 /* ============================================================================
-   Motion (Cloudlight grammar: soft ease cubic-bezier(0.22, 1, 0.36, 1))
+   Motion (soft ease cubic-bezier(0.22, 1, 0.36, 1))
    ============================================================================ */
 @media (prefers-reduced-motion: no-preference) {
   /* the hero card is no longer pinned: it stays in flow so the nav can live
@@ -808,7 +808,7 @@ footer.sl-flex { border-top: 1px dashed var(--cl-border); }
     animation: none !important;
   }
 
-  /* cards: lift on hover (features-12), glow handled above */
+  /* cards: lift on hover, glow handled above */
   .lp-cell,
   .lp-dl-card {
     transition:
@@ -830,7 +830,7 @@ footer.sl-flex { border-top: 1px dashed var(--cl-border); }
   }
   .lp-cloud-cta img { animation: cl-breathe 18s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate; }
 
-  /* buttons: Cloudlight press + arrow nudge */
+  /* buttons: press + arrow nudge */
   .lp-btn-primary svg,
   .lp-announce svg { transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
   .lp-btn-primary:hover svg,

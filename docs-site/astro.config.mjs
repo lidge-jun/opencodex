@@ -37,7 +37,7 @@ export default defineConfig({
         "@fontsource-variable/geist-mono",
         "wanted-sans/fonts/webfonts/variable/split/WantedSansVariable.css",
         "./src/styles/custom.css",
-        "./src/styles/cloudlight.css",
+        "./src/styles/site-theme.css",
       ],
       components: {
         Header: "./src/components/Header.astro",
