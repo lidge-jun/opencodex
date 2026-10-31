@@ -555,7 +555,7 @@ export default function ProviderAuthPanel({
             {accounts.length > 0 && (
               <ul className="pwi-auth-list">
                 {accounts.map(account => {
-                  const label = isAnthropicPool ? t("pws.accountOrdinal", { count: String(accounts.indexOf(account) + 1) }) : oauthAccountDisplayLabel(accounts, account, t);
+                  const label = oauthAccountDisplayLabel(accounts, account, t, isAnthropicPool);
                   const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
@@ -673,7 +673,7 @@ export default function ProviderAuthPanel({
               <AnthropicResetGrantModal
                 key={`${apiBase}:${item.name}:${grantAccount.id}`}
                 accountId={grantAccount.id}
-                accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t)}
+                accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t, isAnthropicPool)}
                 entry={claudeGrants.entries[grantAccount.id]}
                 controller={claudeGrants}
                 onClose={() => setGrantAccount(null)}

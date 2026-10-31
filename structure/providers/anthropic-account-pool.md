@@ -48,7 +48,10 @@ a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
 projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
 or the original unfamiliar validated tier. Dashboard Claude account rows use ordinal labels,
-omit account IDs/emails and show the subscription beside quota. The current quota section keeps
+omit account IDs/emails and show the subscription beside quota. The same ordinal policy in
+`gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
+confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`; custom providers
+retain their existing alias/email labels. The current quota section keeps
 that label even if usage is unavailable. Pro and Max 5x keep their measured five-hour and
 weekly windows; an explicitly absent/inactive session never fabricates a meter.
 
