@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 .advisor-editor-row {
   display: flex;
   align-items: center;
@@ -12,4 +15,5 @@
   .advisor-editor-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
   .advisor-editor-label { min-width: 0; }
   .advisor-editor-row > input, .advisor-editor-row > select { width: 100%; min-height: 44px; }
+}
 }

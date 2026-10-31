@@ -117,12 +117,12 @@
    pill per track follows whichever option holds the name. Without anchor positioning
    the raised option above is the fallback. */
 @supports (anchor-name: --a) and (anchor-scope: --a) {
-  :is(.segmented, .usage-segmented, .cwi-strategy-seg) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher) {
     position: relative;
     isolation: isolate;
     anchor-scope: --ocx-seg;
   }
-  :is(.segmented, .usage-segmented, .cwi-strategy-seg)::before {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher)::before {
     content: "";
     position: absolute;
     z-index: -1;
@@ -137,17 +137,18 @@
     transition: left 0.32s cubic-bezier(0.22, 1, 0.36, 1), right 0.32s cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* no option checked: no anchor, so the pill must not paint at a stale place */
-  :is(.segmented, .usage-segmented, .cwi-strategy-seg):not(:has(> :is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"])))::before {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher):not(:has(> :is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], [aria-current="page"])))::before {
     display: none;
   }
-  :is(.segmented, .usage-segmented, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]) {
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg) > :is(button, .btn):is(.active, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]),
+  .section-switcher > .section-switcher-btn[aria-current="page"] {
     anchor-name: --ocx-seg;
     background: transparent;
     box-shadow: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  :is(.segmented, .usage-segmented, .cwi-strategy-seg)::before { transition: none; }
+  :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher)::before { transition: none; }
 }
 
 /* ---- page heads: the same title scale as the v2 hubs ---------------------- */
@@ -372,3 +373,78 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 .shadow-source-toggle .switch:disabled { opacity: 1; cursor: not-allowed; }
 .shadow-source-toggle:has(> .switch:disabled) > :not(.switch) { opacity: 0.45; }
 .shadow-source-id { font-size: 12px; }
+
+
+/* ---- page chrome shared by every v1 page (React Bits application-UI form) -----
+   Controls are rounded rectangles like the proxy panel, not pills; the section
+   switcher is the same recessed track as the segmented controls, with the pill
+   sliding to the current page; empty states are a quiet framed card. */
+
+/* text fields, native selects and the custom select trigger (the sidebar language
+   picker is a bare text row by design, so it stays out) */
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *) {
+  border-radius: 10px;
+  border: 1px solid var(--ocx-line-strong);
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.03));
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.12);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *):hover:not(:disabled, :focus) {
+  border-color: light-dark(rgb(9 9 11 / 0.3), rgb(255 255 255 / 0.28));
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.12);
+}
+:is(.input, .select-sm, .select-trigger):not(.lang-toggle *):focus-visible,
+:is(.input, .select-sm):focus {
+  border-color: var(--ocx-highlight);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ocx-highlight-soft);
+}
+.input::placeholder { color: var(--ocx-fg-subtle); }
+
+/* section switcher: one recessed track, the current page raised */
+.section-switcher {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.section-switcher-btn {
+  padding: 5px 14px;
+  border-radius: 8px;
+  color: var(--ocx-fg-subtle);
+  font-weight: 500;
+  transition: color 0.2s, background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s;
+}
+.section-switcher-btn:hover { color: var(--ocx-fg-muted); }
+.section-switcher-btn[aria-current="page"] {
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  color: var(--ocx-fg);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+@supports (anchor-name: --a) and (anchor-scope: --a) {
+  .section-switcher > .section-switcher-btn[aria-current="page"] { background: transparent; box-shadow: none; }
+}
+
+/* page tabs: rounded rectangles to match */
+.page-tab { border-radius: 8px; }
+
+/* empty states: a quiet framed card, centred, no dashed outline */
+.empty {
+  padding: 48px 24px;
+  border: 1px solid var(--ocx-line);
+  border-radius: 12px;
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.015));
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+.empty svg { width: 20px; height: 20px; margin-bottom: 12px; color: var(--ocx-fg-muted); }
+.empty .title { color: var(--ocx-fg); font-size: 15px; line-height: 20px; font-weight: 500; letter-spacing: -0.015em; }
+
+/* page intro under a title */
+.page-sub { color: var(--ocx-fg-muted); font-size: 14px; line-height: 1.55; }

@@ -24,6 +24,9 @@ re-authoring every block by hand in plain CSS.
     v2 palette, so unmigrated pages already read as v2;
   - `components`: the v2 base for elements marked `ui-v2` (the slice of preflight they need);
   - `utilities`: Tailwind, so a migrated component always wins.
+- A v1 stylesheet that a component imports itself (`import "./x.css"`) wraps its whole body in
+  `@layer legacy { … }`. Unlayered CSS outranks every layer, so an unwrapped file silently beats
+  both the bridge and Tailwind; fourteen such files did until this rule.
 - v2 tokens are CSS custom properties (`--ocx-*`) in `src/design/theme.css`, mapped into Tailwind's
   theme (`bg-surface`, `text-fg-muted`, `rounded-control`, `shadow-glow`, …). They remain the runtime
   source of truth; new visual values must use them.
