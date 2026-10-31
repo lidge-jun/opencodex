@@ -32,6 +32,7 @@ This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.m
 ## Implementation rules
 
 - Preserve accessibility: keyboard operation, labels, focus behavior, semantic controls, and readable validation errors.
+- No native `<select>`: use `Select` from `src/ui.tsx` (extend it there if it lacks something). Every text-like `<input>` and `<textarea>` carries a `className` (`input` or v2 classes). Unstyled browser controls are unreadable in dark mode; `tests/form-controls-rule.test.ts` enforces both.
 - Do not introduce a dependency for behavior already provided by the current stack or a small local implementation.
 - Dependency changes require explicit security review.
 - Update `docs-site/` when dashboard behavior, setup, or configuration changes for users.
