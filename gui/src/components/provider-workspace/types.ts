@@ -45,6 +45,8 @@ export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required
 
 export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 export interface AccountQuotaReading {
+  /** Subscription name supplied by management independently of quota availability. */
+  planLabel?: string;
   quotaMode?: AccountQuotaMode;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;

@@ -6,6 +6,8 @@ export function captureStartupChildOutput(stdout: ReadableStream<Uint8Array>, st
   const startedAt = Date.now();
   let lastOutputAt: number | null = null;
   let startupComplete = false;
+  let signalStartup!: (complete: boolean) => void;
+  const startup = new Promise<boolean>(resolve => { signalStartup = resolve; });
   const collect = (stream: ReadableStream<Uint8Array>, isStdout: boolean) => {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
@@ -20,6 +22,7 @@ export function captureStartupChildOutput(stdout: ReadableStream<Uint8Array>, st
       if (isStdout && !startupComplete) {
         const search = markerPrefix + text;
         startupComplete = search.includes(STARTUP_MARKER);
+        if (startupComplete) signalStartup(true);
         markerPrefix = search.slice(-(STARTUP_MARKER.length - 1));
       }
       tail = (tail + text).slice(-STARTUP_OUTPUT_TAIL_CHARS);
@@ -33,7 +36,10 @@ export function captureStartupChildOutput(stdout: ReadableStream<Uint8Array>, st
           append(decoder.decode(next.value, { stream: true }));
         }
       } catch { readFailed = true; }
-      finally { reader.releaseLock(); }
+      finally {
+        if (isStdout) signalStartup(false);
+        reader.releaseLock();
+      }
     })();
     return {
       done,
@@ -55,6 +61,13 @@ export function captureStartupChildOutput(stdout: ReadableStream<Uint8Array>, st
   const stop = () => { out.stop(); err.stop(); };
   return {
     snapshot, stop,
+    async waitForStartup(child: { pid: number; exitCode: number | null; exited: Promise<number> }) {
+      // The test runner owns the hang watchdog. Startup is a child event, not a latency claim.
+      const complete = await Promise.race([startup, child.exited.then(() => false)]);
+      if (complete && child.exitCode === null) return;
+      await this.finish();
+      throw new Error(`child ended before live client startup: ${JSON.stringify({ pid: child.pid, exitCode: child.exitCode, ...snapshot() })}`);
+    },
     async finish(timeoutMs = 1000) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
