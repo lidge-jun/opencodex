@@ -491,7 +491,8 @@ export async function startClientRuntime(
         cleanup();
         await flushLinkDiagnostics();
         // launchd relaunches only unsuccessful exits; an external signal must still count.
-        process.exit(restored?.success === false ? 1 : handledSignalExitCode(signal));
+        if (restored?.success === false) process.exit(1);
+        else process.exit(handledSignalExitCode(signal));
       }
     })();
   };
