@@ -399,6 +399,7 @@ export const ru: Record<TKey, string> = {
   "common.loading": "Загрузка…",
   "common.retry": "Повторить",
   "prov.affinityResetPending": "Изменение аккаунта сохранено, но обновление маршрутизации разговоров не завершено. Повторите попытку.",
+  "prov.affinityResetComplete": "Маршрутизация разговоров обновлена.",
   "prov.affinityResetRetryUnavailable": "Повторная попытка для этого аккаунта сейчас недоступна. Обновите список аккаунтов и при необходимости возобновите работу аккаунта или войдите снова.",
   "common.undo": "Отменить",
   "auth.adminTokenTitle": "Токен администратора OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",

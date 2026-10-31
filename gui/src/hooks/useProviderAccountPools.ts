@@ -607,9 +607,12 @@ export function useProviderAccountPools(deps: {
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
-      const result = await res.json().catch(() => ({})) as { affinityResetConfirmed?: boolean };
+      const result = (await res.json().catch(() => ({})) ?? {}) as { affinityResetConfirmed?: boolean };
       if (!currentRetry()) return;
-      if (res.ok && result.affinityResetConfirmed === true) clearPendingAffinityReset(provider);
+      if (res.ok && result.affinityResetConfirmed === true) {
+        clearPendingAffinityReset(provider);
+        notify(t("prov.affinityResetComplete"), true);
+      }
       else notify(t("prov.affinityResetPending"), false);
     } catch {
       if (currentRetry()) notify(t("prov.affinityResetPending"), false);
@@ -761,7 +764,7 @@ export function useProviderAccountPools(deps: {
     let committed = false;
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
-      const result = await res.json().catch(() => ({})) as { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
+      const result = (await res.json().catch(() => ({})) ?? {}) as { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
       if (!current()) return;
       const partial = !res.ok && result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
       if (!res.ok && !partial) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }

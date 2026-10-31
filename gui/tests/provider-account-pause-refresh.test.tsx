@@ -185,16 +185,17 @@ test.each(["active", "pause"] as const)("%s retry survives unavailable rosters a
   await act(async () => { await pools.retryAffinityReset("fixture"); });
   expect(resets).toEqual([{ provider: "fixture" }, { provider: "fixture" }]);
   expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+  expect(notices.at(-1)).toEqual({ key: "prov.affinityResetComplete", ok: true });
 });
 
-test.each(["partial", "legacy", "confirmed"] as const)("delete %s acknowledges account removal separately from global reset", async outcome => {
+test.each(["partial", "legacy", "empty", "confirmed"] as const)("delete %s acknowledges account removal separately from global reset", async outcome => {
   const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
   let deleted = false; let resetSucceeds = false;
   const writes: Array<{ method: string; url: string; body?: unknown }> = [];
   respond = async (url, init) => {
     if (init?.method === "DELETE") {
       writes.push({ method: "DELETE", url }); deleted = true;
-      return outcome === "partial" ? Response.json({ code: "affinity_reset_not_persisted", retryable: true, deletionCommitted: true }, { status: 503 })
+      return outcome === "empty" ? Response.json(null) : outcome === "partial" ? Response.json({ code: "affinity_reset_not_persisted", retryable: true, deletionCommitted: true }, { status: 503 })
         : Response.json({ ok: true, ...(outcome === "confirmed" ? { affinityResetConfirmed: true } : {}) });
     }
     if (init?.method === "PUT") {
@@ -222,6 +223,7 @@ test.each(["partial", "legacy", "confirmed"] as const)("delete %s acknowledges a
       await act(async () => { await pools.retryAffinityReset("fixture"); });
       expect(writes.slice(2)).toEqual(Array.from({ length: 2 }, () => ({ method: "PUT", url: "/pause-hook/api/oauth/accounts/affinity-reset", body: { provider: "fixture" } })));
       expect(pools.pendingAffinityResets.fixture).toBeUndefined();
+      expect(notices.at(-1)).toEqual({ key: "prov.affinityResetComplete", ok: true });
     }
   } finally { consent.mockRestore(); }
 });
@@ -239,6 +241,7 @@ test("late global reset confirmation cannot clear a newer pending intent", async
   }
   expect(pools.pendingAffinityResets.fixture).toEqual({ kind: "pause", accountId: "a", paused: true });
   expect(pools.switchingAccounts).toEqual({});
+  expect(notices.some(notice => notice.key === "prov.affinityResetComplete")).toBe(false);
 });
 
 test.each(["paused", "needsReauth"] as const)("active retry reports %s and succeeds after the account recovers", async blocked => {

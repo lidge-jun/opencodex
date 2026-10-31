@@ -331,6 +331,7 @@ export const tr: Record<TKey, string> = {
   "common.loading": "Yükleniyor…",
   "common.retry": "Tekrar Dene",
   "prov.affinityResetPending": "Hesap değişikliği kaydedildi, ancak konuşma yönlendirmesi güncellenemedi. Tamamlamak için yeniden deneyin.",
+  "prov.affinityResetComplete": "Konuşma yönlendirmesi güncellendi.",
   "prov.affinityResetRetryUnavailable": "Bu hesap için şu anda yeniden denenemiyor. Hesap listesini yenileyin ve gerekirse hesabı devam ettirin veya yeniden oturum açın.",
   "common.undo": "Geri al",
   "auth.adminTokenTitle": "OpenCodex yönetici jetonu (OPENCODEX_ADMIN_AUTH_TOKEN)",

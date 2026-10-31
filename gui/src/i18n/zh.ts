@@ -397,6 +397,7 @@ export const zh: Record<TKey, string> = {
   "common.loading": "加载中…",
   "common.retry": "重试",
   "prov.affinityResetPending": "账户更改已保存，但对话路由更新尚未完成。请重试以完成更新。",
+  "prov.affinityResetComplete": "对话路由更新已完成。",
   "prov.affinityResetRetryUnavailable": "此账户目前无法重试。请刷新账户列表，并在需要时恢复账户或重新登录。",
   "common.undo": "撤销",
   "auth.adminTokenTitle": "OpenCodex 管理员令牌 (OPENCODEX_ADMIN_AUTH_TOKEN)",

@@ -332,6 +332,7 @@ export const en = {
   "common.loading": "Loading…",
   "common.retry": "Retry",
   "prov.affinityResetPending": "The account change was saved, but conversation routing could not finish updating. Retry to finish.",
+  "prov.affinityResetComplete": "Conversation routing has been updated.",
   "prov.affinityResetRetryUnavailable": "This account is unavailable for retry. Refresh the account list and, if needed, resume the account or sign in again.",
   "common.undo": "Undo",
   "auth.adminTokenTitle": "OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)",

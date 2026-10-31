@@ -329,6 +329,7 @@ export const fr: Record<TKey, string> = {
   "common.loading": "Chargement…",
   "common.retry": "Réessayer",
   "prov.affinityResetPending": "Le changement de compte a été enregistré, mais la mise à jour du routage des conversations n’a pas abouti. Réessayez pour terminer.",
+  "prov.affinityResetComplete": "Le routage des conversations a été mis à jour.",
   "prov.affinityResetRetryUnavailable": "Impossible de réessayer avec ce compte. Actualisez la liste des comptes et, si nécessaire, réactivez le compte ou reconnectez-vous.",
   "common.undo": "Annuler",
   "auth.adminTokenTitle": "Jeton d’administration OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",

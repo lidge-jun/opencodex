@@ -303,6 +303,7 @@ export const zhTW: Record<TKey, string> = {
   "common.loading": "載入中…",
   "common.retry": "重試",
   "prov.affinityResetPending": "帳戶變更已儲存，但對話路由更新尚未完成。請重試以完成更新。",
+  "prov.affinityResetComplete": "對話路由更新已完成。",
   "prov.affinityResetRetryUnavailable": "此帳戶目前無法重試。請重新整理帳戶清單，並視需要恢復帳戶或重新登入。",
   "common.undo": "復原",
   "app.logoAria": "opencodex 徽標",
