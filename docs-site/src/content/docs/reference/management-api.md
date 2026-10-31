@@ -710,7 +710,9 @@ report never spawns the CLI or calls Anthropic; other configured providers can s
 normal quota probes. The row is absent until a usage check records quota windows for the signed-in
 account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
 sign-in cache) on a cached read; a newer observation, including one without windows, replaces it
-at once with `refresh=1` and otherwise when the report cache expires.
+at once with `refresh=1` and otherwise when the report cache expires. `GET /api/quota-pool` reads no
+sign-in of its own: it lists the Claude CLI account only for the sign-in this proxy last read, so
+after a restart that row appears once the dashboard or a Claude turn has read the sign-in.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:

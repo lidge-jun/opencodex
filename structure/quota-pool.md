@@ -32,7 +32,10 @@ every caller, and reads only caches other paths filled:
   Devin, DSH, Meta): the last-good per-account cache. A current `QuotaFailureCode` becomes
   `failure`.
 - Claude CLI: `peekClaudeUsageObservation` in `src/providers/claude-cli-usage-state.ts`, which
-  reads the admission snapshot from memory or its file without resolving the sign-in. A parsed CLI
+  reads the admission snapshot from memory or its file without resolving the sign-in. Only the
+  snapshot of the identity the last sign-in read recorded (`claudeSignedInIdentity`) produces a row:
+  the pool is a passive read and may not read the Keychain, so after a sign-out, an account switch
+  or a restart the row is absent until the Home's dashboard or a turn reads the sign-in. A parsed CLI
   limit refusal is a `custom` window `refusal` with `exhausted: true` and source `estimated`.
 - Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the
   `pooled` windows only where account rows do not serve the configured provider: a provider with
