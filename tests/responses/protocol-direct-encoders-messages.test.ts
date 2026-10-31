@@ -353,11 +353,18 @@ describe("direct Messages encoder matches bridge + converter (stream)", () => {
     expect(json.content).toMatchObject([{ type: "tool_use", id: "toolu_call_7dc00b56" }]);
   });
 
-  test("claudeToolUseId keeps toolu_ ids and mints one when the call id is missing", () => {
+  test("claudeToolUseId keeps toolu_ ids, caps long ids at 64, and mints one when the call id is missing", () => {
     expect(claudeToolUseId("toolu_01AbC")).toBe("toolu_01AbC");
     expect(claudeToolUseId(claudeToolUseId("call_x"))).toBe("toolu_call_x");
     expect(claudeToolUseId("")).toMatch(/^toolu_[0-9a-f]{32}$/);
     expect(claudeToolUseId(undefined)).toMatch(/^toolu_[0-9a-f]{32}$/);
+    const long = `call_${"a".repeat(60)}`;
+    const capped = claudeToolUseId(long);
+    expect(capped).toHaveLength(64);
+    expect(capped).toMatch(/^toolu_call_a+_[0-9a-f]{16}$/);
+    expect(claudeToolUseId(long)).toBe(capped);
+    expect(claudeToolUseId(`${long}b`)).not.toBe(capped);
+    expect(claudeToolUseId("c".repeat(58))).toBe(`toolu_${"c".repeat(58)}`);
   });
 
   test("an initial failure is an error stream without message_start", async () => {
