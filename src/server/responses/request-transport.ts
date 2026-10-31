@@ -1,5 +1,6 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
+import { applyChatToolDispatch } from "../../claude/chat-tool-dispatch";
 import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
@@ -578,6 +579,14 @@ export async function prepareResponsesTransport(
       && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
       && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
         `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+    // The Chat wire has no additional_tools; its own opt-in keeps the catalog stable through a
+    // dispatcher instead, projected and un-projected at this one physical adapter (#7452).
+    const chatDispatch = inboundWire === "anthropic" && discovery && provider.adapter === "openai-chat"
+      && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
+      && appendOnlyToolLoadingMatches(config.claudeCode?.chatToolDispatchModels,
+        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+    if (chatDispatch) applyChatToolDispatch(resolved, discovery);
     if (appendOnly) {
       const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
       resolved.buildRequest = (requestParsed, incoming) => {

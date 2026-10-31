@@ -1202,7 +1202,8 @@ it drops the typed search declaration and ordinarily sends function schemas eage
 make the client's context accounting undercount the provider's input.
 
 There is a separate, narrow exception for **client-executed `ToolSearch`** on a verified Responses
-destination selected by [`claudeCode.appendOnlyToolLoadingModels`](#preserve-cache-prefixes-when-client-tools-load).
+destination selected by [`claudeCode.appendOnlyToolLoadingModels`](#preserve-cache-prefixes-when-client-tools-load),
+or on a verified Chat destination selected by [`claudeCode.chatToolDispatchModels`](#chat-routes).
 For that final physical route, the opt-in keeps unused deferred definitions out of the initial
 catalog and adds current definitions at successful structured discovery results. Client-side
 search must already work and an eager `ToolSearch` function must be declared. The launcher
@@ -1276,6 +1277,44 @@ This is not server-side deferred-tool-search support and does not change compati
 admission or turn on tool search in the client. It applies when the client already discovers tools.
 It does not guarantee cache hits: schema changes, revocations, model switches, compaction and
 upstream cache availability can still require a new prefix.
+
+A Responses provider that accepts `additional_tools` but silently drops it is not verified for this
+opt-in: the loaded definition never reaches the model. DeepSeek's official Responses API behaved this
+way when measured on 2026-10-31. Use the Chat-route opt-in below for DeepSeek instead.
+
+#### Chat routes
+
+A Chat Completions route has no equivalent of `additional_tools`. On a translated Chat route, each
+client ToolSearch load changes the tool catalog and the tool-name list in the system message, so the
+next request misses the provider's prompt cache for the whole conversation. A separate opt-in keeps
+both stable for **direct Chat routes verified with the models you use**:
+
+```json
+{
+  "claudeCode": {
+    "chatToolDispatchModels": ["deepseek/deepseek-flash"]
+  }
+}
+```
+
+Selectors, limits, the metadata and eager `ToolSearch` prerequisites, and the combo, policy and
+late-fallback rules are the same as for `appendOnlyToolLoadingModels`, applied to a final physical
+route that is a direct `openai-chat` provider. On a selected route:
+
+- From the first request, the catalog carries one extra function, `use_loaded_tool`, and leaves
+  unused deferred tools out. Loading a tool changes neither the catalog nor the system message.
+- A discovered tool's name, description and parameter schema are appended as text to the ToolSearch
+  result that loaded it. The model calls the tool through `use_loaded_tool` with
+  `{"name": ..., "arguments": {...}}`, and earlier calls are replayed in that same shape.
+- opencodex rewrites those calls back to the real tool before Claude Code sees them, and only for
+  tools discovered in that conversation. Claude Code always receives its own tool names.
+
+Limitations: the definitions are text, so provider-side strict schema enforcement does not apply to
+them and an invalid argument costs a turn; arguments of a dispatched call are not streamed until
+the call completes; the instruction sits inside a tool result, which some models may not follow, so
+verify each model before selecting it. A request that forces an undiscovered tool, or whose history
+is ambiguous, is sent unchanged. Absent, empty or unlisted configuration sends exactly the same
+request bytes as before. This does not guarantee cache hits either.
 
 #### Claude models behind a gateway that also serves GPT
 
