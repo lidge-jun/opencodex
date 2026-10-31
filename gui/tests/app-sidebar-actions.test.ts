@@ -21,8 +21,10 @@ test("the sidebar foot pairs stop with restart-Codex", () => {
   expect(card).toContain("handleCodexRestart");
   expect(proxyControls).toContain("IconPower");
   expect(proxyControls).toContain("IconRefresh");
-  // The destructive control keeps its danger marking.
-  expect(proxyControls).toContain('variant="danger"');
+  // The destructive control keeps its danger marking: the stop button is the tray's `danger` one,
+  // and only that variant turns red on hover.
+  expect(proxyControls).toMatch(/<TrayButton onClick=\{onStop\}[^>]*\bdanger\b/);
+  expect(proxyControls).toContain('"hover:bg-danger-soft hover:text-danger"');
 });
 
 test("the mobile top bar carries the same pair", () => {
@@ -45,10 +47,12 @@ test("every action orb carries an accessible name", () => {
   const orbs = src.split("<button").slice(1).filter(chunk => chunk.slice(0, 400).includes("sidebar-orb"));
   expect(orbs.length).toBeGreaterThanOrEqual(2);
   for (const orb of orbs) expect(orb.slice(0, 400)).toContain("aria-label");
-  // The sidebar card's icon buttons are v2 <Button>s; each one is named too.
-  const buttons = proxyControls.split("<Button").slice(1);
+  // The sidebar card's icon buttons are tray buttons; each call passes a name, and the tray
+  // button turns it into the aria-label.
+  const buttons = proxyControls.split("<TrayButton ").slice(1);
   expect(buttons.length).toBeGreaterThanOrEqual(3);
-  for (const button of buttons) expect(button.slice(0, 400)).toContain("aria-label");
+  for (const button of buttons) expect(button.slice(0, 400)).toMatch(/\blabel=\{/);
+  expect(proxyControls).toContain("aria-label={label}");
 });
 
 test("the restart action comes from the shared hook, not an inline duplicate", () => {

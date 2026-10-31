@@ -48,15 +48,15 @@ export function SidebarGithubRow({
   apiBase,
   onOpenUpdate,
   onOpenTerminalCommand,
-  trailing,
+  version,
 }: {
   apiBase: string;
   /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
   /** Opens the local terminal-command settings in the desktop app shell. */
   onOpenTerminalCommand: () => void;
-  /** One more orb after the row's own, e.g. the theme switch, so the foot keeps one icon row. */
-  trailing?: ReactNode;
+  /** The running version, shown right after the GitHub link. */
+  version?: ReactNode;
 }) {
   const t = useT();
   const [starring, setStarring] = useState(false);
@@ -141,6 +141,7 @@ export function SidebarGithubRow({
       <a className="sidebar-link sidebar-github-link" href={repoUrl} target="_blank" rel="noreferrer">
         <IconGithub /> {t("common.github")}
       </a>
+      {version}
       <div className="sidebar-github-actions">
         <button
           type="button"
@@ -174,7 +175,6 @@ export function SidebarGithubRow({
             <IconTerminal aria-hidden="true" />
           </button>
         )}
-        {trailing}
       </div>
     </div>
   );

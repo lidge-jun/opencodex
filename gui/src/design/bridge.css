@@ -232,27 +232,37 @@
   .sidebar { padding-top: calc(var(--titlebar-h, 40px) + 12px); }
 }
 
-/* ---- sidebar foot: proxy card, language, links + theme, version ----------- */
+/* ---- sidebar foot: proxy capsule, language + theme, GitHub + version ------ */
 .sidebar-foot > .ui-v2:first-child { margin-bottom: 6px; }
+.sidebar-pref-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 10px;
+}
+.sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }
+.sidebar-github-row > .sidebar-github-link { flex: 0 0 auto; padding-right: 3px; }
+/* one line beside "GitHub": a long prerelease id ellipsizes, and the tooltip holds it whole */
+.sidebar-version {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .sidebar-meta-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  min-height: 24px;
+  justify-content: flex-end;
+  min-height: 28px;
   padding: 2px 10px 0;
-}
-.sidebar-version {
-  min-width: 0;
-  color: var(--faint);
-  font-family: var(--font-code);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
 /* phone drawer: the drawer head already shows the full version */
 @media (max-width: 760px) {
   .sidebar-version { display: none; }
-  .sidebar-meta-row:not(:has(> :not(.sidebar-version))) { display: none; }
 }

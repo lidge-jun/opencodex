@@ -97,6 +97,12 @@ function readRuntimeVersion(data: unknown): string | null {
   return typeof version === "string" && version.length > 0 ? version : null;
 }
 
+/** Seconds the proxy has been up, from the same /healthz body; null when it does not say. */
+function readUptime(data: unknown): number | null {
+  const uptime = data && typeof data === "object" ? (data as { uptime?: unknown }).uptime : undefined;
+  return typeof uptime === "number" && Number.isFinite(uptime) && uptime >= 0 ? uptime : null;
+}
+
 function readStoredTheme(): Theme {
   const t = localStorage.getItem(THEME_KEY);
   return t === "light" || t === "dark" ? t : "system";
@@ -297,13 +303,18 @@ export default function App() {
     async (signal) => {
       const res = await fetch(`${machineBase}/healthz`, { signal });
       if (!res.ok) return null;
-      return readRuntimeVersion(await res.json());
+      const body: unknown = await res.json();
+      return { version: readRuntimeVersion(body), uptime: readUptime(body) };
     },
     { pollMs: 30_000, enabled: targetsSettled },
   );
 
   const themeSwitch = <ThemeSwitch theme={theme} onChange={setTheme} />;
-  const displayedVersion: string = healthPoll.data ?? __APP_VERSION__;
+  const displayedVersion: string = healthPoll.data?.version ?? __APP_VERSION__;
+  const uptime = healthPoll.data?.uptime ?? null;
+  // The proxy card's second line: how long it has been up, in the Home tile's own words.
+  const uptimeLabel = uptime === null ? undefined
+    : t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) });
 
   const [stopping, setStopping] = useState(false);
 
@@ -526,6 +537,7 @@ export default function App() {
           <ProxyControls
             label={t("dash.actions")}
             statusLabel={t("dash.online")}
+            detail={uptimeLabel}
             stopLabel={t(targets.connected ? "connection.disconnect" : "dash.stop")}
             stoppingLabel={t("dash.stopping")}
             restartLabel={t("dash.codexRestart")}
@@ -541,17 +553,21 @@ export default function App() {
               onClick: () => { void handleSessionLogout(); },
             } : undefined}
           />
-          <div className="lang-toggle">
-            <IconGlobe aria-hidden />
-            <Select
-              value={locale}
-              options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
-              onChange={v => setLocale(v as Locale)}
-              label={t("lang.label")}
-              placement="right"
-              portal={false}
-              style={{ flex: 1, minWidth: 0, width: "100%" }}
-            />
+          {/* Display preferences share one row: the language picker, then the theme orb. */}
+          <div className="sidebar-pref-row">
+            <div className="lang-toggle">
+              <IconGlobe aria-hidden />
+              <Select
+                value={locale}
+                options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
+                onChange={v => setLocale(v as Locale)}
+                label={t("lang.label")}
+                placement="right"
+                portal={false}
+                style={{ flex: 1, minWidth: 0, width: "100%" }}
+              />
+            </div>
+            {themeSwitch}
           </div>
           <SidebarGithubRow
             apiBase={sharedBase}
@@ -564,15 +580,14 @@ export default function App() {
               setNavOpen(false);
               openDesktopCliPage();
             }}
-            trailing={themeSwitch}
+            version={<span className="sidebar-version" title={displayedVersion}>v{displayedVersion}</span>}
           />
-          <div className="sidebar-meta-row">
-            <span className="sidebar-version" title={displayedVersion}>v{displayedVersion}</span>
-            {zoomManaged && (
+          {zoomManaged && (
+            <div className="sidebar-meta-row">
               <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
                 canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </aside>
 
