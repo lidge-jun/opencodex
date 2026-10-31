@@ -572,6 +572,19 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }),
     });
   }
+  if (url.pathname === "/api/oauth/accounts/affinity-reset" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (!isPublicOAuthProvider(provider) || !isAnthropicOAuthInstance(provider)) {
+      return jsonResponse({ error: "session-affinity reset is only supported for Anthropic OAuth instances" }, 400);
+    }
+    const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
+    if (!await anthropicRoutingFor(provider).resetAnthropicSessionAffinityConfirmed()) {
+      return jsonResponse({ code: "affinity_reset_not_persisted", provider, retryable: true }, 503);
+    }
+    return jsonResponse({ ok: true, provider, affinityResetConfirmed: true });
+  }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
@@ -1055,13 +1068,24 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const id = url.searchParams.get("id") ?? "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
+    const retryReset = url.searchParams.get("retryAffinityReset");
+    if (retryReset !== null && retryReset !== "true" && retryReset !== "false") {
+      return jsonResponse({ error: "retryAffinityReset must be true or false" }, 400);
+    }
+    if (retryReset === "true" && !isAnthropicOAuthInstance(provider)) {
+      return jsonResponse({ error: "session-affinity reset is only supported for Anthropic OAuth instances" }, 400);
+    }
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     reconcileLiveStateStores();
+    let affinityReset: Promise<boolean> | undefined;
     if (isAnthropicOAuthInstance(provider)) {
       const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-      anthropicRoutingFor(provider).clearAnthropicAccountCooldown(id);
-      anthropicRoutingFor(provider).clearAnthropicSessionAffinityForAccount(id);
+      const routing = anthropicRoutingFor(provider);
+      routing.clearAnthropicAccountCooldown(id);
+      routing.clearAnthropicSessionAffinityForAccount(id);
+      affinityReset = retryReset === "true" ? routing.resetAnthropicSessionAffinityConfirmed()
+        : routing.flushAnthropicManualSelectionReset();
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");
@@ -1073,7 +1097,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // leave the JWT and catalog in memory, because only the logout route cleared
     // them.
     if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
-    return jsonResponse({ ok: true });
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ code: "affinity_reset_not_persisted", provider, accountId: id,
+        deletionCommitted: true, retryable: true }, 503);
+    }
+    return jsonResponse({ ok: true, ...(retryReset === "true" ? { affinityResetConfirmed: true } : {}) });
   }
 
   // Multi-key pool for API-key providers (same GUI dropdown as OAuth multiauth): list masked

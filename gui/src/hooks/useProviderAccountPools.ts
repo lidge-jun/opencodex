@@ -592,12 +592,45 @@ export function useProviderAccountPools(deps: {
     }
   };
 
+  const retryAffinityResetOnly = async (provider: string, accountId: string) => {
+    const key = `oauth:${provider}`;
+    if (selectionMutationsRef.current.has(key) || switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider)) return;
+    const retry = { kind: "reset" as const, accountId };
+    rememberAffinityResetRetry(apiBase, provider, retry);
+    const target = { provider, accountId };
+    const mutation = Symbol();
+    selectionMutationsRef.current.set(key, mutation);
+    switchingAccountRef.current.set(provider, target);
+    setSwitchingAccounts(current => ({ ...current, [provider]: target }));
+    const currentRetry = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+      && selectionMutationsRef.current.get(key) === mutation && affinityResetRetries(apiBase)[provider] === retry;
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/accounts/affinity-reset`, { method: "PUT",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+      const result = await res.json().catch(() => ({})) as { affinityResetConfirmed?: boolean };
+      if (!currentRetry()) return;
+      if (res.ok && result.affinityResetConfirmed === true) clearPendingAffinityReset(provider);
+      else notify(t("prov.affinityResetPending"), false);
+    } catch {
+      if (currentRetry()) notify(t("prov.affinityResetPending"), false);
+    } finally {
+      if (selectionMutationsRef.current.get(key) === mutation) selectionMutationsRef.current.delete(key);
+      if (switchingAccountRef.current.get(provider) === target) {
+        switchingAccountRef.current.delete(provider);
+        if (aliveRef.current && mountedRef.current && serverRef.current === apiBase) {
+          setSwitchingAccounts(current => { const next = { ...current }; delete next[provider]; return next; });
+        }
+      }
+    }
+  };
+
   const retryAffinityReset = async (provider: string) => {
     const pending = pendingAffinityResets[provider];
-    if (!pending || serverRef.current !== apiBase) return;
+    if (!pending || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    if (pending.kind === "reset") return retryAffinityResetOnly(provider, pending.accountId);
     const account = accountSets[provider]?.accounts.find(row => row.id === pending.accountId);
     if (!account) {
-      if (accountLoadStates[provider] === "ready") clearPendingAffinityReset(provider);
+      if (accountLoadStates[provider] === "ready") return retryAffinityResetOnly(provider, pending.accountId);
       notify(t("prov.affinityResetRetryUnavailable"), false);
       return;
     }
@@ -722,15 +755,29 @@ export function useProviderAccountPools(deps: {
       confirmLabel: t("common.remove"),
       tone: "danger",
     });
-    if (!consented) return;
+    if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    const pending = affinityResetRetries(apiBase)[provider];
+    const current = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase;
+    let committed = false;
     try {
-      const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}`, { method: "DELETE" });
-      if (!res.ok) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
-      notify(t("prov.accountRemoved", { email: label }), true);
+      const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}${pending ? "&retryAffinityReset=true" : ""}`, { method: "DELETE" });
+      const result = await res.json().catch(() => ({})) as { code?: string; retryable?: boolean; deletionCommitted?: boolean; affinityResetConfirmed?: boolean };
+      if (!current()) return;
+      const partial = !res.ok && result.code === "affinity_reset_not_persisted" && result.retryable === true && result.deletionCommitted === true;
+      if (!res.ok && !partial) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
+      committed = true;
+      if (partial) {
+        const latest = affinityResetRetries(apiBase)[provider];
+        if (!latest || latest === pending) rememberAffinityResetRetry(apiBase, provider, { kind: "reset", accountId: account.id });
+        notify(t("prov.affinityResetPending"), false);
+      } else {
+        if (pending && result.affinityResetConfirmed === true && affinityResetRetries(apiBase)[provider] === pending) clearPendingAffinityReset(provider);
+        notify(t("prov.accountRemoved", { email: label }), true);
+      }
       await fetchAccountSets([provider]);
       await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
     } catch {
-      notify(t("prov.accountRemoveFail", { email: label }), false);
+      if (current()) notify(t(committed ? "pws.accountsLoadFailed" : "prov.accountRemoveFail", { email: label }), false);
     }
   };
 

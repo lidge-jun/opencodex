@@ -1,6 +1,7 @@
 /** App-lifetime retry state. No credentials or account labels are retained. */
 export type AffinityResetRetry = { accountId: string; kind: "active" }
-  | { accountId: string; kind: "pause"; paused: boolean };
+  | { accountId: string; kind: "pause"; paused: boolean }
+  | { accountId: string; kind: "reset" };
 type Snapshot = Readonly<Record<string, AffinityResetRetry>>;
 const empty: Snapshot = Object.freeze({});
 const byServer = new Map<string, Snapshot>();

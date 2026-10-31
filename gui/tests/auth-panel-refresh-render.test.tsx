@@ -38,7 +38,7 @@ const ACCOUNTS = [
 ];
 
 async function mountPanel(onRefreshQuota?: (name: string) => Promise<boolean>,
-  retryReset?: (name: string) => Promise<void>): Promise<HTMLElement> {
+  retryReset?: (name: string) => Promise<void>, accounts = ACCOUNTS): Promise<HTMLElement> {
   const host = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(host as never);
   const { createRoot } = await import("react-dom/client");
@@ -63,8 +63,8 @@ async function mountPanel(onRefreshQuota?: (name: string) => Promise<boolean>,
         <ProviderAuthPanel
           item={ITEM}
           apiBase="http://proxy"
-          oauth={{ loggedIn: true, email: "b@example.com" }}
-          accounts={ACCOUNTS as never}
+          oauth={{ loggedIn: accounts.length > 0, ...(accounts.length ? { email: "b@example.com" } : {}) }}
+          accounts={accounts as never}
           authHandlers={handlers}
         />
       </LanguageProvider>,
@@ -124,6 +124,16 @@ test("an affinity-reset retry remains actionable when the account is already act
   const alert = host.querySelector('[role="alert"]');
   expect(alert?.textContent).toContain("The account change was saved");
   const retry = alert?.querySelector<HTMLButtonElement>("button");
+  expect(retry?.textContent).toBe("Retry");
+  expect(retry?.disabled).toBe(false);
+  await act(async () => { retry!.click(); await flush(); });
+  expect(calls).toEqual(["anthropic"]);
+});
+
+test("a provider-wide reset retry remains actionable after the last account is deleted", async () => {
+  const calls: string[] = [];
+  const host = await mountPanel(undefined, async provider => { calls.push(provider); }, []);
+  const retry = host.querySelector<HTMLButtonElement>('[role="alert"] button');
   expect(retry?.textContent).toBe("Retry");
   expect(retry?.disabled).toBe(false);
   await act(async () => { retry!.click(); await flush(); });
