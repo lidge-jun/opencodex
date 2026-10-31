@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { IconAlert, IconCheck, IconInfo } from "../../icons";
 import { useT } from "../../i18n/shared";
 import { cn } from "@/lib/utils";
@@ -95,16 +95,11 @@ export function StatusDot({ tone }: { tone: "ok" | "warn" | "err" | "idle" | "ac
   );
 }
 
-/**
- * The "?" beside a setting: the plain state stays on screen, the explanation opens below.
- * The region is `hidden`, not unmounted, so its text stays in the document for find-in-page
- * and for the copy contracts the tests read.
+/*
+ * The "?" beside a setting (state from `useHelp` in ./use-help): the plain state stays on
+ * screen, the explanation opens below. The region is `hidden`, not unmounted, so its text
+ * stays in the document for find-in-page and for the copy contracts the tests read.
  */
-export function useHelp() {
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  return { open, id, toggle: () => setOpen(value => !value) };
-}
 
 export function HelpButton({ open, controls, name, onToggle, className }: {
   open: boolean;

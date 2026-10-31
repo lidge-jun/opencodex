@@ -6,7 +6,8 @@ import {
 import { clampNumberDraft } from "../clamp-draft";
 import { NumberStepper } from "./NumberStepper";
 import { Select } from "../ui";
-import { HelpButton, HelpRegion, useHelp } from "./v2-accounts/surface";
+import { HelpButton, HelpRegion } from "./v2-accounts/surface";
+import { useHelp } from "./v2-accounts/use-help";
 
 const STRATEGY_LABEL_KEYS = {
   "reset-first": "accountPool.strategyResetFirst",

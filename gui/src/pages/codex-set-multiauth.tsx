@@ -12,7 +12,8 @@ import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } f
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { startVisibilityPoll } from "../visibility-poll";
 import { createBoundedFetch } from "../bounded-fetch";
-import { HelpButton, HelpRegion, InlineBanner, useHelp } from "../components/v2-accounts/surface";
+import { HelpButton, HelpRegion, InlineBanner } from "../components/v2-accounts/surface";
+import { useHelp } from "../components/v2-accounts/use-help";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
