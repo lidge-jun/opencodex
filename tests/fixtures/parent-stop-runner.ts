@@ -227,7 +227,7 @@ mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEn
 const portReclaim = await import("../../src/server/port-reclaim");
 mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim, reclaimListenPort: async () => {} }));
 // Only shim preflight is unrelated to this stop contract; parsing and dispatch stay real.
-mock.module("../../src/cli/codex-shim-autorestore", () => ({ maybeAutoRestoreCodexShim() {} }));
+mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);

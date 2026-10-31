@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beginCodexCliSelectionParentWrite } from "./cli-update-selection-gate";
+import { beginCodexCliSelectionParentWrite, withCodexCliSelectionParentWriteAsync, CodexCliSelectionMutationBusyError } from "./cli-update-selection-gate";
 import {
   existsSync,
   lstatSync,
@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { delimiter, extname, join, posix, win32 } from "node:path";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
+import type { FileIdentity } from "../lib/file-identity";
 import { assertSelectedRuntimeWritable, RuntimePreflightError, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
 import { getConfigDir } from "../config";
 import { isWslRuntime, wslAutomountRoot } from "./home";
@@ -264,7 +265,7 @@ interface FreshShimInstallJournalEntry {
   writtenWrapperFingerprint?: ShimPathFingerprint;
   wrapperWriteStarted: boolean;
   /** dev/ino of the file our `writeShim()` created, recorded before anything can fail. */
-  writtenWrapperInode?: { dev: number; ino: number };
+  writtenWrapperInode?: FileIdentity;
 }
 
 function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry[]): void {
@@ -982,6 +983,28 @@ export function installCodexShim(deps: RuntimePreflightDeps = {}): { installed: 
   if (!gate.entered) return { installed: false, refused: true, message: "codex_cli_selection_busy" };
   try { return installCodexShimInternal({ ...deps, allowFreshInstall: true }); }
   finally { gate.exit(); }
+}
+
+export async function installCodexShimAsync(deps: RuntimePreflightDeps = {}): Promise<ReturnType<typeof installCodexShim>> {
+  try { return await withCodexCliSelectionParentWriteAsync(() => installCodexShim(deps)); }
+  catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return { installed: false, refused: true, message: error.message };
+    throw error;
+  }
+}
+export async function autoRestoreCodexShimAsync(options: Parameters<typeof autoRestoreCodexShim>[0]): Promise<CodexShimAutoRestoreResult> {
+  try { return await withCodexCliSelectionParentWriteAsync(() => autoRestoreCodexShim(options)); }
+  catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return { status: "deferred", message: error.message };
+    throw error;
+  }
+}
+export async function uninstallCodexShimAsync(): Promise<ReturnType<typeof uninstallCodexShim>> {
+  try { return await withCodexCliSelectionParentWriteAsync(uninstallCodexShim); }
+  catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return { removed: false, message: error.message };
+    throw error;
+  }
 }
 
 export function autoRestoreCodexShim(options: Parameters<typeof autoRestoreWindowsCodexShim>[0]): CodexShimAutoRestoreResult {

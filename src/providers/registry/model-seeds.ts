@@ -770,7 +770,8 @@ export const KIMI_CODING_K31_MODELS = ["k3.1-pro", "k3.1-pro-highspeed"];
 export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
 export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K31_MODELS, ...KIMI_CODING_K28_MODELS];
 export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
-export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+// 2026-10-28: models.md recommends K3.1 Pro; K2.5 ended 2026-08-31. Other K2 ids retire in December.
+export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"];
 // 261025 Kimi K3.1 Pro on the Moonshot API (#7653): the platform model list names kimi-k3.1-pro
 // and kimi-k3.1-pro-highspeed (same model, 2-3x speed) on both the International and China
 // platforms. Every K3-series model has a 1,048,576-token window, and both ids share kimi-k3's

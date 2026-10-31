@@ -260,6 +260,27 @@ blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 
+Meta Responses also receives Codex's current `additional_tools` declarations in the public
+`tools` array. The catalog is captured before history normalization: replayed declarations
+and historical tool-search discoveries cannot activate tools for the new turn. Current
+namespace, custom-tool and long-name aliases retain the existing normalization and response
+restoration. Current declarations keep their parameter schemas when search results repeat a tool.
+Historical custom calls retain their existing function-call representation without granting
+those old tools current authority. Nested function definitions become public declarations.
+Malformed or unrepresentable namespace catalogs return HTTP 400 before inference, including
+requests with string or omitted input, rather than being partially promoted.
+
+For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsupported
+`output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
+request before inference. `reasoning.encrypted_content` and other include entries remain
+intact, so stateless reasoning replay is preserved. The same exact-entry normalization
+applies to xAI; unrelated Responses destinations keep their original include list.
+
+These request-shape fixes do not change account entitlements. Meta limits Muse Code
+subscription credentials to the Muse Code client; other clients require a separately
+billed Meta API key. A subscription key can therefore return HTTP 403 through OpenCodex
+even when the request shape is valid. See [Meta's subscription rules](https://dev.meta.ai/docs/muse-code/subscriptions).
+
 For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
 in the request, including when cached-only search is removed. Valid forced function selections
 remain intact. Replayed custom tool calls with missing or invalid item ids receive stable ids
@@ -358,7 +379,9 @@ MiMo model Command Code serves.
 - **Adaptive thinking display:** adaptive-thinking models (Opus 4.7+, Sonnet 5, Fable) are asked
   for `thinking.display: "summarized"`, so a long think reaches Chat and Responses clients as
   reasoning deltas instead of minutes of heartbeats. A request that hides the reasoning summary
-  (`reasoning.summary: "none"`) keeps the provider default.
+  (`reasoning.summary: "none"`) keeps the provider default. Native Opus 5.5 on `api.anthropic.com`
+  defaults to `display: "updates"`; explicit `reasoning.summary: "concise"` or `"detailed"`
+  selects `"summarized"` without the updates beta. See [Opus 5.5 progress updates](/guides/providers/#claude-opus-55-progress-updates).
 - **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
   with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
   existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
@@ -799,6 +822,11 @@ appended to the id instead.
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
 **Auth:** `key` via the `api-key` header (not Bearer).
+
+Azure requests omit the unsupported output.encrypted_content entry from include,
+while retaining reasoning.encrypted_content and all other entries. This also applies
+to openai-responses configurations targeting a resource under .openai.azure.com.
+When no entries remain, include is omitted.
 
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL

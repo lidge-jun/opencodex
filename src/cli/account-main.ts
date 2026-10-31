@@ -3,6 +3,7 @@ import { redactSecretArgs } from "./secret-args";
 import { codexExecInvocation } from "../codex/exec-invocation";
 import { validatedCodexExecInvocationAsync, type CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
 import { resolveAndPersistCodexRuntime, type ResolveCodexRuntimeDeps } from "../codex/runtime";
+import { withCodexCliSelectionParentWriteAsync } from "../codex/cli-update-selection-gate";
 import type { ResolveDeps, SpawnInvocation } from "../lib/win-exec";
 import {
   apiError,
@@ -62,7 +63,7 @@ export async function nativeMainCodexLoginValidatedInvocation(
   deps: NativeMainCodexLoginValidatedDeps = {},
 ): Promise<SpawnInvocation> {
   const env = deps.env ?? process.env;
-  const command = resolveAndPersistCodexRuntime({
+  const command = (await withCodexCliSelectionParentWriteAsync(() => resolveAndPersistCodexRuntime({
     env,
     platform,
     existsSync: deps.existsSync,
@@ -70,7 +71,7 @@ export async function nativeMainCodexLoginValidatedInvocation(
     configDir: deps.configDir,
     readFileSync: deps.readFileSync,
     discoverAlternatives: false,
-  }).runtime.command || "codex";
+  }), { configDir: deps.configDir, signal: deps.signal })).runtime.command || "codex";
   return validatedCodexExecInvocationAsync(command, ["login"], {
     env,
     platform,

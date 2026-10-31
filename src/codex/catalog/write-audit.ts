@@ -1,6 +1,6 @@
 import {
   closeSync, constants, fstatSync, ftruncateSync, lstatSync, openSync, readSync, writeSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { join } from "node:path";
 import { redactUserPath } from "../../lib/redact";
@@ -40,15 +40,15 @@ function auditLine(event: CatalogWriteAuditEvent): Buffer {
   })}\n`);
 }
 
-function regularPrivateFile(stat: Stats): boolean {
+function regularPrivateFile(stat: BigIntStats): boolean {
   // POSIX bits cannot prove NTFS privacy. Windows requires fresh-file ACL hardening.
-  return !windowsSecretAclApplies() && stat.isFile() && stat.nlink === 1
-    && stat.uid === process.getuid?.() && (stat.mode & 0o777) === 0o600;
+  return !windowsSecretAclApplies() && stat.isFile() && stat.nlink === 1n
+    && stat.uid === BigInt(process.getuid?.() ?? -1) && (stat.mode & 0o777n) === 0o600n;
 }
 
-function sameFile(left: Stats, right: Stats): boolean {
+function sameFile(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
-    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
 /** Read at most the tail budget plus one byte to locate a complete first record. */
@@ -116,8 +116,8 @@ export function appendCatalogWriteAudit(
     if (line.length > CATALOG_AUDIT_MAX_EVENT_BYTES) return "skipped";
     const path = codexCatalogAuditPath(codexHome);
     const windows = windowsSecretAclApplies();
-    let before: Stats | undefined;
-    try { before = lstatSync(path); }
+    let before: BigIntStats | undefined;
+    try { before = lstatSync(path, { bigint: true }); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !options.create) return "skipped";
     }
@@ -126,29 +126,29 @@ export function appendCatalogWriteAudit(
     const flags = constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
       | (before ? (options.create ? 0 : constants.O_APPEND) : constants.O_CREAT | constants.O_EXCL);
     fd = openSync(path, flags, 0o600);
-    let opened = fstatSync(fd);
+    let opened = fstatSync(fd, { bigint: true });
     if (windows) {
       // Existing files have already been refused: no read-only NTFS privacy verifier exists.
-      if (!opened.isFile() || opened.nlink !== 1 || opened.size !== 0
-        || !sameFile(opened, lstatSync(path))) return "skipped";
+      if (!opened.isFile() || opened.nlink !== 1n || opened.size !== 0n
+        || !sameFile(opened, lstatSync(path, { bigint: true }))) return "skipped";
       if (!hardenSecretPath(path, { required: true, deadlineMs: AUDIT_ACL_DEADLINE_MS }).ok) return "skipped";
-      const hardened = fstatSync(fd);
+      const hardened = fstatSync(fd, { bigint: true });
       // ACL changes legitimately move ctime. Retain object identity, then take a fresh baseline.
-      if (!hardened.isFile() || hardened.nlink !== 1 || hardened.size !== 0
+      if (!hardened.isFile() || hardened.nlink !== 1n || hardened.size !== 0n
         || opened.dev !== hardened.dev || opened.ino !== hardened.ino
-        || !sameFile(hardened, lstatSync(path))) return "skipped";
+        || !sameFile(hardened, lstatSync(path, { bigint: true }))) return "skipped";
       opened = hardened;
     } else if (!regularPrivateFile(opened) || (before && !sameFile(before, opened))) return "skipped";
-    if (!options.create && opened.size + line.length > CATALOG_AUDIT_MAX_BYTES) return "skipped";
-    const tail = readTail(fd, opened.size);
+    if (!options.create && opened.size + BigInt(line.length) > CATALOG_AUDIT_MAX_BYTES) return "skipped";
+    const tail = readTail(fd, Number(opened.size));
     const parsed = completeRecords(tail);
-    if (!sameFile(opened, fstatSync(fd)) || !sameFile(opened, lstatSync(path))) return "skipped";
+    if (!sameFile(opened, fstatSync(fd, { bigint: true })) || !sameFile(opened, lstatSync(path, { bigint: true }))) return "skipped";
     if (!options.create) {
       if (!parsed.clean || parsed.count + 1 > CATALOG_AUDIT_KEEP_RECORDS) return "skipped";
       writeAll(fd, line, null);
     } else if (opened.size <= CATALOG_AUDIT_MAX_BYTES - line.length
       && parsed.clean && parsed.count < CATALOG_AUDIT_KEEP_RECORDS) {
-      writeAll(fd, line, opened.size);
+      writeAll(fd, line, Number(opened.size));
     } else {
       const retained: Buffer[] = [line];
       let bytes = line.length;

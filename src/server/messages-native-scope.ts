@@ -13,7 +13,12 @@ export function nativeMessagesToolScopeDenial(
   requestedModel: string,
   body: Readonly<Rec>,
 ): AdmissionModelDeniedError | undefined {
-  if (!scope || scope.models.length === 0) return undefined;
+  if (!scope) return undefined;
+  for (const part of scope.allOf ?? []) {
+    const denial = nativeMessagesToolScopeDenial(part, providerName, requestedModel, body);
+    if (denial) return denial;
+  }
+  if (scope.models.length === 0) return undefined;
   const definitions = new Map<string, Rec[]>();
   const withdrawn = new Set<string>();
   const anonymous: Rec[] = [];

@@ -15,6 +15,7 @@ import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -182,6 +183,7 @@ export async function handleResponsesWithPolicyFallback(
   let rawBody: Record<string, unknown> | null = null;
   const coreOptions: CoreOptions = {
     ...options,
+    advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
     policyRequestScope: policyScope,
     openAiSidecarAuth: options.openAiSidecarAuth === undefined
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,

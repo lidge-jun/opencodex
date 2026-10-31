@@ -1,4 +1,5 @@
-import { closeSync, constants, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, statSync, type BigIntStats } from "node:fs";
+import { sameFileIdentity } from "../../lib/file-identity";
 
 const MAX_CODEX_CONFIG_BYTES = 1024 * 1024;
 
@@ -14,15 +15,15 @@ const MAX_CODEX_CONFIG_BYTES = 1024 * 1024;
 export function readBoundedCodexConfig(path: string): string | null {
   let fd: number | undefined;
   try {
-    let namedBefore: Stats;
+    let namedBefore: BigIntStats;
     try {
-      namedBefore = statSync(path);
+      namedBefore = statSync(path, { bigint: true });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "ENOTDIR") return null;
       throw error;
     }
-    if (!namedBefore.isFile() || namedBefore.size > MAX_CODEX_CONFIG_BYTES) {
+    if (!namedBefore.isFile() || namedBefore.size > BigInt(MAX_CODEX_CONFIG_BYTES)) {
       throw new Error("config.toml is not a bounded regular file");
     }
     // Deliberately no O_NOFOLLOW: Codex and the injector read through a symlinked
@@ -33,27 +34,27 @@ export function readBoundedCodexConfig(path: string): string | null {
       ? 0
       : (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, constants.O_RDONLY | guardedFlags);
-    const before = fstatSync(fd);
-    if (before.dev !== namedBefore.dev || before.ino !== namedBefore.ino) {
+    const before = fstatSync(fd, { bigint: true });
+    if (!sameFileIdentity(before, namedBefore)) {
       throw new Error("config.toml changed while it was read");
     }
-    if (!before.isFile() || before.size > MAX_CODEX_CONFIG_BYTES) {
+    if (!before.isFile() || before.size > BigInt(MAX_CODEX_CONFIG_BYTES)) {
       throw new Error("config.toml is not a bounded regular file");
     }
 
-    const buffer = Buffer.allocUnsafe(before.size + 1);
+    const buffer = Buffer.allocUnsafe(Number(before.size) + 1);
     let bytesRead = 0;
     while (bytesRead < buffer.length) {
       const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
       if (count === 0) break;
       bytesRead += count;
     }
-    const after = fstatSync(fd);
-    const namedAfter = statSync(path);
-    if (bytesRead !== before.size || after.size !== before.size
-      || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
+    const after = fstatSync(fd, { bigint: true });
+    const namedAfter = statSync(path, { bigint: true });
+    if (BigInt(bytesRead) !== before.size || after.size !== before.size
+      || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs
       || !namedAfter.isFile()
-      || namedAfter.dev !== before.dev || namedAfter.ino !== before.ino) {
+      || !sameFileIdentity(namedAfter, before)) {
       throw new Error("config.toml changed while it was read");
     }
     return buffer.toString("utf8", 0, bytesRead);
