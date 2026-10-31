@@ -951,13 +951,41 @@ or remove it to disable capture. The file is owner-only (`0600`) in the hardened
 and rolls after 200 lines, retaining the newest 100.
 
 Each JSONL record contains the protocol, routed provider/model, cache-counter presence and
-provenance, process-local equality tags for the account, prompt-cache key, and allowlisted session
-headers, plus ordered fingerprints for instructions, tools, and message/input blocks. Prefix
-sections retain at most 128 tags and identify only the first divergent section/index. The
-diagnostic never stores prompt or message text, tool names, raw headers, raw cache/session/account
-identifiers, or a durable tag derived from them. Its random HMAC key is created at process start,
-separate from other debug keys, and is never persisted; tags therefore compare values only within
-one proxy process.
+provenance, and process-local equality tags for the account, prompt-cache key, session headers,
+and ordered instruction/tool/message blocks. It never stores prompt or message text, tool names,
+raw headers, or raw cache/session/account identifiers. The random HMAC key is separate from other
+debug keys, created at process start and never persisted, so tags compare only within one process.
+
+- `session.inboundHeaders` and `outboundHeaders` record `session_id`, `session-id`, `thread-id`,
+  and `x-session-id` independently. Identical values have identical tags across these names and
+  directions. An unobserved side is omitted, distinct from observed absent headers. These headers
+  are diagnostic correlation inputs, not proof of account affinity.
+- `accountAffinity` records a separately tagged key from the shared Codex conversation-identity
+  derivation for each observed header set. `derived-key-not-binding` means exactly that: a key
+  is not evidence that a binding was stored, selected, or reused. Reported route labels are separate.
+- `prefix.comparison` compares the observed inbound and outbound projections. `continuation`
+  compares each side with the previous finalized request having the same complete nonempty inbound
+  session-header identity, authenticated caller scope, protocol, model, and config directory. The
+  caller scope comes from the authenticated admission captured before Chat/Messages bridging, not
+  from rewritten upstream headers. It is used only in private in-memory lookup keys, never serialized.
+  The same admitted key has the same scope across supported authentication headers; different keys
+  remain isolated. Without an authenticated admission identity (including unauthenticated loopback),
+  continuation comparisons are `uncomparable`; per-request inbound/outbound comparisons remain available.
+  Provider changes do not reset this
+  comparison; prompt-key and explicit account-label changes are reported separately. Outbound-only
+  session identifiers and prompt-cache keys never supply a missing correlation identity.
+- Comparisons report `first`, `equal`, `append-only`, `different`, `truncated`, or `uncomparable`.
+  Only message-tail growth is append-only. Top-level instructions and system content precede tools;
+  input/message rows, including system/developer updates, stay in their original order. Missing
+  observations and unsupported shapes are uncomparable, never assumed equal to an empty prefix.
+- Each section retains at most 128 tags. An unobserved common tail reports `truncated`, not equality
+  or an exact first divergence. At most 512 recent correlation histories are retained in memory;
+  an evicted history is `first` on its next observation.
+
+These are parsed-body observations at existing request hooks, not captured network bytes or proof
+of upstream cache reuse. Concurrent requests compare in finalization order, not send order. The
+switch changes diagnostics only, not affinity selection or cache behavior; the existing debug-mode
+bridge requirement for otherwise eligible direct Chat/Messages lanes still applies.
 
 ### Catalog troubleshooting
 
