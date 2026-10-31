@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 /**
  * /v1/images/{generations,edits} relay (issue #83).
  *
@@ -730,7 +731,9 @@ export async function handleImages(
       });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
     } catch (err) {
-      if (err instanceof CodexAccountCooldownError) {
+      if (err instanceof CodexInstallationIdUnavailableError) {
+        forwardAuthError = formatErrorResponse(503, "server_busy", err.message);
+      } else if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
       } else if (err instanceof CodexMainProfileDrainingError) {
         forwardAuthError = codexMainProfileDrainingResponse();

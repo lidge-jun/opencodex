@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { codexInstallationIdForAccount } from "./installation-id";
 
 /** Native request metadata shared by the HTTP adapter and WS preparation. */
 export const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -9,36 +9,21 @@ export const CODEX_TURN_METADATA_HEADER = "x-codex-turn-metadata";
 export const CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
 export const CODEX_ATTESTATION_HEADER = "x-oai-attestation";
 
+// Caller credentials are forwarded only to the canonical Codex destination, never by capability.
+export const FORWARD_HEADERS = [
+  "authorization", "chatgpt-account-id", "openai-beta", "originator", "session_id", "session-id",
+  "thread-id", "x-client-request-id", "x-codex-beta-features", "x-codex-installation-id",
+  "x-codex-parent-thread-id", "x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id",
+  "x-oai-attestation", "x-openai-subagent", "x-responsesapi-include-timing-metrics", "version", CODEX_RESPONSES_LITE_HEADER,
+];
+
 const MAX_ROUTING_MODEL_BYTES = 256;
 const MAX_ROUTING_TIER_BYTES = 64;
-const INSTALL_BODY_KEY = "opencodex-codex-pool-install-body-v1";
-const INSTALL_TAG_KEY = "opencodex-codex-pool-install-tag-v1";
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TURN_METADATA_BYTES = 32 * 1024;
 
-function accountTagForUuidPrefix(account: string, prefix20Hex: string): string {
-  return createHmac("sha256", INSTALL_TAG_KEY).update(`${account}\0${prefix20Hex.toLowerCase()}`).digest("hex").slice(0, 12);
-}
-
-/**
- * Deterministic, idempotent RFC 4122 v4 UUID isolated per (chatgptAccountId, callerInstallationId).
- * Calling it twice with the same chatgptAccountId returns the identical UUID without double-hashing.
- */
-export function deriveCodexAccountInstallationId(chatgptAccountId: string, callerInstallationId: string): string {
-  const account = chatgptAccountId.trim();
-  const raw = callerInstallationId.trim();
-  if (!account || !raw) return callerInstallationId;
-  if (UUID_V4_RE.test(raw)) {
-    const hex = raw.replace(/-/g, "").toLowerCase();
-    if (hex.slice(20, 32) === accountTagForUuidPrefix(account, hex.slice(0, 20))) {
-      return raw.toLowerCase();
-    }
-  }
-  const h = createHmac("sha256", INSTALL_BODY_KEY).update(`${account}\0${raw}`).digest("hex");
-  const variant = ((Number.parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16);
-  const prefix20 = `${h.slice(0, 8)}${h.slice(8, 12)}4${h.slice(13, 16)}${variant}${h.slice(17, 20)}`;
-  const node12 = accountTagForUuidPrefix(account, prefix20);
-  return `${prefix20.slice(0, 8)}-${prefix20.slice(8, 12)}-${prefix20.slice(12, 16)}-${prefix20.slice(16, 20)}-${node12}`;
+/** Compatibility export: caller values never contribute to the selected account identity. */
+export function deriveCodexAccountInstallationId(chatgptAccountId: string, _callerInstallationId: string): string {
+  return codexInstallationIdForAccount(chatgptAccountId);
 }
 
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
@@ -55,9 +40,8 @@ export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAc
 
 export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountId: string): void {
   headers.delete(CODEX_ATTESTATION_HEADER);
-  if (!chatgptAccountId.trim()) return;
   const installId = headers.get(CODEX_INSTALLATION_ID_HEADER);
-  if (installId && installId.trim()) {
+  if (installId !== null) {
     headers.set(CODEX_INSTALLATION_ID_HEADER, deriveCodexAccountInstallationId(chatgptAccountId, installId));
   }
   const turnMeta = headers.get(CODEX_TURN_METADATA_HEADER);
@@ -67,15 +51,15 @@ export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountI
 }
 
 export function isolateCodexPoolClientMetadata(body: unknown, chatgptAccountId: string | undefined): unknown {
-  if (!chatgptAccountId?.trim() || !body || typeof body !== "object" || Array.isArray(body)) return body;
+  if (chatgptAccountId === undefined || !body || typeof body !== "object" || Array.isArray(body)) return body;
   const record = body as Record<string, unknown>;
   const cm = record.client_metadata;
   if (!cm || typeof cm !== "object" || Array.isArray(cm)) return body;
   const meta = cm as Record<string, unknown>;
   let nextMeta: Record<string, unknown> | undefined;
   const rawInstallId = meta[CODEX_INSTALLATION_ID_HEADER];
-  if (typeof rawInstallId === "string" && rawInstallId.trim()) {
-    const nextId = deriveCodexAccountInstallationId(chatgptAccountId, rawInstallId);
+  if (Object.hasOwn(meta, CODEX_INSTALLATION_ID_HEADER)) {
+    const nextId = codexInstallationIdForAccount(chatgptAccountId);
     if (nextId !== rawInstallId) nextMeta = { ...meta, [CODEX_INSTALLATION_ID_HEADER]: nextId };
   }
   const rawTurnMeta = (nextMeta ?? meta)[CODEX_TURN_METADATA_HEADER];
@@ -102,4 +86,15 @@ export function applyCodexRoutingHint(headers: Headers, body: unknown): void {
   if (tier !== undefined && !isRoutingHintComponent(tier, MAX_ROUTING_TIER_BYTES)) return;
   headers.set(CODEX_ROUTING_HINT_HEADER,
     `model=${record.model}${tier === undefined ? "" : `;tier=${tier}`}`);
+}
+
+/** Selected identity is authoritative after provider-header merges, including deletions. */
+export function mergeCodexSelectedHeaders(configured: HeadersInit | undefined, selected: Headers): Headers {
+  const headers = new Headers(configured);
+  for (const name of [CODEX_INSTALLATION_ID_HEADER, CODEX_TURN_METADATA_HEADER, CODEX_ATTESTATION_HEADER]) headers.delete(name);
+  for (const name of FORWARD_HEADERS) {
+    const value = selected.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  return headers;
 }

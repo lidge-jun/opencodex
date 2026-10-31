@@ -1,3 +1,4 @@
+import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
 import type { NativeResponseControl } from "./responses/native-response-control";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
@@ -122,16 +123,18 @@ export class WsSendDroppedError extends Error {
 
 export function selectForwardHeaders(
   headers: Headers,
-  codexOverride?: { accessToken: string; chatgptAccountId: string },
+  codexOverride?: { accessToken: string; chatgptAccountId: string; installationId?: string; kind?: "pool" | "main-pool" },
 ): Headers {
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value) selected.set(name, value);
+    if (value !== null) selected.set(name, value);
   }
   if (codexOverride) {
     selected.set("authorization", `Bearer ${codexOverride.accessToken}`);
     selected.set("chatgpt-account-id", codexOverride.chatgptAccountId);
+    if (codexOverride.kind !== "main-pool") isolateCodexPoolAccountHeaders(selected, codexOverride.chatgptAccountId);
+    else selected.delete("x-oai-attestation");
   } else {
     // Kept for the WS turn pipeline, which drops it again everywhere except first-party Direct.
     const assertion = headers.get(AGENT_ASSERTION_HEADER);

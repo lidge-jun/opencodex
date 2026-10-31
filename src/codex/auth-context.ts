@@ -1,3 +1,6 @@
+import type { OcxRuntimeProviderConfig } from "./auth-context-provider";
+export type { OcxRuntimeProviderConfig } from "./auth-context-provider";
+export { stripCodexRuntimeProviderFields } from "./auth-context-provider";
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
@@ -75,6 +78,7 @@ import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, isValid
 import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { codexInstallationIdForAccount } from "./installation-id";
 import { isolateCodexPoolAccountHeaders } from "./forward-transport-headers";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
@@ -377,11 +381,6 @@ export function releaseCodexAuthContextProbeLease(ctx: CodexAuthContext | undefi
   if (ctx.probeQuotaScope) releaseCodexQuotaScopeProbeLease(ctx.accountId!, ctx.probeQuotaScope, leaseId);
   else releaseCodexQuotaProbeLease(ctx.accountId!, leaseId);
 }
-
-export type OcxRuntimeProviderConfig = OcxProviderConfig & {
-  _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
-  _codexAccountRequired?: boolean;
-};
 
 export class CodexAuthContextError extends Error {
   accountId: string;
@@ -1795,6 +1794,8 @@ export function applyCodexAuthContextToProvider(
     _codexAccountOverride: {
       accessToken: ctx.accessToken,
       chatgptAccountId: ctx.chatgptAccountId,
+      kind: ctx.kind,
+      ...(ctx.kind === "pool" ? { installationId: codexInstallationIdForAccount(ctx.chatgptAccountId) } : {}),
     },
     _codexAccountRequired: true,
   };
@@ -1840,14 +1841,15 @@ export function materializeCodexUpstreamAuth(
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value) selected.set(name, value);
+    if (value !== null) selected.set(name, value);
   }
   if (ctx.kind === "pool" || ctx.kind === "main-pool") {
     assertCodexAccountValidationReady(ctx.accountId);
     if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, options.config), poolContextCreditRecoveryNeeded(ctx, options.config), ctx.quotaScope);
     selected.set("authorization", `Bearer ${ctx.accessToken}`);
     selected.set("chatgpt-account-id", ctx.chatgptAccountId);
-    isolateCodexPoolAccountHeaders(selected, ctx.chatgptAccountId);
+    if (ctx.kind === "pool") isolateCodexPoolAccountHeaders(selected, ctx.chatgptAccountId);
+    else selected.delete("x-oai-attestation");
     if (ctx.kind === "main-pool") {
       ctx.mainQuotaWriter = observeSelectedMainCredential(ctx, ctx.mainQuotaWriter);
       assertMainAccountPolicy(options.config);
@@ -1878,7 +1880,7 @@ export function materializeCodexUpstreamAuth(
     selected.delete("chatgpt-account-id");
     selected.set("authorization", `Bearer ${stored.accessToken}`);
     if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
-    isolateCodexPoolAccountHeaders(selected, stored.chatgptAccountId ?? "");
+    selected.delete("x-oai-attestation");
     observeSelectedMainCredential(stored, writer);
     assertMainAccountPolicy(options.config);
     assertMaterializedReserve(selected, ctx, options);
@@ -1949,7 +1951,7 @@ export async function materializeCodexUpstreamAuthAsync(
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value) selected.set(name, value);
+    if (value !== null) selected.set(name, value);
   }
   if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
     reconcileMainCodexAccountRuntimeState();
@@ -1963,7 +1965,7 @@ export async function materializeCodexUpstreamAuthAsync(
   selected.delete("chatgpt-account-id");
   selected.set("authorization", `Bearer ${stored.accessToken}`);
   if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
-  isolateCodexPoolAccountHeaders(selected, stored.chatgptAccountId ?? "");
+  selected.delete("x-oai-attestation");
   observeSelectedMainCredential(stored, writer);
   assertMainAccountPolicy(options.config);
   // An opt-in enabled during token refresh must not turn a proof-less context into Reserve.
@@ -1987,13 +1989,4 @@ export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfi
   if (ctx.kind === "main") return true;
   if (ctx.kind === "main-pool") return isCodexAccountUsable(config, ctx.accountId);
   return isCodexAccountUsable(config, ctx.accountId) && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
-}
-
-export function stripCodexRuntimeProviderFields(provider: OcxProviderConfig): OcxProviderConfig {
-  const {
-    _codexAccountOverride: _override,
-    _codexAccountRequired: _required,
-    ...safeProvider
-  } = provider as OcxRuntimeProviderConfig;
-  return safeProvider;
 }

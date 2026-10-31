@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { formatErrorResponse } from "../../bridge";
 import {
   CodexAccountCooldownError,
@@ -78,6 +79,9 @@ export function mapCodexAuthContextErrorToResponse(
   error: unknown,
   options: CodexAuthContextErrorResponseOptions,
 ): Response | undefined {
+  if (error instanceof CodexInstallationIdUnavailableError) {
+    return formatErrorResponse(503, "server_busy", error.message);
+  }
   if (error instanceof CodexAccountCooldownError) {
     const response = cooldownErrorResponse(error, options.now, options.accountSelector);
     // Exact class only (#7850): main hard-lock, credit, Reserve, recovery-withheld and future

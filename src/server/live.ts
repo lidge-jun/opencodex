@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { codexCompatibleUrl } from "../codex/context-compat";
 /**
  * /v1/live and /v1/realtime/calls relay (issue #371).
@@ -723,7 +724,9 @@ export async function resolveLiveRelay(
         );
       }
     } catch (err) {
-      if (err instanceof CodexAccountCooldownError) {
+      if (err instanceof CodexInstallationIdUnavailableError) {
+        forwardAuthError = formatErrorResponse(503, "server_busy", err.message);
+      } else if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
       } else if (err instanceof CodexMainProfileDrainingError) {
         forwardAuthError = codexMainProfileDrainingResponse();

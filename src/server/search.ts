@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 /**
  * /v1/alpha/search relay.
  *
@@ -159,6 +160,7 @@ export async function handleSearch(
       ? `${upstream.providerName}-${accountNamespace}`
       : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
+    if (err instanceof CodexInstallationIdUnavailableError) return formatErrorResponse(503, "server_busy", err.message);
     if (err instanceof CodexAccountCooldownError) {
       return cooldownErrorResponse(err, Date.now(), accountNamespace);
     }
