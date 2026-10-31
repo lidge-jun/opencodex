@@ -2406,7 +2406,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.oauthCancelled": "로그인이 취소되었습니다.",
   "codexAuth.loginFailed": "로그인에 실패했습니다",
   "codexAuth.needsReauth": "재로그인",
-  "codexAuth.reauthenticate": "Re-authenticate",
+  "codexAuth.reauthenticate": "재인증",
   "codexAuth.tokenExpired": "토큰 만료 — 이 계정을 다시 인증하세요",
   "codexAuth.mainTokenExpired": "토큰 만료 — 아래 디바이스 코드 또는 Codex 앱 로그인으로 다시 로그인하세요",
   "codexAuth.mainReauthSucceeded": "로그인됨",

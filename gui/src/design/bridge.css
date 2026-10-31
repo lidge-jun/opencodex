@@ -448,3 +448,13 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 
 /* page intro under a title */
 .page-sub { color: var(--ocx-fg-muted); font-size: 14px; line-height: 1.55; }
+
+/* ---- sticky section strip: glass, not a painted band ------------------------
+   The strip stays reachable while the page scrolls, so it must hide the rows
+   that pass under it. An opaque --bg read as a dark band over the page's
+   gradient even at rest; a blur does the same job and lets the gradient through. */
+.section-tabs {
+  background: transparent;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}

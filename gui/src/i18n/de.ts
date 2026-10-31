@@ -2362,7 +2362,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.oauthCancelled": "Login wurde abgebrochen.",
   "codexAuth.loginFailed": "Login fehlgeschlagen",
   "codexAuth.needsReauth": "Erneut anmelden",
-  "codexAuth.reauthenticate": "Re-authenticate",
+  "codexAuth.reauthenticate": "Erneut anmelden",
   "codexAuth.tokenExpired": "Token abgelaufen — dieses Konto erneut authentifizieren",
   "codexAuth.mainTokenExpired": "Token abgelaufen — unten mit Gerätecode oder über Codex-App-Login erneut anmelden",
   "codexAuth.mainReauthSucceeded": "Angemeldet",
