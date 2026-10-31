@@ -3,8 +3,10 @@ import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
   anthropicErrorResponse,
   collectAnthropicMessage,
+  responsesJsonToAnthropicMessage,
   responsesSseToAnthropicSse,
 } from "../../src/claude/outbound";
+import { claudeToolUseId } from "../../src/claude/tool-use-id";
 import { isTranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { encodeAnthropicMessageSse, foldAnthropicMessage } from "../../src/protocols/encoders/messages";
 import type { AdapterEvent } from "../../src/types";
@@ -330,6 +332,39 @@ describe("direct Messages encoder matches bridge + converter (stream)", () => {
     expect(frames[1]!.event).toBe("ping");
     expect(frames.at(-2)!.data.delta.stop_reason).toBe("tool_use");
     expect(frames.at(-1)!.event).toBe("message_stop");
+  });
+
+  test("a routed call_id reaches Claude as a toolu_ id on both paths and in the JSON fold", async () => {
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_7dc00b56", name: "lookup" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done", usage },
+    ];
+    const frames = await expectStreamParity(events);
+    const start = frames.find(frame => frame.data?.content_block?.type === "tool_use");
+    expect(start!.data.content_block.id).toBe("toolu_call_7dc00b56");
+    const folded = await expectFoldParity(events);
+    expect(folded.body.content).toMatchObject([{ type: "tool_use", id: "toolu_call_7dc00b56" }]);
+    const json = responsesJsonToAnthropicMessage({
+      status: "completed",
+      output: [{ type: "function_call", id: "fc_1", call_id: "call_7dc00b56", name: "lookup", arguments: "{}" }],
+    }, "client-model");
+    expect(json.content).toMatchObject([{ type: "tool_use", id: "toolu_call_7dc00b56" }]);
+  });
+
+  test("claudeToolUseId keeps toolu_ ids, caps long ids at 64, and mints one when the call id is missing", () => {
+    expect(claudeToolUseId("toolu_01AbC")).toBe("toolu_01AbC");
+    expect(claudeToolUseId(claudeToolUseId("call_x"))).toBe("toolu_call_x");
+    expect(claudeToolUseId("")).toMatch(/^toolu_[0-9a-f]{32}$/);
+    expect(claudeToolUseId(undefined)).toMatch(/^toolu_[0-9a-f]{32}$/);
+    const long = `call_${"a".repeat(60)}`;
+    const capped = claudeToolUseId(long);
+    expect(capped).toHaveLength(64);
+    expect(capped).toMatch(/^toolu_call_a+_[0-9a-f]{16}$/);
+    expect(claudeToolUseId(long)).toBe(capped);
+    expect(claudeToolUseId(`${long}b`)).not.toBe(capped);
+    expect(claudeToolUseId("c".repeat(58))).toBe(`toolu_${"c".repeat(58)}`);
   });
 
   test("an initial failure is an error stream without message_start", async () => {

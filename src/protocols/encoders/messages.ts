@@ -19,6 +19,7 @@ import { isTransientUpstreamStatus } from "../../lib/upstream-retry";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { encodeReasoningEnvelope } from "../../responses/reasoning-envelope";
 import { responsesUsage, webSearchAction } from "../../bridge/internal";
+import { claudeToolUseId } from "../../claude/tool-use-id";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
@@ -274,7 +275,7 @@ function createAnthropicMessageWriter(
       const index = blockIndex++;
       emit("content_block_start", {
         type: "content_block_start", index,
-        content_block: { type: "tool_use", id: call.callId, name: call.name, input: {} },
+        content_block: { type: "tool_use", id: claudeToolUseId(call.callId), name: call.name, input: {} },
       }, { sideEffect: true });
       budget.openCall(call.callId);
       open = {
