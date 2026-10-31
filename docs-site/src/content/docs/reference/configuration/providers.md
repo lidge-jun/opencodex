@@ -1087,6 +1087,20 @@ eligible on the same account. Passive Fable evidence ages out after thirty minut
 known reset and is revalidated by one serving request at a time. Usage thresholds remain
 soft preferences with an all-drained fallback; these controls are not hard usage or billing caps.
 Active usage probes preserve absent family windows unless the response authoritatively enumerates limits.
+Usage reads prefer the active `limits` rows over legacy quota buckets. An inactive
+session or model window does not constrain admission, and a missing/null five-hour
+bucket does not create a zero-percent five-hour bar. A model-scoped weekly limit
+constrains only that model family while active; the all-model weekly limit applies
+to every model. Legacy Pro/Max usage buckets remain supported.
+
+[Ultra replaces Max 20x](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan);
+upstream may still identify it as `claude_max_20x` (shown as `max_20x`). Ultra accounts
+with no active five-hour limit show weekly usage only. Tier names are display
+metadata, including unknown future tiers, and never imply extra quota or API credit.
+Reset grants remain optional, explicit actions with their own eligibility and expiry;
+a usage read never consumes one. A quota read refused with `access_denied` can also
+mean the account's access token expired; a plan rename does not repair credentials.
+
 Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.

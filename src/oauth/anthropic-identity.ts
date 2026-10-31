@@ -56,8 +56,9 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
     const org = organization && typeof organization === "object"
       ? organization as Record<string, unknown> : undefined;
     const strip = (value: unknown, prefix: string) => {
-      const label = normalizeOAuthPlan(value);
-      return label ? normalizeOAuthPlan(label.startsWith(prefix) ? label.slice(prefix.length) : label) : undefined;
+      const label = normalizeOAuthPlan(value === "Ultra" ? "ultra" : value);
+      const tier = label?.startsWith(prefix) ? label.slice(prefix.length) : label;
+      return normalizeOAuthPlan(tier?.startsWith("claude_") ? tier.slice("claude_".length) : tier);
     };
     const plan = strip(org?.rate_limit_tier, "default_claude_") ?? strip(org?.organization_type, "claude_");
     return { ...identity, ...(plan ? { plan } : {}) };

@@ -267,8 +267,8 @@ describe("fetchProviderQuotaReports", () => {
     } as OcxConfig, true);
 
     expect(result.reports[0]?.quota).toMatchObject({
-      fiveHourPercent: 11,
-      weeklyPercent: 22,
+      fiveHourPercent: 44,
+      weeklyPercent: 55,
       customWindows: [{ label: "Fable", percent: 33, resetAt: Date.parse("2026-07-12T12:00:00Z") }],
     });
     expect(result.reports[0]?.quota.customWindows).toHaveLength(1);
