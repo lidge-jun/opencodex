@@ -36,3 +36,19 @@ test("the exported native fingerprint retains its SHA-256 contract", () => {
   expect(nativeResponseFingerprint({ a: [1, 2] })).not.toBe(nativeResponseFingerprint({ a: [2, 1] }));
   expect(nativeResponseFingerprint({ b: null, a: { y: "한", x: true } })).toBe(nativeResponseFingerprint({ a: { x: true, y: "한" }, b: null }));
 });
+
+test.each([
+  { label: "ASCII 64", content: "x".repeat(50), bytes: 64, prefix: "json:" },
+  { label: "ASCII 65", content: "x".repeat(51), bytes: 65, prefix: "body:" },
+  { label: "UTF-8 64", content: "é".repeat(25), bytes: 64, prefix: "json:" },
+  { label: "UTF-8 65", content: "é".repeat(25) + "x", bytes: 65, prefix: "body:" },
+])("native identity uses the canonical byte boundary: $label", ({ content, bytes, prefix }) => {
+  const item = { content };
+  const json = JSON.stringify(item);
+  expect(Buffer.byteLength(json, "utf8")).toBe(bytes);
+  const identity = nativeResponseOutputIdentity(item);
+  expect(identity.startsWith(prefix)).toBe(true);
+  if (prefix === "json:") expect(identity).toBe(`json:${json}`);
+  else expect(identity).toMatch(/^body:[a-f0-9]{64}$/);
+  expect(Buffer.byteLength(identity, "utf8")).toBeLessThanOrEqual(69);
+});
