@@ -16,6 +16,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   signal?: NodeJS.Signals;
   osSignal?: boolean;
   syncBeforeStop?: boolean;
+  externalSignal?: boolean;
+  holdShutdown?: boolean;
+  runtimeRecord?: "absent" | "invalid" | "foreign";
   repeat?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
@@ -133,6 +136,13 @@ if (options.mode === "guard") {
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   report({ writes, refused, boundary: guard.boundary() });
 } else if (options.mode === "runtime") {
+  if (options.holdShutdown) {
+    const diagnostics = await import("../../src/link/diagnostics");
+    mock.module("../../src/link/diagnostics", () => ({ ...diagnostics, flushLinkDiagnostics: async () => {
+      writeFileSync(join(home, "shutdown-drained"), "ready");
+      while (!existsSync(join(home, "shutdown-release"))) await Bun.sleep(10);
+    } }));
+  }
   if (options.preserve?.startsWith("restart-rollback")) {
     const replacement = await import("../../src/server/restart-replacement");
     mock.module("../../src/server/restart-replacement", () => ({ ...replacement,
@@ -165,6 +175,12 @@ if (options.mode === "guard") {
     syncEvidence = { changedFields, fullCasRefused, catalogWritten: synced.catalogWritten, injected: synced.injected,
       journalHomeBound: typeof JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).opencodexHome === "string" };
   }
+  if (options.runtimeRecord) {
+    const path = join(home, "runtime-port.json");
+    if (options.runtimeRecord === "absent") unlinkSync(path);
+    else if (options.runtimeRecord === "invalid") writeFileSync(path, "{");
+    else { const record = JSON.parse(readFileSync(path, "utf8")); record.pid += 100_000; writeFileSync(path, JSON.stringify(record)); }
+  }
   mutate();
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   if (options.preserve === "restart") {
@@ -177,7 +193,11 @@ if (options.mode === "guard") {
   }
   if (options.preserve === "recycle-pending" || options.preserve === "restart-rollback-recycle") scheduleStandaloneRecycle(expected.tokenFingerprint);
   // Exercises the registered production handler; it is not evidence of native OS signal delivery.
-  if (options.osSignal) writeFileSync(join(home, "ready"), "ready");
+  if (options.externalSignal) {
+    writeFileSync(join(home, "ready"), "ready");
+    while (!existsSync(join(home, "signal-now"))) await Bun.sleep(10);
+    process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
+  } else if (options.osSignal) writeFileSync(join(home, "ready"), "ready");
   else process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
 } else {
   const result = options.mode === "api"

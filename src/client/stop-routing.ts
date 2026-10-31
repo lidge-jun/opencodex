@@ -22,7 +22,7 @@ const refusal = (reason: string): LinkRoutingRestoreResult => ({
 });
 
 /** Unsupervised signal cleanup; explicit parent stop and restart retain their own restoration. */
-export function restoreLinkClientRouting(expected: OcxClientConnectionConfig): LinkRoutingRestoreResult {
+export function restoreLinkClientRouting(expected: OcxClientConnectionConfig, options: { syncFenced?: boolean } = {}): LinkRoutingRestoreResult {
   if (siblingOfLivePort() !== null) return { success: true, restored: false, message: siblingSkipMessage() };
   if (!isLinkConnection(expected)) {
     return { success: true, restored: false, message: "Hub connection-owned integrations preserved." };
@@ -30,6 +30,7 @@ export function restoreLinkClientRouting(expected: OcxClientConnectionConfig): L
   const preserve = () => process.env.OCX_SERVICE === "1" || isDesktopSupervised()
     || pendingTeardownOutstanding();
   if (preserve()) return { success: true, restored: false, message: "Supervised restart or pending teardown owns the client integrations." };
+  if (options.syncFenced === false) return refusal("the runtime sync fence could not be verified");
   const guard = stopRestoreWriteGuard(expected);
   const withWriteGuard = <T>(write: () => T): T => guard.run(() => {
     if (preserve()) throw new Error("restart or teardown ownership changed");

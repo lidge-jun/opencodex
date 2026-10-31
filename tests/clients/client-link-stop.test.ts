@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
@@ -213,3 +213,101 @@ test("served-connection guard permits catalog sync metadata at a later write", a
   const report = await runStop({ mode: "guard", mutation: "catalog" });
   expect(report.result).toEqual({ writes: ["before-change", "after-change"], refused: false, boundary: "restore" });
 });
+
+for (const runtimeRecord of ["absent", "invalid", "foreign"]) {
+  test(`signal refuses restoration when its runtime record is ${runtimeRecord}`, async () => {
+    const report = await runStop({ mode: "runtime", runtimeRecord, expectedFailure: true });
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
+  test(`${preserve} signal preservation does not require a restoration sync fence`, async () => {
+    const report = await runStop({ mode: "runtime", preserve, runtimeRecord: "absent" });
+    expect(report.after).toBe(report.before);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+  }, 20_000);
+}
+
+for (const { releaseFirst, hold } of [{ releaseFirst: false, hold: "catalog" }, { releaseFirst: false, hold: "home" }, { releaseFirst: true, hold: "catalog" }] as const) {
+  test(`a separate sync ${releaseFirst ? "finishes before" : "cannot commit after"} signal restoration (${hold})`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-link-sync-stop-"));
+    const home = join(root, "ocx"), codex = join(root, "codex");
+    const children: Array<{ child: ReturnType<typeof Bun.spawn>; drained: Promise<unknown> }> = [];
+    const spawn = (file: string, options: unknown) => {
+      const child = Bun.spawn([process.execPath, fixturePath(file)], {
+        cwd: repoPath(), stdin: new Blob([JSON.stringify(options)]), stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+      });
+      const drained = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      children.push({ child, drained });
+      return child;
+    };
+    const waitFor = async (name: string) => {
+      const end = Date.now() + 15_000;
+      while (!existsSync(join(home, name)) && Date.now() < end) await Bun.sleep(10);
+      if (!existsSync(join(home, name))) throw new Error(`fixture did not publish ${name}`);
+    };
+    const release = (name: string) => writeFileSync(join(home, name), "ready");
+    const read = (name: string) => JSON.parse(readFileSync(join(home, name), "utf8"));
+    const durable = () => ({
+      config: readFileSync(join(codex, "config.toml"), "utf8"),
+      catalog: JSON.parse(readFileSync(join(codex, "opencodex-catalog.json"), "utf8")),
+      profile: existsSync(join(codex, "opencodex.config.toml")),
+      connection: readFileSync(join(home, "config.json"), "utf8"),
+      token: readFileSync(join(home, "service-api-token"), "utf8"),
+    });
+    const timer = setTimeout(() => { for (const { child } of children) if (child.exitCode === null) child.kill(); }, 35_000);
+    try {
+      const runtime = spawn("client-link-stop-runner.ts", { mode: "runtime", externalSignal: true, holdShutdown: true });
+      await waitFor("ready");
+      const held = spawn("client-link-sync-runner.ts", { hold, name: "held" });
+      await waitFor("held-requested");
+      if (releaseFirst) {
+        release("catalog-release");
+        expect(await held.exited).toBe(0);
+        expect(read("held-sync-result.json")).toMatchObject({ ok: true, catalogWritten: true, injected: true });
+        expect(durable().config).toContain("openai_base_url");
+        expect(durable().catalog.models).toEqual([{ slug: "fixture/late-sync" }]);
+      }
+      release("signal-now");
+      await waitFor("shutdown-drained");
+      const restored = durable();
+      expect(restored.config).toBe('model = "native"\n');
+      expect(restored.profile).toBe(false);
+      expect(restored.catalog.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+      if (releaseFirst) {
+        // No apply lock is held now: a fresh sync must be refused by shutdown admission.
+        const fresh = spawn("client-link-sync-runner.ts", { hold: false, name: "fresh" });
+        expect(await fresh.exited).toBe(0);
+        expect(read("fresh-sync-result.json")).toMatchObject({ ok: false, fetched: false });
+        expect(durable()).toEqual(restored);
+      }
+      release("shutdown-release");
+      expect(await runtime.exited).toBe(0);
+      if (!releaseFirst) {
+        release("catalog-release");
+        expect(await held.exited).toBe(0);
+        expect(read("held-sync-result.json")).toMatchObject({ ok: false, fetched: true });
+      }
+      // Read after BOTH processes exit; the runtime's own exit snapshot cannot prove this.
+      expect(durable()).toEqual(restored);
+      if (releaseFirst) {
+        // A new explicit offline sync after complete shutdown remains supported.
+        const offline = spawn("client-link-sync-runner.ts", { hold: false, name: "fresh" });
+        expect(await offline.exited).toBe(0);
+        expect(read("fresh-sync-result.json")).toMatchObject({ ok: true, fetched: true, injected: true });
+      }
+    } finally {
+      clearTimeout(timer);
+      for (const { child } of children) { if (child.exitCode === null) child.kill(); await child.exited; }
+      await Promise.all(children.map(value => value.drained));
+      removeTreeWithRetry(root);
+    }
+  }, 40_000);
+}

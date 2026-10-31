@@ -32,6 +32,7 @@ import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
+import { markClientRuntimeStopping } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
@@ -369,7 +370,7 @@ export async function startClientRuntime(
       supervisor?.start();
       credentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
-      writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
+      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), ...(clientStopping ? { clientStopping: true as const } : {}) });
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
@@ -466,11 +467,19 @@ export async function startClientRuntime(
     shuttingDown = true;
     clientStopping = true;
     if (recycleTimer) { clearTimeout(recycleTimer); recycleTimer = undefined; }
+    const fenceSync = () => {
+      if (!linkMode) return true;
+      try { markClientRuntimeStopping({ pid: process.pid, port: servedPort, attestationSecret }); return true; }
+      catch { return false; }
+    };
+    let syncFenced = fenceSync();
     void (async () => {
       // An accepted restart owns its replacement and rollback. A successful handoff exits
       // inside that flight; a rollback finishes before this signal tears the runtime down.
       if (restartController.hasHandoff()) await restartController.settled().catch(() => {});
       if (recycleFlight) await recycleFlight.catch(() => {});
+      // A rollback may have republished its runtime record while shutdown joined it.
+      syncFenced = fenceSync();
       credentialObservation?.stop();
       credentialObservation = null;
       activeReporter?.stop();
@@ -481,15 +490,15 @@ export async function startClientRuntime(
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
-      const restored = linkMode ? restoreLinkClientRouting(state.value) : null;
+      const restored = linkMode ? restoreLinkClientRouting(state.value, { syncFenced }) : null;
       if (restored && !restored.success) console.error(`[client] ${restored.message}`);
       try {
         activeServer?.stop(true);
       } catch (error) {
         console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        cleanup();
-        await flushLinkDiagnostics();
+        // Keep stopping admission visible through the last await. Cleanup and exit are adjacent.
+        try { await flushLinkDiagnostics(); } finally { cleanup(); }
         // launchd relaunches only unsuccessful exits; an external signal must still count.
         if (restored?.success === false) process.exit(1);
         else process.exit(handledSignalExitCode(signal));
