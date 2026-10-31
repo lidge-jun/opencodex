@@ -456,6 +456,19 @@ export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh
   return row;
 }
 
+/**
+ * Before the provider-report cache fast path: re-read the Claude Code sign-in (the admission's
+ * one-minute identity cache bounds this to one Keychain read a minute), so a cached Claude CLI
+ * row stops being current within a minute of a sign-out or account switch. Returns undefined when
+ * no Claude CLI provider is enabled: awaiting even a resolved promise would add a tick to every
+ * other read and reorder its in-flight join.
+ */
+export function refreshClaudeCliSignIn(config: OcxConfig): Promise<unknown> | undefined {
+  if (!Object.values(config.providers).some(provider => provider.adapter === "claude-cli" && provider.disabled !== true)) return undefined;
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  return import("../../adapters/claude-cli/usage-admission").then(admission => admission.currentClaudeIdentityKey());
+}
+
 // ---------------------------------------------------------------------------
 // Per-account quota (multiauth)
 // ---------------------------------------------------------------------------
