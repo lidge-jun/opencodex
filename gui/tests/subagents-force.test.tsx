@@ -79,6 +79,24 @@ test("default off requires a model; labeled native controls save enable and clea
   expect(writes.at(-1)).toEqual({ force: null });
 });
 
+test("the long help sits behind a closed '?' and the committed pin feeds the page summary", async () => {
+  const seen: Array<string | null | undefined> = [];
+  await act(async () => {
+    root!.render(<LanguageProvider><SubagentForceControl apiBase="" roster={["combo/featured"]} onForceChange={value => { seen.push(value); }} /></LanguageProvider>);
+  });
+  const help = host.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  const panel = window.document.getElementById(help.getAttribute("aria-controls")!) as unknown as HTMLElement;
+  expect(help.getAttribute("aria-expanded")).toBe("false");
+  expect(panel.hidden).toBe(true);
+  expect(panel.textContent).toContain(en["sub.forceScope"]);
+  await act(async () => help.click());
+  expect(panel.hidden).toBe(false);
+  expect(seen.at(-1)).toBeNull();
+  await select("combo/featured");
+  await act(async () => toggle().click());
+  expect(seen.at(-1)).toBe("combo/featured");
+});
+
 test("invalid persisted target remains visible and can be cleared", async () => {
   force = "retired/model";
   await render();
