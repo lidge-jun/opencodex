@@ -216,6 +216,7 @@ describe("management route registry reconciliation", () => {
     expect(untrustedIngress?.status).toBe(403);
     expect(await untrustedIngress?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
     ctx.trustedLoopbackIngress = true;
+    ctx.sessionControl = { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true };
     ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: false }) });
     const unconfirmed = await handleCodexCliUpdateRoutes(ctx);
@@ -237,6 +238,7 @@ describe("management route registry reconciliation", () => {
       const ctx: ManagementContext = { req, url: new URL(req.url),
         config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
         principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        sessionControl: { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true },
         convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
         syncClaudeAgentDefsBestEffort: async () => {} };
       const response = await handleCodexCliUpdateRoutes(ctx);
@@ -262,6 +264,7 @@ describe("management route registry reconciliation", () => {
       const ctx: ManagementContext = { req: makeRequest(), url: new URL("http://localhost/api/codex/cli-update/apply"),
         config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
         principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        sessionControl: { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true },
         convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
         syncClaudeAgentDefsBestEffort: async () => {} };
       const storeDir = join(configDir, "codex-cli-update-jobs"), heldLock = join(storeDir, "admission.lock");

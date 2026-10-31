@@ -25,7 +25,8 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
   }
   if (ctx.url.pathname !== "/api/codex/cli-update/apply") return null;
   if (ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, ctx.req, ctx.config);
-  if (!hasHumanDashboardSession(ctx) || !ctx.trustedLoopbackIngress) {
+  if (!hasHumanDashboardSession(ctx) || !ctx.trustedLoopbackIngress
+    || ctx.sessionControl?.isPaired(ctx.req, ctx.config) !== true) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403, ctx.req, ctx.config);
   }
   let body: unknown;
