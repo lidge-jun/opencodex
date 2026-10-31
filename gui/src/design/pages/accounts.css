@@ -1,3 +1,326 @@
 /* v2 styles for the Accounts & limits (Codex Set, Providers) page. Imported by design/theme.css into the `bridge`
    layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
    Tailwind classes in the components; keep this file for what utilities cannot say. */
+
+/* ============================================================================
+   Shared pieces (components/v2-accounts)
+   ============================================================================ */
+.acc-skel {
+  display: block;
+  background: linear-gradient(90deg, var(--ocx-surface-2) 0%, var(--ocx-surface) 50%, var(--ocx-surface-2) 100%);
+  background-size: 200% 100%;
+  animation: acc-skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes acc-skel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acc-skel { animation: none; }
+}
+.acc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.acc-banner .link-btn { font-size: inherit; }
+.acc-banner--warn { background: color-mix(in oklab, var(--ocx-warning-soft) 45%, var(--ocx-raised)); }
+.acc-banner--err { background: color-mix(in oklab, var(--ocx-danger-soft) 45%, var(--ocx-raised)); }
+.acc-help .link-btn { font-size: inherit; padding: 0; }
+.acc-help[hidden] { display: none !important; }
+
+/* Bare icon at rest, a soft plate only on hover. */
+.acc-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-icon-btn:hover:not(:disabled) { background: var(--ocx-surface-2); color: var(--ocx-fg); }
+.acc-icon-btn:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-icon-btn:disabled { opacity: 0.45; cursor: default; }
+.acc-icon-btn[aria-busy="true"] { animation: acc-busy 1s ease-in-out infinite alternate; }
+@keyframes acc-busy { to { opacity: 0.4; } }
+
+/* ============================================================================
+   Codex tab: accounts (CodexAccountPool, also embedded in Providers → OpenAI)
+   ============================================================================ */
+.acc-v2 .acc-head { margin: 0; align-items: center; }
+.acc-v2 .acc-head .codex-auth-page-head__actions { gap: 14px; }
+.acc-v2 .codex-auth-credits-toggle,
+.acc-v2 .codex-credit-spend { gap: 8px; }
+.acc-v2 .codex-auth-credits-toggle__label { color: var(--ocx-fg-muted); font-size: 13px; }
+
+/* Chips: one inverse chip for "selected", quiet neutrals for the rest, colour only for state. */
+.acc-v2 .badge {
+  height: 20px;
+  padding: 0 7px;
+  gap: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.acc-v2 .badge-primary { background: var(--ocx-accent); color: var(--ocx-on-accent); }
+.acc-v2 .badge-amber { background: var(--ocx-warning-soft); color: var(--ocx-warning); }
+.acc-v2 .badge-green { background: var(--ocx-success-soft); color: var(--ocx-success); }
+.acc-v2 .badge-clickable { cursor: pointer; filter: none; }
+.acc-v2 .badge-clickable:hover { box-shadow: inset 0 0 0 1px var(--ocx-line-strong); filter: none; }
+.acc-v2 .badge-clickable:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-v2 .badge svg { width: 11px; height: 11px; }
+/* The reserved ticket slot kept a v1 card head from growing; a v2 row wraps its chips instead. */
+.acc-v2 .codex-ticket-badge-slot { display: none; }
+.acc-v2 .card-badges { gap: 4px; }
+
+/* Panel body: rows separated by hairlines. */
+.acc-accounts > .acc-panel__body { overflow: hidden; }
+.acc-accounts > .acc-panel__body > * + * { border-top: 1px solid var(--ocx-line); }
+.acc-accounts > .acc-panel__body > .acc-row-banner { margin: 10px 12px; border-top: 0; }
+.acc-accounts > .acc-panel__body > .acc-row-banner + * { border-top: 0; }
+.acc-accounts .codex-auth-actions-row { margin: 0; gap: 2px; }
+.acc-accounts .codex-auth-actions-row .btn { color: var(--ocx-fg-muted); background: transparent; border-color: transparent; }
+.acc-accounts .codex-auth-actions-row .btn:hover:not(:disabled) { color: var(--ocx-fg); background: var(--ocx-surface-2); border-color: transparent; }
+
+.acc-row.card {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.acc-row.card.is-active { background: light-dark(rgb(9 9 11 / 0.018), rgb(255 255 255 / 0.022)); }
+.acc-row.has-more > .acc-row__head { padding-right: 38px; }
+.acc-row .acc-row__actions .btn { height: 30px; }
+.acc-row__notes,
+.acc-row__meters { margin: 10px 0 0 20px; }
+.acc-row__notes { display: flex; flex-direction: column; gap: 4px; }
+.acc-row__notes + .acc-row__meters { margin-top: 12px; }
+.acc-row.is-paused .acc-row__meters { opacity: 0.55; }
+.acc-row__notes .card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--ocx-fg-muted);
+}
+.acc-row__notes .card-sub p { margin: 0; }
+.acc-row__notes .link-btn { font-size: 12.5px; }
+.acc-row__notes .acc-reauth { gap: 8px 12px; }
+.acc-row__notes .codex-main-hard-lock-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12.5px;
+  color: var(--ocx-fg-muted);
+}
+.acc-row__notes .codex-main-hard-lock-status p { margin: 0; }
+.acc-row__notes .codex-main-hard-lock-status { justify-content: flex-start; }
+
+/* Account mode: the mode as a quiet chip, never the inverse "selected" chip. */
+.acc-v2 .acc-mode .badge { background: var(--ocx-surface-2); color: var(--ocx-fg); font-size: 11.5px; min-width: 0; }
+.acc-row__notes .codex-main-hard-lock-status.is-blocked { color: var(--ocx-warning); }
+
+/* The ⋯ overflow: the summary docks to the row corner, the body opens full width under it. */
+.acc-more { display: block; }
+.acc-more > summary.acc-more__summary {
+  position: absolute;
+  top: 13px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-width: 0;
+  border-radius: 8px;
+  color: var(--ocx-fg-subtle);
+  list-style: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-more > summary.acc-more__summary::-webkit-details-marker { display: none; }
+.acc-more > summary.acc-more__summary:hover,
+.acc-more[open] > summary.acc-more__summary { background: var(--ocx-surface-2); color: var(--ocx-fg); }
+.acc-more > summary.acc-more__summary:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-settings.codex-account-more-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  margin: 12px 0 2px 20px;
+  padding: 0;
+  border-radius: 8px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 46px;
+  padding: 7px 12px;
+}
+.acc-setting + .acc-setting { border-top: 1px solid var(--ocx-line); }
+.acc-setting__label { min-width: 0; font-size: 12.5px; color: var(--ocx-fg-muted); overflow-wrap: anywhere; }
+.acc-setting__control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; margin-left: auto; }
+.acc-setting:not(:has(> .acc-setting__label)) > .acc-setting__control { width: 100%; margin-left: 0; }
+.acc-settings :is(.codex-account-priority, .codex-account-auto-switch, .codex-account-credits) {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.acc-settings :is(.codex-account-priority-label, .codex-account-auto-switch-label, .codex-account-credits__label) {
+  margin-right: auto;
+  color: var(--ocx-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.acc-settings .acc-danger-btn { color: var(--ocx-danger); }
+.acc-settings .acc-danger-btn:hover:not(:disabled) { background: var(--ocx-danger-soft); color: var(--ocx-danger); border-color: transparent; }
+
+/* Meters: credits slot drawn as one more meter cell. */
+.acc-meters { padding: 0; }
+.acc-meters.quota-compact--pending { height: auto; min-height: 0; max-height: none; overflow: visible; }
+.acc-meters .quota-row--codex-credits {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label val" "bar bar" "note note";
+  row-gap: 6px;
+  column-gap: 12px;
+  align-items: baseline;
+  min-height: 0;
+  padding: 0;
+}
+.acc-meters .quota-row--codex-credits .quota-label { grid-area: label; font-size: 12px; line-height: 16px; color: var(--ocx-fg-muted); font-weight: 400; }
+.acc-meters .quota-row--codex-credits .quota-val { grid-area: val; font-size: 13px; line-height: 16px; font-weight: 500; color: var(--ocx-fg); }
+.acc-meters .quota-row--codex-credits .bar { grid-area: bar; height: 6px; border-radius: 999px; background: color-mix(in oklab, var(--ocx-fg) 7%, transparent); }
+.acc-meters .quota-row--codex-credits .bar-fill { border-radius: 999px; background: color-mix(in oklab, var(--ocx-fg) 80%, transparent); }
+.acc-meters .quota-row--codex-credits .quota-reset-label { grid-area: note; font-size: 11.5px; line-height: 16px; color: var(--ocx-fg-subtle); }
+.acc-meters .quota-row--codex-credits :is(.quota-reset-day, .quota-reset-time) { display: none; }
+
+/* Inside the accounts body: the pool sub-heading, the empty pool. */
+.acc-pool-label {
+  padding: 10px 16px 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ocx-fg-subtle);
+}
+.acc-pool-label + * { border-top: 0 !important; }
+.acc-pool-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px 24px 24px;
+  text-align: center;
+}
+.acc-pool-empty__title { margin: 0; font-size: 14px; font-weight: 500; color: var(--ocx-fg); }
+.acc-pool-empty__hint { margin: 0 0 6px; max-width: 46ch; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); }
+
+/* Native main-login profiles (its own component, drawn as a v2 card here). */
+.acc-native-main > .panel {
+  margin: 0 !important;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-native-main > .panel h3,
+.acc-native-main > .panel h2 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+
+/* Rotation strategy: the choice on one line, its explanation behind the "?". */
+.acc-v2 .account-pool-strategy-card {
+  margin: 0;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-v2 .account-pool-strategy-controls .setting-row { padding: 0; border: 0; align-items: center; }
+.acc-v2 .account-pool-strategy-controls .setting-row + .setting-row { padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--ocx-line); }
+.acc-v2 .account-pool-strategy-controls .setting-label .title { font-size: 14px; font-weight: 600; color: var(--ocx-fg); }
+.acc-v2 .account-pool-strategy-controls .acc-help .desc { display: block; margin: 0; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); }
+.acc-v2 .account-pool-strategy-controls .setting-row { align-items: flex-start; }
+.acc-v2 .account-pool-strategy-controls .acc-strategy-title { min-height: 32px; }
+.acc-v2 .account-pool-strategy-controls .setting-label { flex: 1 1 320px; min-width: 0; }
+.acc-v2 .account-pool-strategy-controls .setting-controls { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.acc-v2 .account-pool-strategy-controls .account-pool-threshold-badge { order: -1; }
+.acc-v2 .account-pool-strategy-controls .setting-controls .custom-select { width: auto; min-width: 180px; }
+.acc-v2 .account-pool-strategy-controls .setting-controls .select-trigger { width: 100%; }
+.acc-v2 .account-pool-threshold-badge { height: 24px; padding: 0 9px; }
+
+/* Advanced settings: a disclosure row, then the boxes as one ruled list. */
+.acc-v2 .codex-auth-advanced { margin: 0; }
+.acc-v2 .codex-auth-advanced__toggle {
+  width: auto;
+  padding: 6px 10px;
+  margin-left: -10px;
+  border-radius: 8px;
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-v2 .codex-auth-advanced__toggle:hover { background: var(--ocx-surface); color: var(--ocx-fg); }
+.acc-v2 .codex-auth-advanced__toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-v2 .codex-auth-advanced__boxes {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-v2 .codex-auth-advanced__boxes > .card {
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ocx-bg);
+  box-shadow: none;
+}
+.acc-v2 .codex-auth-advanced__boxes > .card:first-child { border-radius: 8px 8px 0 0; }
+.acc-v2 .codex-auth-advanced__boxes > .card:last-child { border-radius: 0 0 8px 8px; }
+.acc-v2 .codex-auth-advanced__boxes > .card:only-child { border-radius: 8px; }
+.acc-v2 .codex-auth-advanced__boxes > .card + .card { border-top: 1px solid var(--ocx-line); }
+.acc-v2 .codex-auth-advanced__boxes > .card strong { font-size: 14px; font-weight: 600; }
+.acc-v2 .codex-auth-advanced__boxes .card-sub { padding-left: 0; padding-right: 0; color: var(--ocx-fg-muted); font-size: 13px; }

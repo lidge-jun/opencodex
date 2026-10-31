@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconPlus } from "../icons";
-import { EmptyState, type NoticeTone } from "../ui";
+import type { NoticeTone } from "../ui";
+import { Panel } from "./v2-accounts/surface";
+import { ServingSummary } from "./v2-accounts/serving-summary";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import AddCodexAccountModal from "./AddCodexAccountModal";
@@ -19,7 +21,7 @@ import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
-import { CodexAccountPoolActions, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
+import { CodexAccountPoolActions, CodexAccountPoolAddButton, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -499,7 +501,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const showDoctorCopy = !embedded;
 
   return (
-    <div>
+    <div className={`acc-v2 flex flex-col ${embedded ? "gap-3" : "gap-4"}`}>
       <CodexAccountPoolPageHead
         t={t}
         embedded={embedded}
@@ -524,23 +526,42 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
       {banner}
 
-      {/*
-        The standalone page places pause/refresh below the mode banner, next to the
-        accounts they act on. The page head retains its title and feedback region.
-      */}
+      {/* The answer people open this page for: which account serves, and what it has left. */}
       {!embedded && (
-        <CodexAccountPoolActions
+        <ServingSummary
+          accounts={accounts}
+          activeId={activeId}
+          mode={accountModeState}
+          threshold={autoSwitchThreshold}
+          loading={loadState === "loading"}
           t={t}
-          refreshingQuota={refreshingQuota}
-          pausingExhausted={pausingExhausted}
-          pauseBusy={pauseBusy}
-          onRefresh={() => { void refreshQuotas(); }}
-          onPauseExhausted={() => { void pauseExhausted(); }}
         />
       )}
 
-      {/* Skeleton must sit where main/pool cards will be — never above the account-mode
-          banner, or the strip collapses on ready and shoves the whole page up (CLS). */}
+      <Panel
+        className="acc-accounts"
+        title={t("accountsV2.accounts")}
+        meta={accounts.length > 0 ? String(accounts.length) : undefined}
+        actions={<>
+          {/*
+            The standalone page places pause/refresh on the accounts panel, next to the
+            accounts they act on. The page head retains its title and feedback region.
+          */}
+          {!embedded && (
+            <CodexAccountPoolActions
+              t={t}
+              refreshingQuota={refreshingQuota}
+              pausingExhausted={pausingExhausted}
+              pauseBusy={pauseBusy}
+              onRefresh={() => { void refreshQuotas(); }}
+              onPauseExhausted={() => { void pauseExhausted(); }}
+            />
+          )}
+          <CodexAccountPoolAddButton t={t} onAdd={() => setShowAdd(true)} />
+        </>}
+      >
+      {/* Skeleton sits where the rows will be, inside the same panel body, so the panel
+          does not collapse on ready and shove the page up (CLS). */}
       <CodexAccountPoolLoadStates
         t={t}
         loadState={loadState}
@@ -580,25 +601,23 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             mainReauth={mainReauth}
           />
 
-          <NativeMainProfiles
-            apiBase={apiBase}
-            disabled={mainReauthActive}
-            onChanged={() => load(false)}
-          />
-
-          <div className="section-sep">
-            <span className="section-label">{t("codexAuth.accountPool")}</span>
-            <div className="sep-line" />
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAdd(true)}>
-              <IconPlus width={14} /> {t("codexAuth.add")}
-            </button>
+          <div className="acc-pool-label" role="presentation">
+            <span>{t("codexAuth.accountPool")}</span>
           </div>
 
           {activePoolNeedsReauth && activePoolAccount && (
             <CodexAccountPoolReauthBanner onReauth={() => openReauth(activePoolAccount.id)} />
           )}
 
-          {pool.length === 0 && <EmptyState title={t("codexAuth.noPool")} />}
+          {pool.length === 0 && (
+            <div className="acc-pool-empty">
+              <p className="acc-pool-empty__title">{t("codexAuth.noPool")}</p>
+              <p className="acc-pool-empty__hint">{t("accountsV2.emptyPoolHint")}</p>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAdd(true)}>
+                <IconPlus width={14} /> {t("codexAuth.add")}
+              </button>
+            </div>
+          )}
 
           <CodexAccountPoolCards
             pool={pool}
@@ -629,6 +648,17 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
           />
         </>
+      )}
+      </Panel>
+
+      {!(loadState === "loading" && accounts.length === 0) && (
+        <div className="acc-native-main">
+          <NativeMainProfiles
+            apiBase={apiBase}
+            disabled={mainReauthActive}
+            onChanged={() => load(false)}
+          />
+        </div>
       )}
 
       <CodexPoolStrategySetting
