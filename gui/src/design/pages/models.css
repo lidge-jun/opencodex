@@ -9,7 +9,7 @@
    hairline-ruled rows, quiet ghost actions, the inverse primary for on/selected. */
 
 /* ---- page head + tab track ------------------------------------------------- */
-.page-head:has(+ .codex-stale-banner, + .models-page-tabs) { align-items: flex-start; margin-bottom: 18px; }
+.page-head:has(~ .models-page-tabs) { align-items: flex-start; margin-bottom: 18px; }
 .models-page-tabs {
   display: inline-flex;
   width: fit-content;
