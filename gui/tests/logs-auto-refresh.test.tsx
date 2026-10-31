@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Logs from "../src/pages/Logs";
+import { chooseOption, selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -583,12 +584,7 @@ function visibleRequestIds(container: HTMLElement): string[] {
 }
 
 async function changeLogSelect(container: HTMLElement, label: string, value: string): Promise<void> {
-  const select = container.querySelector<HTMLSelectElement>(`.logs-filter-container select[aria-label="${label}"]`);
-  expect(select).not.toBeNull();
-  await act(async () => {
-    select!.value = value;
-    select!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, `.logs-filter-container [role="combobox"][aria-label="${label}"]`), value);
   await flushMicrotasks();
 }
 
@@ -673,9 +669,9 @@ test("Logs: rich controls intersect rows while options retain the unfiltered rin
     await act(async () => { intercepted.click(); });
     expect(visibleRequestIds(container)).toEqual(["match"]);
     expect(container.querySelector(".logs-filter-status")?.textContent).toContain("Showing 1 of 6");
-    expect([...container.querySelectorAll<HTMLOptionElement>('select[aria-label="Model"] option')].map(option => option.value))
+    expect(await selectOptionValues(selectTrigger(container, '[role="combobox"][aria-label="Model"]')))
       .toEqual(["", "model-a", "model-a-plus"]);
-    expect([...container.querySelectorAll<HTMLOptionElement>('select[aria-label="Provider"] option')].map(option => option.value))
+    expect(await selectOptionValues(selectTrigger(container, '[role="combobox"][aria-label="Provider"]')))
       .toEqual(["", "openai", "xai"]);
   } finally {
     await act(async () => { root.unmount(); });
@@ -775,19 +771,19 @@ test("Logs: ring rollover clears only vanished model and provider selections", a
     await changeLogSelect(container, "Status", "errors");
     await changeLogSelect(container, "Time", "1h");
     await enterConversation(container, "conversation-a");
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
     rows = [{ ...rows[0]!, model: "model-b" }];
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("openai");
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("openai");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     await changeLogSelect(container, "Model", "model-b");
     rows = [{ ...rows[0]!, provider: "xai" }];
     await advanceSilentRefresh();
-    expect(select("Provider").value).toBe("");
-    expect(select("Model").value).toBe("model-b");
-    expect(select("Status").value).toBe("errors");
-    expect(select("Time").value).toBe("1h");
+    expect(selectValue(select("Provider"))).toBe("");
+    expect(selectValue(select("Model"))).toBe("model-b");
+    expect(selectValue(select("Status"))).toBe("errors");
+    expect(selectValue(select("Time"))).toBe("1h");
     expect(container.querySelector<HTMLInputElement>('.logs-filter-container input[type="search"]')!.value).toBe("conversation-a");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
   } finally {
@@ -808,24 +804,25 @@ test("Logs: casing-only rollover retains model and provider selection with curre
     await changeLogSelect(container, "Model", "GPT-5");
     await changeLogSelect(container, "Provider", "OpenAI");
     await changeLogSelect(container, "Status", "success");
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-    expect(select("Model").value).toBe("GPT-5");
-    expect(select("Provider").value).toBe("OpenAI");
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
+    expect(selectValue(select("Model"))).toBe("GPT-5");
+    expect(selectValue(select("Provider"))).toBe("OpenAI");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
 
     rows = rows.map(row => ({ ...row, model: row.model === "GPT-5" ? "gpt-5" : row.model }));
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("gpt-5");
-    expect(select("Model").selectedOptions[0]?.value).toBe("gpt-5");
-    expect(select("Provider").value).toBe("OpenAI");
+    expect(selectValue(select("Model"))).toBe("gpt-5");
+    // The kept value is one of the current options (the listed spelling), not an orphan.
+    expect(await selectOptionValues(select("Model"))).toContain("gpt-5");
+    expect(selectValue(select("Provider"))).toBe("OpenAI");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
 
     rows = rows.map(row => ({ ...row, provider: row.provider === "OpenAI" ? "openai" : row.provider }));
     await advanceSilentRefresh();
-    expect(select("Provider").value).toBe("openai");
-    expect(select("Provider").selectedOptions[0]?.value).toBe("openai");
-    expect(select("Model").value).toBe("gpt-5");
-    expect(select("Status").value).toBe("success");
+    expect(selectValue(select("Provider"))).toBe("openai");
+    expect(await selectOptionValues(select("Provider"))).toContain("openai");
+    expect(selectValue(select("Model"))).toBe("gpt-5");
+    expect(selectValue(select("Status"))).toBe("success");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
     expect(container.querySelector(".logs-filter-status")?.textContent).toContain("Showing 1 of 3");
   } finally {
@@ -993,7 +990,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     await changeLogSelect(container, "Model", "gpt-test");
     step = 3;
     await advanceSilentRefresh();
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("gpt-test");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     step = 4;
     await advanceSilentRefresh();
@@ -1001,7 +998,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     expectTableLoaded(container, "gpt-mutated");
     expect(container.textContent).toContain("987");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("");
     step = 5;
     await advanceSilentRefresh();
     expect(visibleRequestIds(container)).toEqual(["req-2"]);
@@ -1235,7 +1232,7 @@ test("Logs: switching apiBase clears the old proxy anchor for a legacy envelope"
     await changeLogSelect(container, "Time", "15m");
     expect(visibleRequestIds(container)).toEqual(["proxy-a"]);
     await renderLogsAt(root, "http://proxy-b");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Time"]')!.value).toBe("15m");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Time\"]'))).toBe("15m");
     expect(visibleRequestIds(container)).toEqual(["legacy-fresh"]);
   } finally {
     try {
@@ -1300,8 +1297,8 @@ test("Logs: a late body from an aborted old apiBase cannot poison the new proxy 
     await act(async () => { container.querySelector<HTMLInputElement>(".logs-auto-refresh input")!.click(); });
     await advanceSilentRefresh();
     expect(urls.at(-1)).toContain("cursor=cursor-b");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("gpt-test");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!.value).toBe("openai");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Provider\"]'))).toBe("openai");
     monotonic += 30_000;
     await act(async () => { jest.advanceTimersByTime(30_000); });
     await flushMicrotasks();
@@ -1385,15 +1382,15 @@ test("Logs: reappearing options do not resurrect selections cleared by a success
     await changeLogSelect(container, "Status", "success");
     rows = [replacement];
     await advanceSilentRefresh();
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("");
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("");
     expect(visibleRequestIds(container)).toEqual(["replacement"]);
     rows = [original, replacement];
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("");
-    expect(select("Status").value).toBe("success");
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("");
+    expect(selectValue(select("Status"))).toBe("success");
     expect(visibleRequestIds(container)).toEqual(["replacement", "original"]);
   } finally {
     await act(async () => { root.unmount(); });
@@ -1430,9 +1427,9 @@ test("Logs: a pending refresh reconciles the user's latest selection rather than
       ], "replaced", true));
     });
     await flushMicrotasks();
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("MODEL-B");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!.value).toBe("XAI");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Status"]')!.value).toBe("errors");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Model\"]'))).toBe("MODEL-B");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Provider\"]'))).toBe("XAI");
+    expect(selectValue(selectTrigger(container, '[role=\"combobox\"][aria-label=\"Status\"]'))).toBe("errors");
     expect(visibleRequestIds(container)).toEqual(["current"]);
   } finally {
     await act(async () => { root.unmount(); });

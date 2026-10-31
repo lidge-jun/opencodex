@@ -6,6 +6,7 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { PROTOCOL_MODE_KEYS } from "../components/protocols/protocol-labels";
 import { chip, fieldControl, fieldLabel, quietButton } from "../components/v2-logs/classes";
 import { cn } from "@/lib/utils";
+import { Select } from "../ui";
 import { LOG_PROTOCOL_MODE_FILTERS, type LogFilterState, type LogProtocolModeFilter, type LogStatusFilter, type LogTimeWindow } from "./logs-filter";
 import { logsSurfaceKeyDown } from "./logs-surface-keydown";
 
@@ -21,6 +22,9 @@ interface LogsFilterBarProps {
   /** Table controls that share the toolbar row (the column toggles). */
   trailing?: ReactNode;
 }
+
+/** The compact 32px field the filter grid uses, filling its column. */
+const FILTER_SELECT = { fullWidth: true, size: "sm", triggerClassName: "px-2.5 text-fg" } as const;
 
 type SpeedChoice = "all" | "slow" | "medium" | "fast";
 const SURFACES = ["all", "claude", "codex", "grok"] as const;
@@ -154,54 +158,61 @@ export function LogsFilterBar({
       >
         <label className={fieldLabel}>
           {t("logs.filter.provider.label")}
-          <select className={fieldControl} value={filters.provider} aria-label={t("logs.filter.provider.label")} onChange={event => set({ provider: event.target.value })}>
-            <option value="">{t("logs.filter.provider.all")}</option>
-            {options.providers.map(provider => <option key={provider} value={provider}>{formatProviderDisplayName(provider, t)}</option>)}
-          </select>
+          <Select {...FILTER_SELECT} value={filters.provider} label={t("logs.filter.provider.label")} onChange={provider => set({ provider })}
+            options={[
+              { value: "", label: t("logs.filter.provider.all") },
+              ...options.providers.map(provider => ({ value: provider, label: formatProviderDisplayName(provider, t) })),
+            ]} />
         </label>
 
         <label className={fieldLabel}>
           {t("logs.filter.model.label")}
-          <select className={fieldControl} value={filters.model} aria-label={t("logs.filter.model.label")} onChange={event => set({ model: event.target.value })}>
-            <option value="">{t("logs.filter.model.all")}</option>
-            {options.models.map(model => <option key={model} value={model}>{model}</option>)}
-          </select>
+          <Select {...FILTER_SELECT} value={filters.model} label={t("logs.filter.model.label")} onChange={model => set({ model })}
+            options={[
+              { value: "", label: t("logs.filter.model.all") },
+              ...options.models.map(model => ({ value: model, label: model })),
+            ]} />
         </label>
 
         <label className={fieldLabel}>
           {t("logs.filter.time.label")}
-          <select className={fieldControl} value={filters.timeWindow} aria-label={t("logs.filter.time.label")} onChange={event => set({ timeWindow: event.target.value as LogTimeWindow })}>
-            <option value="all">{t("logs.filter.time.all")}</option>
-            <option value="15m">{t("logs.filter.time.15m")}</option>
-            <option value="1h">{t("logs.filter.time.1h")}</option>
-            <option value="24h">{t("logs.filter.time.24h")}</option>
-          </select>
+          <Select {...FILTER_SELECT} value={filters.timeWindow} label={t("logs.filter.time.label")}
+            onChange={timeWindow => set({ timeWindow: timeWindow as LogTimeWindow })}
+            options={[
+              { value: "all", label: t("logs.filter.time.all") },
+              { value: "15m", label: t("logs.filter.time.15m") },
+              { value: "1h", label: t("logs.filter.time.1h") },
+              { value: "24h", label: t("logs.filter.time.24h") },
+            ]} />
         </label>
 
         <label className={fieldLabel}>
           {t("logs.filter.speed.label")}
-          <select className={fieldControl} value={currentSpeed} aria-label={t("logs.filter.speed.label")} onChange={event => set(speedBounds(event.target.value))}>
-            <option value="all">{t("logs.filter.speed.all")}</option>
-            <option value="slow">{t("logs.filter.speed.slow")}</option>
-            <option value="medium">{t("logs.filter.speed.medium")}</option>
-            <option value="fast">{t("logs.filter.speed.fast")}</option>
-          </select>
+          <Select {...FILTER_SELECT} value={currentSpeed} label={t("logs.filter.speed.label")} onChange={speed => set(speedBounds(speed))}
+            options={[
+              { value: "all", label: t("logs.filter.speed.all") },
+              { value: "slow", label: t("logs.filter.speed.slow") },
+              { value: "medium", label: t("logs.filter.speed.medium") },
+              { value: "fast", label: t("logs.filter.speed.fast") },
+            ]} />
         </label>
 
         <label className={fieldLabel}>
           {t("logs.filter.status.label")}
-          <select className={fieldControl} value={filters.status} aria-label={t("logs.filter.status.label")} onChange={event => set({ status: event.target.value as LogStatusFilter })}>
-            <option value="all">{t("logs.filter.status.all")}</option>
-            <option value="success">{t("logs.filter.status.success")}</option>
-            <option value="errors">{t("logs.filter.status.errors")}</option>
-          </select>
+          <Select {...FILTER_SELECT} value={filters.status} label={t("logs.filter.status.label")}
+            onChange={status => set({ status: status as LogStatusFilter })}
+            options={[
+              { value: "all", label: t("logs.filter.status.all") },
+              { value: "success", label: t("logs.filter.status.success") },
+              { value: "errors", label: t("logs.filter.status.errors") },
+            ]} />
         </label>
 
         <label className={fieldLabel}>
           {t("logs.filter.protocol.label")}
-          <select className={fieldControl} value={protocolMode} aria-label={t("logs.filter.protocol.label")} onChange={event => set({ protocolMode: event.target.value as LogProtocolModeFilter })}>
-            {LOG_PROTOCOL_MODE_FILTERS.map(mode => <option key={mode} value={mode}>{t(protocolModeFilterKey(mode))}</option>)}
-          </select>
+          <Select {...FILTER_SELECT} value={protocolMode} label={t("logs.filter.protocol.label")}
+            onChange={mode => set({ protocolMode: mode as LogProtocolModeFilter })}
+            options={LOG_PROTOCOL_MODE_FILTERS.map(mode => ({ value: mode, label: t(protocolModeFilterKey(mode)) }))} />
         </label>
 
         <label className="col-span-full inline-flex w-fit cursor-pointer items-center gap-2 text-[13px] text-fg-muted hover:text-fg">

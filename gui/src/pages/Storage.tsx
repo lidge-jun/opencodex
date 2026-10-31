@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
-import { EmptyState } from "../ui";
+import { EmptyState, Select } from "../ui";
 import { IconRefresh } from "../icons";
 import { formatBytes } from "../format-bytes";
 import { NumberStepper } from "../components/NumberStepper";
@@ -1153,38 +1153,34 @@ function AutoCleanupPolicyPanel({
         <div className="storage-policy-selects">
           <label className="field" htmlFor="storage-policy-schedule">
             <span className="field-label">{t("storage.policy.schedule")}</span>
-            <select
+            <Select
               id="storage-policy-schedule"
-              className="input"
+              fullWidth
               value={policy.schedule}
               disabled={saving || running}
-              onChange={e => {
-                const schedule = e.target.value as CleanupPolicy["schedule"];
-                void savePolicy({ schedule });
-              }}
-            >
-              <option value="manual">{t("storage.policy.schedule.manual")}</option>
-              <option value="startup">{t("storage.policy.schedule.startup")}</option>
-              <option value="daily">{t("storage.policy.schedule.daily")}</option>
-              <option value="weekly">{t("storage.policy.schedule.weekly")}</option>
-            </select>
+              onChange={value => { void savePolicy({ schedule: value as CleanupPolicy["schedule"] }); }}
+              options={[
+                { value: "manual", label: t("storage.policy.schedule.manual") },
+                { value: "startup", label: t("storage.policy.schedule.startup") },
+                { value: "daily", label: t("storage.policy.schedule.daily") },
+                { value: "weekly", label: t("storage.policy.schedule.weekly") },
+              ]}
+            />
           </label>
 
           <label className="field" htmlFor="storage-policy-mode">
             <span className="field-label">{t("storage.policy.mode")}</span>
-            <select
+            <Select
               id="storage-policy-mode"
-              className="input"
+              fullWidth
               value={policy.mode}
               disabled={saving || running}
-              onChange={e => {
-                const mode = e.target.value as CleanupPolicy["mode"];
-                void savePolicy({ mode });
-              }}
-            >
-              <option value="quarantine">{t("storage.policy.mode.quarantine")}</option>
-              <option value="permanent">{t("storage.policy.mode.permanent")}</option>
-            </select>
+              onChange={value => { void savePolicy({ mode: value as CleanupPolicy["mode"] }); }}
+              options={[
+                { value: "quarantine", label: t("storage.policy.mode.quarantine") },
+                { value: "permanent", label: t("storage.policy.mode.permanent") },
+              ]}
+            />
           </label>
         </div>
         {policy.mode === "permanent" && (

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
-import { Notice, Switch } from "../../ui";
+import { Notice, Select, Switch } from "../../ui";
 import { readJsonOrThrow } from "../../fetch-json";
 import { Frame, FrameBody } from "../v2-subagents/frame";
 import { useHelpDisclosure } from "../v2-subagents/use-help-disclosure";
@@ -119,16 +119,17 @@ export default function SubagentForceControl({ apiBase, roster, id, onForceChang
       <FrameBody>
         <label className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
           <span className="min-w-[min(100%,12rem)] flex-1 text-[14px] leading-5 font-medium text-fg">{t("sub.forceModel")}</span>
-          <select className="input w-full max-w-[22rem] text-[13px] sm:w-auto sm:min-w-[16rem]" value={selected} disabled={!state || pending}
-            onChange={event => {
-              const value = event.target.value;
+          <Select fullWidth className="max-w-[22rem] sm:w-auto sm:min-w-[16rem]" triggerClassName="text-[13px]"
+            label={t("sub.forceModel")} value={selected} disabled={!state || pending}
+            onChange={value => {
               if (state?.force) void save(value);
               else setSelection(value);
-            }}>
-            <option value="" disabled>{t("sub.forceChoose")}</option>
-            {selected && !valid && <option value={selected} disabled>{selected}</option>}
-            {options.map(model => <option key={model} value={model}>{model}</option>)}
-          </select>
+            }}
+            options={[
+              { value: "", label: t("sub.forceChoose"), disabled: true },
+              ...(selected && !valid ? [{ value: selected, label: selected, disabled: true }] : []),
+              ...options.map(model => ({ value: model, label: model })),
+            ]} />
         </label>
       </FrameBody>
       {notices.length > 0 && <div className="flex flex-col gap-2 px-4 py-3">{notices}</div>}

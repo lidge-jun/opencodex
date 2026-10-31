@@ -6,6 +6,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import RoutingProfiles from "../src/pages/RoutingProfiles";
+import { selectValue } from "./helpers/custom-select";
 
 const originalFetch = globalThis.fetch;
 let restoreGlobals: (() => void) | undefined;
@@ -142,7 +143,8 @@ async function mountPage(): Promise<{ container: HTMLDivElement; root: Root }> {
   return { container, root };
 }
 
-function requirementSelect(container: HTMLDivElement, key: string): HTMLSelectElement | null {
+/** The requirement's Select (ui.tsx) as `{ value }`, like the native select it replaced. */
+function requirementSelect(container: HTMLDivElement, key: string): { value: string } | null {
   // Scope the lookup to the "Hard requirements" fieldset so keys that also
   // appear in the optimize/unknown-evidence fieldsets (health, cost, quota)
   // cannot produce a false match.
@@ -151,7 +153,8 @@ function requirementSelect(container: HTMLDivElement, key: string): HTMLSelectEl
   const scope: ParentNode = fieldset ?? container;
   const label = [...scope.querySelectorAll<HTMLLabelElement>("label")]
     .find(candidate => candidate.querySelector("code")?.textContent === key);
-  return label?.querySelector<HTMLSelectElement>("select") ?? null;
+  const trigger = label?.querySelector<HTMLButtonElement>("[role=combobox]");
+  return trigger ? { value: selectValue(trigger) } : null;
 }
 
 test("routing page loads profiles, analytics, and marks the dry-run selection", async () => {

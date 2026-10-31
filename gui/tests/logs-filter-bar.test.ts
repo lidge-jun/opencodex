@@ -7,6 +7,10 @@ import type { TFn } from "../src/i18n/shared";
 import { DEFAULT_LOG_FILTER_STATE, hasActiveLogFilters, type LogFilterState } from "../src/pages/logs-filter";
 import { LogsFilterBar } from "../src/pages/logs-filter-bar";
 import { logsSurfaceKeyDown } from "../src/pages/logs-surface-keydown";
+import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
+
+/** A filter dropdown (the app's Select trigger), found by its accessible name. */
+const filterSelect = (field: string) => `[role="combobox"][aria-label="logs.filter.${field}.label"]`;
 
 test("surface radios support wrapping arrows and Home/End with roving focus", () => {
   const previousDocument = globalThis.document;
@@ -85,13 +89,9 @@ async function withFilterBar(
 test("LogsFilterBar changes labeled selects without dropping other filters", async () => {
   await withFilterBar({ ...DEFAULT_LOG_FILTER_STATE, conversationId: "conversation-a" }, async ui => {
     for (const [field, value] of [["provider", "xai"], ["model", "model-a"], ["time", "15m"], ["status", "errors"]] as const) {
-      const select = ui.container.querySelector<HTMLSelectElement>(`select[aria-label="logs.filter.${field}.label"]`);
-      expect(select).not.toBeNull();
-      await act(async () => {
-        select!.value = value;
-        select!.dispatchEvent(new ui.win.Event("change", { bubbles: true }));
-      });
-      expect(select!.value).toBe(value);
+      const select = selectTrigger(ui.container, filterSelect(field));
+      await chooseOption(select, value);
+      expect(selectValue(select)).toBe(value);
     }
     const intercepted = ui.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     await act(async () => { intercepted.click(); });
@@ -105,15 +105,12 @@ test("LogsFilterBar changes labeled selects without dropping other filters", asy
 
 test("LogsFilterBar speed choices have non-overlapping bounds and clear both bounds on All", async () => {
   await withFilterBar({ ...DEFAULT_LOG_FILTER_STATE, provider: "openai" }, async ui => {
-    const select = ui.container.querySelector<HTMLSelectElement>('select[aria-label="logs.filter.speed.label"]')!;
+    const select = selectTrigger(ui.container, filterSelect("speed"));
     for (const [value, min, max] of [
       ["slow", undefined, 15], ["medium", 15, 50], ["fast", 50, undefined], ["all", undefined, undefined],
     ] as const) {
-      await act(async () => {
-        select.value = value;
-        select.dispatchEvent(new ui.win.Event("change", { bubbles: true }));
-      });
-      expect(select.value).toBe(value);
+      await chooseOption(select, value);
+      expect(selectValue(select)).toBe(value);
       expect(ui.filters().minTokPerSec).toBe(min);
       expect(ui.filters().maxTokPerSec).toBe(max);
       expect(ui.filters().provider).toBe("openai");
@@ -153,7 +150,7 @@ test.each(["pointer", "keyboard"] as const)("LogsFilterBar %s reset restores foc
     expect(ui.container.querySelector(".logs-filter-status")).toBeNull();
     expect(ui.container.querySelector<HTMLInputElement>('input[type="search"]')!.value).toBe("");
     expect(ui.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
-    expect(ui.container.querySelector<HTMLSelectElement>('select[aria-label="logs.filter.speed.label"]')!.value).toBe("all");
+    expect(selectValue(selectTrigger(ui.container, filterSelect("speed")))).toBe("all");
   });
 });
 
@@ -193,7 +190,7 @@ test("LogsFilterBar folds the secondary filters behind a Filters disclosure that
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(panel.hidden).toBe(true);
     // Folded fields stay reachable by label so their state survives the fold.
-    expect(panel.querySelector('select[aria-label="logs.filter.provider.label"]')).not.toBeNull();
+    expect(panel.querySelector(filterSelect("provider"))).not.toBeNull();
     await act(async () => { toggle.click(); });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(panel.hidden).toBe(false);

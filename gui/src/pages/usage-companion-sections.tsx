@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { TFn, TKey } from "../i18n/shared";
 import { relativeTimeLabelsFromT, formatRelativeTime } from "../provider-workspace/usage";
-import { Switch } from "../ui";
+import { Select, Switch } from "../ui";
 import { IconExternal } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
@@ -133,9 +133,9 @@ function SelectControl<T extends string>({ label, value, options, optionLabel, o
   return (
     <label className="usage-companion-control grid min-w-0 gap-1.5">
       <span className={FIELD_LABEL}>{label}</span>
-      <select className="h-9 rounded-control text-[13px]" value={value} onChange={event => onChange(event.target.value as T)}>
-        {options.map(option => <option key={option} value={option}>{optionLabel(option)}</option>)}
-      </select>
+      <Select fullWidth label={label} triggerClassName="h-9 py-0 text-[13px]" value={value}
+        onChange={next => onChange(next as T)}
+        options={options.map(option => ({ value: option, label: optionLabel(option) }))} />
     </label>
   );
 }

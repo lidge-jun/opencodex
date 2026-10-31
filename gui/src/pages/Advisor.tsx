@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Notice } from "../ui";
+import { Notice, Select } from "../ui";
+import { cn } from "../lib/utils";
 import { useDataSurface } from "../data-surface";
 import { useT, type TKey } from "../i18n/shared";
 import { AdvisorModelSelect } from "../components/AdvisorModelSelect";
@@ -30,6 +31,9 @@ export interface AdvisorDto {
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
+// One field width for the editor's dropdowns and the timeout box; full width on a phone.
+const ADVISOR_FIELD_WIDTH = "w-[16rem] max-w-full max-[760px]:w-full";
+const ADVISOR_TRIGGER = cn(ADVISOR_FIELD_WIDTH, "justify-between px-[11px] py-2");
 
 export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: AdvisorSettings }) {
   const t = useT();
@@ -138,36 +142,36 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
         </div>
         <div className="advisor-editor-row">
           <label htmlFor="advisor-effort" className="advisor-editor-label">{t("advisor.effort")}</label>
-          <select
+          <Select
             id="advisor-effort"
             value={draft.effort}
             disabled={saving}
-            onChange={event => edit({ effort: event.target.value })}
-          >
-            {EFFORTS.map(effort => (
-              <option key={effort} value={effort}>{t(`models.reasoningEffort.${effort}` as TKey)}</option>
-            ))}
-          </select>
+            triggerClassName={ADVISOR_TRIGGER}
+            options={EFFORTS.map(effort => ({ value: effort, label: t(`models.reasoningEffort.${effort}` as TKey) }))}
+            onChange={effort => edit({ effort })}
+          />
         </div>
         <div className="advisor-editor-row">
           <label htmlFor="advisor-policy" className="advisor-editor-label">{t("advisor.policy")}</label>
-          <select
+          <Select
             id="advisor-policy"
             value={draft.policy}
             disabled={saving}
-            onChange={event => edit({ policy: event.target.value as AdvisorSettings["policy"] })}
-          >
-            <option value="manual">{t("advisor.policy.manual")}</option>
-            <option value="preflight">{t("advisor.policy.preflight")}</option>
-            <option value="adaptive">{t("advisor.policy.adaptive")}</option>
-          </select>
+            triggerClassName={ADVISOR_TRIGGER}
+            options={[
+              { value: "manual", label: t("advisor.policy.manual") },
+              { value: "preflight", label: t("advisor.policy.preflight") },
+              { value: "adaptive", label: t("advisor.policy.adaptive") },
+            ]}
+            onChange={policy => edit({ policy: policy as AdvisorSettings["policy"] })}
+          />
         </div>
         {draft.policy === "adaptive" && <div className="advisor-editor-row">
           <label htmlFor="advisor-task-limit" className="advisor-editor-label">{t("advisor.taskLimit")}</label>
-          <select id="advisor-task-limit" value={draft.maxConsultationsPerTask ?? 3} disabled={saving}
-            onChange={event => edit({ maxConsultationsPerTask: Number(event.target.value) })}>
-            {[1, 2, 3].map(limit => <option key={limit} value={limit}>{limit}</option>)}
-          </select>
+          <Select id="advisor-task-limit" value={String(draft.maxConsultationsPerTask ?? 3)} disabled={saving}
+            triggerClassName={ADVISOR_TRIGGER}
+            options={[1, 2, 3].map(limit => ({ value: String(limit), label: String(limit) }))}
+            onChange={limit => edit({ maxConsultationsPerTask: Number(limit) })} />
         </div>}
         {draft.policy === "adaptive" && <p className="muted">{t("advisor.adaptiveNote")}</p>}
         <div style={{ margin: "0.8rem 0" }}>
@@ -186,6 +190,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           <label htmlFor="advisor-timeout" className="advisor-editor-label">{t("advisor.timeout")}</label>
           <input
             id="advisor-timeout"
+            className={cn("input", ADVISOR_FIELD_WIDTH)}
             type="number"
             min={1000}
             max={600000}
