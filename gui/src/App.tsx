@@ -410,6 +410,21 @@ export default function App() {
       <span className="ver" title={displayedVersion}>v{displayedVersion}</span>
     </button>
   );
+  // The wide-screen strip carries the wordmark beside the collapse toggle; the version moves
+  // to the foot there, so this copy has none. The topbar and drawer keep `brand` above.
+  const stripBrand = (
+    <button
+      type="button"
+      className="brand brand-home brand--strip"
+      onClick={() => navigateToPage("home")}
+      aria-label={t("nav.goHome")}
+      title={t("nav.goHome")}
+      {...(page === "home" ? { "aria-current": "page" as const } : {})}
+    >
+      <BrandMark className="ui-v2 brand-logo-v2 h-[22px] w-[25px]" label={t("app.logoAria")} />
+      <span className="name">opencodex</span>
+    </button>
+  );
 
   const quotaSummary = targetsSettled && page !== "startup" && (!targets.connected || sharedSessionReady) && (
     <ErrorBoundary key={sharedBase} pageName={t("quotaSummary.aria")} title={t("errorBoundary.title")} message={t("errorBoundary.message")} detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
@@ -456,7 +471,7 @@ export default function App() {
       {navOpen && <div className="drawer-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       {/* Fixed to the window's top-left; kept outside .sidebar so the sidebar's
          backdrop-filter containing block can't clip it to 0 width when collapsed. */}
-      <SidebarTopStrip collapsed={navCollapsed} onToggle={toggleNavCollapse} />
+      <SidebarTopStrip collapsed={navCollapsed} onToggle={toggleNavCollapse} brand={stripBrand} />
       <aside id="app-sidebar" className={`sidebar${navOpen ? " open" : ""}`} ref={sidebarRef} tabIndex={-1}>
         <div className="drawer-head">
           {brand}
@@ -508,30 +523,6 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <div className="lang-toggle">
-            <IconGlobe aria-hidden />
-            <Select
-              value={locale}
-              options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
-              onChange={v => setLocale(v as Locale)}
-              label={t("lang.label")}
-              placement="right"
-              portal={false}
-              style={{ flex: 1, minWidth: 0, width: "100%" }}
-            />
-          </div>
-          {zoomManaged ? (
-            <div className="sidebar-display-row">
-              {themeSwitch}
-              <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
-                canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
-            </div>
-          ) : (
-            <div className="sidebar-action-row sidebar-action-row--theme">
-              <span className="sidebar-action-label">{t("theme.label")}</span>
-              {themeSwitch}
-            </div>
-          )}
           <ProxyControls
             label={t("dash.actions")}
             statusLabel={t("dash.online")}
@@ -550,6 +541,18 @@ export default function App() {
               onClick: () => { void handleSessionLogout(); },
             } : undefined}
           />
+          <div className="lang-toggle">
+            <IconGlobe aria-hidden />
+            <Select
+              value={locale}
+              options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
+              onChange={v => setLocale(v as Locale)}
+              label={t("lang.label")}
+              placement="right"
+              portal={false}
+              style={{ flex: 1, minWidth: 0, width: "100%" }}
+            />
+          </div>
           <SidebarGithubRow
             apiBase={sharedBase}
             onOpenUpdate={() => {
@@ -561,7 +564,15 @@ export default function App() {
               setNavOpen(false);
               openDesktopCliPage();
             }}
+            trailing={themeSwitch}
           />
+          <div className="sidebar-meta-row">
+            <span className="sidebar-version" title={displayedVersion}>v{displayedVersion}</span>
+            {zoomManaged && (
+              <DesktopZoomControl percent={desktopZoom.percent} canZoomIn={desktopZoom.canZoomIn}
+                canZoomOut={desktopZoom.canZoomOut} onStep={desktopZoom.step} />
+            )}
+          </div>
         </div>
       </aside>
 

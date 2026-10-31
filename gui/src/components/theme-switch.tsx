@@ -1,6 +1,5 @@
 import { IconMonitor, IconMoon, IconSun } from "../icons";
 import { useT, type TKey } from "../i18n/shared";
-import { SegmentedControl } from "./ui-v2/segmented-control";
 
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -16,20 +15,27 @@ interface ThemeSwitchProps {
 }
 
 /**
- * Icon-only theme switch for the sidebar foot. All three modes stay visible and the current one
- * is selected, so the user picks a mode in one click instead of cycling through a single button
- * whose next state is hidden. Each option carries its mode name as tooltip and accessible name.
- * Design system v2: rendered as a segmented control whose thumb slides to the chosen mode.
+ * One-button theme switch for the sidebar foot, sized like the GitHub row's orbs it sits with.
+ * A click steps light → dark → system. The icon shows the current mode, and because a single
+ * button hides what comes next, its accessible name and tooltip spell out both the current mode
+ * and the one a click switches to.
  */
 export function ThemeSwitch({ theme, onChange }: ThemeSwitchProps) {
   const t = useT();
+  const index = Math.max(0, MODES.findIndex(entry => entry.mode === theme));
+  const current = MODES[index]!;
+  const next = MODES[(index + 1) % MODES.length]!;
+  const label = t("shellV2.themeCycle", { mode: t(current.tkey), next: t(next.tkey) });
   return (
-    <SegmentedControl
-      size="sm"
-      aria-label={t("theme.label")}
-      value={theme}
-      onChange={onChange}
-      items={MODES.map(({ mode, tkey, Icon }) => ({ value: mode, title: t(tkey), label: <Icon aria-hidden /> }))}
-    />
+    <button
+      type="button"
+      className="sidebar-orb sidebar-theme-toggle"
+      data-mode={theme}
+      onClick={() => onChange(next.mode)}
+      aria-label={label}
+      title={label}
+    >
+      <current.Icon aria-hidden="true" />
+    </button>
   );
 }

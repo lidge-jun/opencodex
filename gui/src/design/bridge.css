@@ -205,3 +205,54 @@
   text-transform: uppercase;
 }
 .app--nav-collapsed .nav-tier-label { visibility: hidden; }
+
+/* ---- sidebar strip: wordmark with the collapse toggle beside it ----------- */
+.sidebar-top { justify-content: space-between; gap: 8px; }
+.sidebar-top .brand--strip {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 8px;
+  padding: 4px 6px 4px 2px;
+  border-radius: 0.5rem;
+}
+.sidebar-top .brand--strip .name {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.sidebar-top .brand--strip:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+/* collapsed: only the toggle floats over the main strip */
+.app--nav-collapsed .sidebar-top .brand--strip { display: none; }
+/* macOS: the traffic lights take the strip's lead, so the mark goes without its name */
+.app--macos .sidebar-top .brand--strip .name { display: none; }
+@media (min-width: 761px) {
+  /* the strip carries the brand on wide screens; the drawer head is the phone drawer's */
+  .sidebar .drawer-head { display: none; }
+  .sidebar { padding-top: calc(var(--titlebar-h, 40px) + 12px); }
+}
+
+/* ---- sidebar foot: proxy card, language, links + theme, version ----------- */
+.sidebar-foot > .ui-v2:first-child { margin-bottom: 6px; }
+.sidebar-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 10px 0;
+}
+.sidebar-version {
+  min-width: 0;
+  color: var(--faint);
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+/* phone drawer: the drawer head already shows the full version */
+@media (max-width: 760px) {
+  .sidebar-version { display: none; }
+  .sidebar-meta-row:not(:has(> :not(.sidebar-version))) { display: none; }
+}

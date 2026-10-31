@@ -13,7 +13,7 @@
  * Either way a click opens the desktop update page in the app shell, or runs a fresh
  * package check in a browser dashboard where the existing dialog owns installation.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { IconDownload, IconGithub, IconStar, IconTerminal } from "../icons";
 import { useT } from "../i18n/shared";
@@ -48,12 +48,15 @@ export function SidebarGithubRow({
   apiBase,
   onOpenUpdate,
   onOpenTerminalCommand,
+  trailing,
 }: {
   apiBase: string;
   /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
   /** Opens the local terminal-command settings in the desktop app shell. */
   onOpenTerminalCommand: () => void;
+  /** One more orb after the row's own, e.g. the theme switch, so the foot keeps one icon row. */
+  trailing?: ReactNode;
 }) {
   const t = useT();
   const [starring, setStarring] = useState(false);
@@ -171,6 +174,7 @@ export function SidebarGithubRow({
             <IconTerminal aria-hidden="true" />
           </button>
         )}
+        {trailing}
       </div>
     </div>
   );
