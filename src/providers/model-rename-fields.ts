@@ -130,6 +130,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   foldDeveloperRoleToSystem: "none",
   singleLeadingSystemMessage: "none",
   promptCacheKey: "none",
+  cacheAffinity: "none",
   chatServiceTier: "none",
   responsesItemIdRepair: "none",
   autoToolChoiceOnlyModels: "list",

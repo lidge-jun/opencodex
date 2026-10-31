@@ -101,7 +101,13 @@ describe("policy candidate fallback", () => {
     },
   );
 
-  for (const hardCode of ["upstream_no_response", "origin_rejected", "origin-rejected", " ORIGIN-REJECTED ", "cyber_policy"]) {
+  for (const hardCode of [
+    "upstream_no_response",
+    "origin_rejected",
+    "origin-rejected",
+    " ORIGIN-REJECTED ",
+    "cyber_policy",
+  ]) {
     test.each(["root", "nested"])(`policy preserves ${hardCode} at %s beside a competing code`, async location => {
       let calls = 0;
       const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
@@ -215,6 +221,39 @@ describe("policy candidate fallback", () => {
       { authorization, chatgptAccountId: "sidecar-account" },
     ]);
     expect(snapshots[1]).toBe(snapshots[0]);
+  });
+  test("a policy hop does not persist the previous candidate's cache-affinity outcome", async () => {
+    const log: RequestLogContext = { model: "", provider: "" };
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(
+      request(),
+      fixtureConfig(),
+      log,
+      {},
+      {
+        runCore: async (req, _config, context, options) => {
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          if (++calls === 1) {
+            context.cacheAffinity = "kept";
+            context.cacheAffinityReason = "cache";
+            context.affinityKeptEntryId = "old-key";
+            context.cacheAffinityApplicable = true;
+            context.affinityKeyEntryId = "old-key";
+            return Response.json({ error: { message: "retry next candidate" } }, { status: 503 });
+          }
+          context.provider = "provider-b";
+          context.cacheAffinityApplicable = false;
+          return Response.json({ status: "completed" });
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(log.cacheAffinity).toBeUndefined();
+    expect(log.cacheAffinityReason).toBeUndefined();
+    expect(log.affinityKeptEntryId).toBeUndefined();
+    expect(log.affinityKeyEntryId).toBeUndefined();
   });
 
   test("ranks only eligible untried candidates by score and stable original order", () => {

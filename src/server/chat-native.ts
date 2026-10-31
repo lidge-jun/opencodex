@@ -3,6 +3,7 @@ import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 import { observeAdvisorNativeReasoning } from "./inference/advisor-diagnostics";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -336,11 +337,15 @@ export async function runNativeChatAttempt(
   // Transport variant: the bare picker answers with the persisted row, which for a built-in
   // provider carries no adapter id or base URL until routedProviderConfig backfills it.
   try {
-    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+    const affinityLane = sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")) ?? (logCtx.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(logCtx.conversationId));
+    if (affinityLane) logCtx.affinityLane = affinityLane;
+    const chatMessages = Array.isArray(execution.chatBody.messages) ? execution.chatBody.messages : [];
+    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation: (chatMessages.at(-1) as { role?: unknown } | undefined)?.role === "tool" });
     if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   } catch (error) {
     cleanupAbort(); upstream.abort();
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+    logCtx.terminalSource = "synthetic";
     const refusal = fail(429, error.message, "rate_limit_error");
     refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
     return refusal;
@@ -678,11 +683,13 @@ export async function runNativeChatAttempt(
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = fail(429, sendError.message, "rate_limit_error");
       refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
       // A decision this process made, answered as the Responses path answers it: 429, not 502.
       return fail(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);
     }
