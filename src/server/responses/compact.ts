@@ -173,6 +173,7 @@ import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve"
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -929,7 +930,7 @@ export async function handleResponsesCompact(
     const base = isCanonicalOpenAiForwardProvider(compactProvider)
       ? CODEX_FORWARD_BASE_URL
       : (compactProvider.baseUrl ?? "").replace(/\/+$/, "");
-    if (compactProvider.authMode !== "forward" && compactProvider.apiKey) {
+    if (compactProvider.authMode !== "forward" && (compactProvider.apiKey || compactProvider.apiKeyPool?.length)) {
       // Native compact never enters handleResponses, so it needs its own pre-dispatch key
       // pick. Kept inside this branch on purpose: the overlay above owns the forward and
       // codexAccountMode cases, and the picker returns null for them anyway.
@@ -940,11 +941,19 @@ export async function handleResponsesCompact(
       catch (error) {
         const refusal = requestPacingOverloadResponse(error);
         if (refusal) return refusal;
+        if (error instanceof ProviderApiKeyPausedError) {
+          return formatErrorResponse(403, "permission_error", error.message);
+        }
         throw error;
       }
       if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
-      headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
-      stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
+      if (compactProvider.apiKey) {
+        headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
+        stampApiKeyAccountLabel(logCtx, route.providerName, compactProvider);
+      }
+    }
+    if (compactProvider.authMode !== "forward" && isProviderApiKeyPaused(compactProvider)) {
+      return formatErrorResponse(403, "permission_error", new ProviderApiKeyPausedError().message);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
     const requireCompactPlaintextReasoning = !isOpenAiOperatedResponsesDestination(compactProvider)
@@ -1199,6 +1208,7 @@ export async function handleResponsesCompact(
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current?.apiKey || !supportsNativeResponsesCompactEndpoint(route.providerName, current)) {
+                  if (!current?.apiKey && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for compact");
                 }
                 const rebuilt = new Headers(sendHeaders);
@@ -1262,7 +1272,8 @@ export async function handleResponsesCompact(
     let outcomeCtx = authCtx;
     const localDispatchRefusal = (error: unknown): Response | undefined => {
       const cause = unwrapUpstreamRetryEvidenceError(error);
-      const response = requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
+      const response = (cause instanceof ProviderApiKeyPausedError ? formatErrorResponse(403, "permission_error", cause.message) : undefined)
+        ?? requestPacingOverloadResponse(cause) ?? spendLedgerStorageErrorResponse(error, logCtx) ?? (cause instanceof SendBudgetExhaustedError
         ? unboundPoolSpendRefusalResponse(logCtx) ?? formatErrorResponse(429, "request_send_budget_exhausted", cause.message)
         : mapCodexAuthContextErrorToResponse(cause, {
           now: Date.now(), accountSelector: route.codexAccountNamespace,

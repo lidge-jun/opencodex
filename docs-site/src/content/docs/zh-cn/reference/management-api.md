@@ -245,6 +245,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET, POST, DELETE /api/providers/keys` | 列出已脱敏的 provider 密钥，添加/激活一个，或移除一个 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |
+| `PUT /api/providers/keys/pause` | 暂停或恢复一个 provider API 密钥。Body `{ name, id, paused }`。暂停当前活跃密钥时，按环形顺序选择下一个可用密钥。成功响应包含结果 `activeAccountId`（没有时为 `null`）和 `activeAccountChanged`。 | 400 输入无效；404 provider/密钥缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、创建、编辑或删除数据平面准入密钥 | 400 请求体/id 无效；404 密钥缺失 |
 
 凭证列表响应会刻意脱敏。OAuth 访问令牌和完整的 provider API 密钥不会返回给仪表板客户端。

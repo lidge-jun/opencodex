@@ -3,12 +3,12 @@ import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { listProviderApiKeys } from "../../src/providers/api-keys";
+import { listProviderApiKeys, removeProviderApiKey } from "../../src/providers/api-keys";
 import { clearProviderQuotaCache, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerApiKeyQuotaMode } from "../../src/providers/quota";
 
 const originalUpstreamFetch = globalThis.fetch;
@@ -60,6 +60,64 @@ describe("provider API key pool", () => {
     expect(first.keys[0]?.active).toBe(true);
     expect(config.providers["opencode-go"]?.apiKeyPool).toBeUndefined();
     expect(readFileSync(join(testDir, "config.json"), "utf8")).toBe(disk);
+  });
+  test("active projection prefers an enabled duplicate key reference over a paused row", () => {
+    const config = baseConfig();
+    config.providers["opencode-go"] = {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "synthetic-shared-key",
+      apiKeyPool: [
+        { id: "paused-copy", key: "synthetic-shared-key", disabled: true },
+        { id: "active-copy", key: "synthetic-shared-key" },
+      ],
+    };
+
+    const projection = listProviderApiKeys(config, "opencode-go");
+
+    expect(projection.activeId).toBe("active-copy");
+    expect(projection.keys.map(({ id, active, disabled }) => ({ id, active, disabled }))).toEqual([
+      { id: "paused-copy", active: false, disabled: true },
+      { id: "active-copy", active: true, disabled: undefined },
+    ]);
+  });
+  test("removing a paused duplicate leaves the enabled active key unchanged", () => {
+    const config = baseConfig();
+    config.providers["opencode-go"] = {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "synthetic-shared-key",
+      apiKeyPool: [
+        { id: "active-copy", key: "synthetic-shared-key" },
+        { id: "paused-copy", key: "synthetic-shared-key", disabled: true },
+        { id: "next", key: "synthetic-next-key" },
+      ],
+    };
+    saveConfig(config);
+
+    expect(removeProviderApiKey(config, "opencode-go", "paused-copy")).toBe(true);
+
+    expect(config.providers["opencode-go"]?.apiKey).toBe("synthetic-shared-key");
+    expect(listProviderApiKeys(config, "opencode-go").activeId).toBe("active-copy");
+    expect(loadConfig().providers["opencode-go"]?.apiKey).toBe("synthetic-shared-key");
+  });
+  test("removing the active enabled duplicate keeps its enabled same-reference survivor", () => {
+    const config = baseConfig();
+    config.providers["opencode-go"] = {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "synthetic-shared-key",
+      apiKeyPool: [
+        { id: "active-copy", key: "synthetic-shared-key" },
+        { id: "next", key: "synthetic-next-key" },
+        { id: "survivor", key: "synthetic-shared-key" },
+      ],
+    };
+    saveConfig(config);
+
+    expect(removeProviderApiKey(config, "opencode-go", "active-copy")).toBe(true);
+
+    expect(config.providers["opencode-go"]?.apiKey).toBe("synthetic-shared-key");
+    expect(listProviderApiKeys(config, "opencode-go").activeId).toBe("survivor");
+    expect(loadConfig().providers["opencode-go"]?.apiKey).toBe("synthetic-shared-key");
+    expect(config.providers["opencode-go"]?.apiKeySelectionRevision).toBeDefined();
   });
   test("GET seeds legacy bare apiKey into a one-entry pool with masked value", async () => {
     const server = startServer(0);

@@ -1614,6 +1614,15 @@ under `provider.apiKeyPool`, makes it active, and mirrors it to `provider.apiKey
 adapters continue to read the same field as before. The same dropdown can switch or remove keys; the
 management API is `/api/providers/keys` and returns masked keys only.
 
+Each configured key row in the dashboard provides dedicated Pause and Resume controls (along with
+`ocx account pause` and `ocx account resume` in the CLI). A paused key is excluded from automatic
+request routing, failover, and cooldown recovery. If another enabled row shares the same key reference, it remains usable. When the last enabled row for the active reference is paused, OpenCodex
+automatically selects the next usable unpaused key in the pool in ring order. If all keys in the pool
+are paused, requests that need that provider return HTTP 403 `permission_error` until a key is
+resumed. The built-in Images route can still use another eligible upstream. Selecting a paused
+key row resumes and activates it. Resume clears the pause while preserving a healthy active key;
+the resumed key becomes active when no usable key is currently selected.
+
 ### Switching accounts from the terminal
 
 Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect or switch the same
