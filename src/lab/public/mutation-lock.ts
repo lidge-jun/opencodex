@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -150,34 +151,89 @@ function unlinkIfPresent(path: string): void {
 
 function cleanupDetachedMutationLocks(lockPath: string): void {
   const dir = dirname(lockPath);
+  const nowMs = Date.now();
   for (const name of readdirSync(dir)) {
     if (!DETACHED_MUTATION_LOCK_RE.test(name)) continue;
-    // Detached lock directories are no longer authoritative once a new canonical
-    // lock has been acquired. Removing only their UUID-scoped names prevents them
-    // from leaking storage or being mistaken for community cache objects.
-    rmSync(join(dir, name), { recursive: true, force: true });
+    const detachedPath = join(dir, name);
+    // A detached directory that still carries a live owner was moved away from a running
+    // holder; it is not this process's to remove. Everything else is leftover from a
+    // completed release or reclaim, and removing only UUID-scoped names keeps it from
+    // leaking storage or being mistaken for community cache objects.
+    const owner = readMutationLockOwner(detachedPath);
+    if (owner && !pidDefinitelyDead(owner.pid) && !exceedsAbsoluteLockAge(owner.createdAt, nowMs)) continue;
+    rmSync(detachedPath, { recursive: true, force: true });
   }
+}
+
+/**
+ * Remove the canonical lock directory only while it is empty.
+ *
+ * Every committed lock holds an owner record and every reclaim holds a claim file, so an
+ * empty-only removal cannot take a directory another process still owns or is reclaiming. The
+ * one empty foreign state is an acquisition between mkdir and its first owner write, and that
+ * acquisition retries when its directory disappears.
+ */
+function removeEmptyMutationLock(lockPath: string): void {
+  try {
+    rmdirSync(lockPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") return;
+    throw error;
+  }
+}
+
+function releasedOwnerPath(lockPath: string, token: string): string {
+  return join(lockPath, `.owner-released-${token}.json`);
+}
+
+/**
+ * Give up this owner's record without touching any other owner's.
+ *
+ * The record moves to a name only this owner uses before it is judged, so the decision is made
+ * on what actually moved. Another owner's record goes straight back. While a record is moved the
+ * directory is ownerless with a fresh mtime, which no stale reclaim accepts, so the canonical
+ * directory cannot be replaced in between.
+ */
+function relinquishOwnerRecord(
+  lockPath: string,
+  owner: MutationLockOwner,
+): "relinquished" | "missing" | "foreign" {
+  const ownerPath = mutationLockOwnerPath(lockPath);
+  const releasedPath = releasedOwnerPath(lockPath, owner.token);
+  try {
+    renameSync(ownerPath, releasedPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+  const moved = readLockMetadata<MutationLockOwner>(releasedPath);
+  if (moved?.pid === owner.pid && moved.token === owner.token) {
+    unlinkIfPresent(releasedPath);
+    return "relinquished";
+  }
+  renameSync(releasedPath, ownerPath);
+  return "foreign";
 }
 
 type DetachedMutationLockOutcome = "removed" | "absent" | "restored" | "retained";
 
 /**
- * Move the canonical lock to a unique detached name, then decide on what was actually moved.
+ * Move a claimed stale lock to a unique detached name, then decide on what was actually moved.
  *
- * A pathname rename cannot be conditioned on the directory a caller checked earlier: another
- * process can replace the canonical lock between that check and the rename. Checking after the
- * move, under a name only this process uses, binds removal to the checked directory. Anything
- * else goes back to the canonical name when that name is still free; when it is taken it stays
- * detached, where it is never removed by this call.
+ * The reclaim claim inside the stale directory keeps release, failed-acquisition cleanup and
+ * other reclaimers from removing it, so the canonical name still names the claimed directory.
+ * Checking again after the move, under a name only this process uses, keeps removal bound to
+ * that directory regardless. Anything else goes back to the canonical name when that name is
+ * free; otherwise it stays detached, and detached cleanup skips a directory with a live owner.
  */
 function detachVerifiedMutationLock(
   lockPath: string,
-  kind: "release" | "stale",
   isExpected: (detachedPath: string) => boolean,
 ): DetachedMutationLockOutcome {
   const detachedPath = join(
     dirname(lockPath),
-    `.mutation-lock-${kind}-${process.pid}-${randomUUID()}`,
+    `.mutation-lock-stale-${process.pid}-${randomUUID()}`,
   );
   try {
     renameSync(lockPath, detachedPath);
@@ -208,16 +264,6 @@ function detachVerifiedMutationLock(
     // The canonical name was taken again; the foreign directory stays detached and intact.
     return "retained";
   }
-}
-
-function detachedOwnerMatches(
-  detachedPath: string,
-  owner: MutationLockOwner,
-  expectedDirectory: MutationLockDirectoryIdentity,
-): boolean {
-  if (!sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), expectedDirectory)) return false;
-  const current = readMutationLockOwner(detachedPath);
-  return current?.pid === owner.pid && current.token === owner.token;
 }
 
 function publishMutationLockOwner(
@@ -326,6 +372,9 @@ function reclaimClaimStillOwned(lockPath: string, claim: MutationLockReclaim): b
 function releaseReclaimClaim(lockPath: string, claim: MutationLockReclaim): void {
   if (!reclaimClaimStillOwned(lockPath, claim)) return;
   unlinkIfPresent(mutationLockReclaimPath(lockPath));
+  // A holder that released while this claim sat in its directory could not remove it
+  // (it was not empty). Finish that removal; a directory with an owner is never empty.
+  removeEmptyMutationLock(lockPath);
 }
 
 function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
@@ -351,7 +400,7 @@ function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
 
     // The claim file lives inside the stale directory, so finding this claim's token in the
     // moved directory, with the identity captured before claiming, proves it is the one claimed.
-    const outcome = detachVerifiedMutationLock(lockPath, "stale", detachedPath =>
+    const outcome = detachVerifiedMutationLock(lockPath, detachedPath =>
       sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), staleDirectory)
       && reclaimClaimStillOwned(detachedPath, claim));
     moved = outcome === "removed";
@@ -364,11 +413,12 @@ function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
 function discardUncommittedMutationLock(
   lockPath: string,
   expectedDirectory: MutationLockDirectoryIdentity,
+  candidate: MutationLockOwner,
 ): void {
   try {
     if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), expectedDirectory)) return;
-    detachVerifiedMutationLock(lockPath, "release", detachedPath =>
-      sameDirectoryIdentity(currentDirectoryIdentity(detachedPath), expectedDirectory));
+    if (relinquishOwnerRecord(lockPath, candidate) === "foreign") return;
+    removeEmptyMutationLock(lockPath);
   } catch {
     // Preserve the owner-publication error. An unrecoverable cleanup witness stays
     // ownerless and can be reclaimed by the long incomplete-acquisition fallback.
@@ -390,8 +440,8 @@ function releaseMutationLock(
   if (!sameDirectoryIdentity(currentDirectory, expectedDirectory)) return;
   const current = readMutationLockOwner(lockPath);
   if (!current || current.pid !== owner.pid || current.token !== owner.token) return;
-  detachVerifiedMutationLock(lockPath, "release", detachedPath =>
-    detachedOwnerMatches(detachedPath, owner, expectedDirectory));
+  if (relinquishOwnerRecord(lockPath, owner) !== "relinquished") return;
+  removeEmptyMutationLock(lockPath);
 }
 
 /** Serialize public-evidence mutations across CLI/server processes with ownership-safe stale recovery. */
@@ -403,6 +453,9 @@ export function withPublicEvidenceMutationLock<T>(
   const lockPath = mutationLockPath(configDir);
   let owner: MutationLockOwner | null = null;
   let ownedDirectory: MutationLockDirectoryIdentity | null = null;
+  // Bounded: a fresh directory can vanish only when a concurrent release or reclaim removes
+  // it as empty in the instant before its first owner write.
+  let vanishedAcquisitions = 0;
 
   while (true) {
     try {
@@ -418,16 +471,23 @@ export function withPublicEvidenceMutationLock<T>(
       throw new PublicEvidenceValidationError("community_cache_busy", "community cache is busy");
     }
 
-    const directory = currentDirectoryIdentity(lockPath);
     const candidate: MutationLockOwner = {
       pid: process.pid,
       token: randomUUID(),
       createdAt: Date.now(),
     };
+    let directory: MutationLockDirectoryIdentity;
+    try {
+      directory = currentDirectoryIdentity(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && vanishedAcquisitions++ < 3) continue;
+      throw error;
+    }
     try {
       publishMutationLockOwner(lockPath, candidate, directory);
     } catch (error) {
-      discardUncommittedMutationLock(lockPath, directory);
+      discardUncommittedMutationLock(lockPath, directory, candidate);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && vanishedAcquisitions++ < 3) continue;
       throw error;
     }
     owner = candidate;

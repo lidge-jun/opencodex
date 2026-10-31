@@ -63,14 +63,18 @@ function expectSuccessorIntact(lockPath: string, identity: { dev: bigint; ino: b
 
 /**
  * Replace the canonical lock with a successor's directory immediately before the first rename
- * that moves the canonical lock to a detached name matching `detached`: the state a paused
- * process finds after its checks when another process replaced the lock in between.
+ * that `matches`: the state a paused process finds after its checks when another process
+ * replaced the lock in between. `afterMove` runs right after that rename.
  */
-function replaceLockBeforeDetach(lockPath: string, detached: RegExp, afterMove?: () => void) {
+function replaceLockBeforeRename(
+  lockPath: string,
+  matches: (from: string, to: string) => boolean,
+  afterMove?: () => void,
+) {
   const realRename = fs.renameSync;
   const state: { successor: { dev: bigint; ino: bigint } | null } = { successor: null };
   const spy = spyOn(fs, "renameSync").mockImplementation(((from, to) => {
-    if (!state.successor && samePath(from, lockPath) && detached.test(String(to))) {
+    if (!state.successor && matches(String(from), String(to))) {
       state.successor = installSuccessorLock(lockPath);
       realRename(from, to);
       afterMove?.();
@@ -81,20 +85,46 @@ function replaceLockBeforeDetach(lockPath: string, detached: RegExp, afterMove?:
   return { spy, state };
 }
 
+/**
+ * Replace the canonical lock with a successor's directory immediately before the first step
+ * that moves or removes the lock or its owner record, whichever protocol takes it.
+ */
+function replaceLockBeforeFirstMutation(lockPath: string) {
+  const realRename = fs.renameSync, realRmdir = fs.rmdirSync;
+  const state: { successor: { dev: bigint; ino: bigint } | null } = { successor: null };
+  const before = (path: fs.PathLike) => {
+    if (!state.successor && (samePath(path, lockPath) || samePath(path, join(lockPath, "owner.json")))) {
+      state.successor = installSuccessorLock(lockPath);
+    }
+  };
+  const rename = spyOn(fs, "renameSync").mockImplementation(((from, to) => {
+    before(from); return realRename(from, to);
+  }) as typeof fs.renameSync);
+  const rmdir = spyOn(fs, "rmdirSync").mockImplementation(((path, options) => {
+    before(path); return realRmdir(path, options);
+  }) as typeof fs.rmdirSync);
+  return { spy: { mockRestore: () => { rename.mockRestore(); rmdir.mockRestore(); } }, state };
+}
+
 function detachedLockNames(config: string): string[] {
   return fs.readdirSync(labCommunityDir(config)).filter(name => name.startsWith(".mutation-lock-"));
+}
+
+function lockEntries(lockPath: string): string[] {
+  return fs.readdirSync(lockPath).sort();
 }
 
 describe("community mutation lock", () => {
   test("release leaves a successor lock that replaced the checked directory in place", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
-    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/);
+    const { spy, state } = replaceLockBeforeFirstMutation(lockPath);
     try {
       withPublicEvidenceMutationLock(config, () => {});
     } finally { spy.mockRestore(); }
     expect(state.successor).not.toBeNull();
     expectSuccessorIntact(lockPath, state.successor!);
+    expect(lockEntries(lockPath)).toEqual(["owner.json"]);
     expect(detachedLockNames(config)).toEqual([]);
   });
 
@@ -104,14 +134,15 @@ describe("community mutation lock", () => {
     mkdirSync(lockPath, { mode: 0o700 });
     const stale = new Date(Date.now() - (25 * 60 * 60 * 1000));
     utimesSync(lockPath, stale, stale);
-    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-stale-/);
+    const { spy, state } = replaceLockBeforeRename(lockPath, (from, to) =>
+      samePath(from, lockPath) && /\.mutation-lock-stale-/.test(to));
     let reclaimed: boolean;
     try {
       reclaimed = publicEvidenceTryReclaimMutationLockForTests(config);
     } finally { spy.mockRestore(); }
     expect(reclaimed).toBe(false);
     expectSuccessorIntact(lockPath, state.successor!);
-    expect(existsSync(join(lockPath, ".reclaim.json"))).toBe(false);
+    expect(lockEntries(lockPath)).toEqual(["owner.json"]);
     expect(detachedLockNames(config)).toEqual([]);
   });
 
@@ -123,7 +154,7 @@ describe("community mutation lock", () => {
       if (/\.owner-[0-9a-f-]{36}\.tmp$/.test(String(path))) throw new Error("injected owner publication failure");
       return realWrite(path, data, options);
     }) as typeof fs.writeFileSync);
-    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/);
+    const { spy, state } = replaceLockBeforeFirstMutation(lockPath);
     try {
       expect(() => withPublicEvidenceMutationLock(config, () => {})).toThrow("injected owner publication failure");
     } finally { spy.mockRestore(); write.mockRestore(); }
@@ -131,23 +162,59 @@ describe("community mutation lock", () => {
     expect(detachedLockNames(config)).toEqual([]);
   });
 
-  test("release never deletes a moved successor lock when the canonical path is taken again", () => {
+  test("a moved lock with a live owner survives a later acquisition's detached cleanup", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
-    const third = { identity: null as { dev: bigint; ino: bigint } | null };
-    const { spy, state } = replaceLockBeforeDetach(lockPath, /\.mutation-lock-release-/, () => {
-      mkdirSync(lockPath, { mode: 0o700 });
-      const stat = lstatSync(lockPath, { bigint: true });
-      third.identity = { dev: stat.dev, ino: stat.ino };
-    });
+    mkdirSync(lockPath, { mode: 0o700 });
+    const stale = new Date(Date.now() - (25 * 60 * 60 * 1000));
+    utimesSync(lockPath, stale, stale);
+    // The successor is moved, then the canonical name is taken before it can be put back.
+    const { spy, state } = replaceLockBeforeRename(lockPath, (from, to) =>
+      samePath(from, lockPath) && /\.mutation-lock-stale-/.test(to), () => mkdirSync(lockPath, { mode: 0o700 }));
     try {
-      withPublicEvidenceMutationLock(config, () => {});
+      expect(publicEvidenceTryReclaimMutationLockForTests(config)).toBe(false);
     } finally { spy.mockRestore(); }
-    const canonical = lstatSync(lockPath, { bigint: true });
-    expect([canonical.dev, canonical.ino]).toEqual([third.identity!.dev, third.identity!.ino]);
     const detached = detachedLockNames(config);
     expect(detached).toHaveLength(1);
+    fs.rmdirSync(lockPath);
+    let ran = false;
+    withPublicEvidenceMutationLock(config, () => { ran = true; });
+    expect(ran).toBe(true);
+    expect(detachedLockNames(config)).toEqual(detached);
     expectSuccessorIntact(join(labCommunityDir(config), detached[0]!), state.successor!);
+  });
+
+  test("release keeps a lock directory that holds another process's reclaim claim", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    withPublicEvidenceMutationLock(config, () => {
+      writeFileSync(join(lockPath, ".reclaim.json"),
+        JSON.stringify({ pid: process.pid, token: SUCCESSOR_TOKEN, createdAt: Date.now() }),
+        { encoding: "utf8", mode: 0o600 });
+    });
+    expect(lockEntries(lockPath)).toEqual([".reclaim.json"]);
+    expect(detachedLockNames(config)).toEqual([]);
+  });
+
+  test("an acquisition whose fresh directory is removed before its owner write retries", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    const realWrite = fs.writeFileSync;
+    let removed = 0;
+    const write = spyOn(fs, "writeFileSync").mockImplementation(((path, data, options) => {
+      if (removed === 0 && /\.owner-[0-9a-f-]{36}\.tmp$/.test(String(path))) {
+        removed += 1;
+        fs.rmdirSync(lockPath);
+      }
+      return realWrite(path, data, options);
+    }) as typeof fs.writeFileSync);
+    let ran = false;
+    try {
+      withPublicEvidenceMutationLock(config, () => { ran = existsSync(join(lockPath, "owner.json")); });
+    } finally { write.mockRestore(); }
+    expect(removed).toBe(1);
+    expect(ran).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
   });
 
   test("release removes its own lock directory and leaves no detached copy", () => {
