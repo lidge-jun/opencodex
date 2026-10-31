@@ -308,6 +308,10 @@ describe("claude-cli child environment carries no credential and no proxy destin
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
   });
 
+  test("labels the turn as opencodex rather than the default sdk-cli entrypoint", () => {
+    expect(buildChildEnv(CLAUDE_CLI_PROFILE, "").CLAUDE_CODE_ENTRYPOINT).toBe("opencodex");
+  });
+
   test("a key configured on the row is never handed to the harness", () => {
     // `keyOptional` makes the row keyless without making it key-*blind*: an operator who saved an
     // API key in the dashboard or with `ocx provider add --api-key` must not silently believe it
