@@ -31,12 +31,17 @@ import { isLinkConnection, readClientConnectionState } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
+import { restoreLinkClientRouting } from "./stop-routing";
+import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
 let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
 let recycleScheduled = false;
+let recycleTimer: ReturnType<typeof setTimeout> | undefined;
+let recycleFlight: Promise<void> | null = null;
+let clientStopping = false;
 
 /**
  * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
@@ -94,7 +99,7 @@ export function clientRuntimeRecord(
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
 ): RuntimePortState {
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField() };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}) };
 }
 
 export function standaloneRecycleEnv(
@@ -123,12 +128,15 @@ export function standaloneRecycleEnv(
 }
 
 export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string): void {
-  if (recycleScheduled) return;
+  if (recycleScheduled || clientStopping) return;
   recycleScheduled = true;
-  const timer = setTimeout(() => {
-    void recycleStandalone(disconnectedTokenFingerprint);
+  recycleTimer = setTimeout(() => {
+    recycleTimer = undefined;
+    if (clientStopping) return;
+    recycleFlight = recycleStandalone(disconnectedTokenFingerprint).finally(() => { recycleFlight = null; });
+    void recycleFlight.catch(error => { if (!clientStopping) throw error; });
   }, 50);
-  if (typeof timer === "object" && "unref" in timer) timer.unref();
+  if (typeof recycleTimer === "object" && "unref" in recycleTimer) recycleTimer.unref();
 }
 
 function configuredTcpPort(): number | undefined {
@@ -418,7 +426,9 @@ export async function startClientRuntime(
     try { await server.stop(true); } catch { /* already closed */ }
   };
 
+  let shuttingDown = false;
   const restartController: ClientRestartController = createClientRestartController({
+    stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
@@ -442,8 +452,8 @@ export async function startClientRuntime(
       }
     },
     exitProcess: async code => {
-      await flushLinkDiagnostics();
-      process.exit(code);
+      try { await flushLinkDiagnostics(); }
+      finally { process.exit(code); }
     },
   });
 
@@ -452,11 +462,24 @@ export async function startClientRuntime(
   await serve();
   options.afterPublish?.();
 
-  let shuttingDown = false;
   const shutdown = (signal?: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clientStopping = true;
+    if (recycleTimer) { clearTimeout(recycleTimer); recycleTimer = undefined; }
+    const fenceSync = () => {
+      if (!linkMode) return true;
+      try { markClientRuntimeStopping({ pid: process.pid, port: servedPort, attestationSecret }); return true; }
+      catch { return false; }
+    };
+    let syncFenced = fenceSync();
     void (async () => {
+      // An accepted restart owns its replacement and rollback. A successful handoff exits
+      // inside that flight; a rollback finishes before this signal tears the runtime down.
+      if (restartController.hasHandoff()) await restartController.settled().catch(() => {});
+      if (recycleFlight) await recycleFlight.catch(() => {});
+      // A rollback may have republished its runtime record while shutdown joined it.
+      syncFenced = !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret });
       credentialObservation?.stop();
       credentialObservation = null;
       activeReporter?.stop();
@@ -467,15 +490,18 @@ export async function startClientRuntime(
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
+      const restored = linkMode ? restoreLinkClientRouting(state.value, { syncFenced }) : null;
+      if (restored && !restored.success) console.error(`[client] ${restored.message}`);
       try {
         activeServer?.stop(true);
       } catch (error) {
         console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        cleanup();
-        await flushLinkDiagnostics();
+        // Keep stopping admission visible through the last await. Cleanup and exit are adjacent.
+        try { await flushLinkDiagnostics(); } finally { cleanup(); }
         // launchd relaunches only unsuccessful exits; an external signal must still count.
-        process.exit(handledSignalExitCode(signal));
+        if (restored?.success === false) process.exit(1);
+        else process.exit(handledSignalExitCode(signal));
       }
     })();
   };
