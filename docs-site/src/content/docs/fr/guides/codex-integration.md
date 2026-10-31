@@ -184,7 +184,7 @@ fournisseur dédié n'annonce `supports_websockets = true` que lorsque `"websock
 bouclage, le fournisseur intégré de Codex peut tenter WebSocket en premier ; si cette fonction est désactivée,
 le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
 
-La relecture locale exige le même appelant OpenCodex admis et le `thread-id` non vide propre à la requête. Un fil parent, une adresse de bouclage, des informations d’authentification amont ou une clé de substitution ne constituent pas cette identité. Les clients sans clé et les requêtes sans fil propre doivent renvoyer la conversation complète sans `previous_response_id`. Les configurations Codex et DSH de bouclage par défaut n’établissent pas cette identité d’appelant. Cela reste distinct des ID Responses natifs appartenant au service amont.
+La relecture locale exige le même appelant OpenCodex admis et le `thread-id` non vide propre à la requête. Un fil parent, une adresse de bouclage, des informations d’authentification amont ou une clé de substitution ne constituent pas cette identité. Les clients sans principal d’appelant admis et les requêtes sans fil propre doivent renvoyer la conversation complète sans `previous_response_id`. Les configurations Codex et DSH de bouclage par défaut n’établissent pas cette identité d’appelant. Cela reste distinct des ID Responses natifs appartenant au service amont.
 
 ## Identité et historique du fil de discussion
 

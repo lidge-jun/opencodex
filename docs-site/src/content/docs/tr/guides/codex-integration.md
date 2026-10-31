@@ -204,7 +204,7 @@ olduğunda `supports_websockets = true` bildirir; geri döngüde Codex'in yerle�
 sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bir proxy
 `426` döndürür, böylece Codex HTTP/SSE'ye geri döner.
 
-Yerel yeniden oynatma, aynı kabul edilmiş OpenCodex çağıranını ve isteğin kendi boş olmayan `thread-id` değerini gerektirir. Üst iş parçacığı, geri döngü adresi, yukarı akış kimlik bilgisi veya yer tutucu anahtar bu kimlik değildir. Anahtarsız istemcilerin ve kendi iş parçacığı olmayan isteklerin `previous_response_id` olmadan tüm konuşmayı yeniden göndermesi gerekir. Varsayılan geri döngü Codex ve DSH yapılandırmaları bu çağıran kimliğini oluşturmaz. Bu, doğrudan yukarı akış hizmetinin sahip olduğu Responses kimliklerinden ayrıdır.
+Yerel yeniden oynatma, aynı kabul edilmiş OpenCodex çağıranını ve isteğin kendi boş olmayan `thread-id` değerini gerektirir. Üst iş parçacığı, geri döngü adresi, yukarı akış kimlik bilgisi veya yer tutucu anahtar bu kimlik değildir. Kabul edilmiş çağıran kimliği olmayan istemcilerin ve kendi iş parçacığı olmayan isteklerin `previous_response_id` olmadan tüm konuşmayı yeniden göndermesi gerekir. Varsayılan geri döngü Codex ve DSH yapılandırmaları bu çağıran kimliğini oluşturmaz. Bu, doğrudan yukarı akış hizmetinin sahip olduğu Responses kimliklerinden ayrıdır.
 
 ## İş parçacığı kimliği ve geçmişi
 

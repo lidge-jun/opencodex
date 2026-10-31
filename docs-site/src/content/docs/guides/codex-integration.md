@@ -490,7 +490,7 @@ including when the new request appears to carry complete input. The proxy cannot
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
 exists. Local replay requires the same admitted OpenCodex caller and the request's own nonblank
 `thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
-that identity. Keyless clients and requests without their own thread must resend the complete
+that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
 conversation without `previous_response_id`. The default loopback Codex and DSH configurations
 do not establish that caller identity. This is separate from native upstream-owned Responses IDs.
 
