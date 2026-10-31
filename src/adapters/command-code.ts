@@ -424,27 +424,29 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
   const encoder = new TextEncoder();
   let buffer = "";
   let bufferBytes = 0;
+  // One live buffer owns one charge; resizing must not reserve old + replacement together.
+  const resizeBuffer = (nextBytes: number) => {
+    if (nextBytes > bufferBytes) {
+      budget.reserveTransient(nextBytes - bufferBytes, { kind: "live_transient" }).commitRetained();
+    } else {
+      budget.releaseRetained(bufferBytes - nextBytes, { kind: "live_transient" });
+    }
+    bufferBytes = nextBytes;
+  };
   try {
     for (;;) {
       const { value, done } = await reader.read();
       const next = buffer + decoder.decode(value, { stream: !done });
       const nextBytes = encoder.encode(next).byteLength;
-      const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
+      resizeBuffer(nextBytes);
       buffer = next;
-      reservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = nextBytes;
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
-      const residualBytes = encoder.encode(buffer).byteLength;
-      const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
-      residualReservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = residualBytes;
+      resizeBuffer(encoder.encode(buffer).byteLength);
       if (done) break;
     }
     const final = buffer.trim();
