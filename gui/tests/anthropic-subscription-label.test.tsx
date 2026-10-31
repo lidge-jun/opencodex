@@ -14,12 +14,16 @@ for (const provider of ["anthropic", "anthropic2"]) {
       const item = { name: provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth",
         ...(provider === "anthropic2" ? { anthropicOAuthInstance: "anthropic2" } : {}) } as WorkspaceItem;
       const accounts: OAuthAccountRow[] = [{ id: "synthetic-private-account", email: "private@example.test", active: true,
-        plan, quotaMode: "probe", quota: { weeklyPercent: 37, updatedAt: Date.now() } }];
+        plan, quotaMode: "probe", quota: { ...(plan === "pro" || plan === "max_5x" ? { fiveHourPercent: 18 } : {}), weeklyPercent: 37, updatedAt: Date.now() } }];
       const markup = renderToStaticMarkup(<LanguageProvider><ProviderAuthPanel item={item} apiBase="" authHandlers={handlers} accounts={accounts} oauth={{ loggedIn: true }} /></LanguageProvider>);
       expect(markup).toContain(`>${label}</span>`);
       expect(markup).not.toContain("private@example.test");
       expect(markup).not.toContain("synthetic-private-account");
       expect(markup).toContain("37% used");
+      if (plan === "pro" || plan === "max_5x") {
+        expect(markup).toContain("5-hour limit");
+        expect(markup).toContain("18% used");
+      } else expect(markup).not.toContain("5-hour limit");
     });
   }
 }

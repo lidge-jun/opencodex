@@ -317,6 +317,7 @@ For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching
 share `src/providers/quota/anthropic-usage-windows.ts`: usable `limits[]` session and
 `weekly_all` counters take precedence over legacy buckets. `five_hour: null` means no
 five-hour limit and leaves that window absent; weekly-only usage is a successful read.
+Pro and Max 5x keep their measured five-hour and weekly windows.
 That fresh parser-bound null proof also lifts an obsolete five-hour cooldown after a plan
 upgrade, provided every other rejected window has headroom. Missing counters prove nothing.
 A `weekly_scoped` row requires `is_active: true` and a recognized Fable, Opus, or Sonnet

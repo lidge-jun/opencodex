@@ -104,3 +104,17 @@ test("empty/malformed responses stay unavailable and HTTP 429 stays rate_limited
   globalThis.fetch = (async () => Response.json({ error: { message: "synthetic-private-detail" } }, { status: 429 })) as typeof fetch;
   expect(await probeAnthropicUsageQuota("synthetic-access")).toEqual({ quota: null, failure: "rate_limited" });
 });
+
+for (const tier of ["claude_pro", "default_claude_max_5x"]) {
+  test(`${tier} retains both real five-hour and weekly windows`, async () => {
+    const body = { five_hour: { utilization: 16 }, seven_day: { utilization: 37 }, limits: [
+      { kind: "session", percent: 18, is_active: true }, { kind: "weekly_all", percent: 39, is_active: true },
+    ] };
+    const { quota } = await probe(body);
+    expect(quota).toMatchObject({ fiveHourPercent: 18, weeklyPercent: 39 });
+    expect(rawAnthropicUsageWindows(body, observedAt).map(row => row.window)).toEqual(["5h", "weekly"]);
+    expect(providerQuotaWindows(quota!, "measured", Date.now()).map(row => row.id)).toEqual(["5h", "weekly"]);
+    globalThis.fetch = (async () => Response.json({ account: { uuid: "synthetic-account" }, organization: { rate_limit_tier: tier } })) as typeof fetch;
+    expect((await resolveAnthropicAccountIdentity("synthetic-access"))?.plan).toBe(tier === "claude_pro" ? "pro" : "max_5x");
+  });
+}
