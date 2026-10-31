@@ -30,7 +30,7 @@ async function runStop(options: Record<string, unknown>) {
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
     const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
     const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
-    for (const field of ["after", "profileAfter", "journalRetained", "catalogAfter", "grokAfter", "protectedUnchanged"]) {
+    for (const field of ["after", "profileAfter", "journalRetained", "journalHomeBound", "catalogAfter", "grokAfter", "protectedUnchanged"]) {
       expect(atExit[field], `no late restoration after listener release: ${field}`).toEqual(report[field]);
     }
     return report;
@@ -54,10 +54,26 @@ for (const signal of process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SI
   }, 20_000);
 }
 
-test.skipIf(process.platform === "win32")("a real POSIX SIGTERM restores before listener release", async () => {
-  const report = await runStop({ mode: "runtime", osSignal: true });
+test.skipIf(process.platform === "win32")("a real POSIX SIGTERM restores after catalog sync before listener release", async () => {
+  const report = await runStop({ mode: "runtime", osSignal: true, syncBeforeStop: true });
+  expect(report.syncEvidence).toEqual({ changedFields: ["catalogFingerprint", "catalogSyncedAt"], fullCasRefused: true, catalogWritten: true, injected: true, journalHomeBound: true });
   expect(report.after).toBe('model = "native"\n');
-  expect(report.journalRetained).toBe(false);
+  expect(report.profileAfter).toBeNull();
+  expect(report.journalHomeBound).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+test("native Link signal restores after real catalog sync without weakening the full snapshot CAS", async () => {
+  const report = await runStop({ mode: "runtime", syncBeforeStop: true });
+  expect(report.syncEvidence).toEqual({ changedFields: ["catalogFingerprint", "catalogSyncedAt"], fullCasRefused: true, catalogWritten: true, injected: true, journalHomeBound: true });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.profileAfter).toBeNull();
+  // Reinjection preserves the first hash: field-level restore retains its recovery
+  // snapshot but releases the home binding, rather than deleting recovery evidence.
+  expect(report.journalRetained).toBe(true);
+  expect(report.journalHomeBound).toBe(false);
+  expect(report.protectedUnchanged).toBe(true);
   expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
   expect(report.grokAfter).toBe('theme = "fixture"\n');
 }, 20_000);
@@ -182,13 +198,18 @@ test("a scheduled recycle cannot skip restoration or spawn after signal shutdown
   expect(report.grokAfter).toBe('theme = "fixture"\n');
 }, 20_000);
 
-for (const mutation of ["connection", "selection", "rotation"]) {
+for (const mutation of ["connection", "selection", "rotation", "hub", "prior-catalog", "api-key", "token", "management", "link-id"]) {
   test(`served-connection guard rechecks ${mutation} at each write and freezes its snapshot`, async () => {
     const report = await runStop({ mode: "guard", mutation });
-    expect(report.result).toEqual({ writes: ["before-change"], refused: true, boundary: "unproven" });
+    expect(report.result).toEqual({ writes: ["before-change"], refused: true, boundary: mutation === "hub" ? "hub-owned" : "unproven" });
     expect(report.after).toBe(report.before);
     expect(report.journalRetained).toBe(true);
     expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
     expect(report.grokAfter).toBe(report.grokBefore);
   });
 }
+
+test("served-connection guard permits catalog sync metadata at a later write", async () => {
+  const report = await runStop({ mode: "guard", mutation: "catalog" });
+  expect(report.result).toEqual({ writes: ["before-change", "after-change"], refused: false, boundary: "restore" });
+});

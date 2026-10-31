@@ -15,9 +15,10 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   transport?: "link" | "hub";
   signal?: NodeJS.Signals;
   osSignal?: boolean;
+  syncBeforeStop?: boolean;
   repeat?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
-  mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub";
+  mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
 };
 const home = process.env.OPENCODEX_HOME!;
 mkdirSync(CODEX_HOME, { recursive: true });
@@ -64,6 +65,12 @@ const grokPath = join(grokHome, "config.toml");
 const grokNative = 'theme = "fixture"\n';
 writeFileSync(grokPath, grokNative + '\n# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>\n[model_providers.opencodex]\nbase_url = "http://127.0.0.1:10100/v1"\n# <<< opencodex managed block <<<\n');
 const mutate = () => {
+  if (options.mutation === "catalog") { config.client!.catalogFingerprint = "synced"; config.client!.catalogSyncedAt = "2026-10-31T00:00:00.000Z"; saveConfig(config); }
+  if (options.mutation === "prior-catalog") { config.client!.priorCatalog = ""; saveConfig(config); }
+  if (options.mutation === "api-key") { config.client!.apiKeyId = "other-client"; saveConfig(config); }
+  if (options.mutation === "token") { config.client!.tokenFingerprint = serviceApiTokenFingerprint("different-token"); saveConfig(config); }
+  if (options.mutation === "management") { config.client!.managementUrl = "https://other.example.test"; saveConfig(config); }
+  if (options.mutation === "link-id") { config.client!.link!.linkId = "lnk_fedcba9876543210"; saveConfig(config); }
   if (options.mutation === "connection") { config.client!.connectedAt = "2026-10-02T00:00:00.000Z"; saveConfig(config); }
   if (options.mutation === "selection") { config.client!.selectedClients = ["claude"]; saveConfig(config); }
   if (options.mutation === "hub") {
@@ -97,10 +104,13 @@ const grokBefore = readFileSync(grokPath, "utf8");
 const configContents = () => statSync(CODEX_CONFIG_PATH).isFile() ? readFileSync(CODEX_CONFIG_PATH, "utf8") : "<nonregular>";
 const before = configContents();
 const profileBefore = readFileSync(CODEX_PROFILE_PATH, "utf8");
+let syncEvidence: { changedFields: string[]; fullCasRefused: boolean; catalogWritten: boolean; injected: boolean; journalHomeBound: boolean } | undefined;
 const snapshot = (result: unknown) => ({
-  result, before, profileBefore, after: configContents(),
+  result, before, profileBefore, syncEvidence, after: configContents(),
   profileAfter: existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf8") : null,
-  journalRetained: existsSync(JOURNAL_PATH), protectedUnchanged: protectedPaths.every((path, index) => readFileSync(path, "utf8") === protectedBefore[index]),
+  journalRetained: existsSync(JOURNAL_PATH),
+  journalHomeBound: existsSync(JOURNAL_PATH) && typeof JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).opencodexHome === "string",
+  protectedUnchanged: protectedPaths.every((path, index) => readFileSync(path, "utf8") === protectedBefore[index]),
   catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
   grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
 });
@@ -139,6 +149,22 @@ if (options.mode === "guard") {
     server.stop = ((close: boolean) => { report({ atListenerStop: true }); return stop(close); }) as typeof server.stop;
     return server;
   } });
+  if (options.syncBeforeStop) {
+    const { syncConnectedClient } = await import("../../src/client/connect");
+    const { assertClientConnectionUnchanged } = await import("../../src/client/state");
+    const synced = await syncConnectedClient({}, {
+      fetchImpl: (async () => Response.json({ models: [{ slug: "fixture/synced" }] })) as typeof fetch,
+      now: () => new Date("2026-10-31T00:00:00.000Z"),
+      catalogCompatibility: { supportedEfforts: () => new Set(["low", "medium", "high"]) },
+      linkHome: { fetchImpl: (async () => Response.json({}, { status: 404 })) as typeof fetch },
+    });
+    const keys = new Set([...Object.keys(expected), ...Object.keys(synced.connection)]);
+    const changedFields = [...keys].filter(key => !Bun.deepEquals(Reflect.get(expected, key), Reflect.get(synced.connection, key))).sort();
+    let fullCasRefused = false;
+    try { assertClientConnectionUnchanged(expected); } catch { fullCasRefused = true; }
+    syncEvidence = { changedFields, fullCasRefused, catalogWritten: synced.catalogWritten, injected: synced.injected,
+      journalHomeBound: typeof JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).opencodexHome === "string" };
+  }
   mutate();
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   if (options.preserve === "restart") {
