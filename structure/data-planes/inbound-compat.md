@@ -232,7 +232,7 @@ caller values are forwarded like an explicit `session_id`, without principal sco
 promoted `x-session-id`. Original ingress headers and affinity computation are unchanged, as are
 custom and API-key destinations. No identity or originator is invented for marker-free requests.
 
-`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses, Messages and Chat Completions before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, WebSocket frames, compact and count_tokens retain their behavior.
+`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses, Messages and Chat Completions before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. A promoted root caller (no `x-codex-parent-thread-id`) also names `session-id` and `thread-id` with the same scoped value, so `codexPoolAffinityKey` binds it like a Codex thread; a declared parent keeps its upstream lineage key. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, WebSocket frames, compact and count_tokens retain their behavior.
 
 ## Chat conversation identity forwarding
 
@@ -388,6 +388,14 @@ allocation supplies the lane. `src/server/responses/core.ts` applies it only at 
 canonical Go transport, including combo selection and failover. No Go-only replay header
 reaches non-Go destinations. Shared system cache keys never become conversation identity.
 The request-scoped fallback is stable across retries and distinct across client requests.
+
+The Messages bridge replays each turn on an internal Responses request. When that request would
+carry no Codex pool key, no declared parent and no caller `thread-id`, `src/server/claude-bridge-pool-session.ts` completes
+`session-id` and `thread-id` from the caller's session alias, else the validated Claude session
+(metadata, else `x-claude-code-session-id`, scoped to the admitted principal like `x-session-id`).
+An invalid non-empty alias names no session, and the shared system-prompt cohort is never one.
+`tests/claude-integration/claude-bridge-pool-session.test.ts` replays recorded alternation through
+the Codex, Anthropic and generic OAuth pool resolvers.
 
 Claude metadata also supplies a private native-session value. Only the final canonical ChatGPT
 attempt receives it, in copied forwarding headers; an explicit underscore session, hyphenated
