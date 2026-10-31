@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claimOwnedServiceHome } from "../helpers/owned-service-home";
@@ -46,18 +45,6 @@ afterAll(() => {
   }
 });
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      srv.close(() => (port ? resolve(port) : reject(new Error("no port"))));
-    });
-  });
-}
-
 async function healthy(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -101,7 +88,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
       async () => {
         const home = mkdtempSync(join(tmpdir(), "ocx-shutdown-"));
         tmpHomes.push(home);
-        const port = await freePort();
+        let port = 0;
         const identity = claimTempHome(home);
 
         // Seed a native Codex config so the proxy actually injects on start (injectCodexConfig
@@ -111,10 +98,8 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           ? 'model_provider = "chatgpt-http"\n[model_providers.chatgpt-http]\nbase_url = "https://chatgpt.com/backend-api/codex"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = false\n'
           : 'model = "gpt-5.1"\n';
         writeFileSync(codexConfig, original);
-        // Pin the configured port to this test's own port. `ocx start` probes the CONFIGURED
-        // port for a live owner even with no state files, and a fresh home defaults to 10100.
-        // On a developer machine running ocx there, the child found that proxy, took the sibling
-        // path and by design never injected Codex config, so this test could not pass locally.
+        // Bind port 0 and discover the actual endpoint from this home's publication.
+        // Pin config too: the startup owner probe must not find a real proxy on 10100.
         writeFileSync(join(home, "config.json"), JSON.stringify({ port }));
 
         // stdout/stderr are CAPTURED, not discarded.
@@ -144,7 +129,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
           });
           expect(consent.status, consent.stderr).toBe(0);
         }
-        const child = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
+        const child = spawn("node", [BIN_OCX, "start"], {
           stdio: ["ignore", "pipe", "pipe"], env: childEnv,
         });
         spawned.push(child);
@@ -163,6 +148,11 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         // The health listener may answer before the launcher completes injection.
         let healthSeen = false;
         const up = await waitUntil(async () => {
+          try {
+            const runtime = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+            if (!Number.isInteger(runtime.port) || runtime.port <= 0) return false;
+            port = runtime.port;
+          } catch { return false; }
           if (!(await healthy(port))) return false;
           healthSeen = true;
           return readFileSync(codexConfig, "utf8").includes(approved ? `http://127.0.0.1:${port}/v1` : OCX_ROUTING_MARKER_LINE);

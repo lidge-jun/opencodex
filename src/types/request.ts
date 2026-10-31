@@ -479,7 +479,7 @@ export type AdapterEvent =
   | { type: "reasoning_raw_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }
   | { type: "tool_call_delta"; arguments: string }
-  | { type: "tool_call_end" }
+  | { type: "tool_call_end"; incomplete?: true }
   /** Internal boundary between a guarded first pass and its one-shot continuation. */
   | { type: "assistant_boundary" }
   // Native web-search activity surfaced by the web-search sidecar so Codex renders a "Searched the
@@ -573,6 +573,13 @@ export interface OcxUsage {
   cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
+  /**
+   * The adapter read these counts off the upstream's own usage frame. Only an adapter whose
+   * provider is estimated by default (usageForFinalLog) sets it, and a merge keeps it only when
+   * every leg had it. A figure taken off a bridged wire or guessed never carries it, so the
+   * provider default still marks those as estimated.
+   */
+  upstreamReported?: true;
   /**
    * The raw upstream usage object for Responses-shaped upstreams (openai/codex#41980 parity):
    * codex-rs preserves the complete `response.usage` object through its own pipeline, so fields

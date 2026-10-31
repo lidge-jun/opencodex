@@ -10,10 +10,10 @@ Makine bağlantısı, bir OpenCodex **Home** bilgisayarını bir **Child** bilgi
 - Home bilgisayarı, Child bilgisayarına OpenSSH anahtarıyla giriş yapabilir.
 - Child tarafından başlatılan bağlantı için Child, Home bilgisayarına OpenSSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez).
 - Child bilgisayarında OpenCodex 2.66.0 veya sonrası kuruludur (Child tarafından başlatılan bağlantıda Home üzerinde de).
-- Her iki bilgisayar da macOS veya Linux çalıştırır.
+- Bilgisayarlar macOS, Linux veya Windows x64 kullanabilir. Windows için OpenSSH Server ve Windows PowerShell gerekir; Git Bash ve curl gerekmez.
 - Home üzerinden Child ekleyen kontrol paneli Home üzerinde ya da eşleştirilmiş bir Hub oturumunda açılır. Geçerli bilgisayarı Child'a dönüştürmek için operatörün eşleştirdiği bir kontrol paneli oturumu gerekir; kimlik bilgisi olmadan oluşturulan yerel oturum bu yönlendirme değişikliğini onaylayamaz.
 
-Parolalı SSH ve Windows mevcut akışın dışındadır. Bağlantı iki taraftan da başlatılabilir: aşağıda anlatıldığı gibi Home tarafından ya da "Bu bilgisayarı Child olarak bağlama" bölümünde anlatıldığı gibi Child tarafından.
+Parolalı SSH desteklenmez. Bağlantı Home veya Child üzerinden başlatılabilir. Windows aynı doğrulanmış OpenSSH bağlantısı üzerinden PowerShell çalıştırır.
 
 ## `#remote` üzerinden Child ekleme
 
@@ -46,8 +46,6 @@ Home'un sağlayıcılarını kullanacak bilgisayarda:
 4. Uyarıyı okuyun ve **Connect as Child** seçeneğini seçin.
 
 Bağlanmak bu bilgisayardaki OpenCodex'i yeniden başlatır. Zaten çalışan Codex istekleri önce tamamlanır ve yeniden başlatma sırasında yeni istekler bir dakikaya kadar başarısız olabilir. Ardından kontrol paneli kendiliğinden yeniden yüklenir ve Child bağlantısını gösterir. Codex bu bilgisayarda `http://127.0.0.1:<port>/v1` adresini kullanmaya devam eder ve belirteç veya ortam değişkeni ayarlamanız gerekmez: yerel OpenCodex her isteği Home'a aktarır, Home da kendi sağlayıcıları ve hesaplarıyla yanıt verir.
-
-Child üzerinde `ocx stop` ile normal durdurma, dinleyiciyi kapatmadan önce yalnızca bu bağlantının sahip olduğu günlükten Codex yönlendirmesini geri yükler. Bağlantı, anahtar, katalog ve diğer entegrasyonlar korunur. Home yönlendirmesini sürdürmek için `ocx start` veya `ocx service start` çalıştırın, ardından `ocx sync --restart-codex` çalıştırın; yalnızca başlatmak yönlendirmeyi yeniden uygulamaz. `ocx restart` komutunun normal devir yolu yönlendirmeyi korur. Sahiplik veya günlük çakışmaları hata olarak bildirilir ve kurtarma kanıtları korunur; çökme veya zorla sonlandırma bu normal durdurma geri yüklemesini çalıştıramaz.
 
 **Child** önce bu bilgisayarı eşleştirmenizi istiyorsa bu bilgisayarın yapılandırılmış HTTP geri döngü IP adresindeki kontrol panelini açın; örneğin `http://127.0.0.1:<configured-port>`. Yerel eşleştirme formu yalnızca eşleştirme eksik olduğunda ve kontrol paneli ile API aynı geri döngü kaynağını kullandığında görünür. Formdaki `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` komutunu kopyalayıp bu bilgisayarın terminalinde çalıştırın, ardından tek kullanımlık kodu forma yapıştırın. Formda gösterilen kaynak adresini aynen kullanın; sağlayıcı API anahtarı veya yönetici belirteci eşleştirme kodu değildir. Eksik eşleştirme ile yapılandırılmış bağlantı noktası uyuşmazlığı farklı nedenlerdir.
 

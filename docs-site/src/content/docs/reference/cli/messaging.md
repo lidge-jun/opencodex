@@ -246,7 +246,11 @@ hold twelve authenticated connections, four more stay reserved for the owner's o
 control, outgoing probes and renewal, and at most eight tunnel
 children and two transient control/inspection helpers, ten total. Setup is bounded by
 30 seconds across the whole selected peer batch. A final lease renewal precedes startup
-success; final and periodic renewal batches have five-second deadlines, within the setup
+success. If SSH reports that a selected forward port was lost, setup closes the owned
+pair and selects fresh ports, up to three attempts within that same deadline. SSH forward
+confirmation, loopback checks and authenticated peer readiness must all succeed. Other
+setup failures stop immediately; published routes do not reconnect automatically. Final
+and periodic renewal batches have five-second deadlines, within the setup
 deadline where applicable, and periodic maintenance runs every ten seconds.
 Cancellation stops only owned
 SSH helpers/listeners; it leaves Codex daemons, threads and unrelated proxies alone.

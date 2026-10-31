@@ -134,6 +134,39 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 这些 family 是 `opus`、`fable`、`sonnet` 和 `haiku`；新路由默认进入 `opus`。只有在该 family 为空时，`none` 才有效。旧版 apply 标志 `--static`、`--hybrid` 和 `--discovery-only` 仍受支持。Claude Code 设置请使用 `ocx claude config <status|set> ...`。
 
+### `ocx codex [codex args...]`
+
+仅当配置及其命名空间受到保护、其他主体无法修改时才提供密钥；当前用户和特权 OS 主体被信任。同一用户的进程被信任：拥有该用户写入权限的主体已经能读取该用户的 OpenCodex 密钥文件。验证与原生启动之间由同一用户替换配置不在此威胁模型内，启动器不会在交接时冻结配置。
+
+正常 Windows 安装的默认 ProgramData 权限允许其他用户创建目录。因此即使 `ProgramData\OpenAI\Codex` 不存在，也会暂缓自动凭据。ProgramData 下的系统 Codex 配置文件夹必须存在，且仅 Administrators/SYSTEM 可写；其祖先目录也必须防止其他用户替换。请管理员审核目录策略。opencodex 从不自行修改 ACL，也不提供配置目录的命令。
+
+也可以自行提供密钥，例如导出 `OPENCODEX_API_AUTH_TOKEN` 环境变量；`ocx codex` 会保留其值不变。已有系统配置文件仍会阻止自动凭据，需另行审核。每种暂缓原因都会输出一条简短明确的 stderr 诊断，不包含密钥值、密钥文件内容或路径。
+
+单词提示前请加 `--`，以免选择未知的 Codex 子命令。
+
+即使系统配置文件不存在，也必须阻止其他用户创建这些文件。无法验证 Windows ProgramData/OpenAI/Codex 路径保护时不自动注入令牌，也不创建目录。macOS 接受仅拒绝的 ACL 和只读允许项。任何允许写入、追加、删除、修改属性、安全或所有者的项都会被拒绝，即使前面已有拒绝项。未知标签和检查错误也会被拒绝。
+
+只有 argv 位于下方允许列表内、环境中没有非空 HTTP(S)/ALL proxy 或 `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` 覆盖（允许规范的 `CODEX_HOME`），且主目录、配置和系统命名空间通过所有权检查时，才读取新服务令牌。配置必须只包含已审核键和准确的托管 loopback provider，没有额外凭据消费者或配置层。`-c`/`--config`、`-p`/`--profile`、未知标志和 `resume`/`fork` 等列表外参数都会暂缓令牌，并输出不含值的诊断；明确提供的用户凭据和原始参数保持不变。
+
+规范主目录和 `config.toml` 必须属于当前用户。POSIX 拒绝 group/other 写权限；Windows 验证所有者 SID，并拒绝当前用户、SYSTEM、Administrators 之外的 DACL 写入授权。还会检查祖先路径替换权限。macOS 还要求不存在强制 Codex 配置 preference。这些检查不能隔离同一用户或管理员运行的恶意进程。
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+自动凭证读取会将 `CODEX_HOME` 中的 `~` 与空白视为字面路径，验证后将同一个规范绝对路径传给子进程。无法读取主目录时不读取令牌。只要存在非空的 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`（不区分大小写），就会跳过自动读取，不受 `NO_PROXY` 影响；拒绝的启动和用户导出的凭证保持不变。传递新令牌时，子进程的 `NO_PROXY` 与 `no_proxy` 会保留已有排除项并加入 `127.0.0.1` 和 `::1`。启用 `features.respect_system_proxy` 或传入 `--enable`/`--disable` 会跳过自动读取。
+
+使用原始参数启动 Codex 前尝试启动代理。路由仍归 Codex 配置所有，启动器不会改写。本机原生及其他网关路由跳过代理启动；未知路由会警告并尝试启动，失败后仍警告并继续。帮助、版本及 `login`、`doctor`、`help` 等内部命令跳过代理启动和自动令牌读取。
+
+只有所选 provider 的完整传输配置与本次安装的回环监听器或已保存的本地客户端连接对应的管理块一致时，才从本次安装的 `service-api-token` 读取缺失的 `OPENCODEX_API_AUTH_TOKEN`。名称或注入注释本身不构成授权。未知或远程目标、默认 profile、项目配置、`OPENAI_BASE_URL` 以及传入的 `-c`/`--config`、`-p`/`--profile`、`-C`/`--cd`、`--remote` 都会跳过自动读取。保留用户导出的凭据和参数，拒绝令牌文件覆盖和管理令牌冲突。
+
+只有匹配成功（`matched`）的 autostart wrapper 才直接启动背后的 Codex。未知状态（包括检查异常）必须通过 bypass 验证；托管 Windows CMD wrapper 必须与当前生成模板完整一致，才以 `OCX_SHIM_BYPASS=1` 执行。普通 npm 启动器仍受支持。无法验证或过时的 wrapper 以退出码 1 拒绝，且不启动 Codex；请用 `ocx codex-shim install` 更新。本次启动不修复 shim；内容检查不证明 Windows backing 文件来源，也不防止并发路径替换。
+
+启动器帮助为 `ocx help codex`，Codex 帮助为 `ocx codex --help`。以后直接运行普通 `codex` 的行为保持不变。
+
 ### `ocx opencode [opencode args...]`
 
 确保代理正在运行，然后在 OpenCode 的内联运行时层（`OPENCODE_CONFIG_CONTENT`）中启动 opencode，并注入生成的 `provider.opencodex` 和 `providers.opencodex` 块。现有的内联配置会被保留，仅本次启动会替换这两个键。可能会读取全局或项目级 `opencode.json` 文件以警告已有覆盖，但不会修改磁盘上的文件。路由后的模型会显示为 `opencodex/<provider>/<model>`。稍后再次启动普通 `opencode` 时，行为与之前完全一致。
@@ -222,7 +255,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows 不读取候选项或配置文件，而是推迟检查。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
+`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，并且在报告了候选版本时该版本与清单版本一致，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows x64 还支持经证明绑定的绝对路径标准 npm `codex.cmd`，以及由持有句柄绑定的 Node/npm 工具链（存在时为前缀本地，确认不存在时为锚定到启动器架构的已捕获 PATH 对）和已验证的前缀内平台支持组件，并使用拒绝重解析的持有句柄。其他 Windows 布局仍然推迟或不受管理。Windows 的 `managed` 结果仅对观察到的安装布局进行分类：绑定的 Node/npm 是更新器的只读元数据工具链，并不保证后续 `codex.cmd` 调用将解析到哪个解释器。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。Windows x64 的 apply 要求具有经过验证的私有写入权限的受限 npm 前缀，并保留无关的软件包和 shim；不受支持的已观测布局返回 `applicable: false` 且 `refusal: windows_apply_disabled`；仅 PATH 选择、OpenCodex 自启动包装器和 global/vendor 回退仍然推迟。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 在 Windows 上，如果捕获到 `CODEX_CLI_PATH=codex` 这样的裸命令、远程路径或设备路径，则报告 `candidate_path_unavailable`。这些情况下候选项已被捕获，但其路径不适用于此检查。
 
@@ -256,3 +289,19 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

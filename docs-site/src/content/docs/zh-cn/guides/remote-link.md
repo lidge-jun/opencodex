@@ -10,10 +10,10 @@ description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
 - 主机可以使用 OpenSSH 密钥登录子机。
 - 对于由子机发起的链接，子机必须能使用 OpenSSH 密钥登录主机（不支持密码登录）。
 - 子机已安装 OpenCodex 2.66.0 或更高版本（由子机发起的链接还要求主机也满足）。
-- 两台电脑运行 macOS 或 Linux。
+- 两台计算机均可运行 macOS、Linux 或 Windows x64。Windows 需要 OpenSSH Server 和 Windows PowerShell，无需 Git Bash 或 curl。
 - 从主机添加子机的控制台需在主机上打开，或使用已配对的 Hub 会话。将当前电脑转换为子机需要操作员配对的控制台会话；无凭据签发的本地会话不能提交这项路由更改。
 
-密码 SSH 和 Windows 不在当前流程中。链接可以从任意一侧发起：按下文从主机发起，或按“将这台电脑连接为子机”一节从子机发起。
+不支持密码 SSH。可从 Home 或 Child 发起链接。Windows 通过同一固定主机密钥的 OpenSSH 连接执行 PowerShell。
 
 ## 从 `#remote` 添加子机
 
@@ -46,8 +46,6 @@ Host devbox
 4. 阅读提示后选择 **Connect as Child**。
 
 连接会重启这台电脑上的 OpenCodex。已在运行的 Codex 请求会先完成，重启期间新的请求可能在最多一分钟内失败。随后控制台会自动重新加载并显示子机链接。Codex 继续使用这台电脑上的 `http://127.0.0.1:<port>/v1`，无需设置令牌或环境变量：本地 OpenCodex 会把每个请求转发给主机，由主机用它自己的提供商和账户提供服务。
-
-在 Child 上通过 `ocx stop` 正常停止时，会在关闭监听器之前，仅从该连接拥有的日志恢复 Codex 路由。连接信息、密钥、目录和其他集成配置保持不变。要恢复 Home 路由，请先运行 `ocx start` 或 `ocx service start`，再运行 `ocx sync --restart-codex`；仅启动不会重新应用路由。`ocx restart` 的正常交接路径会保留路由。所有权或日志冲突会报告失败并保留恢复依据；崩溃或强制终止无法执行正常停止时的恢复。
 
 如果 **Child** 提示先配对这台电脑，请在这台电脑上打开配置的 HTTP 回环 IP 地址控制台，例如 `http://127.0.0.1:<configured-port>`。只有在缺少配对且控制台与 API 使用同一个回环源时，才会显示本地配对表单。复制表单中的 `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` 命令，在这台电脑的终端中运行，再将一次性代码粘贴到表单中。必须使用表单显示的确切源；提供商 API 密钥或管理员令牌不是配对代码。缺少配对与配置端口不匹配是不同的原因。
 

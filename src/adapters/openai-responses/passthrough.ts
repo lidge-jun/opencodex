@@ -3,13 +3,13 @@ import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
 import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
-import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
+import { isOpenCodeGoResponsesUrl, isXaiResponsesUrl, promoteResponsesAdditionalTools } from "../opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { Buffer } from "node:buffer";
-import type { IncomingMeta, ProviderAdapter } from "../base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
+import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER, isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
@@ -40,18 +40,21 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripInternalReasoningEnabled, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripUnsupportedOutputInclude, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
+import { usageFromResponsesPayload } from "./usage";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
 import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
 import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
+import { tagHistoricalInputItems } from "../../responses/item-provenance";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 import { observeOutbound } from "../../usage/cache-diagnostic";
 
+import { normalizeMuseToolCatalog } from "./muse-tool-catalog";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
@@ -124,38 +127,6 @@ function buildRoutedCompactionBody(body: unknown, responsesLite: boolean): unkno
   };
 }
 
-/** Read the Responses `usage` block, if the gateway sent one. */
-function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
-  if (!isPlainObject(payload) || !isPlainObject(payload.usage)) return undefined;
-  const usage = payload.usage;
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  // openai/codex#41980: the raw usage object is wire data a rebuilt response.completed must keep —
-  // unknown keys (subscription metadata, future counters) ride along even when the token counts
-  // themselves are zero or absent (metadata-only usage).
-  const knownKeys = new Set(["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"]);
-  const hasExtras = Object.keys(usage).some(key => !knownKeys.has(key))
-    || (isPlainObject(usage.input_tokens_details)
-      && Object.keys(usage.input_tokens_details).some(key => key !== "cached_tokens" && key !== "cache_write_tokens"
-        && key !== "cache_write_1h_tokens"))
-    || (isPlainObject(usage.output_tokens_details)
-      && Object.keys(usage.output_tokens_details).some(key => key !== "reasoning_tokens"));
-  if (inputTokens === 0 && outputTokens === 0 && !hasExtras) return undefined;
-  const inputDetails = isPlainObject(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
-  const outputDetails = isPlainObject(usage.output_tokens_details) ? usage.output_tokens_details : undefined;
-  return {
-    inputTokens,
-    outputTokens,
-    ...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
-    ...(typeof inputDetails?.cached_tokens === "number" ? { cachedInputTokens: inputDetails.cached_tokens } : {}),
-    ...(typeof inputDetails?.cache_write_tokens === "number" ? { cacheCreationInputTokens: inputDetails.cache_write_tokens } : {}),
-    ...(typeof inputDetails?.cache_write_1h_tokens === "number"
-      ? { cacheCreation1hInputTokens: inputDetails.cache_write_1h_tokens } : {}),
-    ...(typeof outputDetails?.reasoning_tokens === "number" ? { reasoningOutputTokens: outputDetails.reasoning_tokens } : {}),
-    ...(hasExtras ? { rawUsage: { ...usage } } : {}),
-  };
-}
-
 function responsesPayloadText(response: unknown): string {
   if (!isPlainObject(response) || !Array.isArray(response.output)) return "";
   return response.output
@@ -205,10 +176,27 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> | undefined;
       let convertedMuseToolNameAliases: Map<string, string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let outBody = stripPreviousResponseId(
-        parsed._rawBody,
+      const replayPrefixLen = parsed._replayPrefixLen;
+      let outBody = parsed._rawBody;
+      // Clone and tag before any input rewrite can remove, replace, or reorder replay items.
+      if (
+        typeof replayPrefixLen === "number"
+        && replayPrefixLen > 0
+        && isPlainObject(outBody)
+        && Array.isArray(outBody.input)
+      ) {
+        outBody = {
+          ...outBody,
+          input: tagHistoricalInputItems(outBody.input, replayPrefixLen),
+        };
+      }
+      outBody = stripPreviousResponseId(
+        outBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      if (isMetaAiResponsesDestination(url)) {
+        outBody = normalizeMuseToolCatalog(outBody, parsed._replayPrefixLen, provider.supportsResponsesCustomTools);
+      }
       if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
         allowStringContent: isXaiResponsesDestination(provider),
       });
@@ -266,6 +254,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
+      const hostedToolSubstitutions: NonNullable<AdapterRequest["hostedToolSubstitutions"]>[number][] = [];
       if (forward) {
         // `metadata` is stripped on every forward route for compatibility with the canonical backend.
         // `max_output_tokens` is stripped only when this provider is the canonical backend.
@@ -286,6 +275,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           provider,
           parsed.modelId,
           parsed._openAiVirtualSelectedModelId,
+          hostedToolSubstitutions,
         );
         outBody = normalizeImageGenClientTools(outBody);
       }
@@ -337,7 +327,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
           outBody = stripCanonicalOnlyInputItems(outBody);
         }
-        outBody = promoteClientLoadedTools(outBody);
+        // Meta already captured discoveries from the original current-turn slice.
+        if (!isMetaAiResponsesDestination(url)) outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(
@@ -367,6 +358,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
+        // xAI, Meta and Azure answer 400 for `output.encrypted_content` instead of ignoring it;
+        // Codex Desktop asks for it on every turn (#7878).
+        // Azure also rejects this exact include entry, including on plain Responses routes.
+        const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
+          || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
+        if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses) {
+          outBody = stripUnsupportedOutputInclude(outBody);
+        }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
         if (provider.supportsOpenAiWebSearchToolFields === false) {
@@ -384,8 +383,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
-      if (!forward) {
-        outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
+      if (
+        provider.promoteAdditionalTools === true
+        || (!forward && (
+          isOpenCodeGoResponsesUrl(url)
+          || isXaiResponsesDestination(provider)
+          || isXaiResponsesUrl(url)
+        ))
+      ) {
+        outBody = promoteResponsesAdditionalTools(outBody);
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
       // neither forward auth nor native v1 endpoint support implies trigger support. The
@@ -476,6 +482,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = { ...finalBody, stream: true };
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
+        const overrideAccountId = (provider as { _codexAccountOverride?: { chatgptAccountId?: string } })._codexAccountOverride?.chatgptAccountId
+          ?? headers["chatgpt-account-id"];
+        if ((provider as { _codexAccountOverride?: unknown })._codexAccountOverride && overrideAccountId) {
+          finalBody = isolateCodexPoolClientMetadata(finalBody, overrideAccountId);
+        }
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);
         // Static headers may use mixed casing. Remove every stale spelling
@@ -529,6 +540,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body,
+        hostedToolSubstitutions,
         ...(isPlainObject(wireBody) && typeof wireBody.model === "string" ? { outboundModelId: wireBody.model } : {}),
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),

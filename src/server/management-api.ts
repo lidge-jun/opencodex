@@ -50,7 +50,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
 import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
-import { noteExplicitShutdownRequested } from "./management/system-restart";
+import { acquireExplicitShutdownIntent, noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
@@ -83,6 +83,7 @@ import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-pic
 import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
 import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
 import { handleDesktopCompatibilitySettingsRoutes } from "./management/desktop-compatibility-settings-routes";
+import { handleCodexCliUpdateRoutes } from "./management/codex-cli-update-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -384,6 +385,7 @@ export async function handleManagementAPI(
     ??     (await handleDesktopCompatibilityRoutes(ctx))
     ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
     ??     (await handleDesktopCompatibilitySettingsRoutes(ctx))
+    ??     (await handleCodexCliUpdateRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
@@ -434,7 +436,7 @@ export async function handleManagementAPI(
     // outcome. This process cannot verify its own post-exit respawn window; only the
     // receipt-backed parent `ocx stop` can, which is what the deferral exists for.
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
-    const { deferralHonored, desktopSupervisedStopRefusal, performStopTeardown } = await import("./stop-teardown");
+    const { deferralHonored, desktopSupervisedStopRefusal, performStopTeardown, preflightStopTeardownOwnership } = await import("./stop-teardown");
     // The desktop app would start this proxy again within seconds; refuse before anything is
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
@@ -475,58 +477,65 @@ export async function handleManagementAPI(
         message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Nothing was changed. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
       }, 409, req, config);
     }
-    let serviceStop: import("../service").ServiceStopOutcome;
+    // Block automatic handoff while deciding, without committing a refused stop.
+    const releaseStopIntent = acquireExplicitShutdownIntent();
     try {
-      serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
-    } catch (err) {
-      if (isServiceOwnershipError(err)) {
-        // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
-        // this proxy immediately, and its shared config is not ours to tear down. Refuse the
-        // stop instead of half-performing it. 409, not 500 — the request is well-formed.
-        return jsonResponse({ success: false, message: err.message }, 409, req, config);
+      if (!holdsReceipt && !sibling) {
+        const refusal = preflightStopTeardownOwnership();
+        if (refusal) return jsonResponse(refusal, 409, req, config);
       }
-      throw err;
-    }
-    // The boolean helper collapses "failed" into the same false as "no service installed",
-    // so this route used to tear down shared config and exit while a manager that refused
-    // to stop was still there to respawn the proxy (#3008).
-    if (serviceStop === "failed") {
-      return jsonResponse({
-        success: false,
-        message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
-      }, 409, req, config);
-    }
-    if (serviceStop === "state-unknown") {
-      // Same case, same remedy as the pre-check: the query is what needs fixing.
-      return jsonResponse({
-        success: false,
-        code: "service_state_unknown",
-        message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
-      }, 409, req, config);
-    }
-    // The pre-check above already refused the respawnable case without a receipt, so
-    // reaching here with one means the parent owns the verification.
-    // Both managed configs come down together on an explicit teardown. The daemon's own
-    // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
-    // which is exactly why an intentional stop has to do it here — unless the caller is
-    // `ocx stop`, which does it itself once the proxy is proven down.
-    // Mark the stop before the first await after acceptance, so an automatic restart draining
-    // concurrently cannot reach its handoff while teardown is still pending.
-    noteExplicitShutdownRequested();
-    const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
-    setTimeout(async () => {
-      let shutdownSucceeded = false;
+      let serviceStop: import("../service").ServiceStopOutcome;
       try {
-        shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
-      } catch {
-        console.warn("[opencodex] shutdown drain failed");
+        serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
+      } catch (err) {
+        if (isServiceOwnershipError(err)) {
+          // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
+          // this proxy immediately, and its shared config is not ours to tear down. Refuse the
+          // stop instead of half-performing it. 409, not 500 — the request is well-formed.
+          return jsonResponse({ success: false, message: err.message }, 409, req, config);
+        }
+        throw err;
       }
-      // A drained proxy whose shared teardown failed did not finish the job. Exiting 0
-      // told a supervisor the stop was clean while native Codex or the Grok fence was
-      // still pointed at this process (#3008).
-      process.exit(shutdownSucceeded && teardown.success ? 0 : 1);
-    }, 200);
-    return jsonResponse(teardown);
+      // The boolean helper collapses "failed" into the same false as "no service installed",
+      // so this route used to tear down shared config and exit while a manager that refused
+      // to stop was still there to respawn the proxy (#3008).
+      if (serviceStop === "failed") {
+        return jsonResponse({
+          success: false,
+          message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
+        }, 409, req, config);
+      }
+      if (serviceStop === "state-unknown") {
+        // Same case, same remedy as the pre-check: the query is what needs fixing.
+        return jsonResponse({
+          success: false,
+          code: "service_state_unknown",
+          message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
+        }, 409, req, config);
+      }
+      // The pre-check above already refused the respawnable case without a receipt, so
+      // reaching here with one means the parent owns the verification.
+      // Both managed configs come down together on an explicit teardown. The daemon's own
+      // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
+      // which is exactly why an intentional stop has to do it here — unless the caller is
+      // `ocx stop`, which does it itself once the proxy is proven down.
+      const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
+      if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
+      noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.
+      setTimeout(async () => {
+        let shutdownSucceeded = false;
+        try {
+          shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
+        } catch {
+          console.warn("[opencodex] shutdown drain failed");
+        }
+        // A drained proxy whose shared teardown failed did not finish the job. Exiting 0
+        // told a supervisor the stop was clean while native Codex or the Grok fence was
+        // still pointed at this process (#3008).
+        process.exit(shutdownSucceeded && teardown.success ? 0 : 1);
+      }, 200);
+      return jsonResponse(teardown);
+    } finally { releaseStopIntent(); }
   }
 
   if (url.pathname.startsWith("/api/native-main-profiles")) {
@@ -546,7 +555,8 @@ export async function handleManagementAPI(
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {
-      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog, principal);
+      // Remembered sessions retain admin-token consent authority for account refresh.
+      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog, ctx.guiSessionIssuance === "remembered-admin" ? "admin-token" : principal);
     } catch (error) {
       // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
       // treat both as the same retryable busy response.

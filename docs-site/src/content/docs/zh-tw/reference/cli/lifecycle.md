@@ -28,15 +28,17 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-停止執行中的代理（依 PID）、移除 PID 檔案，並為獨立執行個體還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
+無人監督的 Link Child 處理結束訊號時，會在每次寫入前核對連線，並在關閉接聽器前還原 Codex 原生設定及受管理的 Grok。服務/Desktop、sibling、重新啟動交接和父程序 stop 收據會保留設定。結束中的重新啟動要求回傳 `409 runtime_stopping`。強制終止可能略過訊號處理，仍需父程序 `ocx stop` 的還原路徑。
 
-已連線的 hub 用戶端在 `ocx stop` 時會保留連線擁有的 Codex 路由、目錄和 Grok 設定。Remote Link Child 正常停止時，會在關閉監聽器前，僅從該連線擁有的日誌還原 Codex 路由；連線資訊、金鑰、目錄和其他整合設定保持不變。要恢復 Home 路由，請先執行 `ocx start` 或 `ocx service start`，再執行 `ocx sync --restart-codex`；僅啟動不會重新套用路由。`ocx restart` 的正常交接會保留路由。使用 `ocx disconnect` 才會解除連線。
+停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
 
-擁有權衝突、待完成的金鑰輪替、未完成的中斷連線收據（`client_disconnect_pending`）、已修改的設定或設定檔，以及無法讀取或未經驗證的還原日誌狀態（包括過大或不是一般檔案的日誌），都會回報還原失敗並保留復原依據。重新套用連線之前，請檢查保留的復原依據並解決回報的衝突。當機或強制終止無法執行正常停止時的清理。
+對已連線的 hub 用戶端，`ocx stop`（包括成功的 API 停止）會保留連線擁有的 Codex 路由、目錄和 Grok 設定，`ocx start` 會再次提供服務。明確停止 Remote Link Child 時，若共用設定還原成功，則會還原原生 Codex 路由、目錄與已備份的續接歷程中繼資料，並移除受管理的 Grok 設定。已儲存的 Home 連線會保留，可用 `ocx disconnect` 移除。
+
+要在還原後再次從 Codex 使用 Home，請先執行 `ocx start`（已安裝服務時使用 `ocx service start`），再執行 `ocx sync --restart-codex`。僅啟動不會重新套用路由；sync 不會重新建立 Grok 設定區塊。若在停止服務前無法確認連線擁有權，停止 API 會回傳 HTTP 409 與 `sharedTeardown: "refused"`，並讓 Proxy 與服務管理員繼續執行。請等待進行中的連線或中斷連線作業完成後再試。
 
 ### `ocx restart`
 
-代理執行時，向已驗證身分的執行階段要求在相同連接埠重新啟動，並保留路由與服務監督設定。這不是先執行 `stop` 再執行 `start`。已連線的 Child 或 hub 用戶端會嘗試在相同連接埠交接給新執行階段；交接失敗時回復原有執行階段並回報失敗。由服務或桌面應用程式管理的用戶端應透過其管理者重新啟動。詳見[英文參考](/reference/cli/lifecycle/#ocx-restart)。
+執行 `stop` 後接 `ensure`：停止代理／服務、還原原生 Codex、在背景啟動代理，並將即時連接埠同步回 Codex。
 
 ### `ocx ensure`
 
@@ -283,7 +285,7 @@ Unix 解除安裝後，請從 shell 啟動檔移除載入行，並重新啟動 s
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。在啟用管理 ingress 的 hub 上，開啟的是 `http://127.0.0.1:<管理埠>`。
+在 `http://127.0.0.1:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。在啟用管理 ingress 的 hub 上，開啟的是 `http://127.0.0.1:<管理埠>`。
 
 ## 更新
 

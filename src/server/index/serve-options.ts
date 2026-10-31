@@ -109,6 +109,7 @@ import {
 } from "../auth-cors";
 import { managementSessionIssuance } from "../management-auth";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -953,7 +954,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1069,7 +1070,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             config.claudeCode?.desktopProfile,
             desktopInputs.nativeContextCap,
           );
-          const { buildAnthropicModelInfos } = await import("../../claude/model-info");
+          const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
           const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
@@ -1097,51 +1098,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                   ? nativeFastEligible(model.id)
                   : catalogRowFastEligible(model)
               : undefined,
-            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels },
+            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels }, configuredRoutedDisplayName(config),
           );
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
-          // Codex client → Codex catalog shape: native gpt + namespaced routed models,
-          // cloned from a native template so required fields (base_instructions, etc.) are present.
-          // Pass the subagent picks so featured models lead by priority (matches the on-disk file).
-          // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
-          // on-disk sync; codex-rs keeps them out of the picker itself).
-          const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
-          // Account rows use the same hidden-inclusive supported set as on-disk sync. This lets a
-          // newly re-enabled native reappear under each selector before the next sync, while the
-          // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
-          const catalogNativeSlugs = accountSelectors.length > 0
-            ? [...new Set([
-              ...availableAccountNativeSlugs,
-              ...accountNativeSlugs,
-            ])]
-            : nativeSlugs;
-          const entries = buildCatalogEntries(
-            loadCatalogTemplate(),
-            catalogNativeSlugs,
-            goOrdered,
-            config.subagentModels,
-            websocketsEnabled(config),
-            maMode as "v1" | "default" | "v2",
-            exactComboSlugs,
-            accountSelectors,
-            suppressedBareNativeSlugs,
-            new Set(),
-            nativeContextLimits(config),
-            accountNativeSlugs,
-            accountNativeSlugsBySelector,
-            config.keepNativeChatGptOnV1 === true,
-            config.modelPickerOrder,
-          );
-          return jsonResponse({
-            models: applyNativeVisibility(
-              entries,
-              disabledModels,
-              accountSelectors.length > 0,
-              new Set(accountNativeSlugs),
-            ),
-          }, 200, req, policy);
+          const { buildCodexModelList } = await import("../codex-model-list");
+          return jsonResponse(buildCodexModelList({
+            config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
+            accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
+            suppressedBareNativeSlugs, disabledModels,
+          }), 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
@@ -1357,10 +1324,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
+              advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
           } catch (error) {
@@ -1516,12 +1485,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         const sessionReq = withCallerSessionIdentity(withGrokSessionIdentity(req), admission);
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponses(sessionReq, config, logCtx, {
               turnAdmissionLease,
               admission,
+              advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
               abortSignal: req.signal,
               onFirstOutput: () => recordFirstOutput(logCtx, start),
@@ -1605,8 +1577,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         let ownsRequestLog = false;
         const claimRequestLog = (work: (lease: ActiveTurnLease) => Promise<Response>) =>
           (lease: ActiveTurnLease) => { ownsRequestLog = true; return work(lease); };
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         const response = await runAdmittedHttpTurn(sessionReq, policy, claimRequestLog(async turnAdmissionLease => withCors(
-          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
+          await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy }, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
         )), { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
@@ -1641,10 +1615,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const sessionReq = withCallerSessionIdentity(req, admission);
         // Only expose an id when the handler or a logged refusal owns its history row.
         let ownsRequestLog = false;
+        // Capture at authentication: runAdmittedHttpTurn can wait for body capacity first (#7859).
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
           ownsRequestLog = true;
           return withCors(
-            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy }),
             req,
             policy,
           );

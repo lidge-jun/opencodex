@@ -59,9 +59,10 @@ export function writeHistoryProviderTransition(
   permit: HistoryWritePermit,
   target: HistoryWriteTarget,
   provider: CodexHistoryProvider,
+  withWriteGuard?: <T>(write: () => T) => T,
 ): CodexHistorySyncResult {
   assertHistoryWritePermit(permit, target.canonicalStateDbPath);
-  return syncCodexHistoryProvider(provider, target.canonicalStateDbPath, target.canonicalBackupPath);
+  return syncCodexHistoryProvider(provider, target.canonicalStateDbPath, target.canonicalBackupPath, { withWriteGuard });
 }
 
 /**

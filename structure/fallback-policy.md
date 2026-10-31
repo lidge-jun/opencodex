@@ -40,6 +40,11 @@ Device identity comes from admission only: a `configured` admission's key id, pl
 id whose `apiKeyId` matches it in the link store. The store is read only when `devices` is non-empty
 and is cached for five seconds. Loopback and unkeyed requests have no device scope.
 
+Advisor children retain the host admission and additionally enforce frozen caller policy and
+device ids at every `guardFallbackHop` boundary. Both must permit the hop; caller refusal uses
+the caller's captured device identity. The [Advisor policy contract](advisor.md#cross-provider-consultation)
+owns capture, capability authentication and child propagation.
+
 ## Sites
 
 | Site | Hop point | Reactive status | Proactive |
@@ -130,4 +135,4 @@ privacy), `tests/responses/responses-combo-fallback-off.test.ts`, `tests/routing
 `tests/server/fallback-routes.test.ts`, `tests/clients/client-home-unreachable.test.ts`, `tests/cli/cli-fallback.test.ts`
 and `gui/tests/fallback-panel.test.tsx`.
 
-The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-combo-selection) can reopen saved combo cooldowns in `src/combos/resolve.ts`; only the request-eligible target keys are cleared, with throwing predicates treated as ineligible during recovery preparation and available siblings preferred without probing cooled targets. Route-level picks and in-flight retry-after-cooldown selections disable reprobes. Recovery does not authorize a fallback hop or bypass the configured fallback policy.
+The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-combo-selection) can reserve saved combo cooldowns in `src/combos/resolve.ts`; only that request bypasses its reserved writes until a successful dispatch conditionally clears its unchanged target, with throwing predicates treated as ineligible during recovery preparation and available siblings preferred without probing cooled targets. Route-level picks and in-flight retry-after-cooldown selections disable reprobes. Recovery does not authorize a fallback hop or bypass the configured fallback policy.

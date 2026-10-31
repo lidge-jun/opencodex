@@ -29,10 +29,14 @@ export function persistCommittedDesktopGateway(
   const appliedAt = new Date().toISOString();
   try {
     const outcome = mutatePersistedConfig(current => {
+      if (JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(profile)) {
+        return { changed: false, value: null };
+      }
       recordCommittedDesktopGateway(current, profile, fingerprint, appliedAt);
       return { changed: true, value: structuredClone(current.claudeCode) };
     });
     if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
+    if (outcome.value === null) return { ok: false, reason: "conflict" };
     adoptPersistedClaudeCode(snapshot, outcome.value);
     // The mode/profile pair IS the committed transaction, not mergeable state.
     // Without an armed baseline the three-way adopt cannot prove the live leaves

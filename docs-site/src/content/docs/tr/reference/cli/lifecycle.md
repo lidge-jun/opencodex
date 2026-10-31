@@ -50,13 +50,15 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve bağımsız bir örnek için yerel Codex'i
+Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğrular ve dinleyiciyi bırakmadan önce yerel Codex ile yönetilen Grok ayarlarını geri yükler. Servis/Desktop, sibling, yeniden başlatma devri ve üst stop makbuzu ayarları korur. Kapanma sırasında yeniden başlatma `409 runtime_stopping` döndürür. Zorla sonlandırma sinyali atlayabilir; üst `ocx stop` geri yüklemesi yine gereklidir.
+
+Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
 
-Bağlı bir hub istemcisinde `ocx stop`, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur. Remote Link Child normal biçimde durdurulduğunda, dinleyici kapanmadan önce yalnızca o bağlantının Codex günlüğü geri yüklenir; bağlantı, anahtar, katalog ve diğer entegrasyonlar korunur. Home yönlendirmesini yeniden kullanmak için `ocx start` veya `ocx service start`, ardından `ocx sync --restart-codex` çalıştırın; yalnızca başlatmak yönlendirmeyi yeniden uygulamaz. `ocx restart` komutunun normal devir işlemi yönlendirmeyi korur. Bağlantıyı bırakmak için `ocx disconnect` kullanın.
+Bağlı bir hub istemcisinde `ocx stop`, API üzerinden başarılı durdurma dahil, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur; `ocx start` bunları yeniden sunar. Remote Link Child açıkça durdurulduğunda ise paylaşılan geri yükleme başarılıysa yerel Codex yönlendirmesi, katalog ve yedeklenmiş oturum sürdürme geçmişi meta verileri geri yüklenir, yönetilen Grok yapılandırması kaldırılır. Kayıtlı Home bağlantısı korunur; `ocx disconnect` ile kaldırılır.
 
-Sahiplik çakışması, bekleyen anahtar yenileme, tamamlanmamış bağlantı kesme kaydı (`client_disconnect_pending`), değiştirilmiş yapılandırma/profil dosyaları veya okunamayan ya da doğrulanmamış günlük durumu (aşırı büyük veya normal dosya olmayan günlükler dahil) geri yükleme hatasına yol açar ve kurtarma kanıtlarını korur. Bağlantıyı yeniden uygulamadan önce bu kanıtları inceleyip bildirilen çakışmayı çözün. Çökme veya zorla sonlandırma normal kapatma temizliğini çalıştıramaz.
+Geri yüklemeden sonra Codex'ten Home'u yeniden kullanmak için `ocx start` (servis kuruluysa `ocx service start`), ardından `ocx sync --restart-codex` çalıştırın. Yalnızca başlatmak yönlendirmeyi yeniden uygulamaz; sync Grok bloğunu yeniden oluşturmaz. Servis durdurulmadan önce bağlantı sahipliği doğrulanamıyorsa durdurma API'si HTTP 409 ve `sharedTeardown: "refused"` döndürür; proxy ve servis yöneticisi çalışmaya devam eder. Devam eden bağlanma veya bağlantıyı kesme işlemi bitince yeniden deneyin.
 
 ### `ocx restart`
 
@@ -519,7 +521,7 @@ Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimd�
 
 ### `ocx gui`
 
-Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
+Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://127.0.0.1:<port>`
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme

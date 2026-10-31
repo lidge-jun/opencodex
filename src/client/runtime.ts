@@ -6,6 +6,8 @@ import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
+import { observeLocalCredentials } from "../local-credentials/runtime-observation";
+import { verifiedHomeConnection } from "./link-connection";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -36,6 +38,9 @@ let activePort: number | null = null;
 let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
 let recycleScheduled = false;
+let recycleTimer: ReturnType<typeof setTimeout> | undefined;
+let recycleFlight: Promise<void> | null = null;
+let clientStopping = false;
 
 /**
  * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
@@ -122,12 +127,15 @@ export function standaloneRecycleEnv(
 }
 
 export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string): void {
-  if (recycleScheduled) return;
+  if (recycleScheduled || clientStopping) return;
   recycleScheduled = true;
-  const timer = setTimeout(() => {
-    void recycleStandalone(disconnectedTokenFingerprint);
+  recycleTimer = setTimeout(() => {
+    recycleTimer = undefined;
+    if (clientStopping) return;
+    recycleFlight = recycleStandalone(disconnectedTokenFingerprint).finally(() => { recycleFlight = null; });
+    void recycleFlight.catch(error => { if (!clientStopping) throw error; });
   }, 50);
-  if (typeof timer === "object" && "unref" in timer) timer.unref();
+  if (typeof recycleTimer === "object" && "unref" in recycleTimer) recycleTimer.unref();
 }
 
 function configuredTcpPort(): number | undefined {
@@ -231,7 +239,7 @@ export async function bindClientListener(
     preferred: number;
     explicitPort: boolean;
     configuredPort: number;
-  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel" | "linkReadiness" | "restart">,
+  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel" | "linkReadiness" | "linkConnectionGeneration" | "restart">,
   io: ClientRuntimeIo = {},
 ): Promise<{ server: Server<unknown>; port: number }> {
   const { linkMode } = request;
@@ -272,6 +280,7 @@ export async function bindClientListener(
         ...(request.linkKeySource ? { linkKeySource: request.linkKeySource } : {}),
         ...(request.linkTunnel ? { linkTunnel: request.linkTunnel } : {}),
         ...(request.linkReadiness ? { linkReadiness: request.linkReadiness } : {}),
+        ...(request.linkConnectionGeneration ? { linkConnectionGeneration: request.linkConnectionGeneration } : {}),
         ...(request.restart ? { restart: request.restart } : {}),
       });
       return { server, port: server.port ?? port };
@@ -313,6 +322,8 @@ export async function startClientRuntime(
     && !isChildInitiatedLink(state.value.link.linkId);
   // One secret for the life of this process: a rollback republishes the same identity.
   const attestationSecret = createLocalAttestationSecret();
+  // The local-credential observer lives exactly while this process serves (status attestation).
+  let credentialObservation: { stop(): void } | null = null;
 
   // Bind, start a fresh tunnel supervisor and publish. Runs once at start and again when a failed
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
@@ -347,6 +358,8 @@ export async function startClientRuntime(
       ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
       ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
       ...(linkReadiness ? { linkReadiness } : {}),
+      ...(supervisor ? { linkConnectionGeneration: () => supervisor.connectionGeneration() }
+        : homeInitiated && link ? { linkConnectionGeneration: () => verifiedHomeConnection(link.linkId) } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs });
     const publish = (): void => {
       activeServer = server;
@@ -354,6 +367,7 @@ export async function startClientRuntime(
       servedPort = boundPort;
       activeSupervisor = supervisor;
       supervisor?.start();
+      credentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
       writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
       if (linkMode && state.value.link && linkKey) {
@@ -386,6 +400,8 @@ export async function startClientRuntime(
 
   // Stop everything this process serves, giving in-flight requests up to `drainMs`.
   const stopServing = async (drainMs: number): Promise<void> => {
+    credentialObservation?.stop();
+    credentialObservation = null;
     activeReporter?.stop();
     activeReporter = null;
     try {
@@ -409,7 +425,9 @@ export async function startClientRuntime(
     try { await server.stop(true); } catch { /* already closed */ }
   };
 
+  let shuttingDown = false;
   const restartController: ClientRestartController = createClientRestartController({
+    stopping: () => shuttingDown,
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
@@ -433,8 +451,8 @@ export async function startClientRuntime(
       }
     },
     exitProcess: async code => {
-      await flushLinkDiagnostics();
-      process.exit(code);
+      try { await flushLinkDiagnostics(); }
+      finally { process.exit(code); }
     },
   });
 
@@ -443,11 +461,18 @@ export async function startClientRuntime(
   await serve();
   options.afterPublish?.();
 
-  let shuttingDown = false;
   const shutdown = (signal?: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clientStopping = true;
+    if (recycleTimer) { clearTimeout(recycleTimer); recycleTimer = undefined; }
     void (async () => {
+      // An accepted restart owns its replacement and rollback. A successful handoff exits
+      // inside that flight; a rollback finishes before this signal tears the runtime down.
+      if (restartController.hasHandoff()) await restartController.settled().catch(() => {});
+      if (recycleFlight) await recycleFlight.catch(() => {});
+      credentialObservation?.stop();
+      credentialObservation = null;
       activeReporter?.stop();
       activeReporter = null;
       try {

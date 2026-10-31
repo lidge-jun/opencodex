@@ -4,6 +4,7 @@ import { shouldPreserveNativeClientPreamble } from "../../../src/adapters/anthro
 import { buildAnthropicMessagesPassthroughRequest } from "../../../src/adapters/anthropic/passthrough";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { claudeCodeSessionId } from "../../../src/adapters/client-fingerprint";
+import { CLAUDE_CLI_SDK_PACKAGE_VERSION, CLAUDE_CLI_USER_AGENT } from "../../../src/providers/claude-cli-identity";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -113,12 +114,12 @@ describe("observed Claude Code identity", () => {
     headers.append("X-Stainless-Package-Version", "1.0.0");
     const built = build(captureAnthropicClientIdentity(headers));
     expect(built.headers["X-Stainless-Runtime-Version"]).not.toBe("x".repeat(513));
-    expect(built.headers["X-Stainless-Package-Version"]).toBe("0.74.0");
-    expect(build({} as AnthropicClientIdentity).headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
+    expect(built.headers["X-Stainless-Package-Version"]).toBe(CLAUDE_CLI_SDK_PACKAGE_VERSION);
+    expect(build({} as AnthropicClientIdentity).headers["User-Agent"]).toBe(CLAUDE_CLI_USER_AGENT);
   });
   test("compatible destinations keep defaults; first-party keys retain real caller identity", () => {
     const identity = captureAnthropicClientIdentity(new Headers(observed));
-    expect(build(identity, { authMode: "key", baseUrl: "https://anthropic.example" }).headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
+    expect(build(identity, { authMode: "key", baseUrl: "https://anthropic.example" }).headers["User-Agent"]).toBe(`@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`);
     const key = new Headers(build(identity, { authMode: "key" }).headers);
     expect(key.get("user-agent")).toBe(UA);
     expect(key.get("x-api-key")).toBe(provider.apiKey!);
@@ -141,7 +142,7 @@ describe("observed Claude Code identity", () => {
   test("generated Responses adapter traffic keeps its existing compatibility fingerprint", async () => {
     const parsed = { modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: "fixture" }], systemPrompt: [] } } as unknown as OcxParsedRequest;
     const built = await createAnthropicAdapter(provider).buildRequest(parsed);
-    expect(built.headers["User-Agent"]).toBe("@anthropic-ai/sdk/0.74.0");
+    expect(built.headers["User-Agent"]).toBe(CLAUDE_CLI_USER_AGENT);
     expect(built.headers["X-Claude-Code-Session-Id"]).toBe(claudeCodeSessionId(provider.apiKey));
   });
 });

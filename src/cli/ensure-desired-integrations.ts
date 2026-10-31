@@ -1,3 +1,4 @@
+import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../config/paths";
 /**
  * Align Grok and Claude Desktop files with the durable switches during `ocx ensure`.
  *
@@ -9,7 +10,9 @@
  * each external-file mutation, and use that current config for sync inputs.
  */
 import { loadConfig } from "../config";
+import { readConfigForAdmittedMutation } from "../config/persisted-mutation";
 import { cliFirstPartyDesired, firstPartyDesired, reconcileClaudeFirstPartySettings } from "../claude/first-party-settings";
+import { getConfigDir } from "../config/paths";
 import { claudeInterceptEnabled } from "../claude/intercept/runtime";
 import { removeDesktopPickerArtifacts } from "../claude/desktop-picker";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -17,10 +20,10 @@ import { runtimeRequest } from "./runtime-api";
 import { stripGrokConfig, type GrokInjectResult } from "../grok/inject";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../claude/desktop-3p";
 import {
-  applyDesktopFirstParty,
+  applyDesktopFirstParty, withFirstPartySecretsSettled,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
-  removeDesktopFirstParty,
+  removeDesktopFirstParty, removeDesktopFirstPartySettled,
   resolveClaudeDesktopMode,
 } from "../claude/desktop-first-party";
 import {
@@ -45,7 +48,7 @@ export interface EnsureDesiredIntegrationsDeps {
   syncGrokConfig: (
     port: number,
     config: OcxConfig,
-    opts?: { hostname?: string },
+    opts?: { hostname?: string; probeHostname?: string },
   ) => Promise<GrokInjectResult>;
   removeDesktop3pStandardPivot: typeof removeDesktop3pStandardPivot;
   removeDesktopFirstParty?: typeof removeDesktopFirstParty;
@@ -64,7 +67,7 @@ export interface EnsureDesiredIntegrationsDeps {
 async function defaultSyncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string } = {},
+  opts: { hostname?: string; probeHostname?: string } = {},
 ): Promise<GrokInjectResult> {
   const { syncGrokConfig } = await import("../grok/sync");
   return syncGrokConfig(port, config, opts);
@@ -97,7 +100,7 @@ function io(deps: EnsureDesiredIntegrationsDeps): {
  */
 export async function ensureGrokFenceMatchesDesired(
   port: number,
-  opts: { hostname?: string } = {},
+  opts: { hostname?: string; probeHostname?: string } = {},
   deps: EnsureDesiredIntegrationsDeps = productionDeps,
 ): Promise<void> {
   const config = deps.loadConfig();
@@ -129,7 +132,8 @@ export async function ensureGrokFenceMatchesDesired(
     const g = await deps.syncGrokConfig(
       port,
       config,
-      hostname !== undefined ? { hostname } : {},
+      { ...(hostname !== undefined ? { hostname } : {}),
+        ...(opts.probeHostname !== undefined ? { probeHostname: opts.probeHostname } : {}) },
     );
     if (g.changed) log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!g.ok) error(`⚠️  ${g.message}`);
@@ -150,12 +154,16 @@ export async function ensureClaudeDesktopMatchesDesired(
   deps: EnsureDesiredIntegrationsDeps = productionDeps,
 ): Promise<void> {
   const config = deps.loadConfig();
+  const readCurrent = () => deps.loadConfig === loadConfig ? readConfigForAdmittedMutation() : deps.loadConfig();
   const { log, error } = io(deps);
   if (cliFirstPartyDesired(config)) {
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (seen.settings.kind === "absent" || seen.stale || !claudeInterceptEnabled(config)) {
-      const result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
-        firstPartyDesired(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config)));
+      const result = await withFirstPartySecretsSettled(getConfigDir(), () => {
+        const current = readCurrent();
+        return (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(current,
+          firstPartyDesired(current, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(current)));
+      });
       if (result.ok && result.changed) log(`   + Claude CLI first-party env refreshed (${result.path})`);
       else if (!result.ok) error(`⚠️  Claude CLI first-party env refresh skipped: ${result.reason}.`);
     }
@@ -173,7 +181,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     }
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (!seen.stale) return;
-    const applied = (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config);
+    const applied = await withFirstPartySecretsSettled(getConfigDir(), () => (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(readCurrent()));
     if (applied.ok && applied.changed) log(`   + Claude Desktop first-party env refreshed (${applied.path})`);
     else if (!applied.ok) error(`⚠️  Claude Desktop first-party env refresh skipped: ${applied.reason}.`);
     return;
@@ -196,7 +204,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     error(`⚠️  Claude Desktop picker cleanup skipped: ${detail}.`);
   }
   try {
-    const env = (deps.removeDesktopFirstParty ?? removeDesktopFirstParty)(deps.loadConfig());
+    const env = await removeDesktopFirstPartySettled(deps.loadConfig, {}, deps.removeDesktopFirstParty ?? removeDesktopFirstParty);
     if (env.ok && env.changed) log("   ↩️  Claude Desktop first-party env removed.");
     else if (env.ok && env.retainedFor === "cli") log("   = Shared first-party env retained for Claude Code CLI.");
     else if (!env.ok) error(`⚠️  Claude Desktop first-party env cleanup skipped: ${env.reason} (${env.path}).`);
@@ -205,9 +213,9 @@ export async function ensureClaudeDesktopMatchesDesired(
     error(`⚠️  Claude Desktop first-party env cleanup failed: ${detail}.`);
   }
   try {
-    const removed = deps.removeDesktop3pStandardPivot({
-      appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint ?? null,
-    });
+    const removed = await settleConfigRoot(configRoot(), () => deps.removeDesktop3pStandardPivot({
+      appliedFingerprint: readCurrent().claudeCode?.desktopProfile?.appliedFingerprint ?? null,
+    }));
     if (removed.ok && removed.changed) {
       log("   ↩️  Claude Desktop integration residue removed.");
     } else if (!removed.ok) {
@@ -220,12 +228,12 @@ export async function ensureClaudeDesktopMatchesDesired(
 }
 
 export type EnsureDesiredIntegrationsBranch =
-  | { kind: "live"; hostname?: string }
+  | { kind: "live"; hostname?: string; probeHostname?: string }
   | { kind: "spawned" };
 
 /**
  * Reconcile the two external integration files after either ensure race window.
- * Only the live proxy's observed bind host crosses this boundary; persisted
+ * The live proxy's bind scope and responding address cross this boundary; persisted
  * config is deliberately loaded inside each mutation helper.
  */
 export async function reconcileEnsureDesiredIntegrations(
@@ -236,7 +244,8 @@ export async function reconcileEnsureDesiredIntegrations(
   const liveHost = branch.kind === "live" ? branch.hostname : undefined;
   await ensureGrokFenceMatchesDesired(
     port,
-    liveHost ? { hostname: liveHost } : {},
+    { ...(liveHost ? { hostname: liveHost } : {}),
+      ...(branch.kind === "live" && branch.probeHostname !== undefined ? { probeHostname: branch.probeHostname } : {}) },
     deps,
   );
   await ensureClaudeDesktopMatchesDesired(deps);

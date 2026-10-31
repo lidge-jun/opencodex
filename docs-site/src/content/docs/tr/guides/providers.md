@@ -196,8 +196,7 @@ sağlayıcıları birden fazla oturum tutabilir. Sağlayıcılar sayfası bu hes
 bir açılır menüde gösterir, başka bir tane eklemenize izin verir ve diğerlerinin
 oturumunu kapatmadan etkin hesabı değiştirir. Normal oturum açmada kimliği olmayan
 Kimi kimlik bilgileri etkin yuvanın yerini alır; açık **Hesap ekle** akışı mevcut
-yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN'sine göre
-anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
+yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları, varsa oturum açan kullanıcının e-posta adresi ile profil ARN'si birlikte kullanılarak ayırt edilir; aynı kuruluş profilini paylaşan kullanıcılar ayrı kimlik bilgilerini koruyabilir. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
 
@@ -279,6 +278,8 @@ paneli Codex hesap havuzu aracılığıyla yeniden kimlik doğrulaması yapın. 
 referansında [`ocx status` / `ocx doctor`](/tr/reference/cli/) bölümüne bakın.
 
 ### Kiro kimlik bilgisi içe aktarma
+
+Panelde **AWS IAM Identity Center** seçeneğini seçip kuruluşunuzun AWS erişim portalı URL’sini ve SSO bölgesini girin. Tarayıcıda cihaz kodunu onaylayın ve birden fazla Kiro profili varsa kaydedilecek profili seçin. CLI veya SSH gerekmez. Aşağıdaki CLI adımları **Kiro CLI** seçeneği içindir.
 
 Kiro oturum açma Kiro CLI'yı bekler: Unix'te `curl -fsSL
 https://cli.kiro.dev/install | bash` ile kurun; Windows PowerShell'de `irm
@@ -397,7 +398,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (kodlama) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (kodlama) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. `moonshot` API varsayılanı `kimi-k3.1-pro` modelidir; resmî API adresleri için kaydedilmiş `kimi-k2.5` seçimleri bu modele taşınır. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Kodlama) | `https://api.z.ai/api/coding/paas/v4` |
@@ -434,7 +435,7 @@ Yeniden oynatma açık `store: false`, eksiksiz girdi ve yalnızca istemcide ça
 
 Standart `opencode-zen` sağlayıcısının API anahtarıyla kimlik doğrulanan resmi `https://opencode.ai/zen/v1` ve `https://opencode.ai/inference/v1` yollarında Gemini, varsayılan `googleMode: ai-studio` modunda Google'ın yerel API'sini otomatik kullanır. Zen model kimlikleri, `-tiered` eki olmayan Flash kimlikleri dahil korunur. Claude, `googleMode` değerinden bağımsız olarak Anthropic Messages kullanır. Kaydedilmiş yapılandırmalar yüklenirken yalnızca bu yerel modellerin uygun eski Chat/Responses geçersiz kılmaları ve uygun, yalnızca Responses'a özgü `image_generation` barındırılan araç tercihleri yok sayılır. Özel sağlayıcılar, anahtar kimlik doğrulaması kullanmayan yollar ve diğer tercihler değişmez.
 
-**`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve dosya değiştirilmez. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/).
+**`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve yükleme sırasında dosya değiştirilmez. Bir sonraki yapılandırma kaydı bu girdileri ve referansları config.json dosyasından kaldırır. Kayıttan önce özgün dosya aynı dizinde `config.json.pre-opencode-free-removal.bak` adıyla otomatik olarak korunur; bu ad kullanılıyorsa benzersiz bir kardeş dosya adı kullanılır. Baytları aynı olan bağımsız bir kopya, yalnızca erişimin sahibine özel olduğu doğrulanabiliyorsa yeniden kullanılır; aksi halde yanına yeni ve korumalı bir kopya yazılır. Mevcut dosyaların üzerine yazılmaz. İlk yüklemeler çakışırsa birden fazla aynı ve korumalı kopya kalabilir ve uyarıda kurtarma kopyasının yolu gösterilir. Geri yüklemek için, örneğin eski sürüme döndükten sonra, bu kopyayı config.json dosyasının üzerine kopyalayın. Kopyalama başarısız olursa uyarı config.json dosyasını hemen kopyalamanızı ister. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/). Pasif okumalar yalnızca bellekte devre dışı bırakır; kopya oluşturmaz veya uyarı vermez.
 
 Geçerli Claude Desktop atamaları ve varsayılanları korunur. Kaynak model izin listesi boşalan kurallar devre dışı bırakılır; enjeksiyon modeli kaldırılırsa yerel alt ajan eşitlemesi de kapatılır. Sonraki yapılandırma kayıtları budanan referansları geri getirmez ve geçerli eşzamanlı düzenlemeleri korur.
 
@@ -665,6 +666,9 @@ tohumlanmıştır:
 | Codex girişi (Pool veya Direct) | `gpt-5.6-*` | 922.000 |
 | OpenAI (API anahtarı) | `openai-apikey/gpt-5.6-*` artı `*-pro` | 922.000 (922.000 maksimum girdi) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922.000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1.000.000 |
 
 Yerel GPT-5.6 girdileri sabitlenmiş yukarı akış akıl yürütme merdivenlerini
@@ -688,7 +692,7 @@ anahtar/abonelik belirteci ağ geçidi olarak kalır. **Cloudflare AI Gateway**,
 URL'ye doldurulan hesap + ağ geçidi kimliklerinize ihtiyaç duyar.
 
 Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
 Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat

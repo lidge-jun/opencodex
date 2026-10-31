@@ -1,6 +1,6 @@
 // Windows Node-launcher compatibility code. The install owns its entire process tree until
 // exit is proved; a timeout signal alone never authorizes stage removal.
-import { spawn } from "node:child_process";
+import { guardedSpawn, materializeMutationData } from "./mutation-guard.mjs";
 import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +11,9 @@ function quoteWindowsArg(value) {
   return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
 }
 
-export async function runNpmInstall(invocation, { env = process.env, timeoutMs = 180000 } = {}) {
+export async function runNpmInstall(invocation, { env = process.env, timeoutMs = 180000, authorizeMutation = () => false } = {}) {
+  invocation = materializeMutationData(invocation);
+  env = materializeMutationData(env);
   if (!invocation) return { status: 1, processTreeExited: true, error: { code: "ENOENT", message: "npm invocation unavailable" } };
   if (process.platform === "win32") {
     // Resolve from the same absolute system directory as the hardened cmd hop.
@@ -22,7 +24,7 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
     const supervisor = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");
     return new Promise(resolve => {
-      const child = spawn(supervisor, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper], {
+      const child = guardedSpawn(authorizeMutation, "package", supervisor, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper], {
         env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       });
       let output = "";

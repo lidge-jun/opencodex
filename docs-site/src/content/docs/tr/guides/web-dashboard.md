@@ -14,8 +14,10 @@ trafiğini yönetmenin en kısa yoludur.
 ocx gui
 ```
 
-Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
+Bu komut tarayıcınızda çalışan proxy'nin adresini açar: varsayılan olarak `http://127.0.0.1:<port>`,
+IPv6 loopback adresi `::1` için ise `http://[::1]:<port>`. Bu adresler, yerel tarayıcı eşleştirmesi için
+gereken yapılandırılmış origin'i korur. Hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>`
+adresini açar. Gerekirse önce proxy otomatik olarak başlatılır. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
@@ -38,6 +40,12 @@ standart bir şifre formu sunar. Kontrol panelinin kendisi belirteci yine de
 yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
 kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
 kararıdır.
+
+**Bu cihazı hatırla** varsayılan olarak kapalıdır. Doğrudan HTTPS panelinde (veya yerel loopback üzerinden) yönetici belirteci, sunucunun verdiği HttpOnly, SameSite=Strict cihaz çerezi ve bu sitenin localStorage alanında saklanan ayrı bir cihaz kanıtıyla değiştirilir. HTTPS çerezi Secure ve ana makineyle sınırlıdır. Çerez de kanıt da yönetici belirteci değildir; hiçbiri tek başına çalışmaz. Aynı ana makine adının portları çerezleri paylaşır; origin kapsamındaki kanıt, hatırlanan cihazı bu panelin origin’ine bağlar. Yine de ayrı bir ana makine adı tercih edin. Yönetici belirteci localStorage veya sessionStorage içine yazılmaz. Tarayıcı depolaması kullanılamıyorsa veya kanıt kaydedilemiyorsa Hatırla işlemi kullanılamadığını bildirir.
+
+Özel dashboard-sessions.json çerezin, kanıtın, yönetici kimlik bilgisinin ve tarayıcı kimliğinin özetlerini, sunucu origin’ini ve sabit 30 günlük süreyi saklar. Safari ana ekran uygulaması yeniden açılınca geçerli cihaz kaydı kısa bir oturumu yeniler. Hatırlanan oturumlar onay gerektiren işlemleri yetkilendiremez: GitHub yıldızı, sıfırlama kredisi tüketimi, istem katmanı düzenlemeleri, Meta Muse girişi, masaüstü uyumluluk değişiklikleri veya kota doğrulaması. Bunlar için yeni bir yerel veya eşleştirilmiş oturum kullanın. Relay, başka origin ve uzak düz HTTP Hatırla seçeneğini desteklemez. Süre dolması, tarayıcı kimliği değişmesi veya belirtecin değiştirilip sunucunun yeniden başlatılması yeniden giriş gerektirir.
+
+Kenar çubuğu veya mobil işlemlerde başarılı **Bu cihazı unut** ya da başarılı çıkış, kaydı ve türetilen tüm oturumları hemen iptal eder ve tarayıcı kanıtını siler. Başarısız çıkışta yeniden deneme için kanıt korunur. Sunucu değişikliği yayımlamadan önce kayıt içeriğini diske eşitler; çökme sonrası dizin girdisinin kalıcılığı mümkün olduğunca sağlanır. Eski belirteç anahtarları okunmadan veya taşınmadan silinir. Yalnızca güvenilir cihazda kullanın; Safari AutoFill özelliğini geri getirmez.
 
 ## Kota özeti çubuğu
 
@@ -85,6 +93,8 @@ zaman yukarı akışta yenilemeye zorlamaz.
 Kullanım, panel, sağlayıcı çalışma alanı, sağlayıcı kataloğu ve API anahtarı görünümleri, okunabilir kayıt kalmasa bile dışlanan kayıtlar için uyarı gösterir. Sayılar, tarihler ve kullanım sıralamaları yalnızca okunabilir kayıtlara dayanır. Geçmiş eksikse en çok kullanılan model sırası kaydedilmez; başka bir sıra seçin veya yeniden denemeden önce geçmişi onarın.
 
 ### İstek günlüklerini filtreleme
+
+İstek ayrıntıları, genel proxy hatası metni yerine kaydedilmiş upstream hata nedenini öncelikli gösterir. Fiziksel gönderim sayısı geçerliyse her zaman gösterilir; eksik veya geçersiz muhasebe bilgisi sıfır yerine **Unavailable** olarak görüntülenir. **Retries**, yalnızca muhasebesi tamamen kesinleşmiş ve tutarlı tek bir deneme kaydı bulunduğunda ilk gönderimden sonraki ek gönderim sayısını gösterir. Birden fazla deneme, çözümlenmemiş veya tutarsız muhasebe ve kayıplı attempt normalizasyonu, uydurma yeniden deneme sayısı yerine retries alanını gizler. Bilinmeyen kalıcı nedenler, ham atıf olmadan durum tabanlı başlığa döner.
 
 Filtreler yüklü günlükte yüzey, yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
 

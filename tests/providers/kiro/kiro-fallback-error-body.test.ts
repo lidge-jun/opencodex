@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +78,31 @@ async function collectAdapterEvents(events: AsyncGenerator<AdapterEvent>): Promi
   for await (const event of events) out.push(event);
   return out;
 }
+
+test.each([0, -1, 17_013])("text fallback retains the current fetch header budget %s", async timeoutMs => {
+  const parent = new AbortController();
+  const clocks: number[] = [];
+  const original = globalThis.setTimeout;
+  const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback, delay, ...args) => {
+    if (delay === 200_000 || delay === 17_013) clocks.push(delay);
+    return original(callback, delay, ...args);
+  }) as typeof setTimeout);
+  let sends = 0;
+  const executor = (async (_input, init) => {
+    expect(init!.signal!.aborted).toBe(false);
+    sends++;
+    return new Response(streamOf(eventFrame({ content: sends === 1 ? "I am checking." : "fixture reply" })));
+  }) as typeof fetch;
+  try {
+    const adapter = createKiroAdapter(provider);
+    const request = await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+    const response = await adapter.fetchResponse!(request, { timeoutMs, abortSignal: parent.signal, executor });
+    const events = await collectAdapterEvents(adapter.parseStream(response));
+    expect(sends).toBe(2);
+    expect(clocks).toEqual(timeoutMs > 0 ? [timeoutMs, timeoutMs] : []);
+    expect(events.some(event => event.type === "text_delta" && event.text.includes("fixture reply"))).toBe(true);
+  } finally { parent.abort(); timerSpy.mockRestore(); }
+});
 
 test("fallback HTTP errors stop reading oversized upstream bodies", async () => {
   const chunk = new TextEncoder().encode("A".repeat(32 * 1024));

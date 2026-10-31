@@ -10,6 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
+import { runCliAction } from "./runtime-api";
 import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
@@ -82,9 +83,10 @@ export function selectDefaultGuiUrl(
   const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
   if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
 
+  // Keep literal loopback addresses: standalone pairing admits the configured
+  // origin, so replacing 127.0.0.1 with localhost strands its browser flow.
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
-  const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;
-  return `http://${hostname}:${live?.port ?? config.port ?? 10100}`;
+  return `http://${guiHost}:${live?.port ?? config.port ?? 10100}`;
 }
 
 const commandRunners: Record<string, CommandRunner> = {
@@ -433,8 +435,8 @@ const commandRunners: Record<string, CommandRunner> = {
         if (expectation) {
           // The root preflight skipped the shim repair for a pinned sync; the identity held, so
           // run it now, as an unpinned sync would have.
-          const { runCodexShimAutoRestore } = await import("./codex-shim-autorestore");
-          runCodexShimAutoRestore();
+          const { runCodexShimAutoRestoreAsync } = await import("./codex-shim-autorestore");
+          await runCodexShimAutoRestoreAsync();
         }
         // The connection the sync ran under, read inside its lock; the read above may be stale.
         const link = result.connection.transport === "link";
@@ -546,7 +548,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -729,10 +731,10 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   "codex-shim": async deps => {
-    const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
+    const { codexShimStatus, diagnoseCodexShim, installCodexShimAsync, uninstallCodexShimAsync } = await import("../codex/shim");
     switch (deps.args[1]) {
       case "install": {
-        const r = installCodexShim();
+        const r = await installCodexShimAsync();
         const { healthy, runnable, active, summary } = diagnoseCodexShim();
         const success = !r.refused && (runnable ?? healthy);
         const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
@@ -762,7 +764,7 @@ const commandRunners: Record<string, CommandRunner> = {
       }
       case "uninstall":
       case "remove": {
-        const r = uninstallCodexShim();
+        const r = await uninstallCodexShimAsync();
         console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
         break;
       }
@@ -856,7 +858,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   ready: async deps => {
     // Fail-closed impossible-state guard: readyArgs is populated by the
-    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShim, so
+    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShimAsync, so
     // reaching here without it means dispatch diverged. Refuse with code 64
     // and perform NO I/O (no discovery/probe). process.exit is `never`,
     // narrowing below.
@@ -869,12 +871,12 @@ const commandRunners: Record<string, CommandRunner> = {
     // Reset first, like the service runner below: reading process.exitCode only
     // reports THIS command's outcome if nothing earlier in the process set it.
     process.exitCode = 0;
-    await handleProviderCommand(deps.args.slice(1));
+    const code = await runCliAction(() => handleProviderCommand(deps.args.slice(1)));
     // handleProviderCommand reports failure through process.exitCode, which it sets
     // from handleProviderRuntimeCommand. Returning a literal 0 here made index.ts
     // call process.exit(0) and erase it, so `ocx provider quota` against a stopped
     // proxy printed an error and still exited 0 (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   account: async deps => {
     const { cmdAccount } = await import("./account");
@@ -883,10 +885,10 @@ const commandRunners: Record<string, CommandRunner> = {
   models: async deps => {
     const { handleModels } = await import("./models");
     process.exitCode = 0;
-    await handleModels(deps.args.slice(1));
+    const code = await runCliAction(() => handleModels(deps.args.slice(1)));
     // Same as the provider runner above: handleModels sets process.exitCode from
     // handleModelsRuntimeCommand, and a literal 0 discarded it (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   alias: async deps => {
     const { handleAliasCommand } = await import("./alias");
@@ -1037,6 +1039,10 @@ const commandRunners: Record<string, CommandRunner> = {
       return await handleClaudeConfigCommand(deps.args.slice(2));
     }
     return await cmdClaude(deps.args.slice(1));
+  },
+  codex: async deps => {
+    const { cmdCodex } = await import("./codex-launcher");
+    return await cmdCodex(deps.args.slice(1));
   },
   opencode: async deps => {
     const { cmdOpencode } = await import("./opencode");

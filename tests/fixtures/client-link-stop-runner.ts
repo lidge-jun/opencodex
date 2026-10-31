@@ -6,13 +6,18 @@ import { getDefaultConfig, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/codex/journal";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
+import { ensureCatalogBackup } from "../../src/codex/catalog/parsing";
+import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contract";
+import { claimPendingTeardown } from "../../src/config/pending-teardown";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
-  mode: "runtime" | "helper" | "api" | "parent";
+  mode: "runtime" | "helper" | "api" | "parent" | "guard";
   transport?: "link" | "hub";
   signal?: NodeJS.Signals;
+  osSignal?: boolean;
   repeat?: boolean;
-  mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular";
+  preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
+  mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub";
 };
 const home = process.env.OPENCODEX_HOME!;
 mkdirSync(CODEX_HOME, { recursive: true });
@@ -47,12 +52,29 @@ writeFileSync(CODEX_PROFILE_PATH, 'model = "managed"\n');
 markJournalInjectedState(injected, 'model = "managed"\n', {
   injectedOpenaiBaseUrl: `http://127.0.0.1:${config.port}/v1`, injectedRealtimeWsBaseUrl: null, injectedCatalogPath: DEFAULT_CATALOG_PATH,
 });
-writeFileSync(DEFAULT_CATALOG_PATH, '{"models":[{"id":"home-model"}]}');
+const nativeCatalog = { models: [{ slug: "fixture-native", visibility: "list" }] };
+writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify(nativeCatalog));
+ensureCatalogBackup(DEFAULT_CATALOG_PATH, nativeCatalog);
+writeFileSync(DEFAULT_CATALOG_PATH, '{"models":[{"slug":"fixture/home-model"}]}');
 writeFileSync(join(home, "service-api-token"), token);
-writeFileSync(join(home, "grok-sentinel"), "unrelated Grok configuration");
+const grokHome = join(home, "grok");
+process.env.GROK_HOME = grokHome;
+mkdirSync(grokHome, { recursive: true });
+const grokPath = join(grokHome, "config.toml");
+const grokNative = 'theme = "fixture"\n';
+writeFileSync(grokPath, grokNative + '\n# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>\n[model_providers.opencodex]\nbase_url = "http://127.0.0.1:10100/v1"\n# <<< opencodex managed block <<<\n');
 const mutate = () => {
   if (options.mutation === "connection") { config.client!.connectedAt = "2026-10-02T00:00:00.000Z"; saveConfig(config); }
   if (options.mutation === "selection") { config.client!.selectedClients = ["claude"]; saveConfig(config); }
+  if (options.mutation === "hub") {
+    delete config.client!.transport; delete config.client!.link;
+    config.client!.serverUrl = config.client!.managementUrl = "https://hub.example.test";
+    saveConfig(config);
+  }
+  if (options.mutation === "rotation") {
+    config.client!.pendingOperation = { kind: "rotate", rotationId: "fixture-rotation", newKeyIssuedAt: "2026-10-02T00:00:00.000Z", oldKeyBackupPath: join(home, "token.prev") };
+    saveConfig(config);
+  }
   if (options.mutation === "journal" || options.mutation === "process-journal" || options.mutation === "unverified") {
     const journal = JSON.parse(readFileSync(JOURNAL_PATH, "utf8"));
     if (options.mutation === "unverified") delete journal.injectedConfigHash;
@@ -67,21 +89,51 @@ const mutate = () => {
     else { unlinkSync(CODEX_CONFIG_PATH); mkdirSync(CODEX_CONFIG_PATH); }
   }
 };
-if (options.mode !== "runtime") mutate();
-const protectedPaths = [join(home, "config.json"), DEFAULT_CATALOG_PATH, join(home, "service-api-token"), join(home, "grok-sentinel")];
+if (options.mode !== "runtime" && options.mode !== "guard") mutate();
+const protectedPaths = [join(home, "config.json"), join(home, "service-api-token")];
 let protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+const catalogBefore = readFileSync(DEFAULT_CATALOG_PATH, "utf8");
+const grokBefore = readFileSync(grokPath, "utf8");
 const configContents = () => statSync(CODEX_CONFIG_PATH).isFile() ? readFileSync(CODEX_CONFIG_PATH, "utf8") : "<nonregular>";
 const before = configContents();
 const profileBefore = readFileSync(CODEX_PROFILE_PATH, "utf8");
-const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify({
+const snapshot = (result: unknown) => ({
   result, before, profileBefore, after: configContents(),
   profileAfter: existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf8") : null,
   journalRetained: existsSync(JOURNAL_PATH), protectedUnchanged: protectedPaths.every((path, index) => readFileSync(path, "utf8") === protectedBefore[index]),
-}));
-if (options.mode === "runtime") {
-  const { startClientRuntime } = await import("../../src/client/runtime");
+  catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
+  grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
+});
+const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
+process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
+if (options.preserve === "service") process.env.OCX_SERVICE = "1";
+if (options.preserve === "desktop") takeDesktopSupervisedMarker({ OCX_DESKTOP_SUPERVISED: "1" });
+if (options.preserve === "receipt") claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact");
+if (options.preserve === "sibling") (await import("../../src/codex/sibling-start")).markSiblingStart(10100);
+if (options.mode === "guard") {
+  const { stopRestoreWriteGuard } = await import("../../src/client/restore-ownership");
+  const guard = stopRestoreWriteGuard(expected);
+  const writes: string[] = [];
+  guard.run(() => writes.push("before-change"));
+  mutate();
+  // A caller mutating its own snapshot cannot move an already-created guard's authority.
+  Object.assign(expected, config.client);
+  let refused = false;
+  try { guard.run(() => writes.push("after-change")); } catch { refused = true; }
+  protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+  report({ writes, refused, boundary: guard.boundary() });
+} else if (options.mode === "runtime") {
+  if (options.preserve?.startsWith("restart-rollback")) {
+    const replacement = await import("../../src/server/restart-replacement");
+    mock.module("../../src/server/restart-replacement", () => ({ ...replacement,
+      spawnReplacementStart: async () => { throw Object.assign(new Error("fixture replacement refused"), { code: "not_ready" }); },
+    }));
+  }
+  const { scheduleStandaloneRecycle, startClientRuntime } = await import("../../src/client/runtime");
   const { startMachineListener } = await import("../../src/client/machine-listener");
-  await startClientRuntime({ block: false }, { startListener: (port, deps) => {
+  let requestRestart: (() => Promise<unknown>) | undefined;
+  await startClientRuntime({ block: false }, { restartSupervisor: () => options.preserve?.startsWith("restart-rollback") ? Promise.resolve(null) : new Promise(() => {}), startListener: (port, deps) => {
+    requestRestart = deps?.restart?.request;
     const server = startMachineListener(port, deps);
     const stop = server.stop.bind(server);
     server.stop = ((close: boolean) => { report({ atListenerStop: true }); return stop(close); }) as typeof server.stop;
@@ -89,11 +141,22 @@ if (options.mode === "runtime") {
   } });
   mutate();
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
-  process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
+  if (options.preserve === "restart") {
+    if (!requestRestart) throw new Error("fixture missing real restart admission");
+    void requestRestart();
+  }
+  if (options.preserve?.startsWith("restart-rollback")) {
+    if (!requestRestart) throw new Error("fixture missing real restart admission");
+    await requestRestart();
+  }
+  if (options.preserve === "recycle-pending" || options.preserve === "restart-rollback-recycle") scheduleStandaloneRecycle(expected.tokenFingerprint);
+  // Exercises the registered production handler; it is not evidence of native OS signal delivery.
+  if (options.osSignal) writeFileSync(join(home, "ready"), "ready");
+  else process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
 } else {
   const result = options.mode === "api"
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=fixture"), { ownsReceipt: () => true })
-    : options.mode === "parent" ? await (await import("../../src/cli/stop-restore")).restoreSharedClientStateAfterStop(() => {}, expected)
+    : options.mode === "parent" ? await (await import("../../src/cli/stop-restore")).restoreSharedClientStateAfterStop(() => {})
     : (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected);
   const repeated = options.repeat ? (await import("../../src/client/stop-routing")).restoreLinkClientRouting(expected) : undefined;
   report(repeated ? { first: result, repeated } : result);

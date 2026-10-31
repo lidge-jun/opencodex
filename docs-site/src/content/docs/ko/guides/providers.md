@@ -168,7 +168,7 @@ deny-by-default 상태로 유지됩니다.
 
 자격 증명에 고정된 계정 id나 이메일이 있는 OAuth 프로바이더는 로그인을 여러 개 보관할 수 있습니다.
 Providers 페이지에서 계정을 추가하고, 다른 계정을 로그아웃하지 않은 채 활성 계정만 바꿀 수 있습니다.
-계정 식별 정보가 없는 Kimi 자격 증명은 일반 로그인에서는 활성 슬롯을 교체하지만, 명시적인 **계정 추가**에서는 기존 슬롯을 보존하고 별도의 새 슬롯을 활성화합니다. Kiro 계정은 프로필 ARN을 키로 저장됩니다.
+계정 식별 정보가 없는 Kimi 자격 증명은 일반 로그인에서는 활성 슬롯을 교체하지만, 명시적인 **계정 추가**에서는 기존 슬롯을 보존하고 별도의 새 슬롯을 활성화합니다. Kiro 계정은 프로필 ARN과 로그인한 사용자의 이메일(제공되는 경우)을 함께 사용해 구분합니다. 같은 조직 프로필을 공유하는 사용자도 각자의 자격 증명을 별도로 유지할 수 있습니다.
 `chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
 `/api/oauth/accounts`는 마스킹된 메타데이터만 반환합니다.
 
@@ -186,6 +186,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 인라인 JSON과 추가 위치 인수는 거부됩니다. 내보낸 파일은 비공개로 보관하고 가져온 뒤 삭제하거나 안전하게 저장하세요.
 
 ### Kiro 자격 증명 가져오기
+
+대시보드에서 **AWS IAM Identity Center**를 선택하고 조직의 AWS 액세스 포털 URL과 SSO 리전을 입력하면 CLI나 SSH 없이 계정을 추가할 수 있습니다. 브라우저에서 기기 코드를 승인하고 Kiro 프로필이 여러 개면 저장할 프로필을 선택하세요. 아래 CLI 설명은 **Kiro CLI** 선택 항목에 해당합니다.
 
 Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 먼저 `kiro-cli login`으로 로그인하세요. `kiro-cli` 세션이 없으면 `ocx login kiro`는 붙여 넣은 액세스 토큰이나 `KIRO_ACCESS_TOKEN` 환경 변수로 폴백합니다.
 
@@ -260,7 +262,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. `moonshot` API 기본 모델은 `kimi-k3.1-pro`입니다. 공식 API 주소에 저장된 `kimi-k2.5` 선택은 이 모델로 마이그레이션됩니다. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
@@ -302,7 +304,7 @@ Responses 도구 결과 배열은 텍스트로 변환하고 이미지는 짝이 
 
 정식 `opencode-zen` 제공자에서 API 키 인증과 공식 경로 `https://opencode.ai/zen/v1` 또는 `https://opencode.ai/inference/v1`을 사용하면 Gemini는 기본 `googleMode: ai-studio`에서 Google 네이티브 API를 자동으로 사용합니다. Zen 모델 ID는 `-tiered` 접미사가 없는 Flash ID도 그대로 유지합니다. Claude는 `googleMode`와 관계없이 Anthropic Messages를 사용합니다. 저장된 설정을 읽을 때 이 네이티브 모델의 조건에 맞는 기존 Chat/Responses 재정의와 조건에 맞는 Responses 전용 `image_generation` 호스팅 도구 선호 설정만 무시합니다. 사용자 지정 제공자, 키 인증이 아닌 경로, 그 밖의 선호 설정은 그대로 유지합니다.
 
-**`opencode-free` 지원이 제거되었습니다.** OpenCode의 업스트림 무료 등급 제한으로 모든 모델이 `403 permission_denied`를 반환하기 때문입니다([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). 기존 설정을 불러오면 해당 항목과 종속 모델 참조를 메모리에서 비활성화하고 프로세스당 한 번 경고하며 파일은 변경하지 않습니다. 기본 공급자였다면 표준 OpenAI OAuth 경로가 기본값이 됩니다. `opencode-go`, API 키를 사용하는 `opencode-zen` 또는 다른 공급자를 사용하세요. [OpenCode Zen 약관](https://opencode.ai/docs/zen/).
+**`opencode-free` 지원이 제거되었습니다.** OpenCode의 업스트림 무료 등급 제한으로 모든 모델이 `403 permission_denied`를 반환하기 때문입니다([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). 기존 설정을 불러오면 해당 항목과 종속 모델 참조를 메모리에서 비활성화하고 프로세스당 한 번 경고하며 불러올 때 파일은 변경하지 않습니다. 다음 설정 저장 시 해당 항목과 참조가 config.json에서 제거됩니다. 저장 전에 원본 파일을 같은 폴더의 `config.json.pre-opencode-free-removal.bak`에 자동 보관합니다. 해당 이름이 이미 사용 중이면 고유한 이름의 사본을 만듭니다. 바이트가 동일한 독립 사본은 소유자만 접근할 수 있음을 검증한 경우에만 재사용하고, 그렇지 않으면 그 옆에 보호된 새 사본을 만듭니다. 기존 파일은 덮어쓰지 않습니다. 첫 로드가 겹치면 동일하게 보호된 사본이 여러 개 남을 수 있습니다. 경고에 복구 사본 경로가 표시됩니다. 다운그레이드 후 복원하려면 이 사본을 config.json 위에 복사하세요. 자동 복사에 실패하면 config.json을 즉시 복사하라는 경고가 표시됩니다. 기본 공급자였다면 표준 OpenAI OAuth 경로가 기본값이 됩니다. `opencode-go`, API 키를 사용하는 `opencode-zen` 또는 다른 공급자를 사용하세요. [OpenCode Zen 약관](https://opencode.ai/docs/zen/). 수동적 읽기(passive read)에서는 메모리 내 비활성화만 적용하고 사본이나 경고를 만들지 않습니다.
 
 정상 Claude Desktop 할당과 기본값은 유지됩니다. 소스 모델 허용 목록이 비게 되는 규칙은 비활성화되며, 주입 모델이 제거되면 네이티브 하위 에이전트 동기화도 비활성화됩니다. 이후 설정을 저장하면 제거된 참조는 다시 기록되지 않고 정상적인 동시 편집은 유지됩니다.
 
@@ -471,6 +473,9 @@ Sol/Terra/Luna를 폴백 목록에 넣어 둡니다.
 | Codex 로그인(Pool 또는 Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*`와 `*-pro` | 922,000 (max input 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 네이티브 GPT-5.6 항목은 고정된 업스트림 reasoning 단계를 그대로 따릅니다. 예를 들어 Luna에는
@@ -491,7 +496,7 @@ Amazon Bedrock 네이티브 API처럼 이 구현 중 어느 것과도 맞지 않
 Gateway**는 URL에 계정 + 게이트웨이 id를 채워야 합니다.
 
 Copilot은 혼합 wire 카탈로그를 제공합니다. 모델(`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)은 에이전트
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)은 에이전트
 트래픽에 대해 `/chat/completions`를 거부하므로 opencodex는 이 모델들을 내장 기본값으로
 Responses API를 통해 라우팅하고, 다른 Copilot 모델은 모두 chat completions를 유지합니다.
 우선순위는 하드 wire 핀 → 명시적 [`modelAdapters`](/ko/reference/configuration/providers/)

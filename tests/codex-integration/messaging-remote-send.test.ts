@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { MessageBudget } from "../../src/messaging/budget";
 import { sendRemoteMessage, remoteSessions } from "../../src/messaging/remote-send";
 import { LocalFixtureRpcError, LOCAL_OTHER, LOCAL_TARGET, NO_REPLY } from "../helpers/messaging-local";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { capability } from "../../src/messaging/remote-contract";
+import { remotePortCandidate } from "../../src/messaging/remote-ports";
 
 for (const stage of ["sender", "discovery", "revalidation"] as const) {
   for (const action of ["remove", "disable", "replace"] as const) {
@@ -96,4 +97,30 @@ test.skipIf(process.platform === "win32")("revoked peers and missing owners cann
       expect(receipt.status).toBe("not_sent"); expect(pair.b.calls.filter(call => call.method === "thread/queue/add")).toHaveLength(0);
     } finally { await owners.close(); }
   } finally { budget.dispose(); await pair.close(); }
+});
+
+test.skipIf(process.platform === "win32")("co-located owners have distinct ports even when released candidates are reused", async () => {
+  const listen = Bun.listen, candidate = remotePortCandidate();
+  // Model an ephemeral allocator that immediately reuses a released port.
+  function allocate<Data>(options: Bun.TCPSocketListenOptions<Data>): Bun.TCPSocketListener<Data>;
+  function allocate<Data>(options: Bun.UnixSocketOptions<Data>): Bun.UnixSocketListener<Data>;
+  function allocate<Data>(options: Bun.TCPSocketListenOptions<Data> | Bun.UnixSocketOptions<Data>) {
+    if ("port" in options) {
+      if (options.port === 0) {
+        try { return listen({ ...options, port: candidate }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error; }
+      }
+      return listen(options);
+    }
+    return listen(options);
+  }
+  const allocation = spyOn(Bun, "listen").mockImplementation(allocate);
+  let pair: ReturnType<typeof remoteMessagingPair> | undefined;
+  try {
+    pair = remoteMessagingPair();
+    expect(pair.aStore.requireEnabled().port).not.toBe(pair.bStore.requireEnabled().port);
+    allocation.mockRestore();
+    const owners = await pair.owners();
+    await owners.close();
+  } finally { allocation.mockRestore(); await pair?.close(); }
 });

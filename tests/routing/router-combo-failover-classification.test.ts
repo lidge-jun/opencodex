@@ -104,9 +104,73 @@ describe("combo failure cooldown scope", () => {
     expect(comboFailureCooldownScope(429, "monthly usage limit reached")).toBe("provider");
   });
 
+  test("one account's spent window cools only that target, so sibling accounts stay eligible", () => {
+    // An account-window exhaustion names one account, not the provider: a provider row can carry
+    // several pooled accounts, and a provider-wide hold would hide the healthy ones (#7426, #7625).
+    for (const message of [
+      "quota exhausted",
+      "weekly usage quota exceeded",
+      "weekly usage quota is exhausted",
+      "Your weekly usage quota has been exhausted.",
+      "Devin cloud error failed_precondition: Cognition chat failed (failed_precondition: quota exhausted) (cloud trace ID: 0123abcd)",
+    ]) expect(comboFailureCooldownScope(429, message)).toBe("target");
+    expect(comboFailureCooldownScope(429, "quota exhausted for this minute")).toBe("target");
+    expect(comboFailureCooldownScope(429, "usage limit reached", { code: "usage_limit_reached" })).toBe("target");
+  });
+
   test("an ordinary target failure still cools only that target", () => {
     expect(comboFailureCooldownScope(500, "internal server error")).toBe("target");
     expect(comboFailureCooldownScope(429, "rate limit reached for requests")).toBe("target");
+  });
+
+  test("transient per-minute rate limits and quotas cool only that target and preserve short fallback duration", () => {
+    // A per-minute quota or rate limit is transient and must not be promoted to provider-wide
+    // exhaustion (which uses the 10-minute MAX_COOLDOWN_MS and provider scope).
+    expect(comboFailureCooldownScope(429, "per-minute quota exceeded")).toBe("target");
+    expect(comboFailureCooldownScope(429, "Rate limit reached: per-minute quota exceeded")).toBe("target");
+    expect(comboFailureCooldownScope(429, "requests per minute quota exceeded")).toBe("target");
+
+    const now = 1_000_000;
+    const target = { provider: "a", model: "m1" };
+
+    // Per-minute quota gets standard 60s cooldown, not the 10-minute (600s) account exhaustion cap.
+    coolComboTarget("free", target, {
+      now,
+      status: 429,
+      message: "per-minute quota exceeded",
+    });
+    expect(isComboTargetInCooldown("free", target, now + 59_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, now + 61_000)).toBe(false);
+
+    // In contrast, weekly usage quota exhaustion gets the 10-minute cap.
+    coolComboTarget("free", target, {
+      now,
+      status: 429,
+      message: "Your weekly usage quota has been exhausted.",
+    });
+    expect(isComboTargetInCooldown("free", target, now + 599_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, now + 601_000)).toBe(false);
+  });
+
+  test("a 400 validation error quoting quota text does not trigger account failover or provider cooldown", () => {
+    const errorQuotingQuota = "Invalid parameter 'prompt': text cannot contain 'quota exhausted'";
+    expect(comboFailureDecision(400, errorQuotingQuota, { code: "invalid_request_error" })).toBe("stop");
+    expect(comboFailureCooldownScope(400, errorQuotingQuota, { code: "invalid_request_error" })).not.toBe("provider");
+
+    const errorQuotingExhaustion = "Validation error: argument quotes 'Your weekly usage quota has been exhausted'";
+    expect(comboFailureDecision(400, errorQuotingExhaustion)).toBe("stop");
+    expect(comboFailureCooldownScope(400, errorQuotingExhaustion)).not.toBe("provider");
+
+    // The same reflected wording on a 422, with or without the upstream's own invalid_request_error code.
+    const reflected422 = "Invalid parameter: value quotes 'weekly usage quota exceeded'";
+    expect(comboFailureDecision(422, reflected422, { code: "invalid_request_error" })).toBe("stop");
+    expect(comboFailureDecision(422, reflected422)).toBe("stop");
+  });
+
+  test("a structured exhaustion code hops even inside a 400 envelope", () => {
+    for (const code of ["usage_limit_exceeded", "usage_limit_reached", "1308", "insufficient_quota"]) {
+      expect(comboFailureDecision(400, "Bad request", { code })).toBe("hop");
+    }
   });
 });
 
@@ -115,6 +179,21 @@ describe("combo failure hop/stop verdicts", () => {
     for (const code of ["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"]) {
       expect(comboFailureDecision(400, "upstream rejected the model", { code })).toBe("hop");
     }
+  });
+
+  test("devin quota exhaustion arrives as a 429 and hops, while request-specific precondition stops", () => {
+    const exhausted = "Devin cloud error failed_precondition: Cognition chat failed (failed_precondition: quota exhausted) (cloud trace ID: 0123abcd)";
+    expect(comboFailureDecision(429, exhausted, { code: "failed_precondition", failedAdapter: "devin" })).toBe("hop");
+    expect(comboFailureCooldownScope(429, exhausted, { code: "failed_precondition" })).toBe("target");
+
+    // Request-specific precondition without quota evidence stays terminal and does not cool provider
+    expect(comboFailureDecision(400, "Devin cloud error failed_precondition: Unable to process request due to an MCP configuration issue", {
+      code: "failed_precondition",
+      failedAdapter: "devin",
+    })).toBe("stop");
+    expect(comboFailureCooldownScope(400, "Devin cloud error failed_precondition: Unable to process request due to an MCP configuration issue", {
+      code: "failed_precondition",
+    })).not.toBe("provider");
   });
 
   test("a Codex model the ChatGPT plan cannot use hops instead of ending the chain", () => {

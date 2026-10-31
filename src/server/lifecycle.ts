@@ -520,7 +520,7 @@ export function trackStreamLifetime(
 export async function drainAndShutdown(
   server: ReturnType<typeof Bun.serve> | undefined,
   timeoutMs: number,
-  beforeListenerStop?: () => void | Promise<void>,
+  beforeListenerStop?: () => undefined,
 ): Promise<boolean> {
   const s = server ?? _serverRef;
   let shutdownSucceeded = true;
@@ -606,11 +606,13 @@ export async function drainAndShutdown(
     setStorageCleanupPolicyJobLiveApply(null);
   } finally {
     try {
-      // Routing restoration belongs after admitted work drains but before another process
-      // can claim this listener's port. Failure still closes the listener and is reported.
-      try { await beforeListenerStop?.(); }
-      catch { shutdownSucceeded = false; console.warn("[opencodex] routing cleanup before listener shutdown failed"); }
-      await stopServerListener(s);
+      // Signal cleanup restores owned client routing while this listener still owns its port.
+      // Cleanup is synchronous only; a throw still releases listener and startup ownership.
+      try {
+        beforeListenerStop?.();
+      } finally {
+        await stopServerListener(s);
+      }
     } finally {
       await releaseServerStartupLifecycle(s);
       // shutdownDraining is a process-lifetime latch. A stopped server must

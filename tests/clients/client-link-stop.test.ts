@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
@@ -14,12 +14,26 @@ async function runStop(options: Record<string, unknown>) {
   });
   const timeout = setTimeout(() => child.kill(), 15_000);
   try {
+    if (options.osSignal) {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(join(home, "ready")) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+      if (!existsSync(join(home, "ready"))) throw new Error("fixture did not publish its signal-ready listener");
+      child.kill("SIGTERM");
+    }
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (options.expectedFailure || options.expectedRefusal) {
       expect(exit, stdout).toBe(options.expectedFailure ? 1 : 0);
       expect(stderr).toContain("Link Child Codex routing restore refused");
+    } else if (String(options.preserve).startsWith("restart-rollback")) {
+      expect(exit, stdout).toBe(0);
+      expect(stderr.trim()).toBe("[client] restart: the replacement did not start (not_ready); this runtime keeps serving");
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
-    return JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
+    const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
+    const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
+    for (const field of ["after", "profileAfter", "journalRetained", "catalogAfter", "grokAfter", "protectedUnchanged"]) {
+      expect(atExit[field], `no late restoration after listener release: ${field}`).toEqual(report[field]);
+    }
+    return report;
   } finally {
     clearTimeout(timeout);
     if (child.exitCode === null) { child.kill(); await child.exited; }
@@ -35,8 +49,18 @@ for (const signal of process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SI
     expect(report.profileAfter).toBeNull();
     expect(report.journalRetained).toBe(false);
     expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+    expect(report.grokAfter).toBe('theme = "fixture"\n');
   }, 20_000);
 }
+
+test.skipIf(process.platform === "win32")("a real POSIX SIGTERM restores before listener release", async () => {
+  const report = await runStop({ mode: "runtime", osSignal: true });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
 
 test("native hub signal exit preserves the connection-owned route", async () => {
   const report = await runStop({ mode: "runtime", transport: "hub" });
@@ -55,7 +79,7 @@ test("native Link signal refuses a connection swapped after runtime publication"
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
 
-test("owned Link routing restore is idempotent and retains the connection's remaining artifacts", async () => {
+test("owned Link full restore is idempotent and retains connection credentials", async () => {
   const report = await runStop({ mode: "helper", repeat: true });
   expect(report.result.first).toMatchObject({ success: true, restored: true });
   expect(report.result.repeated).toMatchObject({ success: true, restored: false });
@@ -63,9 +87,11 @@ test("owned Link routing restore is idempotent and retains the connection's rema
   expect(report.profileAfter).toBeNull();
   expect(report.journalRetained).toBe(false);
   expect(report.protectedUnchanged).toBe(true);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
 });
 
-for (const mutation of ["connection", "selection", "journal", "process-journal", "unverified"]) {
+for (const mutation of ["connection", "selection", "journal", "process-journal", "unverified", "rotation", "hub"]) {
   test(`Link restore refuses ${mutation} evidence without touching its files`, async () => {
     const report = await runStop({ mode: "helper", mutation });
     expect(report.result).toMatchObject({ success: false, restored: false });
@@ -73,17 +99,21 @@ for (const mutation of ["connection", "selection", "journal", "process-journal",
     expect(report.profileAfter).toBe(report.profileBefore);
     expect(report.journalRetained).toBe(true);
     expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
   });
 }
 
 for (const mutation of ["config", "profile"]) {
-  test(`Link restore preserves an edited ${mutation} and reports the incomplete pair`, async () => {
+  test(`Link full restore preserves user edits in ${mutation} while removing owned routing`, async () => {
     const report = await runStop({ mode: "helper", mutation });
-    expect(report.result.success).toBe(false);
-    if (mutation === "config") expect(report.after).toBe(report.before);
+    expect(report.result.success).toBe(true);
+    if (mutation === "config") expect(report.after).toContain('approval_policy = "on-request"');
     else expect(report.profileAfter).toBe(report.profileBefore);
-    expect(report.journalRetained).toBe(true);
+    expect(report.after).not.toContain("openai_base_url");
     expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+    expect(report.grokAfter).toBe('theme = "fixture"\n');
   });
 }
 
@@ -97,29 +127,68 @@ for (const mutation of ["oversized", "nonregular"]) {
   });
 }
 
-test("Link API teardown restores the owned journal before an accepted parent deferral", async () => {
+test("Link API teardown preserves the merged parent deferral contract", async () => {
   const report = await runStop({ mode: "api" });
-  expect(report.result).toMatchObject({ success: true, sharedTeardown: "performed" });
-  expect(report.result.message).toContain("ocx sync --restart-codex");
-  expect(report.after).toBe('model = "native"\n');
-  expect(report.profileAfter).toBeNull();
-  expect(report.journalRetained).toBe(false);
-  expect(report.protectedUnchanged).toBe(true);
-});
-
-test("parent Link teardown restores only its connection-owned journal", async () => {
-  const report = await runStop({ mode: "parent" });
-  expect(report.result).toEqual({ historyOnly: false, historyDeferred: false, other: false });
-  expect(report.after).toBe('model = "native"\n');
-  expect(report.journalRetained).toBe(false);
-  expect(report.protectedUnchanged).toBe(true);
-});
-
-test("parent Link teardown refuses the connection that replaced its stopped target", async () => {
-  const report = await runStop({ mode: "parent", mutation: "connection", expectedRefusal: true });
-  expect(report.result).toEqual({ historyOnly: false, historyDeferred: false, other: true });
+  expect(report.result).toMatchObject({ success: true, sharedTeardown: "deferred" });
   expect(report.after).toBe(report.before);
   expect(report.profileAfter).toBe(report.profileBefore);
   expect(report.journalRetained).toBe(true);
   expect(report.protectedUnchanged).toBe(true);
 });
+
+test("parent Link teardown retains the merged full restoration contract", async () => {
+  const report = await runStop({ mode: "parent" });
+  expect(report.result).toEqual({ historyOnly: false, historyDeferred: false, other: false });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.protectedUnchanged).toBe(true);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+});
+
+for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
+  test(`native Link signal preserves ${preserve} restoration ownership`, async () => {
+    const report = await runStop({ mode: "runtime", preserve });
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+  }, 20_000);
+}
+
+test("a pending restart admission cannot leave routing behind on signal shutdown", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "restart" });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+test.each(["restart-rollback", "restart-rollback-recycle"])("signal shutdown joins %s before restoring", async preserve => {
+  const report = await runStop({ mode: "runtime", preserve });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+test("a scheduled recycle cannot skip restoration or spawn after signal shutdown", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "recycle-pending" });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+for (const mutation of ["connection", "selection", "rotation"]) {
+  test(`served-connection guard rechecks ${mutation} at each write and freezes its snapshot`, async () => {
+    const report = await runStop({ mode: "guard", mutation });
+    expect(report.result).toEqual({ writes: ["before-change"], refused: true, boundary: "unproven" });
+    expect(report.after).toBe(report.before);
+    expect(report.journalRetained).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+  });
+}

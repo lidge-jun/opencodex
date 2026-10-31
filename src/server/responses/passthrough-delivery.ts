@@ -1,6 +1,8 @@
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
+import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
@@ -64,18 +66,21 @@ import {
 } from "../responses-snapshot-repair";
 import { rewriteResponsesIncompleteReasonJson } from "../../responses/incomplete-reason";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
-import { createImageGenCallRestoreRewrite, restoreImageGenCallsInJson } from "../responses-image-gen-repair";
+import { createImageGenCallRestoreRewrite, restoreImageGenCallsInJson, restoreImageGenCalls } from "../responses-image-gen-repair";
 import {
   createSelfNamedToolCallNamespaceScrubRewrite,
   scrubSelfNamedToolCallNamespaceInJson,
+  scrubSelfNamedToolCallNamespace,
 } from "../responses-self-named-namespace-scrub";
 import {
   createMuseToolNameRestoreRewrite,
   restoreMuseToolNamesInJson,
+  restoreMuseToolNames,
 } from "../../responses/muse-tool-name-alias";
 import {
   createRoutedNamespaceCallRestoreRewrite,
   restoreRoutedNamespaceCallsInJson,
+  restoreRoutedNamespaceCalls,
 } from "../../responses/namespace-tool-compat";
 import {
   hasResponsesItemIdRepair,
@@ -118,6 +123,7 @@ import {
   undeclaredToolCallNameInResponse,
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
+  normalizeDefaultNamespaceInItem,
 } from "../responses-undeclared-tool-guard";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 
@@ -466,8 +472,8 @@ export async function deliverPassthroughResponse(
   if (isUsageDebugEnabled() && originalContentType) logCtx.usageDebugContentType = originalContentType;
   if (responseEffects.plaintextV2AgentMessageToolNames.size > 0
     && upstreamResponse.ok && upstreamResponse.body && (parsed.stream || canonicalBufferedJson)
-    && !originalContentType?.toLowerCase().includes("text/event-stream")
-    && !originalContentType?.toLowerCase().includes("application/json")
+    && !hasResponseMediaType(upstreamResponse.headers, "text/event-stream")
+    && !hasResponseMediaType(upstreamResponse.headers, "application/json")
     && !isCodexWsUpstreamResponse(upstreamResponse)
     && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
     upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse, {
@@ -485,8 +491,8 @@ export async function deliverPassthroughResponse(
     }
     // ChatGPT may omit Content-Type on SSE responses. Plaintext V2 responses
     // reach this fallback only after their first Responses event is confirmed.
-    const passthroughCt = headers.get("content-type")?.toLowerCase();
-    const isEventStream = passthroughCt?.includes("text/event-stream")
+    const passthroughCt = headers.get("content-type");
+    const isEventStream = hasResponseMediaType(headers, "text/event-stream")
       || (responseEffects.plaintextV2AgentMessageToolNames.size === 0
         && upstreamResponse.ok
         && !!upstreamResponse.body
@@ -823,6 +829,23 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
+      const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
+      const normalizeRequiredToolItem = (item: unknown) => {
+        item = restoreImageGenCalls(item, imageGenCallAliases).value;
+        item = scrubSelfNamedToolCallNamespace(item, selfNamedNamespaceScrubAuthorization).value;
+        item = restoreMuseToolNames(item, responseEffects.routedMuseToolNameAliases).value;
+        item = restoreRoutedNamespaceCalls(item, responseEffects.routedNamespaceToolAliases).value;
+        item = restoreRoutedNamespaceCalls(item, authorizedBareNamespaceToolAliases).value;
+        return normalizeDefaultNamespaceInItem(item, declaredWireToolNames, declaredBareWireToolNames).value;
+      };
+      const requiredStreamGuard = options.comboAttempt && clientRequestedStream === true
+        && (options.inboundWire === undefined || options.inboundWire === "responses")
+        && route.provider.adapter === "openai-responses" && !isNonReplayableResponse(upstreamResponse)
+        ? createComboRequiredToolStreamGuard(parsed._rawBody, providerExecutedCallTypes,
+          requiredStreamEvidence, normalizeRequiredToolItem, nativeExchange.request)
+        : undefined;
+      // The factory creates independent raw/client state with one tool identity resolver.
+      const requiredStreamInspector = requiredStreamGuard;
       const blockRewrites = [
         payloadRewrites.length > 0
           ? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites))
@@ -894,9 +917,13 @@ export async function deliverPassthroughResponse(
           : undefined,
         grokUpstreamEchoEnabled
           ? createGrokUpstreamEnvelopeEchoBlockRewrite(
-            rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
+            rememberPassthroughResponse ? (response) => {
+              if (requiredStreamGuard) requiredStreamGuard.rememberCompleted(response, rememberPassthroughResponseChecked);
+              else rememberPassthroughResponseChecked(response);
+            } : undefined,
           )
           : undefined,
+        requiredStreamGuard?.blockRewrite,
         createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
@@ -1169,7 +1196,7 @@ export async function deliverPassthroughResponse(
             options.onNativePassthroughTerminal?.(status);
           }
           : undefined;
-        const inspector = createSseInspector({
+        const inspector = (requiredStreamInspector?.inspectorFactory ?? createSseInspector)({
           onTerminal: reportNativeTerminal,
           logCtx,
           onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
@@ -1236,6 +1263,7 @@ export async function deliverPassthroughResponse(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        ...(requiredStreamInspector ? { inspectorFactory: requiredStreamInspector.inspectorFactory } : {}),
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
@@ -1311,7 +1339,7 @@ export async function deliverPassthroughResponse(
         headers,
       }));
     }
-    if (headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    if (hasResponseMediaType(headers, "application/json")) {
       // Bounded whole-body read: a non-streaming upstream JSON body is fully materialized
       // here (and again by the request-log finalizer and the WebSocket bridge's reframing),
       // so an unbounded .text() would let a hostile or stuck upstream grow proxy memory

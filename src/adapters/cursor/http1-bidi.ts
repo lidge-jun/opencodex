@@ -220,6 +220,7 @@ export class CursorHttp1BidiConnection {
       "connect-protocol-version": "1",
       authorization: `Bearer ${this.options.token}`,
       "x-ghost-mode": "true",
+      "x-cursor-streaming": "true",
       "x-cursor-client-version": this.options.clientVersion,
       "x-cursor-client-type": "cli",
       "x-request-id": this.options.requestId,

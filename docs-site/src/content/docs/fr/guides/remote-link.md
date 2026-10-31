@@ -10,10 +10,10 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 - Home peut se connecter à Child avec une clé OpenSSH.
 - Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
 - OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
-- Les deux ordinateurs utilisent macOS ou Linux.
+- Les ordinateurs peuvent utiliser macOS, Linux ou Windows x64. Windows nécessite OpenSSH Server et Windows PowerShell, sans Git Bash ni curl.
 - Le tableau de bord qui ajoute un Child depuis Home est ouvert sur Home ou via une session Hub appairée. Transformer l’ordinateur actuel en Child exige une session de tableau de bord appairée par l’opérateur ; une session locale sans identifiant ne peut pas valider ce changement de routage.
 
-SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut être lancée des deux côtés : depuis Home, comme décrit ci-dessous, ou depuis Child, comme décrit dans la section « Connecter cet ordinateur comme Child ».
+SSH par mot de passe n'est pas pris en charge. Une liaison peut être lancée depuis Home ou Child. Windows utilise PowerShell via la même connexion OpenSSH vérifiée.
 
 ## Ajouter un Child depuis `#remote`
 
@@ -46,8 +46,6 @@ Sur l’ordinateur qui doit utiliser les fournisseurs de Home :
 4. Lisez l’avertissement et choisissez **Connect as Child**.
 
 La connexion redémarre OpenCodex sur cet ordinateur. Les tours Codex déjà en cours se terminent d’abord, et les nouvelles requêtes peuvent échouer pendant une minute au plus pendant le redémarrage. Le tableau de bord se recharge ensuite de lui-même et affiche la liaison Child. Codex continue d’utiliser `http://127.0.0.1:<port>/v1` sur cet ordinateur, sans jeton ni variable d’environnement à définir : l’OpenCodex local relaie chaque requête vers Home, qui y répond avec ses propres fournisseurs et comptes.
-
-Un arrêt normal du Child avec `ocx stop` restaure le routage Codex depuis le journal appartenant à cette connexion avant de fermer le listener. La connexion, la clé, le catalogue et les autres intégrations restent en place. Pour reprendre le routage vers Home, lancez `ocx start` ou `ocx service start`, puis `ocx sync --restart-codex` : le démarrage seul ne réapplique pas le routage. Le transfert normal de `ocx restart` conserve le routage. Un conflit de propriété ou de journal est signalé comme un échec et conserve les éléments de récupération ; un plantage ou un arrêt forcé ne peut pas exécuter cette restauration ordonnée.
 
 Si **Child** demande de jumeler d’abord cet ordinateur, ouvrez son tableau de bord HTTP à l’adresse IP de bouclage configurée, par exemple `http://127.0.0.1:<configured-port>`. Le formulaire de jumelage local apparaît uniquement lorsque le jumelage manque et que le tableau de bord et l’API utilisent la même origine de bouclage. Copiez la commande `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` du formulaire, exécutez-la dans un terminal sur cet ordinateur, puis collez le code à usage unique dans le formulaire. Utilisez exactement l’origine affichée ; une clé API de fournisseur ou un jeton d’administration n’est pas un code de jumelage. L’absence de jumelage et un port différent du port configuré sont deux causes distinctes.
 

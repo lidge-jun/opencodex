@@ -24,6 +24,7 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | `quota` | `--refresh`, `--json` | 讀取供應商配額報告。 |
 | `presets` | `--json` | 列出儀表板供應商預設。 |
 | `account-mode` | `pool`, `direct`, `--json` | 選擇池化或直接的 Codex 帳號路由。 |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | 從 CC-Switch SQLite（`cc-switch.db`）或舊版 JSON 檔案預覽、選擇性套用或還原無金鑰供應商項目。 |
 
 預設的 `add`、`remove` 與 `set-default` 修改本機設定。修改執行中的代理需加 `--live`，線上刪除還需 `--yes`。`--sync --json` 同樣會在儲存後嘗試同步；失敗時保留儲存結果，以非零狀態結束，並回傳 `needsSync: true`。`--live` 不能與 `--sync` 同用。pacing 與 snapshot/apply 操作請見[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
@@ -39,6 +40,27 @@ ocx models live --provider ark --json
 ```
 
 `--jsonl` 僅輸出已設定的供應商，每行一個 JSON 物件。每個物件的欄位與 `--json` 輸出中 `configured` 陣列的元素相同，不包含 `registryCount` 摘要。指令碼可以逐行處理這些物件。`--json` 與 `--jsonl` 不能同時使用。
+
+### 無金鑰匯入 CC-Switch 供應商
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 在另一個終端機啟動代理（或執行 ocx ensure），再新增金鑰：
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# 獨立的回滾路徑（先停止代理；僅移除未修改的無金鑰項目）：
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` 僅從一般本機 CC-Switch SQLite 資料庫或舊版 JSON 檔案投射明確白名單內的非機密中繼資料欄位（供應商 ID、應用類型、base URL、協定轉接器與預設模型）。為掃描輸入會暫時讀取來源與內嵌設定位元組，但金鑰／憑證欄位、自由文字顯示名稱與 TOML 註解會在位元組層級略過，絕不解碼為字串、寫入磁碟或記錄日誌，且暫存位元組緩衝區會在 `finally` 中清零。窄化 base URL 路徑規則（`http(s)://host[:port]` 配空路徑或 1–4 個小寫 `[a-z0-9._-]` API 路徑段，如 `/v1`、`/api/v1` 或 `/compatible-mode/v1`）與識別碼／模型語法檢查僅作為縱深防禦並拒絕不合規值（不回顯原值）。來源檔案透過 `O_NOFOLLOW | O_NONBLOCK` 描述元驗證單次開啟，SQLite 在記憶體中唯讀反序列化且不寫入暫存檔；具有多個硬連結（`nlink > 1`）的 SQLite 檔案會被拒絕以防透過別名路徑繞過附屬檔檢查，若同層 `-wal` 或 `-journal` 檔案非空則會拒絕匯入並提示先關閉 CC-Switch（或執行資料庫 checkpoint）再重試。請僅從受信任的本機 CC-Switch 來源檔案匯入，並在新增憑證前核對輸出的每個 ID、模型與 `baseUrl`：
+
+- **預覽（預設）：** 需要 `--source <FILE>`，不寫入任何內容，回報發現、可用、衝突與無效項目數量。
+- **套用（`--apply`）：** 需要 `--source <FILE>` 且代理已停止（`ocx stop`），在 Remote Link Child 上會被拒絕。重複指定 `--provider <id>` 可僅匯入所選項目，傳入 `--allow-private-network` 可允許迴路或私有網路 base URL。即使未事先預覽，`--apply` 也會在寫入無金鑰供應商項目與回滾日誌 `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` 之前輸出每個匯入供應商的 ID、預設模型與目標 URL（文字模式輸出至 `stdout`，`--json` 模式輸出至 `stderr`）；存在使用中回滾日誌時再次執行 `--apply` 會被拒絕。核對輸出項目後啟動代理（在另一終端機執行 `ocx start` 或執行 `ocx ensure`），再透過 `printf '%s\n' "$API_KEY" | ocx account add-key <provider>`（管線標準輸入）或 `ocx login <provider>` 新增憑證。
+- **還原（`--restore`）：** 獨立的回滾路徑（而非新增憑證的後續步驟），要求代理已停止（`ocx stop`），在 Remote Link Child 上會被拒絕，且不接受 `--source`、`--provider` 或 `--allow-private-network`。它會以唯讀位元組方式檢查 `auth.json`（無法讀取或格式損毀時安全保留），僅從使用中日誌移除仍維持匯入時無金鑰狀態、未被選為 `defaultProvider`，且未被路由、組合（combos）、回退策略（fallback policy）、OAuth 帳號或 API 金鑰參照的供應商。
 
 ## 認證
 

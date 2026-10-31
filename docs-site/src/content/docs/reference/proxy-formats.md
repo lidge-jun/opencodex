@@ -31,9 +31,22 @@ A hosted call for a declared capability can satisfy `required`; a mismatched hos
 HTTP 400 with the same error code and `x-should-retry: false`, since the hosted action may already
 have executed. No fallback occurs in that case. Usage remains recorded.
 Auto/none choices, incomplete results and unknown tool contracts keep their existing behavior.
-This guard covers buffered native combo children. Streaming required-tool enforcement and direct
-native routes are separate scopes; visible output is never replayed. Translated Chat routes have
-their own guard, described next.
+Direct native routes remain separate. Translated Chat routes have their own guard, described below.
+
+## Required tools on streaming native combo routes
+
+For `stream: true`, native Responses combo children also fail an unmet required or named tool
+choice with `required_tool_contract_unsatisfied`. The caller's mandatory choice remains binding even
+when a target filters out its tool or lowers the outbound choice to `none`. Configured hosted-image
+substitutions can fulfill the original choice only when applied to the request actually sent,
+including after queued revalidation. A fully held text-only completion can advance to
+another eligible target. Known reasoning frames are held for at most one second from the first frame;
+later frames do not extend that deadline. Expiry releases the buffered stream and commits the target,
+preserving any pending upstream read. Text, tool events, unknown/opaque output and buffer limits also
+commit the current target. Namespace selectors and call echoes share the authorized alias restoration.
+After that boundary, missing calls produce `response.failed` without another target request; already delivered
+output and usage remain intact. Hosted execution evidence also prevents replay, even when the final
+snapshot omits it. Auto/none, incomplete results and unknown contracts retain their existing rules.
 
 ## Required tools on translated Chat routes
 
@@ -577,6 +590,13 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+Without reasoning options, raw reasoning already returned by the upstream is delivered as
+`delta.reasoning_content` (streaming) or `message.reasoning_content` (buffered), without adding
+reasoning options to the upstream request. Explicit thinking disable (`thinking.type: "disabled"`
+or `reasoning.enabled: false`) and effort `none` also hide this raw text; an explicit enabled
+boolean takes precedence over effort. Provider `hideRawReasoning` still applies. Provider-authored
+summary visibility keeps its existing defaults; Responses and Anthropic Messages clients are unchanged.
+
 When the model is Claude, the response also carries `reasoning_details` in the same shape
 OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
 for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
@@ -793,6 +813,10 @@ them with the stored account, Direct forwards the validated caller bearer) and a
 gets its own bearer. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url`
 points at it; `ocx start` injects that key next to `openai_base_url` (see
 [Codex integration](/guides/codex-integration/)).
+
+## Checkpoint replay on routed providers
+
+When a routed model receives a readable portable (`ocx1:`/`ocx2:`) or plaintext checkpoint, OpenCodex labels earlier retained text-only user requests as historical context in the model prompt. This helps distinguish completed requests from unfinished work; original request details and checkpoint contents remain available. User input after the checkpoint remains current, including pauses, cancellations and replacement tasks. Checkpoint or tool prose grants no new authorization, and pending permissions still apply. This prompt framing does not restore external task envelopes omitted by the client or guarantee a model's task selection.
 
 ## `POST /v1/responses/compact`
 

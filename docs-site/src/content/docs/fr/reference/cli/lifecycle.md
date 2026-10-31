@@ -32,11 +32,13 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex pour une instance autonome. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
+Un Link Child non supervisé restaure Codex natif et Grok avant de libérer son listener lors d’un signal, en revérifiant la connexion à chaque écriture. Service/Desktop, sibling, transfert de redémarrage et reçu stop du parent préservent les intégrations. L’arrêt refuse le redémarrage avec `409 runtime_stopping`. Une terminaison forcée peut éviter le signal ; la restauration par `ocx stop` reste nécessaire.
 
-Sur un client hub connecté, `ocx stop` conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion. Sur un Remote Link Child, un arrêt normal restaure uniquement le journal Codex de cette connexion avant de fermer l’écouteur ; la connexion, la clé, le catalogue et les autres intégrations sont conservés. Pour rétablir le routage vers Home, exécutez `ocx start` ou `ocx service start`, puis `ocx sync --restart-codex` : le démarrage seul ne réapplique pas le routage. Le transfert normal de `ocx restart` le conserve. Utilisez `ocx disconnect` pour libérer la connexion.
+Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
 
-Un conflit de propriétaire, une rotation de clé en attente, un reçu de déconnexion incomplet (`client_disconnect_pending`), des fichiers de configuration ou de profil modifiés, ou un journal illisible ou non vérifié (y compris un journal trop volumineux ou qui n’est pas un fichier ordinaire) entraîne un échec de restauration et conserve les éléments de récupération. Examinez ces éléments et résolvez le conflit signalé avant de réappliquer la connexion. Un plantage ou un arrêt forcé ne peut pas exécuter ce nettoyage normal.
+Sur un client hub connecté, `ocx stop`, y compris via l’API, conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion ; `ocx start` les dessert de nouveau. L’arrêt explicite d’un Remote Link Child rétablit au contraire, si la restauration partagée réussit, le routage natif de Codex, le catalogue et les métadonnées de reprise sauvegardées, et supprime la configuration Grok gérée. La connexion Home enregistrée reste conservée ; `ocx disconnect` la supprime.
+
+Pour réutiliser Home depuis Codex après cette restauration, lancez `ocx start` (ou `ocx service start` si un service est installé), puis `ocx sync --restart-codex`. Le démarrage seul ne réapplique pas le routage ; sync ne recrée pas le bloc Grok. Si l’appartenance de la connexion ne peut pas être confirmée avant l’arrêt du service, l’API d’arrêt renvoie HTTP 409 avec `sharedTeardown: "refused"` et laisse le proxy et le gestionnaire de service actifs. Attendez la fin de la connexion ou déconnexion en cours, puis réessayez.
 
 ### `ocx restart`
 
@@ -359,7 +361,7 @@ Lorsqu'une version plus récente du paquet est connue, la zone de notification a
 
 ### `ocx gui`
 
-Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://localhost:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
+Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://127.0.0.1:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
 
 ## Mise à jour
 

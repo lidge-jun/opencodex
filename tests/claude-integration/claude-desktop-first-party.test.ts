@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import * as userIdentity from "../../src/codex/user-identity";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 import {
   applyDesktopFirstParty,
   inspectDesktopFirstParty,
@@ -23,8 +25,11 @@ import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
+import { setLocalCaWindowsAclRunnerForTests } from "../../src/claude/intercept/local-ca-windows";
+import { resolveCurrentWindowsPrincipal } from "../../src/lib/windows-user-principal";
 
 let root = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let library = "";
 let claudeDir = "";
 const previous: Record<string, string | undefined> = {};
@@ -53,14 +58,15 @@ async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
-// Attach the response body to every status failure so a hosted-runner flake classifies
-// itself (an environmental ca_unavailable, say, instead of a bare "Expected: 200 / Received: 500").
+// Attach the response body to status failures to preserve refusal codes and sanitized
+// secret-preparation stage/cause diagnostics alongside the expected/actual status.
 function expectStatus(result: { status: number; body: unknown }, status: number): void {
   expect(result.status, `body=${JSON.stringify(result.body)}`).toBe(status);
 }
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-desktop-1p-"));
+  lifecycleLock = isolateClientLifecycleLock(root);
   library = join(root, "desktop-library");
   claudeDir = join(root, "claude");
   for (const key of ENV_KEYS) previous[key] = process.env[key];
@@ -68,10 +74,24 @@ beforeEach(() => {
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
+  // The local-CA ACL inspection spawns PowerShell under the shared 30 s principal-lookup budget,
+  // which a loaded hosted Windows runner can exhaust (local_ca_path_unsafe). This file tests
+  // first-party apply; claude-intercept-local-ca.test.ts runs the native inspection. Report the
+  // private ACL for the current SID, which production resolves (and caches) before this runner.
+  if (process.platform === "win32") {
+    setLocalCaWindowsAclRunnerForTests((_path, timeoutMs) => {
+      const sid = resolveCurrentWindowsPrincipal(timeoutMs).replace(/^\*/, "");
+      return { success: true, exitCode: 0, timedOut: false, stdout: JSON.stringify({
+        owner: sid, protected: true, rules: [{ sid, type: 0, rights: 2032127 }],
+      }) };
+    });
+  }
 });
 
 afterEach(async () => {
-  await flushConfigDirHardeningAndReaps(root);
+  try { await flushConfigDirHardeningAndReaps(root); }
+  finally { setLocalCaWindowsAclRunnerForTests(null); }
+  lifecycleLock.restore();
   for (const key of ENV_KEYS) {
     if (previous[key] === undefined) delete process.env[key];
     else process.env[key] = previous[key];
@@ -235,6 +255,30 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
   // With the gateway default, only the owned first-party env on disk keeps it first-party.
   expect(resolveClaudeDesktopMode({ claudeCode: { ...savedBack.claudeCode, desktopMode: undefined } })).toBe("gateway");
   expect(resolveClaudeDesktopMode({ claudeCode: { ...savedBack.claudeCode, desktopMode: undefined } }, { ownedFirstPartySettings: true })).toBe("first-party");
+});
+
+test("management gateway and first-party apply acquire only fixture lifecycle locks", async () => {
+  // If fixture injection regresses, refuse before opening the real user's lock.
+  const productionRoot = spyOn(userIdentity, "resolveEffectiveUserRuntimeRoot").mockImplementation(() => {
+    throw new Error("management fixture reached the production lifecycle namespace");
+  });
+  try {
+    for (const mode of ["gateway", "first-party"] as const) {
+      lifecycleLock.acquisitions.length = 0;
+      const result = await dispatch("/api/claude-desktop/apply", {
+        method: "POST", body: JSON.stringify({ mode }),
+      }, JSON.parse(readFileSync(join(root, "config.json"), "utf8")), { fetchAllModels: async () => [] });
+      expect(lifecycleLock.acquisitions.length).toBeGreaterThan(0);
+      for (const { path } of lifecycleLock.acquisitions) {
+        const within = relative(root, path);
+        expect(within).not.toBe("");
+        expect(isAbsolute(within)).toBe(false);
+        expect(within === ".." || within.startsWith(`..${sep}`)).toBe(false);
+      }
+      expectStatus(result, 200);
+    }
+    expect(productionRoot).not.toHaveBeenCalled();
+  } finally { productionRoot.mockRestore(); }
 });
 
 test("native toggle: enable applies gateway by default and never writes first-party env", async () => {

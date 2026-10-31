@@ -383,24 +383,22 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
    * would be discovered and the assertion would pass for the wrong reason.
    */
   test("fails through the runtime-api error naming ocx start, emitting no config", () => {
-    const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
-    const deadPort = probe.port;
-    probe.stop(true);
-
     const home = tempDir();
     // Must pass config validation: a rejected config falls back to the DEFAULT config, whose
     // port 10100 may host the developer's own proxy — the test would then probe a live one.
     writeFileSync(
       join(home, "config.json"),
       JSON.stringify({
-        port: deadPort,
+        // The child preload injects ECONNREFUSED at this exact endpoint.
+        port: 42101,
         defaultProvider: "mock",
         providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1", allowPrivateNetwork: true } },
       }),
       "utf8",
     );
 
-    const result = spawnSync(process.execPath, [cliPath, "export", "--client", "opencode", "--json"], {
+    const preload = join(repoRoot, "tests", "fixtures", "refused-local-probe-preload.ts");
+    const result = spawnSync(process.execPath, ["--preload", preload, cliPath, "export", "--client", "opencode", "--json"], {
       cwd: repoRoot,
       env: { ...process.env, OPENCODEX_HOME: home },
       encoding: "utf8",
@@ -408,6 +406,7 @@ describe("ocx export with no live proxy (accept criterion 5)", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("[refused-probe] ECONNREFUSED");
     expect(result.stderr).toContain("ocx start");
     // Routed by the dispatcher, not swallowed by the unknown-command branch.
     expect(result.stderr).not.toContain("Unknown command");

@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
-const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "crypto", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -62,7 +62,8 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body));
       const role = url.slice(url.lastIndexOf("/") + 1);
       roleRows = roleRows.map(row => row.role === role ? { ...row, model: body.model ?? row.model, effort: body.effort === undefined ? row.effort : body.effort } : row);
-      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: mirrorStatus } });
+      // Like the server, a write without a batch starts one and the response names it.
+      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: mirrorStatus }, batch: body.batch ?? `server-${requests.length}` });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "a/small", "a/mid"] });
     if (url.endsWith("/api/injection-model")) return json({ efforts: ["low", "medium", "high"] });
@@ -146,7 +147,7 @@ test("apply all writes each remaining proposal once and skips unsized roles", as
   await click(button("Apply all"));
   expect(requests.slice(1)).toEqual([
     { method: "PUT", url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "a/small", effort: "low" } },
-    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid" } },
+    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid", batch: "server-2" } },
   ]);
   expect(container.textContent).toContain("Applied 2 of 2 proposals.");
   expect(button("Apply all").disabled).toBe(true);
@@ -206,7 +207,7 @@ test("Apply all merges both confirmed rows when every reload fails", async () =>
   await click(button("Auto-assign"));
   reloadFails = true;
   await click(button("Apply all"));
-  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low" }, { model: "a/mid" }]);
+  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low" }, { model: "a/mid", batch: "server-2" }]);
   expect(roleRow("explorer").querySelectorAll("td")[1]!.textContent).toBe("a/small · low");
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · high");
   await expectEffortOptions("explorer", ["Inherit effort", "low", "medium", "high"]);
@@ -255,3 +256,18 @@ test("Apply after a failed effort-only mirror on a model-inheriting role carries
   ]);
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · low");
 });
+
+// A dashboard opened over plain HTTP on the LAN is not a secure context: randomUUID is missing or throws.
+for (const availability of ["absent", "throws"] as const) {
+  test(`Apply all writes one batch and unlocks the panel when randomUUID is ${availability}`, async () => {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: availability === "absent" ? {}
+      : { randomUUID: () => { throw new Error("insecure context"); } } });
+    await mount();
+    await click(button("Auto-assign"));
+    await click(button("Apply all"));
+    const batches = requests.slice(1).map(r => (r.body as { batch?: string }).batch);
+    expect(batches).toEqual([undefined, "server-2"]);
+    expect(container.textContent).toContain("Applied 2 of 2 proposals.");
+    expect(button("Auto-assign").disabled).toBe(false);
+  });
+}

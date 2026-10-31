@@ -19,6 +19,7 @@
  */
 
 import { isAbsolute } from "node:path";
+import { POWERSHELL_ENCODED_MAX, windowsOcxArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -165,8 +166,8 @@ while :; do
 done
 exit ${REMOTE_COMMAND_NOT_FOUND}`;
 
-export function remoteOcxArgv(args: readonly string[]): string[] {
-  return ["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", ...args];
+export function remoteOcxArgv(args: readonly string[], platform: "posix" | "windows" = "posix"): string[] {
+  return platform === "windows" ? windowsOcxArgv(args) : ["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", ...args];
 }
 
 export interface ProbeArgvOptions {
@@ -178,7 +179,7 @@ export interface ProbeArgvOptions {
 /**
  * First contact with a host that has no confirmed key. accept-new writes the offered key to the
  * temporary file; the caller reads it with `ssh-keygen -lf` and shows the fingerprint before
- * anything is trusted. The remote command is `true` and its result is not trusted either.
+ * anything is trusted. The remote command is a fixed cross-shell echo; it conveys no authorization.
  */
 export function buildProbeArgv(options: ProbeArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
@@ -187,7 +188,7 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
     ...commonOptions(alias, options.tempKnownHostsFile, "accept-new"),
     "-o", "ClearAllForwardings=yes",
     "--", alias,
-    "true",
+    "echo ocx-link-probe",
   ];
 }
 
@@ -222,7 +223,14 @@ export function buildResolveArgv(alias: string): string[] {
 
 /** Emit only sh in command position; single-quote every argument for the remote shell. */
 export function quoteRemote(argv: readonly string[]): string {
-  if (argv[0] !== "sh") throw new LinkSshArgumentError("remote command must be sh");
+  if (argv[0] === "powershell.exe") {
+    if (argv.length !== 6 || argv.slice(1, 5).join(" ") !== "-NoLogo -NoProfile -NonInteractive -EncodedCommand"
+      || !/^[A-Za-z0-9+/]+={0,2}$/.test(argv[5] ?? "") || (argv[5]?.length ?? 0) > POWERSHELL_ENCODED_MAX) {
+      throw new LinkSshArgumentError("invalid encoded PowerShell command");
+    }
+    return argv.join(" ");
+  }
+  if (argv[0] !== "sh") throw new LinkSshArgumentError("remote command must be sh or encoded PowerShell");
   return argv.map((arg, index) => {
     if (arg.includes("\0")) throw new LinkSshArgumentError("remote argument contains NUL");
     // PowerShell treats a leading quoted word as an expression, not a command invocation.

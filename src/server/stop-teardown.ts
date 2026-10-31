@@ -3,8 +3,8 @@ import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { deferralMatchesReceipt } from "../config/pending-teardown";
 import { isDesktopSupervised } from "../lib/system-restart-contract";
 import type { ManagementPrincipal } from "./management-auth";
-import { restoreLinkClientRouting, type LinkRoutingRestoreResult } from "../client/stop-routing";
-import type { OcxClientConnectionConfig } from "../types";
+import type { RestoreConfigOptions } from "../codex/inject/restore";
+import { stopRestoreWriteGuard } from "../cli/stop-restore-guard";
 
 /**
  * Shared-teardown decision and execution for `POST /api/stop` (#3008).
@@ -16,6 +16,11 @@ import type { OcxClientConnectionConfig } from "../types";
  */
 
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
+
+// A verified receipt transfers shared restoration to the parent until this process exits.
+// Keep this separate from recycling and connected-client capability/ownership decisions.
+let sharedTeardownDeferredOnExit = false;
+export function isSharedTeardownDeferredOnExit(): boolean { return sharedTeardownDeferredOnExit; }
 
 /** Read-only promise covering API teardown and the CLI runtime's signal/manager exit cleanup. */
 export function stopCapabilities() {
@@ -29,17 +34,31 @@ export type StopTeardownIo = {
   isHandoverReceipt?: (nonce: string | null) => boolean;
   /** Keep Codex, Grok and env fences in place when this process exits. */
   keepClientConfigOnExit?: () => void;
-  restoreNativeCodex?: () => Promise<CodexNativeRestoreResult>;
+  restoreNativeCodex?: (options?: RestoreConfigOptions) => Promise<CodexNativeRestoreResult>;
   stripGrok?: () => GrokStripResult;
-  restoreLinkRouting?: (connection: OcxClientConnectionConfig) => LinkRoutingRestoreResult;
 };
 
 export type StopTeardownBody = {
   success: boolean;
   message: string;
   /** `not-owned`: shared routing belongs to a live sibling owner or a client connection. */
-  sharedTeardown: "deferred" | "performed" | "not-owned";
+  sharedTeardown: "deferred" | "performed" | "not-owned" | "refused";
 };
+
+function stopOwnershipRefusal(): StopTeardownBody {
+  return { success: false, message: "Stop refused: client connection ownership may be changing; remaining restoration and obligations are preserved. Retry once connect or disconnect finishes.", sharedTeardown: "refused" };
+}
+
+/** Read under C before manager mutation; every later write still revalidates independently. */
+export function preflightStopTeardownOwnership(): StopTeardownBody | null {
+  const guard = stopRestoreWriteGuard();
+  try { guard.run(() => {}); }
+  catch (error) {
+    if (guard.boundary() === "unproven") return stopOwnershipRefusal();
+    if (guard.boundary() !== "hub-owned") throw error;
+  }
+  return null;
+}
 
 /**
  * A deferral is honoured only when the caller proves it owns the obligation.
@@ -103,14 +122,9 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
       sharedTeardown: "not-owned",
     };
   }
-  if (connection.kind === "connected") {
-    // The loopback route must be removed while this listener still owns its port, even
-    // when a parent holds a deferred-teardown receipt. Never use standalone restoration.
-    const result = (io.restoreLinkRouting ?? restoreLinkClientRouting)(connection.value);
-    return { success: result.success, message: result.message, sharedTeardown: "performed" };
-  }
   const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
   if (deferralHonored(url, ownsReceipt)) {
+    sharedTeardownDeferredOnExit = true;
     // A handover outlives this process: the exit cleanup would otherwise restore native
     // Codex and put the pristine catalog back right after the stop kept them (#7423).
     // Exiting as a recycle leaves them for the replacement, as a dashboard restart does.
@@ -135,12 +149,24 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
       sharedTeardown: "deferred",
     };
   }
-  const restore = io.restoreNativeCodex
-    ? await io.restoreNativeCodex()
-    : await (await import("../codex/inject")).restoreNativeCodexAsync();
-  const grok = io.stripGrok
-    ? io.stripGrok()
-    : (await import("../grok/inject")).stripGrokConfig();
+  const guard = stopRestoreWriteGuard();
+  let restore: CodexNativeRestoreResult;
+  let grok: GrokStripResult;
+  try {
+    guard.run(() => {}); // Refuse pending ownership before entering an asynchronous writer.
+    const options = { withWriteGuard: guard.run };
+    restore = io.restoreNativeCodex
+      ? await io.restoreNativeCodex(options)
+      : await (await import("../codex/inject")).restoreNativeCodexAsync(options);
+    const strip = io.stripGrok ?? (await import("../grok/inject")).stripGrokConfig;
+    grok = guard.run(() => strip());
+  } catch (error) {
+    const boundary = guard.boundary();
+    if (boundary === "restore") throw error;
+    return boundary === "hub-owned"
+      ? { success: true, message: "Proxy stopping; a hub connection owns Codex routing, catalog and Grok config, so restoration stopped.", sharedTeardown: "not-owned" }
+      : stopOwnershipRefusal();
+  }
   // Success means BOTH halves came down. Deciding it from the native restore alone and
   // appending the Grok text let a caller read `success: true` while the fence still
   // pointed at a proxy that was exiting — the teardown reported done with half of it

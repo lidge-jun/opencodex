@@ -183,7 +183,7 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
         globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = new URL(input instanceof Request ? input.url : String(input));
           if (url.href === "https://auth.openai.com/oauth/token") {
-            refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+            refreshes.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
             entered.resolve();
             // Deliberately ignore init.signal: a late rotating grant must be saved even
             // though caller cancellation still prevents subsequent inference.

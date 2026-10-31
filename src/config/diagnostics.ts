@@ -8,6 +8,7 @@ import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
+import { WORKFLOW_BUDGET_SHAPE_HINT, workflowBudgetConfigError } from "./schema/workflow-budget";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
@@ -22,7 +23,7 @@ import { isMissingPathError } from "./atomic-write";
 import { getConfigDir, getConfigPath } from "./paths";
 import { getDefaultConfig } from "./proxy-env";
 import { salvageConfigCandidate } from "./salvage";
-import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
+import { projectRemovedOpenCodeFreeSnapshot } from "./removed-opencode-free-backup";
 import { sanitizeOpenCodeOverridesForLoad } from "./opencode-wire-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
@@ -145,6 +146,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
+  if (workflowBudgetConfigError(rawParsed)) warnings.push("workflowBudget ignored: " + WORKFLOW_BUDGET_SHAPE_HINT + "; the built-in ceilings remain");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
@@ -200,7 +202,7 @@ export function subagentDefaultSyncEffective(
 }
 
 export function mergeConfigDefaults(parsed: unknown): unknown {
-  if (!parsed || typeof parsed !== "object") return parsed;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
   const defaults = getDefaultConfig();
   const raw = parsed as Record<string, unknown>;
   // Same absence-is-meaningful pin as the repair merge above.
@@ -735,6 +737,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     // drop a refusal on the next whole-config save; the write boundary rejects it instead.
     ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
+    ?? workflowBudgetConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
@@ -781,9 +784,13 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
 }
 
 export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
+  return configDiagnosticsFromText(raw);
+}
+
+function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
-    sanitizeRemovedOpenCodeFreeForLoad(parsed);
+    projectRemovedOpenCodeFreeSnapshot(parsed, file);
     sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
@@ -835,10 +842,12 @@ export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   }
 }
 
-export function readConfigFileSnapshot(): ConfigFileSnapshot {
+export function readConfigFileSnapshot(options: { passive?: boolean } = {}): ConfigFileSnapshot {
   try {
-    const raw = readFileSync(getConfigPath(), "utf-8");
-    return { diagnostics: configDiagnosticsFromRaw(raw), raw };
+    const path = getConfigPath();
+    const bytes = readFileSync(path);
+    const raw = bytes.toString("utf-8");
+    return { diagnostics: configDiagnosticsFromText(raw, options.passive ? undefined : { path, bytes }), raw };
   } catch (error) {
     if (isMissingPathError(error)) {
       return {
@@ -851,8 +860,9 @@ export function readConfigFileSnapshot(): ConfigFileSnapshot {
   }
 }
 
-export function readConfigDiagnostics(): ConfigDiagnostics {
-  return readConfigFileSnapshot().diagnostics;
+/** Passive observations project retired providers without publishing recovery backups. */
+export function readConfigDiagnostics(options: { passive?: boolean } = {}): ConfigDiagnostics {
+  return readConfigFileSnapshot(options).diagnostics;
 }
 
 /** Read-only init preflight. Occupied unsafe entries are never treated as absence. */
@@ -890,12 +900,13 @@ export type ConfigAdmissionSnapshot =
   | Readonly<{ kind: "unreadable"; diagnostics: ConfigDiagnostics; contentSha256: null }>;
 
 export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
+  const path = getConfigPath();
   let bytes: Buffer;
   try {
     // ONE read. Hashing the file and then reading it again to parse would leave
     // a window for the two to disagree, which is the exact hazard this exists
     // to detect — the check would become a second chance to be wrong.
-    bytes = readFileSync(getConfigPath());
+    bytes = readFileSync(path);
   } catch (error) {
     return {
       kind: "unreadable",
@@ -908,7 +919,7 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
   return {
     kind: "read",
     // Decoded from the same buffer that was hashed, not re-read from disk.
-    diagnostics: configDiagnosticsFromRaw(bytes.toString("utf-8")),
+    diagnostics: configDiagnosticsFromText(bytes.toString("utf-8"), { path, bytes }),
     contentSha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }

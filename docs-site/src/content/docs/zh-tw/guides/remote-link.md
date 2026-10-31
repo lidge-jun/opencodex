@@ -10,10 +10,10 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 - Home 可以使用 OpenSSH 金鑰登入 Child。
 - 對於由 Child 發起的連結，Child 必須能使用 OpenSSH 金鑰登入 Home（不支援密碼登入）。
 - Child 已安裝 OpenCodex 2.66.0 或更新版本（由 Child 發起的連結也要求 Home 符合）。
-- 兩台電腦執行 macOS 或 Linux。
+- 兩台電腦可執行 macOS、Linux 或 Windows x64。Windows 需要 OpenSSH Server 和 Windows PowerShell，不需要 Git Bash 或 curl。
 - 從 Home 新增 Child 的儀表板需在 Home 上開啟，或使用已配對的 Hub 工作階段。將目前電腦轉換為 Child 需要由操作者配對的儀表板工作階段；未經憑證簽發的本機工作階段不能提交這項路由變更。
 
-密碼 SSH 和 Windows 不在目前流程中。連結可以從任一端發起：依下文從 Home 發起，或依「將這台電腦連線為 Child」一節從 Child 發起。
+不支援密碼 SSH。可從 Home 或 Child 發起連結。Windows 透過相同固定主機金鑰的 OpenSSH 連線執行 PowerShell。
 
 ## 從 `#remote` 新增 Child
 
@@ -46,8 +46,6 @@ Host devbox
 4. 閱讀提示後選擇 **Connect as Child**。
 
 連線會重新啟動這台電腦上的 OpenCodex。已在執行的 Codex 請求會先完成，重新啟動期間新的請求可能在最多一分鐘內失敗。之後儀表板會自動重新載入並顯示 Child 連結。Codex 會繼續使用這台電腦上的 `http://127.0.0.1:<port>/v1`，不需要設定權杖或環境變數：本機 OpenCodex 會把每個請求轉送給 Home，由 Home 以它自己的供應商與帳戶提供服務。
-
-在 Child 上透過 `ocx stop` 正常停止時，會在關閉接聽器之前，僅從該連線擁有的日誌還原 Codex 路由。連線資訊、金鑰、目錄與其他整合設定會保留。若要恢復 Home 路由，請先執行 `ocx start` 或 `ocx service start`，再執行 `ocx sync --restart-codex`；單獨啟動不會重新套用路由。`ocx restart` 的正常交接流程會保留路由。所有權或日誌衝突會回報失敗並保留復原依據；當機或強制終止無法執行正常停止時的還原。
 
 如果 **Child** 提示先配對這台電腦，請在這台電腦上開啟設定的 HTTP 回環 IP 位址儀表板，例如 `http://127.0.0.1:<configured-port>`。只有在缺少配對且儀表板與 API 使用相同的回環來源時，才會顯示本機配對表單。複製表單中的 `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` 命令，在這台電腦的終端機中執行，再將一次性代碼貼到表單中。必須使用表單顯示的確切來源；供應商 API 金鑰或管理員權杖不是配對代碼。缺少配對與設定的連接埠不符是不同的原因。
 

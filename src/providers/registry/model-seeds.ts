@@ -222,7 +222,8 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * 1,050,000 context, 922,000 max input, 128,000 max output, efforts low..max
  * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
-export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"];
+// GPT-6.1 Terra (2026-10-26): same API limits; its none..max ladder is set per model.
+export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -330,6 +331,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
   // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
   "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  // OpenRouter listing checked 2026-10-27: context_length 1,050,000.
+  "openai/gpt-6.1-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
 
 /**
@@ -767,7 +770,8 @@ export const KIMI_CODING_K31_MODELS = ["k3.1-pro", "k3.1-pro-highspeed"];
 export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
 export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K31_MODELS, ...KIMI_CODING_K28_MODELS];
 export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
-export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+// 2026-10-28: models.md recommends K3.1 Pro; K2.5 ended 2026-08-31. Other K2 ids retire in December.
+export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"];
 // 261025 Kimi K3.1 Pro on the Moonshot API (#7653): the platform model list names kimi-k3.1-pro
 // and kimi-k3.1-pro-highspeed (same model, 2-3x speed) on both the International and China
 // platforms. Every K3-series model has a 1,048,576-token window, and both ids share kimi-k3's
@@ -987,6 +991,8 @@ export const DIGITALOCEAN_CHAT_COMPLETION_MODELS = [
   "arcee-trinity-large-thinking",
   "openai-gpt-5.6-sol",
   "openai-gpt-5.6-terra",
+  // 261027 preemptive: GPT-6.1 Terra (mirrors the GPT-6 Sol seed; provider listing unverified).
+  "openai-gpt-6.1-terra",
   "openai-gpt-5.6-luna",
   // 260923 preemptive: GPT-6 Sol/Luna ahead of DigitalOcean's model list.
   "openai-gpt-6-sol",

@@ -4,6 +4,7 @@
  */
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { withConfigDirHardeningSettled } from "../../config/paths";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../../codex/catalog";
 import type { OcxClaudeDesktopProfile } from "../../types";
 import { aliasForRoute, claudeCodeNativeAlias } from "../alias";
@@ -137,9 +138,11 @@ export function createPickerModelSnapshot(
         const models = build(await load());
         const next = { models, builtAt: Date.now() };
         if (persistPath) {
-          mkdirSync(dirname(persistPath), { recursive: true, mode: 0o700 });
-          writeFileSync(persistPath, JSON.stringify(next), { encoding: "utf8", mode: 0o600 });
-          chmodSync(persistPath, 0o600);
+          await withConfigDirHardeningSettled(dirname(persistPath), () => {
+            mkdirSync(dirname(persistPath), { recursive: true, mode: 0o700 });
+            writeFileSync(persistPath, JSON.stringify(next), { encoding: "utf8", mode: 0o600 });
+            chmodSync(persistPath, 0o600);
+          });
         }
         snapshot = next;
       } catch { /* Keep the last good snapshot when discovery or persistence fails. */ }

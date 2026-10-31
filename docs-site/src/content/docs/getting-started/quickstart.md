@@ -1,9 +1,11 @@
 ---
 title: Quickstart
-description: Configure your first provider and route OpenAI Codex through opencodex in three commands.
+description: Install opencodex, add your first provider, and connect the coding tool you already use, whether that is Codex, Claude Code, Claude Desktop, Grok Build or another supported tool.
 ---
 
-This guide takes you from a fresh install to running Codex against a non-OpenAI model.
+This guide takes you from a fresh install to the first request from the coding tool you already
+use. Steps 1 and 2 are the same for every tool; step 3 has one short branch per tool. The
+[client support page](/reference/client-support/) lists every tool and how it connects.
 
 ## Standalone binary (no npm)
 
@@ -103,9 +105,17 @@ ocx status
 ocx gui       # open the dashboard on the live port
 ```
 
-## 3. Use Codex
+## 3. Connect your tool
 
-Codex now talks to opencodex transparently:
+Pick the branch for the tool you use. You can connect more than one; they share the same
+providers and models.
+
+### Codex
+
+If you accepted the Codex prompt in step 1, Codex now talks to opencodex transparently. If you
+declined it, or setup exited because a config already existed, turn on the Codex switch on the
+dashboard's **Connect** page before running Codex. [Codex Integration](/guides/codex-integration/)
+explains what it changes and how to restore.
 
 ```bash
 codex "Refactor this function for readability"
@@ -117,6 +127,53 @@ To target a specific routed model, use the `provider/model` form Codex's model p
 codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
+
+### Claude Code
+
+With the `claude` CLI installed:
+
+```bash
+ocx claude
+```
+
+`ocx claude` starts the proxy if it is not running and launches Claude Code with its environment
+pointed at opencodex. Extra arguments pass through. See [Claude Code](/guides/claude-code/) for
+tier defaults, other launchers and how to opt out.
+
+### Claude Desktop
+
+```bash
+ocx claude desktop
+```
+
+On a new install this sets up the gateway profile for the whole app. An install that already uses
+the first-party mode keeps it; run `ocx claude desktop apply --gateway` to switch explicitly. The
+first-party mode, which keeps Desktop on claude.ai and routes only its Code tab, is described under
+[Claude Desktop modes](/guides/claude-code/#claude-desktop-modes-gateway-default-and-first-party).
+
+Fully quit and reopen Claude Desktop after switching modes.
+
+### Grok Build
+
+On a local listener, `ocx start` registers the visible models in `~/.grok/config.toml` when
+`~/.grok` exists. Pick an `ocx-*` model in Grok Build. Remote setups and the managed block are
+covered in [Grok Build](/guides/grok-build/).
+
+After you add providers or models, run `ocx ensure` or restart the proxy so Grok Build sees them.
+
+### Other tools
+
+Tools with a managed integration (OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code and more) are
+connected from the dashboard's **Connect** page or with:
+
+```bash
+ocx integration client enable --client <id>
+```
+
+Each tool's config file and when the change takes effect are listed in
+[Integrations](/guides/integrations/). Any other tool that accepts a custom endpoint can use the
+OpenAI-compatible base URL `http://localhost:10100/v1` or the Anthropic base URL
+`http://localhost:10100`.
 
 ## Choose sub-agent models (optional)
 
@@ -153,6 +210,12 @@ OpenCodex could not safely decide whether another proxy owns the shared client s
 It stops before publishing a new runtime or changing those settings. Retry startup after
 local connectivity recovers; an installed background service retries through its service manager.
 A timeout does not permanently turn the new process into a secondary instance.
+
+`Proxy ownership is unverified; startup refused` means the local owner check was
+inconclusive. OpenCodex preserves the PID record, recovery journal and shared client
+settings. Retry after the owner responds or exits; a failed health probe alone does
+not authorize crash recovery. A dead recorded process with no listener still recovers
+automatically.
 
 IPv6 does not need to be enabled on loopback. Startup checks whether each loopback
 address can be bound locally and skips an unavailable family. Timeouts on an available

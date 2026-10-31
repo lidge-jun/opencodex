@@ -165,7 +165,7 @@ opt-in した上流がこのフィールドを拒否しても、opencodex はフ
 
 認証情報に固定アカウント ID やメールがある OAuth プロバイダーはログインを複数保持できます。
 Providers ページでアカウントを追加し、別アカウントをログアウトせずにアクティブアカウントだけを切り替えられます。
-アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN をキーに保存されます。
+アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN と、取得できる場合はサインインしたユーザーのメールアドレスを組み合わせて識別されます。同じ組織プロファイルを共有するユーザーも、それぞれ別の認証情報を保持できます。
 `chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
 
@@ -183,6 +183,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 インライン JSON と余分な位置引数は拒否されます。エクスポートファイルは非公開に保ち、インポート後は削除するか安全に保管してください。
 
 ### Kiro 認証情報の取り込み
+
+ダッシュボードでは **AWS IAM Identity Center** を選び、組織の AWS アクセスポータル URL と SSO リージョンを入力すると、CLI や SSH を使わずにアカウントを追加できます。ブラウザーでデバイスコードを承認し、複数の Kiro プロファイルがある場合は保存するものを選択します。以下の CLI 手順は **Kiro CLI** の選択肢に適用されます。
 
 Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
 
@@ -256,7 +258,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`。`moonshot` API の既定モデルは `kimi-k3.1-pro` です。公式 API の保存済み `kimi-k2.5` 選択はこのモデルへ移行します。 |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
@@ -293,7 +295,7 @@ Responses では OpenGateway がネイティブのカスタムツール呼び出
 
 正規の `opencode-zen` プロバイダーで API キー認証と公式ルート `https://opencode.ai/zen/v1` または `https://opencode.ai/inference/v1` を使用すると、Gemini は既定の `googleMode: ai-studio` で Google ネイティブ API を自動的に使用します。Zen のモデル ID は、`-tiered` 接尾辞のない Flash ID もそのまま保持します。Claude は `googleMode` に関係なく Anthropic Messages を使用します。保存済み設定の読み込み時、これらのネイティブモデルの適格な旧 Chat/Responses オーバーライドと、適格な Responses 専用 `image_generation` ホストツール設定のみを無視します。カスタムプロバイダー、キー認証以外のルート、その他の設定は変更しません。
 
-**`opencode-free` のサポートは削除されました。** OpenCode の上流無料枠の制限により、すべてのモデルが `403 permission_denied` を返すためです（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。既存設定の読み込み時は該当項目と依存するモデル参照をメモリ上で無効にし、プロセスごとに一度警告します。ファイルは変更しません。既定のプロバイダーだった場合、標準の OpenAI OAuth 経路を既定にします。`opencode-go`、API キー付きの `opencode-zen`、または別のプロバイダーを使用してください。[OpenCode Zen 規約](https://opencode.ai/docs/zen/)。
+**`opencode-free` のサポートは削除されました。** OpenCode の上流無料枠の制限により、すべてのモデルが `403 permission_denied` を返すためです（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。既存設定の読み込み時は該当項目と依存するモデル参照をメモリ上で無効にし、プロセスごとに一度警告します。読み込み時にファイルは変更しません。次回の設定保存時に、これらの項目と参照は config.json から削除されます。保存前に元のファイルが隣の `config.json.pre-opencode-free-removal.bak` に自動保存されます。その名前が使用中なら一意の名前のコピーを作成します。バイトが同一の独立したコピーは、所有者のみがアクセスできることを検証できる場合に限り再利用し、それ以外は隣に保護された新しいコピーを作成します。既存ファイルは上書きしません。初回の読み込みが重なると、同一の保護されたコピーが複数残る場合があります。警告には復元用コピーのパスが表示されます。ダウングレード後などに、そのコピーを config.json に上書きして復元できます。コピーに失敗した場合は、すぐに config.json をコピーするよう警告されます。既定のプロバイダーだった場合、標準の OpenAI OAuth 経路を既定にします。`opencode-go`、API キー付きの `opencode-zen`、または別のプロバイダーを使用してください。[OpenCode Zen 規約](https://opencode.ai/docs/zen/)。 パッシブ読み取りではメモリ内の無効化のみを行い、コピーの作成や警告は行いません。
 
 正常な Claude Desktop の割り当てと既定値は保持されます。ソースモデルの許可リストが空になるルールは無効になり、注入モデルが削除された場合はネイティブサブエージェント同期も無効になります。その後の設定保存では、削除済み参照を復元せず、正常な同時編集を保持します。
 
@@ -465,6 +467,9 @@ Sol/Terra/Luna をフォールバックリストに入れています。
 | Codex ログイン(Pool または Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API キー) | `openai-apikey/gpt-5.6-*` と `*-pro` | 922,000 (max input 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` | 1,000,000 |
 
 ネイティブ GPT-5.6 項目は固定の上流推論段階に従います。例えば Luna には
@@ -484,7 +489,7 @@ Amazon Bedrock ネイティブ API のような、これらの実装のいずれ
 Gateway** は URL にアカウント + ゲートウェイ ID を埋める必要があります。
 
 Copilot は混在 wire カタログを提供します。モデル（`gpt-5.3-codex`、`gpt-5.4`、
-`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）はエージェント
+`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、 `gpt-6.1-sol`、 `gpt-6.1-terra`、 `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）はエージェント
 通信の `/chat/completions` を拒否するため、opencodex はこれらのモデルを組み込みデフォルトで
 Responses API 経由にルーティングし、他の Copilot モデルはすべて chat completions のままです。
 優先順位は次のとおりです: ハード wire ピン → 明示的な

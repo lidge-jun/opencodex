@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readUpdateRuntimeTarget, withUpdateOwnershipLease } from "../../src/update/ownership-transaction";
@@ -27,7 +27,7 @@ async function run(scenario: string) {
       while (alive() && Date.now() < deadline) await Bun.sleep(20);
       expect(alive(), "owned recovery fixture must exit").toBe(false);
     }
-    return { exit, trace, log: out + err };
+    return { exit, trace, log: out + err, pendingReceipt: existsSync(home.path("pending-teardown-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.unreadable.json")) };
   } finally { home.remove(); }
 }
 
@@ -171,3 +171,46 @@ test.skipIf(process.platform === "win32").each(["direct-spawn-error", "direct-ti
   if (scenario === "direct-foreign") expect(result.trace.some(row => row.phase === "health" && row.pidBound)).toBe(true);
   expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
 }, 30_000);
+
+for (const scenario of ["home-unknown", "home-unknown-fail", "parent-package-only", "parent-package-only-result"]) test(`${scenario} replaces only the package and releases its lease`, async () => {
+  const result = await run(scenario);
+  expect(result.exit, result.log).toBe(scenario.endsWith("result") ? 75 : scenario.endsWith("fail") ? 1 : 0);
+  expect(result.trace.filter(row => !["replacement", "after"].includes(row.phase))).toEqual([]);
+  expect(result.trace.find(row => row.phase === "replacement")).toMatchObject({ contenderBlocked: true, delegated: false });
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+  if (!scenario.endsWith("fail")) {
+    expect(result.log).toContain("ownership could not be verified");
+    expect(result.log).toContain("Restart the proxy:");
+  }
+});
+
+test("a home that becomes unknown before stop blocks package replacement", async () => {
+  const result = await run("home-changed");
+  expect(result.exit, result.log).toBe(1);
+  expect(result.trace.map(row => row.phase)).toEqual(["after"]);
+});
+
+for (const scenario of ["home-unknown-live", "home-unknown-changed", "home-changed-after-stop", "home-unknown-pending"]) test(`${scenario} still refuses package replacement`, async () => {
+  const result = await run(scenario);
+  expect(result.exit, result.log).toBe(1);
+  expect(result.trace.map(row => row.phase)).toEqual(scenario === "home-changed-after-stop" ? ["stop", "after"] : ["after"]);
+  if (scenario === "home-unknown-pending") expect(result.pendingReceipt).toBe(true);
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+});
+
+for (const scenario of ["delegated-known-unknown", "delegated-unknown-known", "delegated-malformed", "delegated-unknown-unknown"]) test(`the actual Bun child enforces ${scenario}`, async () => {
+  const result = await run(scenario);
+  const stableUnknown = scenario === "delegated-unknown-unknown";
+  expect(result.exit, result.log).toBe(stableUnknown ? 75 : 1);
+  expect(result.trace.map(row => row.phase)).toEqual(stableUnknown ? ["replacement", "after"] : ["after"]);
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+  if (stableUnknown) expect(result.log).toContain("Restart the proxy:");
+});
+
+test("the actual Bun updater refuses changed post-replacement authority before shim, tray or service commands", async () => {
+  const result = await run("delegated-post-replacement");
+  expect(result.exit, result.log).toBe(1);
+  expect(result.trace.map(row => row.phase)).toEqual(["stop", "replacement", "after"]);
+  expect(result.log).toContain("ownership could not be verified");
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+});

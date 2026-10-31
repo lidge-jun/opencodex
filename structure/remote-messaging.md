@@ -153,6 +153,20 @@ Transient old-endpoint unreachability can allow takeover; lease generation is no
 session authority. Initiated routes remain conflicts.
 `src/messaging/remote-ports.ts` refuses public reverse binds, including sshd
 GatewayPorts configurations. Port selection alone does not prove readiness.
+Local candidates use exclusive socket reservations until the synchronous SSH handoff;
+their process-local claims remain held until the owned pair closes. The remote `_port`
+helper cannot transfer a socket to sshd, so its exclusive candidate is released on return.
+SSH bind receipts precede loopback inspection: owned forwards request DEBUG1 diagnostics,
+but inspect only fixed success/failure tokens and retain no diagnostic bytes. The local
+pre-bind listening announcement is not a receipt; local session entry and the exact remote
+forward success are. Only explicit unsuccessful forward binds reselect both candidates,
+at most three attempts within the original setup deadline, after joined pair cleanup.
+Repeated lost candidates are excluded. Authentication, inspection and cleanup failures
+are not retried. Helpers preserve intrinsic I/O and pre-cleanup exit failures through
+diagnostic settlement; pair classification after joined cleanup ignores sibling exits
+caused by shutdown, so an initiating bind failure survives a sibling readiness rejection.
+Independent failures, cancellation and incomplete cleanup remain terminal.
+Authenticated peer/native readiness remains required in the owner.
 Linux inspection requires the IPv4 listener table; only an absent IPv6 table is treated as
 empty. Permission, read and other inspection failures remain fail-closed.
 
@@ -225,6 +239,9 @@ Offline contracts live in `tests/codex-integration/messaging-remote-contract.tes
 `tests/codex-integration/messaging-remote-lifecycle.test.ts`.
 Helper settlement and persistent/transient capacity contracts live in
 `tests/codex-integration/messaging-remote-process.test.ts`.
+Exclusive reservations, SSH receipts and bounded lost-port recovery are exercised by
+`tests/codex-integration/messaging-remote-forward-failure.test.ts` and
+`tests/codex-integration/messaging-remote-port-reservation.test.ts` without a live SSH service.
 Opt-in `tests/codex-integration/messaging-remote-interop.test.ts` qualifies a
 disposable loopback sshd with generated keys, isolated homes and strict native
 fixtures. `tests/codex-integration/messaging-remote-native.test.ts` qualifies an

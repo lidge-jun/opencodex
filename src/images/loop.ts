@@ -24,7 +24,7 @@ import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
-import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
+import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -172,10 +172,12 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
   calls: ImageCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
+  hasIncompleteToolCall: boolean;
 } {
   const calls: ImageCall[] = [];
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
+  let hasIncompleteToolCall = false;
   let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const flushPending = (): void => {
     if (!pending) return;
@@ -198,7 +200,10 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
       pending.events.push(e);
     } else if (e.type === "tool_call_end" && pending) {
       pending.events.push(e);
-      if (toolNames.has(pending.name)) {
+      if (e.incomplete) {
+        hasIncompleteToolCall = true;
+        passthrough.push(...pending.events);
+      } else if (toolNames.has(pending.name)) {
         calls.push({ id: pending.id, name: pending.name, args: pending.argsBuf, providerMetadata: pending.providerMetadata });
       } else {
         passthrough.push(...pending.events);
@@ -211,7 +216,7 @@ function scanEventsForImageCall(events: AdapterEvent[], toolNames: Set<string>):
     }
   }
   flushPending();
-  return { calls, passthrough, hasRealToolCall };
+  return { calls, passthrough, hasRealToolCall, hasIncompleteToolCall };
 }
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -307,6 +312,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
 export interface ImageBridgeDeps {
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
   parsed: OcxParsedRequest;
+  /** Chat delivery only; never copied into parsed generation options. */
+  chatRawReasoningVisible?: boolean;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
@@ -974,8 +981,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Codex. forceFinal also finalizes.
           // A refused iteration also finalizes: fulfilling its media call would re-ask the model
           // with the refused context (#7148).
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal
-            && !split.passthrough.some(isTerminalRefusalIncomplete);
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !split.hasIncompleteToolCall && !forceFinal
+            && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
+              || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
             if (hiddenUsage || rotatedUsage) {
               for (let i = split.passthrough.length - 1; i >= 0; i--) {
@@ -1213,6 +1221,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),

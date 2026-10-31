@@ -25,7 +25,7 @@ describe("handled signal exit code", () => {
     const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
     expect(cli).toContain("process.exit(restored && shutdownSucceeded ? handledSignalExitCode(signal) : 1);");
     const client = readFileSync(repoPath("src/client/runtime.ts"), "utf8");
-    expect(client).toContain("process.exit(restored?.success === false ? 1 : handledSignalExitCode(signal));");
+    expect(client).toContain("process.exit(handledSignalExitCode(signal));");
     const launchd = readFileSync(repoPath("src/service/launchd.ts"), "utf8");
     expect(launchd).toContain("<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>");
   });

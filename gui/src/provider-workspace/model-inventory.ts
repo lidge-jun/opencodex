@@ -1,4 +1,5 @@
 import type { ModelRow } from "../pages/models-shared";
+import type { ProviderDiscoverySummary } from "../models-groups";
 import type { ProviderModelCounts, ProviderAvailableModels, ProviderSelectedModels, ProviderLiveModelCounts } from "./usage";
 import { parseSelectedModels } from "../model-visibility";
 
@@ -118,4 +119,39 @@ export function catalogRefreshPending(value: unknown): boolean {
   if (!status || typeof status !== "object" || Array.isArray(status)) return true;
   const disposition = status as Record<string, unknown>;
   return disposition.status !== "committed" || typeof disposition.changed !== "boolean" || typeof disposition.degraded !== "boolean";
+}
+
+function parseDiscoverySummary(value: unknown): ProviderDiscoverySummary | undefined {
+  if (value === undefined) return undefined;
+  const obj = record(value);
+  if (obj.status === "ok") return { status: "ok" };
+  if (obj.status !== "failed") throw new Error("Invalid provider discovery status");
+  if (obj.reason === "http") {
+    if (typeof obj.httpStatus !== "number" || !Number.isInteger(obj.httpStatus)) {
+      throw new Error("Invalid provider discovery HTTP status");
+    }
+    return { status: "failed", reason: "http", httpStatus: obj.httpStatus };
+  }
+  if (
+    obj.reason === "blocked"
+    || obj.reason === "invalid_response"
+    || obj.reason === "network"
+    || obj.reason === "provider"
+  ) {
+    return { status: "failed", reason: obj.reason };
+  }
+  throw new Error("Invalid provider discovery reason");
+}
+
+/** Parse `/api/providers` rows into a revision-bound provider -> discovery map. */
+export function parseProviderDiscoveryMap(value: unknown): Record<string, ProviderDiscoverySummary> {
+  if (!Array.isArray(value)) throw new Error("Invalid providers discovery response");
+  const out: Record<string, ProviderDiscoverySummary> = Object.create(null);
+  for (const raw of value) {
+    const row = record(raw);
+    const name = identity(row.name);
+    const discovery = parseDiscoverySummary(row.discovery);
+    if (discovery) out[name] = discovery;
+  }
+  return out;
 }

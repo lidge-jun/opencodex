@@ -3,6 +3,8 @@ title: Codex App 모델 선택기
 description: 공유 Codex 카탈로그를 통해 opencodex 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
 ---
 
+기본값은 `false`입니다. `config.json`에 `"omitDisabledNativeModels": true`를 설정하고 `ocx sync`를 실행하면 비활성화한 native 행을 catalog와 cache, Codex 형식의 HTTP 모델 목록에서 제외합니다. 제외 전 검증한 상속 템플릿을 보존하므로 routed 행의 메타데이터는 유지되며 직접 요청의 라우팅은 바뀌지 않습니다. 아래 hide 설명은 기본 설정에 해당합니다.
+
 opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI와 같은 Codex 설정과 모델 카탈로그를
 씁니다. app-server는 이 공유 상태를 읽지만, 일부 Codex Desktop 릴리스는 renderer에서 추가 remote
 allowlist를 적용해 routed row를 picker에서 제거할 수 있습니다. 명시적 `nativeAlias: true` combo가
@@ -104,11 +106,12 @@ GPT-5.6에만 사용합니다. 오래된 템플릿으로 근사하지 않고 모
 
 | 경로 | 선택기 id와 카탈로그 메타데이터 |
 | --- | --- |
-| Codex 로그인(계정 한정 선택기 행 비활성) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` 같은 bare native id를 표시하고 `codexAccountMode`에 따라 Pool 또는 Direct를 사용합니다. GPT-5.6 행의 카탈로그 창은 922,000토큰입니다. |
+| Codex 로그인(계정 한정 선택기 행 비활성) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` 같은 bare native id를 표시하고 `codexAccountMode`에 따라 Pool 또는 Direct를 사용합니다. GPT-5.6 행의 카탈로그 창은 922,000토큰입니다. `gpt-6.1-terra`: 기본 500,000 / 장문 872,000. |
 | Codex 로그인(계정 한정 선택기 행 활성, 유효한 selector 있음) | 유효한 selector와 지원되는 native model의 각 조합마다 `<selector>/<native-openai-model>` 행을 표시합니다. 각 행은 매핑된 계정만 사용하며 bare native 행은 선택기에서 숨깁니다. Native metadata와 context window는 보존됩니다. |
 | Codex 로그인(명시적 Daybreak forward 행) | canonical `openai` provider에 정확한 `customModels` 항목이 있을 때만 `openai/gpt-daybreak-blue-latest`를 표시합니다. Daybreak wire id를 유지하고 고정된 Sol capability snapshot(컨텍스트 922,000; 자동 압축점 922,000)을 사용합니다. |
-| OpenAI(API key) | 정확히 열 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 세 개의 `*-pro` 가상 id, 두 Daybreak 별칭 (모두 컨텍스트 922,000; 최대 입력 922,000) |
+| OpenAI(API key) | 네임스페이스 모델에는 `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, `*-pro` 가상 id, Daybreak 별칭이 포함됩니다(컨텍스트 1,050,000; 최대 입력 922,000). `openai-apikey/gpt-6.1-terra`는 컨텍스트 1,050,000, 최대 출력 128,000입니다. |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922,000) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` (1,050,000) |
 | Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 Grok 4.5/4.6/4.7의 일반·Fast 항목(500,000)이 들어갑니다. 4.6과 4.7은 `xhigh`도 노출하며, 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
 | xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그에는 `xai/grok-4.6`과 `xai/grok-4.7`이 포함되며 기본값은 `xai/grok-4.5`입니다. 세 모델 모두 컨텍스트 창은 500,000입니다. Grok 4.6과 4.7은 `low` / `medium` / `high` / `xhigh`(업스트림 기본값: `high`)를 제공하고, Grok 4.5는 `high`까지만 제공합니다. |
 

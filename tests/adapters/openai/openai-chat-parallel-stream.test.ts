@@ -462,6 +462,121 @@ data: [DONE]
 });
 
 
+describe("negotiated block-stop tool completion", () => {
+  const completionHeader = { "x-opencodex-tool-completion": "block-stop-v1" };
+  const marker = (index: number, id: string) => ({ index, id, x_opencodex_completed: "block-stop-v1" });
+  const call = (index: number, id: string, args = '{"cmd":"pwd"}') => ({ index, id, function: { name: "shell", arguments: args } });
+  const tail = { choices: [{ delta: { content: "Later text" } }] };
+  const prepare = (adapter: ReturnType<typeof createOpenAIChatAdapter>) => adapter.buildRequest({ modelId: "fixture", stream: true, options: {},
+    context: { messages: [{ role: "user", content: "fixture", timestamp: 0 }], tools: [] } }, { completedToolBlocks: true });
+
+  async function events(frames: unknown[], optIn = true, acknowledged = true) {
+    const adapter = createOpenAIChatAdapter({ ...provider, ...(optIn ? { headers: completionHeader } : {}) });
+    prepare(adapter);
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(sse(frames), { headers: acknowledged ? completionHeader : {} }), undefined, undefined, { completedToolBlocks: true })) out.push(event);
+    return out;
+  }
+  test("a completed structured call reaches the client before later text, exactly once", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    expect(out.findIndex(e => e.type === "tool_call_end")).toBeLessThan(out.findIndex(e => e.type === "text_delta"));
+    expect(assembled(out)).toEqual([{ id: "call_a", name: "shell", args: '{"cmd":"pwd"}' }]);
+  });
+  test("both configuration opt-in and relay acknowledgment are required", async () => {
+    for (const [optIn, ack] of [[false, true], [true, false]]) {
+      const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")], optIn, ack);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("out-of-order completion waits for the original pending-call prefix", async () => {
+    const out = await events([chunkOf([call(0, "call_a"), call(1, "call_b")]), chunkOf([marker(1, "call_b")]), tail, chunkOf([marker(0, "call_a")]), chunkOf([], "tool_calls")]);
+    expect(assembled(out).map(c => c.id)).toEqual(["call_a", "call_b"]);
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+  });
+  test("later fragments for a completed call terminate rather than executing it again", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), chunkOf([{ index: 0, function: { arguments: " " } }]), chunkOf([], "tool_calls")]);
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.at(-1)?.type).toBe("error");
+  });
+  test("an invalid completion sequence still reports the usage already captured", async () => {
+    const out = await events([
+      chunkOf([call(0, "call_a")]),
+      chunkOf([marker(0, "call_a")]),
+      { choices: [], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } },
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]);
+    const error = out.at(-1);
+    expect(error?.type).toBe("error");
+    expect(error?.message).toContain("invalid negotiated tool completion sequence");
+    expect(error?.usage).toEqual({ inputTokens: 11, outputTokens: 7 });
+  });
+  test("root input calls stay buffered for existing freeform reconciliation", async () => {
+    const out = await events([chunkOf([call(0, "call_a", '{"input":"pwd"}')]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+  });
+  test("consumer cancellation after a completed call releases reservations without success", async () => {
+    const budget = createTestTranslatorBudget();
+    const adapter = createOpenAIChatAdapter({ ...provider, headers: completionHeader });
+    prepare(adapter);
+    const response = new Response(sse([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]), { headers: completionHeader });
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(response, budget, undefined, { completedToolBlocks: true })) {
+      out.push(event);
+      if (event.type === "tool_call_end") break;
+    }
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.some(e => e.type === "done" || e.type === "error")).toBe(false);
+    expect(response.body?.locked).toBe(false);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    expect(budget.snapshot().activeCalls).toBe(0);
+  });
+  test("trusted request construction cannot authorize another response parser", async () => {
+    const adapter = createOpenAIChatAdapter({ ...provider, headers: completionHeader });
+    prepare(adapter);
+    const body = sse([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    for (const streamContext of [undefined, { completedToolBlocks: false }]) {
+      const out: AdapterEvent[] = [];
+      for await (const event of adapter.parseStream(new Response(body, { headers: completionHeader }), undefined, undefined, streamContext)) out.push(event);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("a marker cannot claim another index or call ID", async () => {
+    for (const bad of [marker(1, "call_a"), marker(0, "call_b"), { ...marker(0, "call_a"), x_opencodex_completed: "future-v2" }]) {
+      const out = await events([chunkOf([call(0, "call_a")]), chunkOf([bad]), chunkOf([], "tool_calls")]);
+      expect(assembled(out)).toHaveLength(0);
+      expect(out.at(-1)?.type).toBe("error");
+    }
+  });
+  test("held serialized text and reasoning retain their place ahead of tools", async () => {
+    const held = { choices: [{ delta: { content: '<tool_call name="shell">' } }] };
+    const reasoning = { choices: [{ delta: { reasoning_content: "fixture reasoning" } }] };
+    const out = await events([held, reasoning, chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+    const start = out.findIndex(e => e.type === "tool_call_start");
+    expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(start);
+    expect(out.findIndex(e => e.type === "reasoning_raw_delta")).toBeLessThan(start);
+  });
+  test("24 reverse markers preserve pending order with no duplicate terminal calls", async () => {
+    const calls = Array.from({ length: 24 }, (_, i) => call(i, `call_${i}`));
+    const stops = Array.from({ length: 24 }, (_, i) => chunkOf([marker(23-i, `call_${23-i}`)]));
+    const out = await events([chunkOf(calls), ...stops, tail, chunkOf([], "tool_calls")]);
+    expect(assembled(out).map(c => c.id)).toEqual(calls.map(c => c.id));
+    expect(out.findLastIndex(e => e.type === "tool_call_end")).toBeLessThan(out.findIndex(e => e.type === "text_delta"));
+  });
+  test("invalid or non-object arguments retain the existing terminal path", async () => {
+    for (const args of ['{"cmd":', '[]', 'null', '"pwd"']) {
+      const out = await events([chunkOf([call(0, "call_a", args)]), chunkOf([marker(0, "call_a")]), tail, chunkOf([], "tool_calls")]);
+      expect(out.findIndex(e => e.type === "text_delta")).toBeLessThan(out.findIndex(e => e.type === "tool_call_start"));
+    }
+  });
+  test("a later upstream error preserves the closed call but never reports success", async () => {
+    const out = await events([chunkOf([call(0, "call_a")]), chunkOf([marker(0, "call_a")]), { error: { message: "fixture stream failed", type: "server_error" } }]);
+    expect(assembled(out)).toHaveLength(1);
+    expect(out.at(-1)?.type).toBe("error");
+    expect(out.some(e => e.type === "done")).toBe(false);
+  });
+});
+
 test("fragmented large SSE lines bound UTF-8 counting work without changing tool arguments", async () => {
   const args = JSON.stringify({ code: "x".repeat(256 * 1024) });
   const wire = new TextEncoder().encode(sse([

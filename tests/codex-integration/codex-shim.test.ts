@@ -200,17 +200,18 @@ describe("Codex autostart shim", () => {
   });
 
   test("PowerShell shim is written with a UTF-8 BOM (Windows PowerShell 5.1 decodes BOM-less ps1 as ANSI)", async () => {
-    const source = readFileSync(repoPath("src", "codex", "shim.ts"), "utf8");
+    const source = readFileSync(repoPath("src", "codex", "shim-wrapper-write.ts"), "utf8");
 
     expect(source).toContain("`\\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`");
   });
 
   test("Windows target discovery includes the extensionless Git-Bash launcher and writeShim emits a forward-slash sh shim for it", () => {
     const source = readFileSync(repoPath("src", "codex", "shim.ts"), "utf8");
+    const writeSource = readFileSync(repoPath("src", "codex", "shim-wrapper-write.ts"), "utf8");
 
     expect(source).toContain('const gitBashLauncher = join(dir, "codex");');
     expect(source).toContain("for (const path of [cmd, ps1, gitBashLauncher])");
-    expect(source).toContain("buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()))");
+    expect(writeSource).toContain("buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()))");
   });
 
   test("Unix shim accepts an injected token-file path (Git-Bash shims need forward slashes everywhere)", () => {
@@ -1184,7 +1185,7 @@ printf '%s\\n' child-codex
           });
           if (callerToken === undefined) delete env.OPENCODEX_API_AUTH_TOKEN;
           const result = shell === "cmd"
-            ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", "driver.cmd"], { cwd: dir, env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true })
+            ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", ".\\driver.cmd"], { cwd: dir, env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true })
             : spawnSync(`${shell}.exe`, ["-NoProfile", "-NonInteractive", "-File", driverPath], { env, encoding: "utf8", timeout: SHELL_SPAWN_TIMEOUT_MS, windowsHide: true });
           expect(result.status, result.stderr).toBe(0);
           expect(result.stdout.trim().split(/\r?\n/)).toEqual([
