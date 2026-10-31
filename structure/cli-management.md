@@ -2,6 +2,8 @@
 
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
+`src/cli/account-affinity-reset.ts` implements `ocx account reset-affinity <anthropic|anthropic2> [--json]` through the declared `PUT /api/oauth/accounts/affinity-reset` management route. It sends once, requires a matching provider and explicit durable confirmation, and reports unconfirmed or failed responses as nonzero exits. This provider-wide cleanup remains available without a configured pool or account roster; it never selects or resumes an account. See the [affinity persistence contract](providers/anthropic-account-pool.md#anthropic-account-pause).
+
 ## CLI readiness diagnostics
 
 `src/cli/status.ts` retains connection transport in the status JSON. Link clients identify Remote Link Home in the banner and connection line. They read supported Hub state through the identity-checked local Child without a CLI credential, retain owner-bound cache fallback on transport errors, and report standalone Home role absence without obsolete Hub cache. Hub clients retain their existing remote provider and login report.

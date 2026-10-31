@@ -129,7 +129,7 @@ Répertoriez et changez de compte de fournisseur et de pools de clés API via le
 la surface est :
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -143,6 +143,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -160,7 +161,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 Les sous-commandes nécessitent que le proxy soit en cours d'exécution et résolvent automatiquement son port d'exécution enregistré, sauf `import-orca` : l'aperçu est purement local, et `import-orca --apply` exige que le proxy soit arrêté.
 Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur ou un identifiant inconnu, un
-proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
+proxy inaccessible ou un échec API renvoient normalement le code 1. Pour `reset-affinity`, HTTP 404 renvoie 4 et HTTP 409 renvoie 5 ; les autres échecs API et les résultats non confirmés renvoient 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
 les commodités sont synthétisées côté client, comme dans le tableau de bord : `main` désigne la connexion
 Codex App du groupe de comptes `openai`, les comptes OAuth sans adresse e-mail apparaissent sous la forme `Account N`,

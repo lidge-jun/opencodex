@@ -118,7 +118,7 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -132,6 +132,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -148,7 +149,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 Подкоманды требуют запущенного прокси и сами определяют записанный runtime-port, кроме `import-orca`: предпросмотр работает только локально, а `import-orca --apply` требует остановленного прокси. Успешные
 операции завершаются с кодом 0. Некорректное использование, неизвестный провайдер, account/key id,
-недостижимый прокси или ошибка API приводят к коду 1. Поля credential'ов выводятся ровно в том
+недостижимый прокси или ошибка API обычно приводят к коду 1. Для `reset-affinity` HTTP 404 означает код выхода 4, HTTP 409 — код 5; остальные ошибки API и неподтверждённые результаты дают код 1. Поля credential'ов выводятся ровно в том
 виде, как их возвращает management API (включая его masking); сырые API-key'и и OAuth-token'ы
 никогда не возвращаются. Display convenience синтезируется на стороне клиента, как и в дашборде:
 `main` — это alias CLI для логина Codex App внутри пула `openai`, OAuth-аккаунты без email

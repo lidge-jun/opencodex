@@ -536,6 +536,14 @@ export default function ProviderAuthPanel({
                 </div>
               </div>
             )}
+            {authHandlers.pendingAffinityResets?.[item.name] && (
+              <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+                <span>{t("prov.affinityResetPending")}</span>
+                {authHandlers.onRetryAffinityReset && <button type="button" className="btn btn-ghost btn-sm"
+                  disabled={Boolean(switchingAccountId || pausingAccountId)}
+                  onClick={() => void authHandlers.onRetryAffinityReset?.(item.name)}>{t("common.retry")}</button>}
+              </div>
+            )}
             {accountLoadState === "loading" && accounts.length === 0 && (
               <div className="pwi-auth-state" role="status">
                 <span className="pwi-spin-inline" aria-hidden="true" />

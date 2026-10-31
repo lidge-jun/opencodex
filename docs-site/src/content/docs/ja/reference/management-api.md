@@ -247,15 +247,18 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET /api/oauth/status` | 1 つのプロバイダーの OAuth フローをポーリングする | 400 不明なプロバイダー |
 | `POST /api/oauth/logout` |選択したプロバイダー資格情報を削除します | 400 不明なプロバイダー。 `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | マスクされたアカウントを一覧表示するか、アカウントを 1 つ削除する Kiro の行には自動選択の `autoSelectable` と、除外時には閉じた集合の `skipReason` が含まれます。アクティブな単一アカウントは送信を続けられ、クォータ取得は任意です。 | 400 無効なプロバイダー/ID。 404 アカウントがありません。 `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` |アクティブな OAuth アカウントを選択します | 400 無効なプロバイダー/アカウント。 `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` |アクティブな OAuth アカウントを選択します | 400 無効なプロバイダー/アカウント。 `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; アカウント選択は保存済み。すでに有効でも同じリクエストを再送信) |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth プール ポリシーの読み取りまたは更新 | 400 非 Anthropic プロバイダーまたは無効なポリシー |
 | `POST /api/oauth/accounts/clear-cooldown` | 1 つの OAuth アカウントのランタイム クールダウンをクリアする | 400 無効なプロバイダー/アカウント |
 | `PUT /api/oauth/accounts/alias` | OAuth アカウント エイリアスを設定またはクリアする | 400 無効なプロバイダー/アカウント/エイリアス |
-| `PUT /api/oauth/accounts/pause` | Anthropic または汎用 OAuth アカウントを一時停止・再開。Body `{ provider, accountId, paused }`。アクティブなアカウントを停止すると、利用可能な別のアカウントがあれば切り替えます。 | 400 未対応のプロバイダーまたは無効な body；404 アカウントなし；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Anthropic または汎用 OAuth アカウントを一時停止・再開。Body `{ provider, accountId, paused }`。アクティブなアカウントを停止すると、利用可能な別のアカウントがあれば切り替えます。 | 400 未対応のプロバイダーまたは無効な body；404 アカウントなし；`oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 一時停止状態は保存済み。同じアカウントと停止状態を維持し、`retryAffinityReset: true` を追加して再送信。サーバー再起動後もリセットを確認) |
 | `GET, POST, DELETE /api/providers/keys` |マスクされたプロバイダー キーを一覧表示し、1 つを追加/アクティブ化するか、1 つを削除します。 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/active` |プロバイダーのアクティブなキーを選択します | 400 無効な入力。 404 プロバイダー/キーがありません |
 | `PUT /api/providers/keys/alias` |プロバイダー キー エイリアスを設定またはクリアする | 400 無効な入力。 404 プロバイダー/キーがありません |
 | `GET, POST, PATCH, DELETE /api/keys` |データ プレーン アドミッション キーの一覧表示、作成、編集、または削除 | 400 無効な本文/ID。 404 キーがありません |
+| `PUT /api/oauth/accounts/affinity-reset` | アカウントを必要とせず provider 全体の会話接続リセットの保存を確認します。Body `{ provider }`。成功時 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+
+ダッシュボードは、対象アカウントが消えてもリセットの保存が確認されるまで警告を保持します。一覧の読み込み失敗や、アクティブアカウントの一時停止・再認証時も通知と再試行を保持します。一覧で不在を確認した後の再試行は、`{ provider }` で `PUT /api/oauth/accounts/affinity-reset` を呼び、`affinityResetConfirmed: true` を受け取った場合のみ警告を消します。この操作は最初の失敗後に作られた接続を含む全接続を消しますが、アカウントの選択・再開は行わず、一覧が空でも実行できます。未確認のリセットがある状態での削除は `retryAffinityReset=true` を送り、保存失敗時は 503 `affinity_reset_not_persisted`、`deletionCommitted: true`、`retryable: true` を返します。アカウントは削除済みなので、削除ではなくリセット専用 API を再試行してください。通常の削除は残るアカウントの接続を保持します。対象は登録済み Anthropic OAuth インスタンスに限り、既存の管理認証とオリジン検査を維持します。
 
 資格情報リストの応答は意図的にマスクされます。 OAuth アクセス トークンと完全なプロバイダー API キーはダッシュボード クライアントに返されません。
 

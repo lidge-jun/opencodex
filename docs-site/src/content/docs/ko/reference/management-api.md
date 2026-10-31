@@ -255,16 +255,19 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET /api/oauth/status` | 하나의 provider OAuth 흐름을 조회합니다 | 400 알 수 없는 provider |
 | `POST /api/oauth/logout` | 선택된 provider 자격 증명을 제거합니다 | 400 알 수 없는 provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 마스킹된 계정을 나열하거나 계정 하나를 제거합니다 Kiro 행에는 자동 선택 가능 여부인 `autoSelectable`과 제외 시 닫힌 집합의 `skipReason`이 포함됩니다. 활성 단일 계정은 여전히 요청을 보낼 수 있고 quota 조회는 선택 사항입니다. | 400 잘못된 provider/id; 404 계정 없음; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | 활성 OAuth 계정을 선택합니다 | 400 잘못된 provider/account; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | 활성 OAuth 계정을 선택합니다 | 400 잘못된 provider/account; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; 계정 선택은 저장됨; 이미 활성 상태여도 동일 요청을 재전송) |
 | `GET, PUT, PATCH /api/pool/settings` | 모든 pool 종류(codex, anthropic, generic)의 policy를 읽거나 업데이트합니다. 세 종류 모두 같은 키로 응답하고, 해당 종류가 실제로 적용하는 필드는 `supported`에 나옵니다 | 400 알 수 없는 provider, 해당 종류가 지원하지 않는 필드, 잘못된 값 |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic과 일반 OAuth provider의 기존 pool policy입니다. `/api/pool/settings`로 대체되었고 기존 클라이언트를 위해 유지합니다 | 400 codex 또는 API 키 provider, 잘못된 policy |
 | `POST /api/oauth/accounts/clear-cooldown` | OAuth 계정 하나의 런타임 cooldown을 지웁니다 | 400 잘못된 provider/account |
 | `PUT /api/oauth/accounts/alias` | OAuth 계정 alias를 설정하거나 지웁니다 | 400 잘못된 provider/account/alias |
-| `PUT /api/oauth/accounts/pause` | Anthropic 또는 일반 OAuth 계정을 정지·재개합니다. Body `{ provider, accountId, paused }`. 활성 계정을 정지하면 사용 가능한 다른 계정이 있을 때 전환합니다. | 400 지원하지 않는 provider 또는 잘못된 body; 404 계정 없음; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Anthropic 또는 일반 OAuth 계정을 정지·재개합니다. Body `{ provider, accountId, paused }`. 활성 계정을 정지하면 사용 가능한 다른 계정이 있을 때 전환합니다. | 400 지원하지 않는 provider 또는 잘못된 body; 404 계정 없음; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; 일시정지 상태는 저장됨; 계정과 정지 상태를 유지하고 `retryAffinityReset: true`를 추가해 재시도하면 서버 재시작 후에도 초기화를 확인) |
 | `GET, POST, DELETE /api/providers/keys` | 마스킹된 provider key를 나열, 추가/활성화, 또는 제거합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/active` | provider의 활성 key를 선택합니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `PUT /api/providers/keys/alias` | provider-key alias를 설정하거나 지웁니다 | 400 잘못된 입력; 404 provider/key 없음 |
 | `GET, POST, PATCH, DELETE /api/keys` | 데이터 평면 admission key를 나열, 생성, 수정, 또는 삭제합니다 | 400 잘못된 본문/id; 404 key 없음 |
+| `PUT /api/oauth/accounts/affinity-reset` | 계정 없이 provider 전체의 대화 연결 초기화 저장을 확인합니다. Body `{ provider }`; 성공 시 `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+
+대시보드는 저장된 계정이 사라져도 초기화 저장이 확인되기 전에는 경고를 보존합니다. 목록 로드 실패나 활성 계정의 일시정지·재인증 상태에서도 안내와 재시도를 유지합니다. 로드된 목록에서 계정 부재가 확인되면 재시도는 `{ provider }`로 `PUT /api/oauth/accounts/affinity-reset`을 호출하고, `affinityResetConfirmed: true`를 받아야 경고를 지웁니다. 이 작업은 최초 실패 이후 생성된 연결까지 모두 지우지만 계정을 선택·재개하지 않으며 빈 목록에서도 가능합니다. 초기화가 남은 상태의 계정 삭제는 `retryAffinityReset=true`를 보내고, 게시 실패 시 503 `affinity_reset_not_persisted`, `deletionCommitted: true`, `retryable: true`를 반환합니다. 계정은 이미 삭제됐으므로 삭제 대신 초기화 전용 API를 재시도하세요. 일반 삭제는 남은 계정의 연결을 보존합니다. 초기화 전용 정리는 등록된 Anthropic OAuth 인스턴스만 지원하며 기존 관리 인증·출처 검사를 유지합니다.
 
 자격 증명 목록 응답은 의도적으로 마스킹됩니다. OAuth access token과 완전한 provider API key는 대시보드 클라이언트에 반환되지 않습니다.
 

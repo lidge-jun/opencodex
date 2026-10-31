@@ -86,7 +86,7 @@ ocx login anthropic
 透過執行中的代理列出並切換供應商帳號與 API-key 池。隨附的說明介面如下：
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex 帳號池、OAuth 帳號與 API 金鑰（識別碼依 API 回傳遮罩顯示）。
 history openai <pool-account-id> [--limit <1-200>]  單一 Codex 帳號池帳號的近期路由決策。
@@ -101,6 +101,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。
@@ -114,7 +115,7 @@ main <doctor|list|register|add|reauth|switch|recover>  管理帳號池稱為 'ma
 Codex 池選擇套用於清除既有親和性後的下一個請求；進行中的請求保留其擷取的帳號。
 ```
 
-除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗則離開 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
+除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗通常以 1 結束。但 `reset-affinity` 遇到 HTTP 404 時結束碼為 4，遇到 HTTP 409 時為 5；其他 API 失敗或未確認的結果則為 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
 
 `--json` 帳號列使用此通用結構（不可用時省略可選欄位）：
 

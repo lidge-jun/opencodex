@@ -349,6 +349,8 @@ type RoutingFacadeSymbol =
   | "promoteAnthropicActiveAccount"
   | "commitAnthropicSelectionRouting"
   | "resetAnthropicRoutingForManualSelection"
+  | "flushAnthropicManualSelectionReset"
+  | "resetAnthropicSessionAffinityConfirmed"
   | "getAnthropicPoolAccessToken"
   | "getAnthropicPoolAccessSnapshot"
   | "canRefreshAnthropicPoolAccount";
@@ -372,6 +374,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
   // The startup baseline comes from the authoritative store, never a second persisted pin.
   let manualPreference: OAuthAccountSelection | null | undefined;
   let manualSelectionGeneration = 0;
+  let manualResetPending = false;
   /** Automatic pointer moves preserve affinity; manual selection revokes older bindings. */
   function captureAnthropicManualSelectionGeneration(): number { return manualSelectionGeneration; }
 
@@ -530,6 +533,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     sessionAffinity.resetMemory();
     manualPreference = undefined;
     manualSelectionGeneration++;
+    manualResetPending = false;
     quorumCache = null;
   }
 
@@ -1314,18 +1318,37 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     return true;
   }
 
+  function requestAnthropicSessionAffinityReset(): void {
+    sessionAffinity.clear();
+    manualSelectionGeneration++;
+    manualResetPending = true;
+  }
+
   /**
    * Manual selection resets session affinity and seeds the RR ring so the next
    * unbound new session honors the operator-chosen account (Codex parity).
    */
   function resetAnthropicRoutingForManualSelection(accountId: string): void {
-    sessionAffinity.clear();
-    manualSelectionGeneration++;
+    requestAnthropicSessionAffinityReset();
     manualPreference = captureOAuthAccountSelection(PROVIDER);
     seedPoolRotationAccount(poolKey, accountId);
     // A manual account selection is an operator statement about the roster; do not answer the
     // next activation question from a count read before it.
     quorumCache = null;
+  }
+
+  async function flushAnthropicManualSelectionReset(): Promise<boolean> {
+    if (!manualResetPending) return true;
+    const generation = manualSelectionGeneration;
+    const persisted = await sessionAffinity.flushConfirmed();
+    if (persisted && generation === manualSelectionGeneration) manualResetPending = false;
+    return persisted && generation === manualSelectionGeneration;
+  }
+
+  /** Complete a reset without selecting, resuming or requiring an account. */
+  async function resetAnthropicSessionAffinityConfirmed(): Promise<boolean> {
+    requestAnthropicSessionAffinityReset();
+    return flushAnthropicManualSelectionReset();
   }
 
   /**
@@ -1439,7 +1462,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
     clearAnthropicSessionAffinityForAccount, rotateAnthropicAccountOn429, rotateAnthropicAccountOnRefusal,
     recordAnthropicAccount429, recordAnthropicAccountRefusal, promoteAnthropicActiveAccount,
-    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, getAnthropicPoolAccessToken,
+    commitAnthropicSelectionRouting, resetAnthropicRoutingForManualSelection, flushAnthropicManualSelectionReset, resetAnthropicSessionAffinityConfirmed, getAnthropicPoolAccessToken,
     getAnthropicPoolAccessSnapshot, canRefreshAnthropicPoolAccount,
   });
 }
@@ -1667,6 +1690,14 @@ export function commitAnthropicSelectionRouting(
 
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   return anthropicRoutingFor("anthropic").resetAnthropicRoutingForManualSelection(accountId);
+}
+
+export function flushAnthropicManualSelectionReset(): Promise<boolean> {
+  return anthropicRoutingFor("anthropic").flushAnthropicManualSelectionReset();
+}
+
+export function resetAnthropicSessionAffinityConfirmed(): Promise<boolean> {
+  return anthropicRoutingFor("anthropic").resetAnthropicSessionAffinityConfirmed();
 }
 
 export function getAnthropicPoolAccessToken(accountId: string): Promise<string> {

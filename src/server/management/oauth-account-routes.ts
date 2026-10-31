@@ -572,6 +572,19 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }),
     });
   }
+  if (url.pathname === "/api/oauth/accounts/affinity-reset" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (!isPublicOAuthProvider(provider) || !isAnthropicOAuthInstance(provider)) {
+      return jsonResponse({ error: "session-affinity reset is only supported for Anthropic OAuth instances" }, 400);
+    }
+    const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
+    if (!await anthropicRoutingFor(provider).resetAnthropicSessionAffinityConfirmed()) {
+      return jsonResponse({ code: "affinity_reset_not_persisted", provider, retryable: true }, 503);
+    }
+    return jsonResponse({ ok: true, provider, affinityResetConfirmed: true });
+  }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
@@ -595,15 +608,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // side carries resetCodexRoutingForManualSelection for.
     const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
     seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
-    if (isAnthropicOAuthInstance(provider)) {
-      const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-      anthropicRoutingFor(provider).resetAnthropicRoutingForManualSelection(body.accountId);
-    }
+    const anthropicRouting = isAnthropicOAuthInstance(provider)
+      ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
+    anthropicRouting?.resetAnthropicRoutingForManualSelection(body.accountId);
+    const affinityReset = anthropicRouting?.flushAnthropicManualSelectionReset();
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ error: "Account selection was saved, but its session-affinity reset was not persisted. Retry the selection.",
+        code: "affinity_reset_not_persisted", provider, activeAccountId: body.accountId,
+        selectionCommitted: true, retryable: true }, 503);
+    }
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
@@ -617,6 +635,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       return jsonResponse({ error: "missing accountId" }, 400);
     }
     if (typeof body.paused !== "boolean") return jsonResponse({ error: "paused must be a boolean" }, 400);
+    if (body.retryAffinityReset !== undefined && typeof body.retryAffinityReset !== "boolean") {
+      return jsonResponse({ error: "retryAffinityReset must be a boolean" }, 400);
+    }
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
@@ -629,11 +650,16 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const result = await setAccountPaused(provider, body.accountId, body.paused);
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
 
+    const anthropicRouting = isAnthropicOAuthInstance(provider)
+      ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
+    let affinityReset: Promise<boolean> | undefined;
+    // Explicit retries rebuild reset intent after a server restart lost the in-memory marker.
+    if (anthropicRouting && (result.activeAccountChanged || body.retryAffinityReset === true)) {
+      anthropicRouting.resetAnthropicRoutingForManualSelection(result.activeAccountId);
+      affinityReset = anthropicRouting.flushAnthropicManualSelectionReset();
+    }
     if (result.activeAccountChanged) {
-      if (isAnthropicOAuthInstance(provider)) {
-        const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-        anthropicRoutingFor(provider).resetAnthropicRoutingForManualSelection(result.activeAccountId);
-      } else {
+      if (!anthropicRouting) {
         const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
         seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
       }
@@ -644,6 +670,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
 
+    // An unchanged retry must finish a reset left pending by the first request.
+    affinityReset ??= anthropicRouting?.flushAnthropicManualSelectionReset();
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ error: "Account pause was saved, but its session-affinity reset was not persisted. Retry with the same pause state and retryAffinityReset: true.",
+        code: "affinity_reset_not_persisted", provider, accountId: body.accountId, paused: body.paused,
+        activeAccountId: result.activeAccountId, activeAccountChanged: result.activeAccountChanged,
+        pauseCommitted: true, retryable: true }, 503);
+    }
     return jsonResponse({
       ok: true,
       provider,
@@ -1034,13 +1068,24 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const id = url.searchParams.get("id") ?? "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
+    const retryReset = url.searchParams.get("retryAffinityReset");
+    if (retryReset !== null && retryReset !== "true" && retryReset !== "false") {
+      return jsonResponse({ error: "retryAffinityReset must be true or false" }, 400);
+    }
+    if (retryReset === "true" && !isAnthropicOAuthInstance(provider)) {
+      return jsonResponse({ error: "session-affinity reset is only supported for Anthropic OAuth instances" }, 400);
+    }
     const { removeAccount, getAccountSet } = await import("../../oauth/store");
     if (!(await removeAccount(provider, id))) return jsonResponse({ error: "account not found" }, 404);
     reconcileLiveStateStores();
+    let affinityReset: Promise<boolean> | undefined;
     if (isAnthropicOAuthInstance(provider)) {
       const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
-      anthropicRoutingFor(provider).clearAnthropicAccountCooldown(id);
-      anthropicRoutingFor(provider).clearAnthropicSessionAffinityForAccount(id);
+      const routing = anthropicRoutingFor(provider);
+      routing.clearAnthropicAccountCooldown(id);
+      routing.clearAnthropicSessionAffinityForAccount(id);
+      affinityReset = retryReset === "true" ? routing.resetAnthropicSessionAffinityConfirmed()
+        : routing.flushAnthropicManualSelectionReset();
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");
@@ -1052,7 +1097,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // leave the JWT and catalog in memory, because only the logout route cleared
     // them.
     if (isDevinCloudDirectProvider(provider)) await clearDevinCloudDirectCaches();
-    return jsonResponse({ ok: true });
+    if (affinityReset && !await affinityReset) {
+      return jsonResponse({ code: "affinity_reset_not_persisted", provider, accountId: id,
+        deletionCommitted: true, retryable: true }, 503);
+    }
+    return jsonResponse({ ok: true, ...(retryReset === "true" ? { affinityResetConfirmed: true } : {}) });
   }
 
   // Multi-key pool for API-key providers (same GUI dropdown as OAuth multiauth): list masked
