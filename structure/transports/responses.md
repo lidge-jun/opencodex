@@ -536,8 +536,8 @@ not `openai-chat` is decided without a copy. An eligible child is dispatched thr
 already opened (its opening stays hand-rolled: the ordinal comes from the parent context while the
 active attempt and requested effort land on the child context, which `beginInferenceAttempt`
 does not express). The child gets the combo's per-target send budget, the client's abort signal
-and the turn lease. Ordinary Combo policy maps onto `reasoning_effort` through `concreteComboRequestBody`; the first JEV choice overrides it, including explicit null.
-Initial shaping removes conflicting controls and caller `service_tier` before provider pins/caps and wire normalization; labels retain applied transitions ([JEV Decision Routing](../providers/jev-decision.md)).
+and the turn lease. Ordinary Combo policy maps onto `reasoning_effort` through `concreteComboRequestBody`; in the default `decide` mode the first JEV choice overrides it, including explicit null; with `jevEffortMode: "client"` ordinary Combo policy stays in force ([JEV owner](../providers/jev-decision.md)).
+In `decide` mode initial shaping removes conflicting controls and caller `service_tier` before provider pins/caps and wire normalization; labels retain applied transitions ([JEV Decision Routing](../providers/jev-decision.md)).
 Later targets use ordinary policy from the original body. Its attempt path is native (`[chat, chat]`) and its answer is marked `chat`.
 
 Send accounting: the combo's hop reservation already booked the target's first send, so the native

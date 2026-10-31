@@ -1035,6 +1035,10 @@ export async function executeComboResponses(
       modelId: targetRoute.modelId,
     });
     const initialJevDecision = firstComboTarget ? jevDecision : undefined;
+    // `client` keeps the decision's target but not its tier: the caller and the target ladder
+    // own the wire effort, so a provider whose effort swaps the upstream model id is never
+    // re-tiered mid-session and its prompt cache survives the turn.
+    const jevEffortApplies = initialJevDecision !== undefined && combo.jevEffortMode !== "client";
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -1043,14 +1047,16 @@ export async function executeComboResponses(
     const childBody = concreteComboRequestBody(
       childInput,
       pick.target,
-      initialJevDecision ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
-      initialJevDecision?.effort === null ? [] : targetReasoningEfforts,
+      jevEffortApplies ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
+      jevEffortApplies && initialJevDecision.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
-      initialJevDecision ? (initialJevDecision.effort === null ? "fallback" : "force") : combo.defaultEffortMode,
+      jevEffortApplies
+        ? (initialJevDecision.effort === null ? "fallback" : "force")
+        : combo.defaultEffortMode,
     );
     if (initialJevDecision) {
-      delete childBody.service_tier;
-      if (initialJevDecision.effort !== null) {
+      if (jevEffortApplies) delete childBody.service_tier;
+      if (jevEffortApplies && initialJevDecision.effort !== null) {
         const childReasoning = childBody.reasoning;
         const preservedReasoning = childReasoning && typeof childReasoning === "object" && !Array.isArray(childReasoning)
           ? childReasoning as Record<string, unknown>
@@ -1215,7 +1221,7 @@ export async function executeComboResponses(
         onResponseComplete: callbackGate.onResponseComplete,
       });
       // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
-      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort);
+      restoreOriginalRequestedEffort(childLog, jevEffortApplies ? initialJevDecision?.effort : undefined);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {

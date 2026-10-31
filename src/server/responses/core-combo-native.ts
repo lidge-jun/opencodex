@@ -217,7 +217,11 @@ export function createComboProtocolLanes(input: {
         provider: targetRoute.provider,
         modelId: targetRoute.modelId,
       });
-      if (initialDecision) {
+      // `client` keeps the decision's target but not its tier, so the ordinary combo effort
+      // policy applies instead of the decision's effort.
+      const decisionOwnsEffort = initialDecision !== undefined
+        && getCombo(config, comboId)?.jevEffortMode !== "client";
+      if (decisionOwnsEffort) {
         // A validated JEV choice owns only this first dispatch, including explicit no-effort.
         // Do not run ordinary force defaults for null: they require a non-null default.
         delete body.service_tier;
@@ -254,9 +258,14 @@ function applyComboEffort(
 ): void {
   const combo = getCombo(config, comboId);
   if (!combo) return;
+  // Same precedence as the Chat inbound parser: `reasoning_effort` first, nested `reasoning.effort` second.
+  const nested = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
+    ? (body.reasoning as Rec).effort
+    : undefined;
   const hadEffort = Object.hasOwn(body, "reasoning_effort");
+  const callerEffort = hadEffort ? body.reasoning_effort : nested;
   const shaped = concreteComboRequestBody(
-    hadEffort ? { reasoning: { effort: body.reasoning_effort } } : {},
+    hadEffort || nested !== undefined ? { reasoning: { effort: callerEffort } } : {},
     target,
     comboDefaultEffort(config, comboId),
     supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),

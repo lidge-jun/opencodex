@@ -230,6 +230,46 @@ test("ordinary force invariant is not relaxed", () => {
     .toThrow("force combo default effort requires a valid defaultEffort");
 });
 
+// jevEffortMode: "client" keeps the decision's target but leaves the tier to the caller and the
+// target ladder. A provider whose effort swaps the upstream model id pays a cache miss on every
+// re-tier, so this mode is what lets such a target stay on one tier through a session.
+for (const lane of ["native", "responses"] as const) {
+  test(`${lane}: jevEffortMode client keeps the caller effort instead of the decision's`, async () => {
+    const f = fixture(lane, "typesafe", "low");
+    Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+    const { response, row } = await send(lane, f.config);
+    expect(response.status).toBe(200);
+    expect(f.inference.bodies).toHaveLength(1);
+    // The caller sent "high" and the target ladder supports it, so "high" is what leaves.
+    expect(f.inference.bodies[0]!.reasoning_effort).toBe("high");
+    // The decision itself still records the tier it chose; only the wire effort is client-owned.
+    expect(row.jevDecision).toMatchObject({ backend: "typesafe", gate: "apply", selected: { provider: "a", model: "m", effort: "low" } });
+  }, 30_000);
+
+  test(`${lane}: jevEffortMode client tolerates a decision that named no tier`, async () => {
+    const f = fixture(lane, "typesafe", null);
+    Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+    const { response } = await send(lane, f.config);
+    expect(response.status).toBe(200);
+    // This fixture's target advertises an empty ladder, so the ordinary policy strips the
+    // control. What matters is that it is the ladder deciding, not the null-tier decision.
+    expect(f.inference.bodies[0]!.reasoning_effort).toBeUndefined();
+  }, 30_000);
+}
+
+test("native: jevEffortMode client keeps a nested-only caller effort as the wire effort", async () => {
+  const f = fixture("native", "typesafe", "low");
+  Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+  const { response } = await send("native", f.config, { reasoning_effort: undefined, reasoning: { effort: "high" } });
+  expect(response.status).toBe(200);
+  expect(f.inference.bodies[0]!.reasoning_effort).toBe("high");
+}, 30_000);
+
+test("jevEffortMode defaults to decide so an existing JEV combo keeps overriding effort", () => {
+  const f = fixture("native", "typesafe", "low");
+  expect(f.config.combos!.auto!.jevEffortMode).toBeUndefined();
+});
+
 test("a JEV combo whose only allowlist is unsupported names that target in its 503", async () => {
   const f = fixture("responses", "model", "high");
   f.config.providers.a!.reasoningEfforts = [];

@@ -97,6 +97,7 @@ export type {
   OcxComboDefaultEffort,
   OcxComboDefaultEffortMode,
   OcxComboReasoningEffortMode,
+  OcxComboJevEffortMode,
   OcxComboTarget,
   OcxComboConfig,
   OcxRoutingUnknownEvidenceMode,

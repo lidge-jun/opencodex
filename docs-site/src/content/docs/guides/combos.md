@@ -648,10 +648,12 @@ target/effort, a coarse decision gate, latency, optional confidence/probability,
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
 
-JEV's selected effort applies to the first Responses child and to native Chat children on the opt-in
-`protocols.rollout.nativeChatCombos` path. It replaces caller effort and removes conflicting thinking
-controls and caller `service_tier`; an explicit no-effort choice removes effort even when the Combo has
-a forced default. Provider effort pins, caps and wire normalization still apply afterward.
+With `jevEffortMode: "decide"` (the default), JEV's selected effort applies to the first Responses child
+and to native Chat children on the opt-in `protocols.rollout.nativeChatCombos` path. It replaces caller
+effort and removes conflicting thinking controls and caller `service_tier`; an explicit no-effort choice
+removes effort even when the Combo has a forced default. With `"client"`, JEV keeps its selected target
+but leaves effort resolution to the caller and the target ladder. Provider effort pins, caps and wire
+normalization still apply afterward.
 Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
 adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
 label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
@@ -1018,6 +1020,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
+| `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
