@@ -34,7 +34,7 @@ import { coerceIntegerToolArguments } from "../../lib/tool-argument-integers";
 import { classifyError, isCyberPolicyCode, type OcxErrorPayload } from "../../lib/errors";
 import { redactSecretString } from "../../lib/redact";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import { createCitationMarkerFilter, type CitationMarkerFilter } from "../../responses/citation-markers";
+import { createCitationMarkerFilter, escapeMemoryCitationMentions, type CitationMarkerFilter } from "../../responses/citation-markers";
 import { isTruncatedStopReason, truncationReasonFor } from "../../responses/truncated-stop-reason";
 import { safeWebSearchSources } from "../../web-search/sources";
 import { resolveStallTimeoutSec } from "../../stall-timeout";
@@ -358,7 +358,7 @@ export function encodeAdapterEventStream(
     if (!currentMsg) return;
     // A citation span can straddle a delta boundary; the filter releases its held tail here.
     const trailing = currentMsg.citationFilter.flush();
-    if (trailing) writer.text(trailing);
+    if (trailing) writer.text(escapeMemoryCitationMentions(trailing));
     writer.messageDone();
     currentMsg = null;
   };
@@ -603,7 +603,10 @@ export function encodeAdapterEventStream(
               currentMsg = { citationFilter: createCitationMarkerFilter(), ...(event.phase ? { phase: event.phase } : {}) };
             }
             const visible = currentMsg.citationFilter.push(event.text);
-            if (visible) writer.text(visible);
+            // A literal memory-citation tag in prose makes the Codex client hide everything
+            // between the first opening tag and the last closing one, which reads as a truncated
+            // answer. Escape it here, while it streams.
+            if (visible) writer.text(escapeMemoryCitationMentions(visible));
             break;
           }
           case "thinking_delta": {

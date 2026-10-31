@@ -243,6 +243,19 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
  */
 const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set([GEMINI_ARGON, "gemini-3.8-flash", CLAUDE_OPUS_55, CLAUDE_SONNET_55]);
 
+/**
+ * Suffix-tier models that withhold `thought: true` text unless the request ALSO names its tier
+ * in `thinkingConfig.thinkingLevel`.
+ *
+ * Measured against live CCA (2026-10-27): `gemini-4-argon-high` with
+ * `{includeThoughts: true}` alone answers 200 with `thoughtsTokenCount` in the thousands and
+ * zero thought parts — the whole plan arrives as ordinary visible text. Sending
+ * `{thinkingLevel: "high", includeThoughts: true}` on the same wire id returns the thought
+ * parts. `gemini-3.8-flash-high` does not behave this way: its include-only request still
+ * returns thoughts, so it stays out of this set and keeps the one-field shape.
+ */
+const ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS = new Set([GEMINI_ARGON]);
+
 function completeDiscoveredEffortWireModelIds(
   pickerId: string,
   available: ReadonlyMap<string, Record<string, unknown>>,
@@ -747,7 +760,18 @@ export function resolveAntigravityEffortWireModel(
   baseUrl?: string,
 ): { wireModelId: string; thinkingLevel?: string } {
   const discoveredEffortWireModelId = discoveredAntigravityEffortWireModelId(modelId, effort, baseUrl);
-  if (discoveredEffortWireModelId) return { wireModelId: discoveredEffortWireModelId };
+  if (discoveredEffortWireModelId) {
+    // Discovery returns the tier's wire id, never a level; Argon still needs the level on the
+    // wire to expose thought text, so derive it from the requested effort (or its default tier).
+    const discoveredLevel = ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS.has(modelId)
+      ? (effort ? resolveAntigravityThinkingLevel(effort) : undefined)
+        ?? ANTIGRAVITY_DEFAULT_EFFORT[modelId]
+      : undefined;
+    return {
+      wireModelId: discoveredEffortWireModelId,
+      ...(discoveredLevel ? { thinkingLevel: discoveredLevel } : {}),
+    };
+  }
 
   // A collapsed picker row reports ONE representative wire id (whichever tier CCA
   // listed first), so live discovery cannot describe a ladder — it can only name a
@@ -786,7 +810,12 @@ export function resolveAntigravityEffortWireModel(
 
   // Rule 1: suffix/compat alias — suffix IS the effort.
   if (isAntigravitySuffixModelId(modelId)) {
-    return { wireModelId: resolveAntigravityWireModelId(modelId, baseUrl) };
+    const wireModelId = resolveAntigravityWireModelId(modelId, baseUrl);
+    // Argon is the measured exception to "the suffix IS the effort": CCA withholds its thought
+    // text unless the tier is also named in thinkingConfig. Only a `-low/-medium/-high` suffix
+    // carries a level, so a bare Argon id keeps its historical shape.
+    const argonSuffix = /^gemini-4-argon-(low|medium|high)$/.exec(wireModelId);
+    return argonSuffix ? { wireModelId, thinkingLevel: argonSuffix[1]! } : { wireModelId };
   }
 
   // Rule 1b: single-wire-id Gemini model whose tiers ride on thinkingLevel. Without
@@ -811,11 +840,20 @@ export function resolveAntigravityEffortWireModel(
       : effort;
     if (requested && requested in effortMap) {
       const wireModelId = effortMap[requested]!;
-      // The suffix already names the tier; see ANTIGRAVITY_SUFFIX_TIER_MODELS.
-      return suffixTiered ? { wireModelId } : { wireModelId, thinkingLevel: requested };
+      // The suffix already names the tier; see ANTIGRAVITY_SUFFIX_TIER_MODELS. Argon is the
+      // exception: it withholds thought text unless the level is repeated on the wire, and the
+      // level sent is this same suffix tier, so the two fields cannot disagree.
+      return suffixTiered && !ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS.has(modelId)
+        ? { wireModelId }
+        : { wireModelId, thinkingLevel: requested };
     }
     const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]!;
-    return { wireModelId: effortMap[defaultEffort]! };
+    return {
+      wireModelId: effortMap[defaultEffort]!,
+      ...(ANTIGRAVITY_THOUGHT_LEVEL_REQUIRED_SUFFIX_MODELS.has(modelId)
+        ? { thinkingLevel: defaultEffort }
+        : {}),
+    };
   }
 
   // Rule 4: Claude models — effort via thinkingConfig only (no suffix variants).

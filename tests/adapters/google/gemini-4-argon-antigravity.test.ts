@@ -78,18 +78,33 @@ describe("Gemini 4 Argon on Antigravity", () => {
     expect(ANTIGRAVITY_MODEL_INPUT_MODALITIES["gemini-4-argon"]).toEqual(["text", "image"]);
   });
 
-  test("each effort resolves to its verified suffix wire id with no thinkingLevel", () => {
-    for (const [effort, wireModelId] of [
-      ["low", "gemini-4-argon-low"],
-      ["medium", "gemini-4-argon-medium"],
-      ["high", "gemini-4-argon-high"],
-      ["xhigh", "gemini-4-argon-high"],
-      ["max", "gemini-4-argon-high"],
+  test("each effort resolves to its verified suffix wire id plus the same tier as thinkingLevel", () => {
+    // Argon is the measured exception to "the suffix IS the effort": with only
+    // includeThoughts on the wire, CCA answers 200 with thousands of thoughtsTokenCount and no
+    // thought parts, so the plan shows up as ordinary text. Repeating the suffix tier as
+    // thinkingLevel is what makes the thought text arrive (live CCA, 2026-10-27).
+    for (const [effort, wireModelId, thinkingLevel] of [
+      ["low", "gemini-4-argon-low", "low"],
+      ["medium", "gemini-4-argon-medium", "medium"],
+      ["high", "gemini-4-argon-high", "high"],
+      ["xhigh", "gemini-4-argon-high", "high"],
+      ["max", "gemini-4-argon-high", "high"],
     ] as const) {
-      expect(resolveAntigravityEffortWireModel("gemini-4-argon", effort)).toEqual({ wireModelId });
+      expect(resolveAntigravityEffortWireModel("gemini-4-argon", effort)).toEqual({ wireModelId, thinkingLevel });
     }
     // Google's documented default thinking level.
-    expect(resolveAntigravityEffortWireModel("gemini-4-argon")).toEqual({ wireModelId: "gemini-4-argon-medium" });
+    expect(resolveAntigravityEffortWireModel("gemini-4-argon"))
+      .toEqual({ wireModelId: "gemini-4-argon-medium", thinkingLevel: "medium" });
+  });
+
+  test("a suffix Argon id keeps its own tier as the level; other suffix families stay level-free", () => {
+    expect(resolveAntigravityEffortWireModel("gemini-4-argon-high"))
+      .toEqual({ wireModelId: "gemini-4-argon-high", thinkingLevel: "high" });
+    // Bare Argon names no tier, so there is no level to state twice.
+    expect(resolveAntigravityEffortWireModel("gemini-4-argon")).toMatchObject({ wireModelId: "gemini-4-argon-medium" });
+    // 3.8 Flash returns thought text with includeThoughts alone; it must not gain a second field.
+    expect(resolveAntigravityEffortWireModel("gemini-3.8-flash", "high"))
+      .toEqual({ wireModelId: "gemini-3.8-flash-high" });
   });
 
   test("usage collapses every Argon wire id onto the picker id", () => {
@@ -143,12 +158,13 @@ describe("Antigravity User-Agent selection", () => {
   });
 
   test("an Argon inference request carries the CLI UA and the suffix wire id", async () => {
-    for (const [effort, wire] of [["low", "gemini-4-argon-low"], ["high", "gemini-4-argon-high"], [undefined, "gemini-4-argon-medium"]] as const) {
+    for (const [effort, wire, level] of [["low", "gemini-4-argon-low", "low"], ["high", "gemini-4-argon-high", "high"], [undefined, "gemini-4-argon-medium", "medium"]] as const) {
       const { req, env } = await built("gemini-4-argon", effort);
       expect(env.model).toBe(wire);
       expect(req.headers["User-Agent"]).toBe(CLI_UA);
-      // The suffix already names the tier; a thinkingLevel beside it would state it twice.
-      expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBeUndefined();
+      // The suffix names the tier, and Argon additionally needs it named in thinkingConfig or
+      // CCA withholds the thought parts. Both spellings are the same tier, so they cannot conflict.
+      expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe(level);
     }
   });
 

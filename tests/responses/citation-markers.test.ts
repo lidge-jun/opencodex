@@ -4,6 +4,8 @@ import {
   CITATION_MARKER_SEPARATOR,
   CITATION_MARKER_START,
   createCitationMarkerFilter,
+  createMemoryCitationEscaper,
+  escapeMemoryCitationMentions,
   hasCitationMarker,
   stripCitationMarkers,
 } from "../../src/responses/citation-markers";
@@ -217,5 +219,47 @@ describe("non-citation directive spans pass through (#6039)", () => {
     expect(filter.push(`go ${S}vis`)).toBe(`go ${S}vis`);
     expect(filter.push(`ualize${P}{"path"`)).toBe(`ualize${P}{"path"`);
     expect(filter.flush()).toBe("");
+  });
+
+  // The Codex client treats a literal <oai-mem-citation> as markup: it keeps the LAST block and
+  // drops everything between the first opening tag and the last closing one. A model that quotes
+  // the tag name in prose therefore loses the rest of its answer, which is the "truncated at a
+  // backtick" report. Escaping the leading `<` keeps the characters visible without matching.
+  test("a literal memory-citation tag in prose is escaped, not left to the client", () => {
+    expect(escapeMemoryCitationMentions("put the `<oai-mem-citation>` block last"))
+      .toBe("put the `&lt;oai-mem-citation>` block last");
+    expect(escapeMemoryCitationMentions("</oai-mem-citation>"))
+      .toBe("&lt;/oai-mem-citation>");
+    // Text that merely shares a prefix is untouched.
+    expect(escapeMemoryCitationMentions("<oai-mem-citationless> and <p> tags"))
+      .toBe("<oai-mem-citationless> and <p> tags");
+  });
+
+  test("a real memory-citation block keeps its tags so the client can still render it", () => {
+    const block = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n"
+      + "<rollout_ids>\n0123\n</rollout_ids>\n</oai-mem-citation>";
+    // A mention before the block is escaped, the block itself survives byte for byte.
+    expect(escapeMemoryCitationMentions(`put the \`<oai-mem-citation>\` block last.\n\n${block}`))
+      .toBe(`put the \`&lt;oai-mem-citation>\` block last.\n\n${block}`);
+    expect(escapeMemoryCitationMentions(block)).toBe(block);
+  });
+
+  test("the streaming escaper escapes a tag split across deltas", () => {
+    const escaper = createMemoryCitationEscaper();
+    const chunks = ["answer: ", "<", "oai", "-mem-cit", "ation", ">", " rest"];
+    const out = chunks.map(chunk => escaper.push(chunk)).join("") + escaper.pending();
+    expect(out).toBe("answer: &lt;oai-mem-citation> rest");
+  });
+
+  test("the streaming escaper releases a tail that stops looking like a tag", () => {
+    const escaper = createMemoryCitationEscaper();
+    // "<o" could still open the tag, so it is held; "ps" proves it cannot and releases it.
+    expect(escaper.push("a <o")).toBe("a ");
+    expect(escaper.push("ps b")).toBe("<ops b");
+    expect(escaper.pending()).toBe("");
+    // An unterminated open tag is released verbatim at close, so no text is invented or lost.
+    const held = createMemoryCitationEscaper();
+    expect(held.push("tail <oai-mem")).toBe("tail ");
+    expect(held.pending()).toBe("<oai-mem");
   });
 });
