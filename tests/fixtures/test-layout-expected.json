@@ -99,6 +99,8 @@
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
+  "current-turn-tool-catalog-direct.test.ts": "responses",
+  "current-turn-tool-catalog-namespace.test.ts": "responses",
   "gentle-shell-path.test.ts": "clients", "gentle-shell-client.test.ts": "clients", "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
