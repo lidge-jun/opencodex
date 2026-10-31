@@ -16,6 +16,28 @@ const INSTALL_TAG_KEY = "opencodex-codex-pool-install-tag-v1";
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TURN_METADATA_BYTES = 32 * 1024;
 
+/**
+ * Bun rejects control characters and lone UTF-16 surrogates when a value is
+ * written to Headers. Codex metadata is caller-provided, so a malformed value
+ * must be dropped instead of taking down the whole Responses request.
+ */
+function isSafeHeaderValue(value: string): boolean {
+  return !/[\u0000-\u0008\u000a-\u001f\u007f\ud800-\udfff]/u.test(value);
+}
+
+function setSafeHeader(headers: Headers, name: string, value: string): void {
+  if (!isSafeHeaderValue(value)) {
+    headers.delete(name);
+    return;
+  }
+  try {
+    headers.set(name, value);
+  } catch {
+    // A malformed inbound header must not become a local 500/HTML error page.
+    headers.delete(name);
+  }
+}
+
 function accountTagForUuidPrefix(account: string, prefix20Hex: string): string {
   return createHmac("sha256", INSTALL_TAG_KEY).update(`${account}\0${prefix20Hex.toLowerCase()}`).digest("hex").slice(0, 12);
 }
@@ -62,7 +84,11 @@ export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountI
   }
   const turnMeta = headers.get(CODEX_TURN_METADATA_HEADER);
   if (turnMeta) {
-    headers.set(CODEX_TURN_METADATA_HEADER, rewriteTurnMetadataInstallationId(turnMeta, chatgptAccountId));
+    setSafeHeader(
+      headers,
+      CODEX_TURN_METADATA_HEADER,
+      rewriteTurnMetadataInstallationId(turnMeta, chatgptAccountId),
+    );
   }
 }
 
