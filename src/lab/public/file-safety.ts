@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { sameFileIdentity } from "../../lib/file-identity";
 import { isPrivateFileStageName } from "./private-file";
 import { PublicEvidenceValidationError } from "./validate";
 
@@ -95,32 +96,31 @@ function withPrivateRegularFile<T>(
   options: PrivateRegularFileReadOptions,
   consume: (fd: number, size: number) => T,
 ): T {
-  let pathStats = lstatSync(path);
-  if (!pathStats.isSymbolicLink() && pathStats.isFile() && pathStats.nlink > 1) {
+  let pathStats = lstatSync(path, { bigint: true });
+  if (!pathStats.isSymbolicLink() && pathStats.isFile() && Number(pathStats.nlink) > 1) {
     recoverPublishedPrivateFileStage(path);
-    pathStats = lstatSync(path);
+    pathStats = lstatSync(path, { bigint: true });
   }
-  if (pathStats.isSymbolicLink() || !pathStats.isFile() || pathStats.nlink !== 1) {
+  if (pathStats.isSymbolicLink() || !pathStats.isFile() || Number(pathStats.nlink) !== 1) {
     throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
   }
-  if (pathStats.size > options.maxBytes) throw sizeError(options);
+  if (Number(pathStats.size) > options.maxBytes) throw sizeError(options);
 
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
-    const stats = fstatSync(fd);
+    const stats = fstatSync(fd, { bigint: true });
     if (
       !stats.isFile()
-      || stats.nlink !== 1
-      || stats.dev !== pathStats.dev
-      || stats.ino !== pathStats.ino
+      || Number(stats.nlink) !== 1
+      || !sameFileIdentity(stats, pathStats)
     ) {
       throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
     }
-    if (stats.size > options.maxBytes) throw sizeError(options);
-    if (options.requireMode600 && process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
+    if (Number(stats.size) > options.maxBytes) throw sizeError(options);
+    if (options.requireMode600 && process.platform !== "win32" && (Number(stats.mode) & 0o777) !== 0o600) {
       throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
     }
-    return consume(fd, stats.size);
+    return consume(fd, Number(stats.size));
   } finally {
     closeSync(fd);
   }

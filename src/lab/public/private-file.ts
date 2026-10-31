@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { sameFileIdentity } from "../../lib/file-identity";
 
 export type PrivateFileCommitFault = "before_publish" | "parent_directory_sync" | null;
 let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
@@ -152,7 +153,7 @@ export function cleanupStalePrivateFileStages(finalPath: string): void {
 function cleanupPublishedPrivateFileStages(finalPath: string): void {
   let finalStats;
   try {
-    finalStats = lstatSync(finalPath);
+    finalStats = lstatSync(finalPath, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
@@ -166,9 +167,9 @@ function cleanupPublishedPrivateFileStages(finalPath: string): void {
     if (!name.startsWith(prefix) || !PRIVATE_STAGE_RE.test(name)) continue;
     const stagePath = join(dir, name);
     try {
-      const stageStats = lstatSync(stagePath);
+      const stageStats = lstatSync(stagePath, { bigint: true });
       if (!stageStats.isFile() || stageStats.isSymbolicLink()) continue;
-      if (stageStats.dev !== finalStats.dev || stageStats.ino !== finalStats.ino) continue;
+      if (!sameFileIdentity(stageStats, finalStats)) continue;
       unlinkSync(stagePath);
       changed = true;
     } catch (error) {
