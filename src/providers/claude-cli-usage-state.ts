@@ -22,6 +22,13 @@ export type ClaudeUsageSnapshot = {
 export type ClaudeUsageObservation = Readonly<ClaudeUsageSnapshot>;
 
 const memory = new Map<string, ClaudeUsageSnapshot>();
+let signedInIdentity: string | null = null;
+
+/** The adapter records every sign-in read here, so a published report can tell it was superseded. */
+export function recordClaudeSignedInIdentity(identity: string | null): void { signedInIdentity = identity; }
+
+/** The hashed key of the last sign-in read, or null when signed out, unreadable or not yet read. */
+export function claudeSignedInIdentity(): string | null { return signedInIdentity; }
 
 export function claudeUsageStatePath(statePath?: string): string {
   return statePath ?? join(getConfigDir(), "claude-usage-admission.json");
@@ -67,11 +74,12 @@ export function readClaudeUsageSnapshots(path: string): ClaudeUsageSnapshot[] {
 }
 
 /**
- * The newest recorded usage snapshot, from memory or the admission file. Read-only: it resolves
- * no sign-in (no Keychain read), runs no probe and writes nothing. `identity` is the admission's
- * own SHA-256 account key, never the account uuid itself.
+ * The newest recorded usage snapshot, from memory or the admission file, optionally only for one
+ * account. Read-only: it resolves no sign-in (no Keychain read), runs no probe and writes nothing.
+ * `identity` is the admission's own SHA-256 account key, never the account uuid itself.
  */
-export function peekClaudeUsageObservation(deps: { statePath?: string } = {}): ClaudeUsageObservation | null {
-  const rows = readClaudeUsageSnapshots(claudeUsageStatePath(deps.statePath));
+export function peekClaudeUsageObservation(deps: { statePath?: string; identity?: string } = {}): ClaudeUsageObservation | null {
+  const rows = readClaudeUsageSnapshots(claudeUsageStatePath(deps.statePath))
+    .filter(row => deps.identity === undefined || row.identity === deps.identity);
   return rows.sort((a, b) => b.checkedAt - a.checkedAt)[0] ?? null;
 }

@@ -2,23 +2,30 @@
  * The Claude Code CLI subscription publishes no quota endpoint OpenCodex may call on a
  * dashboard load, so `/api/provider-quotas` reports the admission's last observation instead.
  * It must carry the `observed` marker: a subscription row older than the 30-minute last-good
- * bound is the only measurement that exists, not a probe that went quiet.
+ * bound is the only measurement that exists, not a probe that went quiet. The row only ever
+ * shows the signed-in account: sign-out or an account switch clears it.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { currentClaudeIdentityKey, setClaudeIdentityForTests } from "../../src/adapters/claude-cli/usage-admission";
 import { clearProviderQuotaCache, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests } from "../../src/providers/quota";
 import { saveClaudeUsageSnapshot } from "../../src/providers/claude-cli-usage-state";
 import { setQuotaResetSink } from "../../src/quota/reset-observer";
 import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { ProviderQuotaResponse } from "../../src/providers/quota/report-cache";
 import type { OcxConfig } from "../../src/types";
 
+const ACCOUNT_A = "a".repeat(64);
+const ACCOUNT_B = "b".repeat(64);
 const originalHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
 let home: string;
 let fetchCalls: number;
+/** The Claude Code sign-in the seam reports; null is signed out. */
+let signedIn: string | null;
 
 function config(): OcxConfig {
   return {
@@ -35,7 +42,7 @@ function config(): OcxConfig {
 
 function seedObservation(observedAt: number): void {
   writeFileSync(join(home, "claude-usage-admission.json"), JSON.stringify({
-    identity: "a".repeat(64),
+    identity: ACCOUNT_A,
     checkedAt: observedAt,
     quota: {
       fiveHourPercent: 1,
@@ -53,6 +60,8 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   clearProviderQuotaCache();
   resetQuotaResetStoreForTests();
+  signedIn = ACCOUNT_A;
+  setClaudeIdentityForTests(() => signedIn ? { key: signedIn, access: "test-access" } : null);
   fetchCalls = 0;
   // The row is cache-only: a fetch here is itself the failure.
   globalThis.fetch = (async () => {
@@ -64,6 +73,8 @@ beforeEach(() => {
 afterEach(async () => {
   await flushProviderQuotaObservationsForTests();
   setQuotaResetSink(null);
+  setClaudeIdentityForTests();
+  setSystemTime();
   resetQuotaResetStoreForTests();
   globalThis.fetch = originalFetch;
   clearProviderQuotaCache();
@@ -116,7 +127,7 @@ test("forced refresh publishes newer percentages and their observation time", as
   await fetchProviderQuotaReports(config());
   const updatedAt = observedAt + 30_000;
   saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), {
-    identity: "a".repeat(64), checkedAt: updatedAt,
+    identity: ACCOUNT_A, checkedAt: updatedAt,
     quota: { fiveHourPercent: 23, weeklyPercent: 64, updatedAt },
   });
 
@@ -127,13 +138,14 @@ test("forced refresh publishes newer percentages and their observation time", as
   expect(row?.updatedAt).toBe(updatedAt);
 });
 
-test.each([false, true])("forced refresh clears the prior account's quota when the new snapshot has no windows (%s)", async emptyQuota => {
+test.each([false, true])("forced refresh clears the prior account's quota when the signed-in account's snapshot has no windows (%s)", async emptyQuota => {
   const observedAt = Date.now() - 60_000;
   seedObservation(observedAt);
   expect((await fetchProviderQuotaReports(config())).reports).toHaveLength(1);
   const checkedAt = observedAt + 30_000;
+  signedIn = ACCOUNT_B;
   saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), {
-    identity: "b".repeat(64), checkedAt,
+    identity: ACCOUNT_B, checkedAt,
     ...(emptyQuota ? { quota: { updatedAt: checkedAt } } : {}),
   });
 
@@ -141,19 +153,66 @@ test.each([false, true])("forced refresh clears the prior account's quota when t
   expect(response.reports.some(report => report.provider === "claude-cli")).toBe(false);
 });
 
-test.each(["a", "b"])("display-only Claude CLI snapshots never trigger resets across identity %s", async identity => {
+const claudeRow = (response: ProviderQuotaResponse) => response.reports.find(report => report.provider === "claude-cli");
+const transitions = [["sign-out", null], ["account switch", ACCOUNT_B]] as const;
+
+test.each(transitions)("%s clears the previous account's report on a forced refresh", async (_, next) => {
+  seedObservation(Date.now() - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  signedIn = next;
+
+  expect(claudeRow(await fetchProviderQuotaReports(config(), true))).toBeUndefined();
+});
+
+test.each(transitions)("%s seen by a later sign-in read drops the cached report without a forced refresh", async (_, next) => {
+  seedObservation(Date.now() - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  signedIn = next;
+  // Stands in for the next turn's admission check, which reads the sign-in on its own.
+  expect(await currentClaudeIdentityKey(true)).toBe(next);
+
+  expect(claudeRow(await fetchProviderQuotaReports(config()))).toBeUndefined();
+});
+
+test.each(transitions)("%s drops the cached report on a plain dashboard read once the sign-in cache expires", async (_, next) => {
+  const start = Date.now();
+  seedObservation(start - 60_000);
+  expect(claudeRow(await fetchProviderQuotaReports(config()))?.quota.weeklyPercent).toBe(51);
+  signedIn = next;
+  // Past the one-minute sign-in cache, still inside the five-minute report cache.
+  setSystemTime(start + 61_000);
+
+  expect(claudeRow(await fetchProviderQuotaReports(config()))).toBeUndefined();
+});
+
+test("after an account switch the report shows only the new account's own windows", async () => {
+  const statePath = join(home, "claude-usage-admission.json");
+  seedObservation(Date.now() - 60_000);
+  await fetchProviderQuotaReports(config());
+  signedIn = ACCOUNT_B;
+  const checkedAt = Date.now();
+  saveClaudeUsageSnapshot(statePath, { identity: ACCOUNT_B, checkedAt, quota: { weeklyPercent: 7, updatedAt: checkedAt } });
+  expect(claudeRow(await fetchProviderQuotaReports(config(), true))?.quota.weeklyPercent).toBe(7);
+
+  // Back on A, whose snapshot the B check replaced: B's windows must not be shown as A's.
+  signedIn = ACCOUNT_A;
+  expect(claudeRow(await fetchProviderQuotaReports(config(), true))).toBeUndefined();
+});
+
+test.each([ACCOUNT_A, ACCOUNT_B])("display-only Claude CLI snapshots never trigger resets across identity %#", async identity => {
   const resets: unknown[] = [];
   setQuotaResetSink(event => resets.push(event));
   const checkedAt = Date.now();
   const statePath = join(home, "claude-usage-admission.json");
   saveClaudeUsageSnapshot(statePath, {
-    identity: "a".repeat(64), checkedAt,
+    identity: ACCOUNT_A, checkedAt,
     quota: { fiveHourPercent: 90, fiveHourResetAt: checkedAt + 3_600_000, updatedAt: checkedAt },
   });
   await fetchProviderQuotaReports(config(), true);
   await flushProviderQuotaObservationsForTests();
+  signedIn = identity;
   saveClaudeUsageSnapshot(statePath, {
-    identity: identity.repeat(64), checkedAt: checkedAt + 1000,
+    identity, checkedAt: checkedAt + 1000,
     quota: { fiveHourPercent: 10, fiveHourResetAt: checkedAt + 3_600_000, updatedAt: checkedAt + 1000 },
   });
   const response = await fetchProviderQuotaReports(config(), true);

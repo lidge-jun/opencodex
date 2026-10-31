@@ -9,7 +9,7 @@ import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-accoun
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
-import { peekClaudeUsageObservation } from "../claude-cli-usage-state";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../claude-cli-usage-state";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -429,21 +429,31 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
 }
 
 /**
- * Provider-level row for the Claude Code CLI subscription: the last usage the admission
- * recorded, in the same shape `fetchPassiveProviderQuota` returns.
+ * Provider-level row for the Claude Code CLI subscription: the signed-in account's last usage the
+ * admission recorded, in the same shape `fetchPassiveProviderQuota` returns.
  *
  * Cache-only. OpenCodex stores no Claude credential and this path must never spawn the CLI or
  * probe an endpoint on a dashboard load; the admission already reads Anthropic's usage endpoint
- * before a launch. A forced quota refresh re-reads this snapshot, not the upstream. `updatedAt`
- * stays the observation time, which is the age the quota card renders.
+ * before a launch. A forced quota refresh re-reads the local sign-in and this snapshot, not the
+ * upstream. `updatedAt` stays the observation time, which is the age the quota card renders.
+ *
+ * The row belongs to one account. Signed out, an unreadable sign-in, or a sign-in with no recorded
+ * snapshot is authoritative empty, which clears another account's cached row. A cached row stops
+ * being current as soon as any later sign-in read (a turn's admission included) names another account.
  */
-export function fetchClaudeCliObservedQuota(provider: string): ProviderQuotaProbeResult {
-  const observation = peekClaudeUsageObservation();
-  if (!observation) return null;
-  if (!observation.quota) return AUTHORITATIVE_EMPTY_QUOTA;
+export async function fetchClaudeCliObservedQuota(provider: string, forceRefresh: boolean): Promise<ProviderQuotaProbeResult> {
+  // Lazy: the adapter's sign-in reader (Keychain, child process) stays off the core request path.
+  const { currentClaudeIdentityKey } = await import("../../adapters/claude-cli/usage-admission");
+  const identity = await currentClaudeIdentityKey(forceRefresh);
+  if (!identity) return AUTHORITATIVE_EMPTY_QUOTA;
+  const observation = peekClaudeUsageObservation({ identity });
+  if (!observation?.quota) return AUTHORITATIVE_EMPTY_QUOTA;
   const built = report(provider, `${provider}:subscription-observation`, observation.quota);
+  if (!built) return AUTHORITATIVE_EMPTY_QUOTA;
   // Tagged here rather than inside report(), which every probed path shares.
-  return built ? { ...built, observed: true } : AUTHORITATIVE_EMPTY_QUOTA;
+  const row = { ...built, observed: true };
+  accountReportCurrent.set(row, () => claudeSignedInIdentity() === identity);
+  return row;
 }
 
 // ---------------------------------------------------------------------------

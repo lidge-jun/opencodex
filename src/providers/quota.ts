@@ -122,8 +122,8 @@ async function maybeFetchProviderQuota(
   if (provider.disabled === true) return null;
   try {
     // The Claude Code CLI owns its sign-in and reports the subscription windows itself; there is
-    // no key or token for this facade to probe, so publish the admission's last observation.
-    if (provider.adapter === "claude-cli") return fetchClaudeCliObservedQuota(name);
+    // no key or token for this facade to probe, so publish the signed-in account's last observation.
+    if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }
@@ -249,6 +249,12 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const key = typeof keyCandidate === "string" ? keyCandidate : await keyCandidate;
   const writerGeneration = captureConfigGeneration();
   const providerEpochs = captureProviderReportEpochs();
+  // The Claude CLI row is bound to the signed-in account. Re-read the sign-in (the admission's
+  // one-minute identity cache bounds this to one Keychain read a minute) so the fast path below
+  // stops serving a cached row after a sign-out or account switch. Lazy for the core-path reason.
+  if (!forceRefresh && Object.values(config.providers).some(provider => provider.adapter === "claude-cli" && provider.disabled !== true)) {
+    await (await import("../adapters/claude-cli/usage-admission")).currentClaudeIdentityKey();
+  }
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.

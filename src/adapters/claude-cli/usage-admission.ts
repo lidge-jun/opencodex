@@ -9,6 +9,7 @@ import {
   claudeUsageStatePath,
   loadClaudeUsageSnapshot,
   readClaudeUsageSnapshots,
+  recordClaudeSignedInIdentity,
   saveClaudeUsageSnapshot,
   type ClaudeUsageSnapshot,
 } from "../../providers/claude-cli-usage-state";
@@ -31,6 +32,9 @@ export type AdmissionDeps = {
 const CACHE_MS = 60_000;
 const inflight = new Map<string, Promise<ClaudeUsageSnapshot | null>>();
 let identityCache: { scope: string; at: number; value: Promise<Identity | null> } | undefined;
+let identityOverride: ((fresh?: boolean) => Identity | null | Promise<Identity | null>) | undefined;
+let identityReads = 0;
+let recordedIdentityRead = 0;
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -54,14 +58,40 @@ async function readLocalIdentity(): Promise<Identity | null> {
 /**
  * The signed-in Claude Code account, read through the CLI's own secure storage. Cached briefly so
  * a burst of turns costs one Keychain lookup; an account switch is noticed within the cache window.
+ * Every read is recorded, newest read wins, so a published quota row can tell it was superseded.
  */
 function localIdentity(fresh = false): Promise<Identity | null> {
   const scope = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
   const now = Date.now();
   if (!fresh && identityCache && identityCache.scope === scope && now - identityCache.at < CACHE_MS) return identityCache.value;
-  const value = readLocalIdentity().catch(() => null);
+  const read = ++identityReads;
+  const override = identityOverride;
+  const value = (override ? Promise.resolve().then(() => override(fresh)) : readLocalIdentity())
+    .catch(() => null)
+    .then(identity => {
+      if (read > recordedIdentityRead) {
+        recordedIdentityRead = read;
+        recordClaudeSignedInIdentity(identity?.key ?? null);
+      }
+      return identity;
+    });
   identityCache = { scope, at: now, value };
   return value;
+}
+
+/** Test seam for the signed-in account; call with no argument to restore the real sign-in read. */
+export function setClaudeIdentityForTests(fn?: (fresh?: boolean) => Identity | null | Promise<Identity | null>): void {
+  identityOverride = fn;
+  identityCache = undefined;
+  recordClaudeSignedInIdentity(null);
+}
+
+/**
+ * The signed-in account's hashed key, or null when signed out or the sign-in cannot be read. Only
+ * the key leaves this module, never the access token. `fresh` bypasses the identity cache.
+ */
+export async function currentClaudeIdentityKey(fresh = false): Promise<string | null> {
+  return (await resolveIdentity({}, fresh))?.key ?? null;
 }
 async function resolveIdentity(deps: AdmissionDeps, fresh = false): Promise<Identity | null> {
   try { return await (deps.identity ?? localIdentity)(fresh); } catch { return null; }

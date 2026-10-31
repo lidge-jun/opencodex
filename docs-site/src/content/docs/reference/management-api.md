@@ -703,10 +703,13 @@ per-model Cloud Code Assist usage windows when the model-discovery response prov
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
 
 For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
-observation (`observed: true`) rather than an active probe. `refresh=1` re-reads that local
-snapshot. Fetching this Claude CLI report never spawns the CLI or calls Anthropic; other configured
-providers can still run their normal quota probes. The row is absent until a usage check records
-quota windows, and a newer observation without windows clears the previous report.
+observation (`observed: true`) rather than an active probe, and only for the account Claude Code is
+signed in to. `refresh=1` re-reads the local sign-in and that snapshot. Fetching this Claude CLI
+report never spawns the CLI or calls Anthropic; other configured providers can still run their
+normal quota probes. The row is absent until a usage check records quota windows for the signed-in
+account. A sign-out or account switch clears it at once with `refresh=1` and within a minute (the
+sign-in cache) on a cached read; a newer observation, including one without windows, replaces it
+at once with `refresh=1` and otherwise when the report cache expires.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:
