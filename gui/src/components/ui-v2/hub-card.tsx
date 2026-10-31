@@ -16,7 +16,7 @@ interface HubCardProps {
 
 const BADGE_TONE: Record<HubBadge["tone"], string> = {
   done: "bg-success-soft text-success",
-  todo: "bg-accent-soft text-accent",
+  todo: "bg-highlight-soft text-highlight",
   optional: "bg-surface-2 text-fg-muted",
 };
 
@@ -33,7 +33,7 @@ export function HubCard({ title, term, body, badge, icon, onOpen, openLabel }: H
       className={cn(
         "ui-v2 group flex h-full w-full cursor-pointer flex-col gap-3 rounded-card bg-surface p-5 text-left",
         "transition-[translate,box-shadow,background-color] duration-300 ease-soft hover:-translate-y-0.5 hover:bg-raised hover:shadow-md hover:ring-1 hover:ring-line",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-highlight",
       )}
     >
       <span className="flex items-start justify-between gap-3">
@@ -49,7 +49,7 @@ export function HubCard({ title, term, body, badge, icon, onOpen, openLabel }: H
         {term && <span className="font-mono text-[11px] text-fg-subtle">{term}</span>}
       </span>
       <span className="text-[13px] leading-5 text-fg-muted">{body}</span>
-      <span className="mt-auto inline-flex items-center gap-1 pt-1 text-[13px] font-medium text-accent">
+      <span className="mt-auto inline-flex items-center gap-1 pt-1 text-[13px] font-medium text-highlight">
         {openLabel}
         <span aria-hidden className="transition-transform duration-300 ease-soft group-hover:translate-x-0.5">→</span>
       </span>

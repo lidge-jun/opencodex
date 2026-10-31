@@ -20,12 +20,12 @@
   --muted: var(--ocx-fg-muted);
   --faint: light-dark(#71717a, #8b8b94);
 
-  /* the single accent is now the blue; neutral selection uses --accent-soft */
+  /* the accent is the inverse primary (white on dark); rings and links take the sky highlight */
   --accent: var(--ocx-accent);
-  --accent-hover: light-dark(#1f5ae6, #5a95ff);
+  --accent-hover: light-dark(#3f3f46, #e4e4e7);
   --accent-ink: var(--ocx-on-accent);
   --accent-soft: light-dark(rgb(9 9 11 / 0.05), rgb(255 255 255 / 0.07));
-  --accent-ring: light-dark(rgb(38 103 255 / 0.55), rgb(90 149 255 / 0.6));
+  --accent-ring: light-dark(rgb(2 132 199 / 0.6), rgb(56 189 248 / 0.65));
 
   --green: var(--ocx-success);
   --green-soft: var(--ocx-success-soft);
@@ -33,8 +33,8 @@
   --red-soft: var(--ocx-danger-soft);
   --amber: var(--ocx-warning);
   --amber-soft: var(--ocx-warning-soft);
-  --blue: var(--ocx-accent);
-  --blue-soft: var(--ocx-accent-soft);
+  --blue: var(--ocx-highlight);
+  --blue-soft: var(--ocx-highlight-soft);
 
   --radius-xs: 8px;
   --radius-sm: 10px;
@@ -44,9 +44,9 @@
   --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-code: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
 
-  --toggle-off-bg: light-dark(#d4d4d8, #3f3f46);
+  --toggle-off-bg: light-dark(#d4d4d8, #52525b);
   --toggle-on-bg: var(--ocx-accent);
-  --toggle-dot-color: #ffffff;
+  --toggle-dot-color: light-dark(#ffffff, #09090b);
 
   --shadow-sm: var(--ocx-shadow-sm);
   --shadow: var(--ocx-shadow-md);
@@ -191,7 +191,7 @@
   background: var(--ocx-raised);
   box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 0 0 1px var(--ocx-line);
 }
-.nav-item.active svg { color: var(--ocx-accent); }
+.nav-item.active svg { color: var(--ocx-highlight); }
 
 /* ---- sidebar tiers (Everyday / Set up / Fine-tuning) ---------------------- */
 .nav-tier { display: flex; flex-direction: column; gap: 2px; }
@@ -265,4 +265,73 @@
 /* phone drawer: the drawer head already shows the full version */
 @media (max-width: 760px) {
   .sidebar-version { display: none; }
+}
+
+/* ---- links: the sky highlight marks what is clickable ---------------------- */
+a:hover { text-decoration-color: var(--ocx-highlight); }
+.link-btn { color: var(--ocx-highlight); text-decoration-color: color-mix(in oklab, var(--ocx-highlight) 40%, transparent); }
+.link-btn:hover { text-decoration-color: var(--ocx-highlight); }
+
+/* ---- the strip is part of the rail: no own glass, no rule under it ---------
+   The strip floats over the sidebar's top padding, so with its own background
+   and border gone the rail shows through and the wordmark reads as the first
+   line of the sidebar. The nav scrolls in its own box below, never under it. */
+.sidebar-top {
+  border-bottom-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---- scrollbars: a slim pill that shows itself when you reach for it -------
+   No track. The thumb is faint at rest inside a hovered scroller, firms up
+   under the pointer, and takes the sky highlight while it is dragged. */
+@supports selector(::-webkit-scrollbar) {
+  *::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    min-height: 40px;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+  }
+  *:hover::-webkit-scrollbar-thumb { background-color: light-dark(rgb(9 9 11 / 0.16), rgb(255 255 255 / 0.14)); }
+  *::-webkit-scrollbar-thumb:hover { border-width: 2px; background-color: light-dark(rgb(9 9 11 / 0.32), rgb(255 255 255 / 0.3)); }
+  *::-webkit-scrollbar-thumb:active { border-width: 2px; background-color: var(--ocx-highlight); }
+}
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: light-dark(rgb(9 9 11 / 0.22), rgb(255 255 255 / 0.2)) transparent; }
+}
+
+/* ---- moving border: a white beam travelling the proxy body's edge ----------
+   Aceternity's moving border as a rotating conic gradient masked to a 1px ring,
+   animated through a registered property instead of a per-frame script. White
+   on dark; on a light page a white beam would vanish, so it runs zinc there. */
+@property --ocx-beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.ocx-beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 1px;
+  border-radius: inherit;
+  --ocx-beam-color: light-dark(#71717a, #ffffff);
+  background: conic-gradient(from var(--ocx-beam-angle),
+    transparent 0deg 250deg,
+    color-mix(in oklab, var(--ocx-beam-color) 30%, transparent) 300deg,
+    var(--ocx-beam-color) 340deg,
+    transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+.ocx-beam > * { position: relative; z-index: 1; }
+.ocx-beam--on::before { opacity: 1; animation: ocx-beam-spin 6s linear infinite; }
+@keyframes ocx-beam-spin { to { --ocx-beam-angle: 360deg; } }
+@media (prefers-reduced-motion: reduce) {
+  .ocx-beam--on::before { animation: none; opacity: 0; }
 }

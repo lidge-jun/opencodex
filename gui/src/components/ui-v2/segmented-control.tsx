@@ -72,7 +72,7 @@ export function SegmentedControl<V extends string>({
             onClick={() => onChange(item.value)}
             className={cn(
               "relative inline-flex cursor-pointer items-center justify-center rounded-[calc(var(--radius-control)-2px)] font-medium",
-              "transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+              "transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
               "[&_svg]:size-3.5",
               size === "sm" ? "h-6 min-w-7 px-2 text-xs" : "h-7 min-w-8 px-3 text-[13px]",
               selected ? "text-fg" : "text-fg-subtle hover:text-fg-muted",

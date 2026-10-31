@@ -144,7 +144,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
                         <span className={cn("text-[14px] font-medium", step.done && "text-fg-subtle line-through")}>{step.title}</span>
                         {!step.done && <span className="text-[13px] text-fg-muted">{step.hint}</span>}
                       </span>
-                      {!step.done && <span className="text-[13px] font-medium text-accent opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
+                      {!step.done && <span className="text-[13px] font-medium text-highlight opacity-0 transition-opacity group-hover:opacity-100">{t("shellV2.stepOpen")} →</span>}
                     </button>
                   </li>
                 );
@@ -157,7 +157,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="m-0 text-[15px] font-semibold">{t("shellV2.recentErrors")}</h2>
             <button type="button" onClick={() => navigate("logs")}
-              className="cursor-pointer text-[13px] font-medium text-accent hover:underline">{t("shellV2.viewAll")}</button>
+              className="cursor-pointer text-[13px] font-medium text-highlight hover:underline">{t("shellV2.viewAll")}</button>
           </div>
           {failures.length === 0 ? (
             <p className="m-0 text-[14px] text-fg-muted">{t("shellV2.noErrors")}</p>
@@ -177,7 +177,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
           <div className="mt-auto flex items-center justify-between gap-3 border-t border-line pt-3 text-[13px] text-fg-muted">
             <span>{t("shellV2.tileProviders")} <b className="font-semibold text-fg tabular-nums">{number.format(providerCount)}</b></span>
             <button type="button" onClick={() => navigate("dashboard", "update")}
-              className="cursor-pointer font-medium text-accent hover:underline">{t("shellV2.checkUpdate")}</button>
+              className="cursor-pointer font-medium text-highlight hover:underline">{t("shellV2.checkUpdate")}</button>
           </div>
         </motion.section>
       </div>

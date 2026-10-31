@@ -24,7 +24,7 @@ test("the sidebar foot pairs stop with restart-Codex", () => {
   // The destructive control keeps its danger marking: the stop button is the tray's `danger` one,
   // and only that variant turns red on hover.
   expect(proxyControls).toMatch(/<TrayButton onClick=\{onStop\}[^>]*\bdanger\b/);
-  expect(proxyControls).toContain('"hover:bg-danger-soft hover:text-danger"');
+  expect(proxyControls).toContain('"hover:bg-danger-soft hover:text-danger');
 });
 
 test("the mobile top bar carries the same pair", () => {

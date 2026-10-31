@@ -20,6 +20,20 @@
 `--accent`는 기본 액션과 포커스에 사용한다. 활성 토글은 다크 모드에서 트랙과 핸들이
 겹쳐 보이지 않도록 `--toggle-on-bg`와 `--toggle-dot-color`를 사용한다.
 
+### v2 색 역할 (`src/design/theme.css`)
+
+v2는 위 v1 토큰을 `src/design/bridge.css`에서 아래 `--ocx-*` 토큰으로 다시 연결한다.
+
+| 역할 | 토큰 | Tailwind | 라이트 | 다크 |
+|---|---|---|---:|---:|
+| 메인(기본 버튼, 선택 상태, 켜진 토글) | `--ocx-accent` | `bg-accent` | `#18181b` | `#fafafa` |
+| 메인 위 글자 | `--ocx-on-accent` | `text-on-accent` | `#ffffff` | `#09090b` |
+| 하이라이트(호버 광, 포커스 링, 링크, 활성 표시) | `--ocx-highlight` | `text-highlight` | `#0284c7` | `#38bdf8` |
+| 하이라이트 바탕 | `--ocx-highlight-soft` | `bg-highlight-soft` | sky 12% | sky 16% |
+
+메인은 화면의 반전색이다. 다크에서는 흰색, 라이트에서는 흰 배경에 묻히지 않게 거의 검정이다.
+파랑을 메인으로 쓰지 않는다. 눌러 볼 수 있다는 신호와 지금 가리키는 곳만 스카이블루로 칠한다.
+
 ## Typography
 
 ### Font families

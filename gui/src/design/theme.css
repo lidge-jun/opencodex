@@ -50,8 +50,10 @@
 }
 
 /* ---- semantic tokens ------------------------------------------------------
-   Neutrals are a zinc ramp; one blue carries primary actions and focus;
-   status hues are reserved for state. Authored once with light-dark(). */
+   Neutrals are a zinc ramp. The primary is the inverse of the page — white on
+   dark, near-black on light — and carries primary actions and every selected
+   state; sky blue is the highlight for hover glows, focus, links and active
+   markers. Status hues are reserved for state. Authored once with light-dark(). */
 :root {
   color-scheme: light dark;
 
@@ -65,12 +67,17 @@
   --ocx-fg-muted: light-dark(#52525b, #a1a1aa);
   --ocx-fg-subtle: light-dark(#a1a1aa, #63636b);
 
-  /* primary blue: the Aceternity gradient pair (top -> bottom) */
-  --ocx-accent: light-dark(#2667ff, #3b7bff);
-  --ocx-accent-top: light-dark(#3f8efc, #5a95ff);
-  --ocx-accent-bottom: light-dark(#2176ff, #2563eb);
-  --ocx-accent-soft: light-dark(rgb(38 103 255 / 0.1), rgb(59 123 255 / 0.16));
-  --ocx-on-accent: #ffffff;
+  /* primary: the inverse of the page, as an Aceternity gradient pair (top -> bottom) */
+  --ocx-accent: light-dark(#18181b, #fafafa);
+  --ocx-accent-top: light-dark(#3f3f46, #ffffff);
+  --ocx-accent-bottom: light-dark(#09090b, #d9d9de);
+  --ocx-accent-soft: light-dark(rgb(9 9 11 / 0.06), rgb(255 255 255 / 0.1));
+  --ocx-on-accent: light-dark(#ffffff, #09090b);
+
+  /* highlight: sky blue for hover glows, focus rings, links and active markers */
+  --ocx-highlight: light-dark(#0284c7, #38bdf8);
+  --ocx-highlight-soft: light-dark(rgb(2 132 199 / 0.12), rgb(56 189 248 / 0.16));
+  --ocx-highlight-glow: light-dark(rgb(2 132 199 / 0.35), rgb(56 189 248 / 0.45));
 
   --ocx-success: light-dark(#0e9f6e, #34d399);
   --ocx-success-soft: light-dark(rgb(14 159 110 / 0.1), rgb(52 211 153 / 0.14));
@@ -87,9 +94,9 @@
   --ocx-shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
   --ocx-shadow-md: 0 1px 2px rgb(16 24 40 / 0.05), 0 12px 32px -16px rgb(16 42 67 / 0.25);
   --ocx-shadow-lg: 0 24px 48px -24px rgb(16 42 67 / 0.35);
-  /* the primary button's inner glow (Aceternity button) */
-  --ocx-glow: inset 0 0 10px 0 rgb(255 255 255 / 0.2);
-  --ocx-glow-hover: inset 0 0 20px 0 rgb(255 255 255 / 0.4);
+  /* the primary button's glow (Aceternity button): a top sheen at rest, a sky halo on hover */
+  --ocx-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 1px 2px rgb(0 0 0 / 0.2);
+  --ocx-glow-hover: inset 0 1px 0 0 rgb(255 255 255 / 0.18), 0 0 0 3px var(--ocx-highlight-soft), 0 0 18px -2px var(--ocx-highlight-glow);
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -113,6 +120,8 @@
   --color-accent-bottom: var(--ocx-accent-bottom);
   --color-accent-soft: var(--ocx-accent-soft);
   --color-on-accent: var(--ocx-on-accent);
+  --color-highlight: var(--ocx-highlight);
+  --color-highlight-soft: var(--ocx-highlight-soft);
   --color-success: var(--ocx-success);
   --color-success-soft: var(--ocx-success-soft);
   --color-warning: var(--ocx-warning);

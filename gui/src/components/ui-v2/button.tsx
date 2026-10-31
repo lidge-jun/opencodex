@@ -42,7 +42,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cn(
         "ui-v2 inline-flex shrink-0 cursor-pointer items-center justify-center rounded-control font-medium whitespace-nowrap select-none",
         "transition-[background-color,color,box-shadow,scale] duration-200 ease-soft active:scale-[0.97]",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50",
         "[&_svg]:size-4 [&_svg]:shrink-0",
         VARIANTS[variant],

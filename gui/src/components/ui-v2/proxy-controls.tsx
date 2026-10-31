@@ -24,11 +24,12 @@ interface ProxyControlsProps {
 }
 
 /*
- * Design system v2 proxy status capsule. While the proxy runs the card carries a faint green
- * wash and a glowing dot, so "is it on?" reads from the corner of the eye; the title and the
- * uptime sit beside it. The actions live in one joined icon tray on the right instead of loose
- * buttons: restart spins while in flight and flashes a check when it settles, and stop stays
- * quiet until hovered, when it turns red, so the destructive action never shouts at rest.
+ * Design system v2 proxy panel, in the React Bits Pro application-UI form: an outer tinted
+ * frame with a header line (title, live status) around an inset raised body that holds the
+ * detail and the actions. While the proxy runs, a thin white beam travels the body's edge
+ * (Aceternity's moving border, done in CSS so the sidebar runs no per-frame script); it stops
+ * with the proxy and under reduced motion. Restart spins while in flight and flashes a check
+ * when it settles; stop stays quiet until hovered, when it turns red.
  */
 export function ProxyControls({
   label,
@@ -50,40 +51,25 @@ export function ProxyControls({
   const live = !stopping;
 
   return (
-    <div
-      className={cn(
-        "ui-v2 relative flex items-center gap-2.5 overflow-hidden rounded-[14px] py-2 pr-1.5 pl-3 ring-1 ring-inset transition-colors duration-300",
-        live
-          ? "bg-[linear-gradient(120deg,color-mix(in_oklab,var(--ocx-success)_12%,transparent),transparent_70%)] ring-success/25"
-          : "bg-surface ring-line",
-        className,
-      )}
-    >
-      <span className="relative inline-flex size-2.5 shrink-0" aria-hidden>
-        {live && !reduce && <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-50" />}
-        <span className={cn(
-          "relative size-2.5 rounded-full",
-          live ? "bg-success shadow-[0_0_0_3px_color-mix(in_oklab,var(--ocx-success)_22%,transparent)]" : "bg-fg-subtle",
-        )} />
-      </span>
-
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13px] leading-[18px] font-semibold tracking-[-0.01em] text-fg">{label}</span>
-        <span className={cn("truncate text-[11.5px] leading-4 tabular-nums", live ? "text-success" : "text-fg-subtle")}>
+    <div className={cn("ui-v2 relative rounded-xl bg-surface p-1 ring-1 ring-line ring-inset", className)}>
+      <div className="flex items-center gap-2 px-2 pt-0.5 pb-1.5">
+        <span className="min-w-0 flex-1 truncate text-xs leading-4 font-medium text-fg-muted">{label}</span>
+        <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-xs leading-4 font-medium", live ? "text-success" : "text-fg-subtle")}>
+          <span className="relative inline-flex size-1.5" aria-hidden>
+            {live && !reduce && <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-60" />}
+            <span className={cn("relative size-1.5 rounded-full", live ? "bg-success" : "bg-fg-subtle")} />
+          </span>
           {stopping ? stoppingLabel : statusLabel}
-          {!stopping && detail && <span className="text-fg-subtle"> · {detail}</span>}
         </span>
-      </span>
+      </div>
 
-      <span className="flex shrink-0 items-center rounded-[10px] bg-bg/70 p-0.5 ring-1 ring-inset ring-line">
+      <div className={cn("ocx-beam relative flex items-center gap-1 rounded-lg bg-raised py-1 pr-1 pl-2.5 shadow-sm ring-1 ring-line ring-inset", live && "ocx-beam--on")}>
+        <span className="min-w-0 flex-1 truncate text-xs leading-4 text-fg-muted tabular-nums">{detail ?? label}</span>
         {session && (
-          <>
-            <TrayButton onClick={session.onClick} disabled={session.busy}
-              label={session.busy ? session.busyLabel : session.label} title={session.label}>
-              <IconX />
-            </TrayButton>
-            <Divider />
-          </>
+          <TrayButton onClick={session.onClick} disabled={session.busy}
+            label={session.busy ? session.busyLabel : session.label} title={session.label}>
+            <IconX />
+          </TrayButton>
         )}
         <TrayButton onClick={onRestart} disabled={restarting}
           label={restarting ? restartingLabel : restartLabel} title={restartLabel}>
@@ -104,12 +90,11 @@ export function ProxyControls({
             )}
           </AnimatePresence>
         </TrayButton>
-        <Divider />
         <TrayButton onClick={onStop} disabled={stopping} danger
           label={stopping ? stoppingLabel : stopLabel} title={stopping ? stoppingLabel : stopLabel}>
           <IconPower />
         </TrayButton>
-      </span>
+      </div>
     </div>
   );
 }
@@ -130,20 +115,17 @@ function TrayButton({ onClick, disabled, label, title, danger, children }: {
       aria-label={label}
       title={title}
       className={cn(
-        "inline-flex size-7 cursor-pointer items-center justify-center rounded-lg text-fg-muted",
-        "transition-[background-color,color,scale] duration-200 ease-soft active:scale-90",
-        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-bg text-fg-muted",
+        "shadow-[0_1px_2px_-1px_rgb(0_0_0/0.16)] ring-1 ring-line ring-inset",
+        "transition-[background-color,color,box-shadow,scale] duration-150 ease-soft active:scale-95 active:shadow-[inset_0_1px_2px_rgb(0_0_0/0.18)]",
+        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5",
-        danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-surface-2 hover:text-fg",
+        danger ? "hover:bg-danger-soft hover:text-danger hover:ring-danger/30" : "hover:text-fg hover:ring-line-strong",
       )}
     >
       {children}
     </button>
   );
-}
-
-function Divider() {
-  return <span className="mx-px h-3.5 w-px bg-line" aria-hidden />;
 }
 
 /** True for a moment right after `busy` falls from true to false. */

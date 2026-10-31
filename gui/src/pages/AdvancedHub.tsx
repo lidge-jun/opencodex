@@ -62,7 +62,7 @@ export default function AdvancedHub({ navigate }: AdvancedHubProps) {
             onChange={e => setQuery(e.target.value)}
             placeholder={t("shellV2.advancedSearch")}
             aria-label={t("shellV2.advancedSearch")}
-            className="h-9 w-full rounded-control bg-surface pr-3 pl-9 text-sm text-fg ring-1 ring-line outline-none ring-inset placeholder:text-fg-subtle focus:ring-2 focus:ring-accent"
+            className="h-9 w-full rounded-control bg-surface pr-3 pl-9 text-sm text-fg ring-1 ring-line outline-none ring-inset placeholder:text-fg-subtle focus:ring-2 focus:ring-highlight"
           />
         </label>
       </header>
