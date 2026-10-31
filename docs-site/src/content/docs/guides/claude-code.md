@@ -69,6 +69,14 @@ response headers on streaming, JSON and upstream-error responses, so compatible 
 statusLine consumers can read the provider's quota observations. Missing observations are
 not filled with invented values. This relay does not change account selection or retry behavior.
 
+Usage reads support Ultra (formerly Max 20x). A null five-hour limit leaves that meter
+absent and still allows weekly usage to display. Current `limits` counters take precedence
+over legacy duplicates; only active model-specific weekly limits affect that model family.
+The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
+metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
+(stored as `max_20x`). Unfamiliar validated tiers retain their original name without
+failing the usage read. Claude account rows use ordinal labels and omit account IDs and emails.
+
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 

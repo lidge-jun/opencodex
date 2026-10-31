@@ -159,3 +159,30 @@ test("a transient hold ending with a quota hold on the same account keeps the re
   f.ratePolicy.anthropicRatePolicyFor("anthropic").pauseAnthropicRateAdmission(f.ids[0], now + 600_000);
   expect(routing.anthropicPoolCooldownError(now).usageLimit).toBeNull();
 });
+
+for (const instance of INSTANCE_FIXTURE_INSTANCES) {
+  test(`${instance}: explicit null session after Ultra upgrade retires only the obsolete 5h hold`, async () => {
+    const routing = f.routing.anthropicRoutingFor(instance);
+    const id = f.ids[0];
+    const now = Date.now();
+    routing.recordAnthropicAccount429(f.config, id, "86400", now, rejected(["5h", "7d"], now + 24 * HOUR));
+    globalThis.fetch = (async () => Response.json({ five_hour: null,
+      limits: [{ kind: "weekly_all", percent: 20, resets_at: new Date(now + HOUR).toISOString() }] })) as typeof fetch;
+    await freshRead(instance, id);
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).toBeNull();
+    expect(routing.getEligibleAnthropicAccounts()).toContain(id);
+  });
+}
+
+test("null 5h cannot lift a still-exhausted weekly hold or an unobserved session", async () => {
+  const routing = f.routing.anthropicRoutingFor("anthropic");
+  const id = f.ids[0];
+  const now = Date.now();
+  routing.recordAnthropicAccount429(f.config, id, "86400", now, rejected(["5h", "7d"], now + 24 * HOUR));
+  for (const body of [{ five_hour: null, limits: [{ kind: "weekly_all", percent: 100 }] },
+    { limits: [{ kind: "weekly_all", percent: 20 }] }]) {
+    globalThis.fetch = (async () => Response.json(body)) as typeof fetch;
+    await freshRead("anthropic", id);
+    expect(routing.getAnthropicAccountHealthSnapshot(id)).not.toBeNull();
+  }
+});

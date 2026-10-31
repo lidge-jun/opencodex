@@ -1,0 +1,14 @@
+{
+  "five_hour": null,
+  "seven_day": { "utilization": 91, "resets_at": "2030-01-08T00:00:00Z" },
+  "seven_day_fable": { "utilization": 100, "resets_at": "2030-01-08T00:00:00Z" },
+  "seven_day_opus": null,
+  "seven_day_sonnet": null,
+  "limits": [
+    { "kind": "weekly_all", "group": "weekly", "percent": 37, "severity": "none", "resets_at": "2030-01-09T00:00:00Z", "scope": null, "is_active": true },
+    { "kind": "weekly_scoped", "group": "weekly", "percent": 100, "severity": "none", "resets_at": "2030-01-09T00:00:00Z", "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null }, "is_active": false }
+  ],
+  "seven_day_breakdown": { "claude_code": { "utilization": 12 } },
+  "cedar_ember": { "eligible": false, "at_limit": false, "grants": [], "next_grant_id": null, "weekly_resets_at": "2030-01-09T00:00:00Z", "cooldown_until": null, "plan": "claude_max_20x" },
+  "future_field": { "ignored": true }
+}

@@ -252,7 +252,7 @@ describe("fetchProviderQuotaReports", () => {
           { kind: "session", percent: 44, resets_at: "2026-07-13T12:00:00Z" },
           { kind: "weekly_all", percent: 55, resets_at: "2026-07-14T12:00:00Z" },
           {
-            kind: "weekly_scoped",
+            kind: "weekly_scoped", is_active: true,
             scope: { model: { display_name: "Claude Fable 5" } },
             percent: 33,
             resets_at: "2026-07-12T12:00:00Z",
@@ -267,8 +267,8 @@ describe("fetchProviderQuotaReports", () => {
     } as OcxConfig, true);
 
     expect(result.reports[0]?.quota).toMatchObject({
-      fiveHourPercent: 11,
-      weeklyPercent: 22,
+      fiveHourPercent: 44,
+      weeklyPercent: 55,
       customWindows: [{ label: "Fable", percent: 33, resetAt: Date.parse("2026-07-12T12:00:00Z") }],
     });
     expect(result.reports[0]?.quota.customWindows).toHaveLength(1);

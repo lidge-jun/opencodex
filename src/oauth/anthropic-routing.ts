@@ -1,3 +1,4 @@
+import { hasAnthropicNoFiveHourLimit } from "../providers/quota/anthropic-usage-windows";
 import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
 /**
  * Opt-in Anthropic OAuth account pool (#294).
@@ -452,6 +453,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       || !Number.isFinite(quota.updatedAt) || quota.updatedAt < claim.claimedAt) return "superseded";
     if (!windows.length) return "retained";
     const recovered = windows.every(window => {
+      if (window === "five-hour" && hasAnthropicNoFiveHourLimit(quota)) return true;
       const percent = window === "five-hour" ? quota.fiveHourPercent : quota.weeklyPercent;
       return typeof percent === "number" && Number.isFinite(percent) && percent >= 0 && percent < 100;
     });

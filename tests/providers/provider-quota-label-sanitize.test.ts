@@ -60,7 +60,7 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
     globalThis.fetch = (async () => Response.json({
       limits: [{
-        kind: "weekly_scoped",
+        kind: "weekly_scoped", is_active: true,
         scope: { model: { display_name: "Other\u001b]52;c;UFdORUQ=\u0007 model\u009b31m" } },
         percent: 33,
       }],
@@ -80,7 +80,7 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
     globalThis.fetch = (async () => Response.json({
       limits: [{
-        kind: "weekly_scoped",
+        kind: "weekly_scoped", is_active: true,
         scope: { model: { display_name: "Claude Opus 4.7" } },
         percent: 41,
       }],

@@ -40,11 +40,15 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 without changing bearer-bound UUID proof. Browser login, refresh, local import and proven
 CLI rotation persist a validated display-only `plan`; both Anthropic instances project it
 through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_`, with organization
-kinds stripping `claude_` as fallback. Unknown tiers remain null and never come from quota
+kinds stripping `claude_` as fallback. Ultra and `claude_max_20x` normalize to `max_20x`; unfamiliar validated tiers remain verbatim. Unknown tiers remain null and never come from quota
 percentages. Same-account refreshes retain an unobserved plan; observed unknown tiers clear it.
 Refresh gives the profile read a 2-second deadline because a refresh can sit on a request path;
 a missed read leaves the stored label in place.
-An account replacement cannot inherit another account's label.
+An account replacement cannot inherit another account's label. Management account DTOs expose optional
+`planLabel` via `src/providers/anthropic-subscription.ts`: Pro, Max 5x, Ultra, or the original
+validated unfamiliar tier. `gui/src/components/provider-workspace/ProviderAuthPanel.tsx` shows
+that name with ordinal Claude account labels and no email/ID; current quota shows the same
+metadata independently of a successful usage read. Subscription metadata never gates routing.
 
 `src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
 to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
@@ -309,8 +313,17 @@ For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching
 
 ## Quota labels
 
-Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
-only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
+`src/providers/claude-cli-usage.ts` and `src/providers/quota/anthropic-decision-windows.ts`
+share `src/providers/quota/anthropic-usage-windows.ts`: usable `limits[]` session and
+`weekly_all` counters take precedence over legacy buckets. `five_hour: null` means no
+five-hour limit and leaves that window absent; weekly-only usage is a successful read.
+That fresh parser-bound null proof also lifts an obsolete five-hour cooldown after a plan
+upgrade, provided every other rejected window has headroom. Missing counters prove nothing.
+A `weekly_scoped` row requires `is_active: true` and a recognized Fable, Opus, or Sonnet
+label. An inactive scoped row suppresses its legacy duplicate. Unknown fields and limit
+kinds do not invalidate usable measurements. Display clamps percentages while raw decision
+evidence retains out-of-range counters and invalid resets for its own validation.
+Regression coverage: `tests/providers/provider-anthropic-ultra-usage.test.ts`.
 
 ## Account entitlement refusal recovery
 

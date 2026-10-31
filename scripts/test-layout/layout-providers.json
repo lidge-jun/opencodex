@@ -1,4 +1,5 @@
 {
+  "provider-anthropic-ultra-usage.test.ts": "providers",
   "xai-additional-tools.test.ts": "providers/xai",
   "xai-replay-provenance.test.ts": "providers/xai",
   "xai-loaded-tool-provenance.test.ts": "providers/xai",

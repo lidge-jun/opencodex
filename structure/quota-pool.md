@@ -96,6 +96,8 @@ every versioned model of that Claude family, and never makes the whole account `
 exact-model diagnostic row without that proof is dropped, because unscoped it would gate every
 model. `rejected` evidence becomes `exhausted: true`.
 
+Anthropic Ultra usage with `five_hour: null` contributes its measured weekly window only;
+no synthetic five-hour meter or reset is created. Inactive model limits are omitted by the producer.
 Absent is unknown: a window with no reading is omitted, never reported as 0%, and a window whose
 reset has passed is omitted too. Optional fields are left out instead of set to `null`. Account
 `state` is `reauth`, then `paused`, then `exhausted` (any unscoped exhausted window), then
