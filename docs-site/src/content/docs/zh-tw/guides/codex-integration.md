@@ -171,6 +171,8 @@ Codex 保持一致。opencodex 也透過 WebSocket 提供 `/v1/responses`。專�
 `"websockets": true` 時宣告 `supports_websockets = true`；loopback 模式下，Codex 的內建 provider
 可能先嘗試 WebSocket，若 proxy 未啟用此功能則回傳 `426`，讓 Codex fallback 到 HTTP/SSE。
 
+本機重放要求同一個獲准的 OpenCodex 呼叫方，以及請求自身非空白的 `thread-id`。父 thread、loopback 位址、上游憑證或預留位置金鑰都不是該身分。沒有金鑰的用戶端以及沒有自己 thread 的請求，必須省略 `previous_response_id`，重新傳送完整對話。預設的 loopback Codex 與 DSH 設定不會建立該呼叫方身分。這與上游原生擁有的 Responses ID 各自獨立。
+
 ## Thread identity 與歷史記錄
 
 預設 loopback 形式會讓新 thread 保持使用 Codex 原生的 `openai` provider 標記，因此一般 resume

@@ -968,7 +968,7 @@ export const tr: Record<TKey, string> = {
   "models.v2Help": "v1 alt ajanları birincil modelle sınırlandırır; taban standart ajan sınırlarını devralır; v2 tam çoklu ajan orkestrasyonunu etkinleştirir.\n\nv2'de ChatGPT v1'de kalsın, Sol/Terra'yı v1'de bırakır; böylece Grok veya Claude spawn edebilirler. ChatGPT v2 çocuk görevlerini şifreler; yönlendirilmiş modeller okuyamaz. Yönlendirilmiş ebeveynler v2'de kalır.\n\nDeğişiklikler yeni oturumlara uygulanır.",
   "plaintextV2.title": "V2 · düz metin görevler etkinleştirilsin mi?",
   "plaintextV2.body": "Deneysel. Uygun iş birliği görev iletileri uygulama düzeyinde düz metin kullanır ve Codex geçmişinde, seçilen sağlayıcıya gönderilen isteklerde ve yerel yanıt/hata ayıklama durumunda kalabilir. HTTPS ve kimlik doğrulama etkin kalır. Mevcut şifreli içerik çözülmez ve kayıtlı geçmiş yeniden yazılmaz.",
-  "plaintextV2.caveat": "Bir istek güvenli şekilde yeniden yazılamazsa olduğu gibi gönderilir; bu nedenle bir temsil ataması yine de başarısız olabilir.",
+  "plaintextV2.caveat": "Bir istek güvenli şekilde yeniden yazılamazsa olduğu gibi gönderilir; bu nedenle bir görev devri yine de başarısız olabilir.",
   "plaintextV2.scope": "Katalog seçimi değişiklikleri yeni oturumlara uygulanır. Derleyici etkinken mevcut V2 oturumlarının standart ChatGPT yolu üzerinden yaptığı sonraki uygun isteklere de uygulanır. Devre dışı bırakmak saklanan kopyaları silmez; v1 kullanılabilir olmaya devam eder.",
   "plaintextV2.acknowledge": "Görev metninin düz metin olarak kalabileceğini anlıyorum.",
   "plaintextV2.confirm": "Düz metin görevleri etkinleştir",

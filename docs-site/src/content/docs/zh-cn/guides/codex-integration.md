@@ -166,6 +166,8 @@ opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有
 `supports_websockets = true`；在 loopback 情况下，Codex 的内置 provider 可能会先尝试 WebSocket，而关闭的 proxy
 会返回 `426`，从而让 Codex fallback 到 HTTP/SSE。
 
+本地重放要求同一个获准的 OpenCodex 调用方和请求自身的非空白 `thread-id`。父线程、loopback 地址、上游凭据或占位密钥都不是该身份。没有密钥的客户端以及没有自己线程的请求必须省略 `previous_response_id`，重新发送完整对话。默认的 loopback Codex 与 DSH 配置不建立该调用方身份。这与上游原生拥有的 Responses ID 相互独立。
+
 ## 线程标识与历史记录
 
 默认的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要

@@ -344,7 +344,7 @@ describe("root dispatch compatibility", () => {
     native(true); writeFileSync(path, readFileSync(path, "utf8") + '\n[agents]\nenabled = false\nmax_depth = 2\n');
     expect(await cmdV2(["status"])).toBe(0);
     expect(out.join("\n")).toContain("agents.enabled: false");
-    expect(out.join("\n")).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
+    expect(out.join("\n")).toContain("agents.max_depth: 2 (V1-only — ignored by V2 sessions)");
     expect(out.join("\n")).toContain("subagent_developer_instructions: (unset — children inherit)");
   });
 });

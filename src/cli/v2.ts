@@ -164,7 +164,7 @@ function printLocalStatus(deps: V2CliDeps): number {
     const maxDepth = getAgentsMaxDepth();
     // max_depth is V1-only upstream; say so whenever V2 is active so the number
     // cannot be misread as an effective V2 limit.
-    log.log(`agents.max_depth: ${maxDepth ?? "(unset — upstream default 1)"}${v2Active ? " (V1-only — ignored while multi_agent_v2 is enabled)" : ""}`);
+    log.log(`agents.max_depth: ${maxDepth ?? "(unset — upstream default 1)"}${v2Active ? " (V1-only — ignored by V2 sessions)" : ""}`);
     const instructions = getSubagentDeveloperInstructions();
     log.log(`subagent_developer_instructions: ${instructions === null ? "(unset — children inherit)" : instructions === "" ? '"" (clears inherited instructions)' : JSON.stringify(instructions)}`);
     const modeHint = getMultiAgentModeHintText();

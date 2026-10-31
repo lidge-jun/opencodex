@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cmdV2, type V2CliDeps } from "../../src/cli/v2";
+import { CliUsageError } from "../../src/cli/runtime-api";
 import { parseV2Command } from "../../src/cli/v2-input";
 import { isMultiAgentV2Enabled } from "../../src/codex/features";
 import * as selectionGate from "../../src/codex/cli-update-selection-gate";
@@ -103,9 +104,21 @@ describe("explicit plaintext V2 CLI", () => {
       expect(messages.join(" ")).toContain("incompatible with v2-plaintext");
     } finally { admission.mockRestore(); }
   });
-  test.each([["on", acknowledge], ["mode", "v1", acknowledge], ["mode", "v2-plaintext", acknowledge, acknowledge],
-    ["mode", "v2-plaintext", `${acknowledge}=true`]])("refuses unrelated or ambiguous consent %j", args => {
-    expect(() => parseV2Command(args)).toThrow(); expect(calls).toEqual([]);
+  test.each([
+    { args: ["on", acknowledge], error: "v2: plaintext acknowledgment applies only to mode v2-plaintext" },
+    { args: ["mode", "v1", acknowledge], error: "v2: plaintext acknowledgment applies only to mode v2-plaintext" },
+    { args: ["mode", "v2-plaintext", acknowledge, acknowledge], error: "v2: duplicate control flag" },
+    { args: ["mode", "v2-plaintext", `${acknowledge}=true`], error: "v2: control flags do not take values; use -- for literal hint text" },
+  ])("refuses unrelated or ambiguous consent (%#)", ({ args, error }) => {
+    expect(() => parseV2Command(args)).toThrow(CliUsageError);
+    expect(() => parseV2Command(args)).toThrow(error);
+  });
+  test("human status explains pin-driven V2 depth with the global flag off", async () => {
+    writeFileSync(configPath, JSON.stringify({ ...readConfig(), multiAgentMode: "v2-plaintext" }));
+    writeFileSync(nativePath, "[features.multi_agent_v2]\nenabled = false\n[agents]\nmax_depth = 3\n");
+    expect(await cmdV2(["status"], deps())).toBe(0);
+    expect(isMultiAgentV2Enabled()).toBe(false);
+    expect(lines.join("\n")).toContain("agents.max_depth: 3 (V1-only — ignored by V2 sessions)");
   });
   test("live request sends scoped acknowledgment and verifies effective state", async () => {
     const sent: unknown[] = [], native = readFileSync(nativePath, "utf8");
