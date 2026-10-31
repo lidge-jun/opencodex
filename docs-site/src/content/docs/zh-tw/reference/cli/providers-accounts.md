@@ -101,7 +101,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
-reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。

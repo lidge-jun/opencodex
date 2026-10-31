@@ -1,5 +1,5 @@
 import { isAnthropicOAuthInstance } from "../providers/anthropic-instance";
-import { apiJson, resolveBaseUrl, type AccountDeps } from "./account-api";
+import { apiJson, LINK_HOME_BASE, resolveBaseUrl, type AccountDeps } from "./account-api";
 
 /** Provider-only recovery remains available after the last account was removed. */
 export async function cmdResetAffinity(args: string[], deps: AccountDeps): Promise<number> {
@@ -13,6 +13,14 @@ export async function cmdResetAffinity(args: string[], deps: AccountDeps): Promi
   };
   if (positional.length !== 1 || !isAnthropicOAuthInstance(provider) || args.filter(arg => arg === "--json").length > 1) {
     return fail("invalid_arguments", "Usage: ocx account reset-affinity <anthropic|anthropic2> [--json]");
+  }
+  if (!deps.baseUrl || deps.baseUrl === LINK_HOME_BASE) {
+    const refusal = (await import("./link-child")).linkChildProviderChangeRefusal("ocx account reset-affinity");
+    if (refusal) {
+      if (wantsJson) console.log(JSON.stringify({ ok: false, code: "link_child_management_unavailable", retryable: false, message: refusal }));
+      else console.error(refusal);
+      return 1;
+    }
   }
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return fail("proxy_unreachable", "Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
