@@ -126,7 +126,7 @@ by `nativeChatDeclineReason` against a structural body built from the requested 
 `nativeChatCombos` on, a combo's candidates are judged as the concrete routes they are, as the
 combo loop judges them; policy candidates keep `combo-or-policy-route`. With
 `protocols.rollout.managedMessagesNative` on, a Messages candidate is judged the same way by
-`nativeMessagesDeclineReason`; with it off Messages candidates carry no decline reason, exactly as
+`nativeMessagesDeclineReason`, and an eligible one runs natively through `createNativeMessagesComboSource` (any `baseUrl`; Chat children only get combo default-effort rewrites; `tests/claude-integration/messages-native-combo.test.ts`); with it off Messages candidates carry no decline reason, exactly as
 before the lane existed. Messages
 caller-forward passthrough depends on the caller's own credential, so it is reported as
 `caller-credential-required` and never assumed. The OpenCode Go session-lane transport is not

@@ -81,11 +81,12 @@ import {
   sessionLaneIdFromRequest,
 } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
-import { clientWireOf } from "./inference/client-wire";
+import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import type { ClientEncoderOption } from "./responses/core-options";
 import { handleResponses } from "./responses";
 import { previewXaiOauthWireModel } from "./responses/core-normalize";
+import { getCombo } from "../combos";
 import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
@@ -623,8 +624,9 @@ async function handleClaudeMessagesWithBudget(
   let directPlan: MessagesDirectPlan | undefined;
   /** The retained charge for the settings-only body, handed back if the plan is left. */
   let directSettingsBodyBytes = 0;
-  // Built only under the reject policy; the legacy default leaves this request untouched.
+  // Built only under the reject policy or for native combos; the legacy default leaves this request untouched.
   let envelope: ProtocolEnvelope | undefined;
+  let nativeMessagesCombo = false;
   let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
   // The Advisor caller policy is the admitted snapshot: capture it before the first await (#7859).
   const advisorAdmissionPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
@@ -900,6 +902,13 @@ async function handleClaudeMessagesWithBudget(
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
+    const comboConfig = settledRoute?.combo ? getCombo(config, settledRoute.combo.comboId) : undefined;
+    nativeMessagesCombo = !!comboConfig && !effortRow && !fastRow && comboConfig.targets.some(
+      target => resolveProtocolSettings(config, target.provider).rollout.managedMessagesNative,
+    );
+    if (!envelope && isRec(anthropicBody) && nativeMessagesCombo) {
+      envelope = createProtocolEnvelope({ inbound: "messages", body: anthropicBody, translatorBudget });
+    }
     // Before any route-specific shaping, so a request that leaves the lane is shaped as the bridge's.
     if (directPlan && !messagesDirectPlanHolds(directPlan, route, anthropicBody as Rec, config)) directLeaveError = leaveDirectPlan();
     if (directEncodersApply(config, route)) {
@@ -1245,14 +1254,36 @@ async function handleClaudeMessagesWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    ...(envelope && nativeMessagesCombo ? {
+      protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
+        req,
+        config,
+        envelope,
+        selector: nativeSelector,
+        requestedModel,
+        translatorBudget,
+        callerAnthropicBeta: req.headers.get("anthropic-beta"),
+        clientIdentity: captureAnthropicClientIdentity(req.headers),
+        sessionKey: anthropicSessionKeyFromParts({
+          sessionIdHeader: req.headers.get("session_id")?.trim() || req.headers.get("x-claude-code-session-id"),
+          threadIdHeader: req.headers.get("thread_id"),
+          clientThreadId: conversationIdFromClaudeMetadata(isRec(anthropicBody) && isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined),
+          promptCacheKey: typeof internalBody.prompt_cache_key === "string" ? internalBody.prompt_cache_key : null,
+          promptCacheKeyIsSharedCohort: cacheKeySource === "system",
+        }),
+        modelScope: resolveAdmissionModelScope(config, logIds?.admission),
+      }),
+    } : {}),
     ...(clientEncoder ? { clientEncoder } : {}),
     ...(directRoute && directPlan
       ? { directRequest: messagesDirectRequestOption(directPlan, anthropicBody, cc, translatorBudget) }
       : {}),
   });
+  if (clientWireOf(upstream) === "messages") {
+    if (!logIds || (upstream.ok && !clientWireLogOf(upstream))) return upstream;
+    return responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx);
+  }
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
-  // Already in the Messages wire (direct encoder): no conversion.
-  if (clientWireOf(upstream) === "messages") return response;
 
   if (!response.ok) {
     // Read the shared provenance verdict before consuming and re-wrapping the body. A refusal

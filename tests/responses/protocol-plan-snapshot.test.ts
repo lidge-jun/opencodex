@@ -95,6 +95,33 @@ describe("buildProtocolPlanSnapshot", () => {
     expect(plan.candidates.map(c => c.mode)).toEqual(["native", "translated"]);
   });
 
+  test("with managedMessagesNative on, a combo's Anthropic candidate is judged as its concrete route", () => {
+    const config = baseConfig({
+      providers: {
+        ...baseConfig().providers,
+        anth: { adapter: "anthropic", baseUrl: "https://anth.example/v1", authMode: "key", apiKey: "ka", models: ["claude-x"] },
+      },
+      combos: {
+        msgCombo: {
+          strategy: "failover",
+          targets: [
+            { provider: "anth", model: "claude-x" },
+            { provider: "r", model: "m3" },
+          ],
+        },
+      },
+      protocols: { rollout: { managedMessagesNative: true } },
+    } as Partial<OcxConfig>);
+    const snapshot = buildProtocolPlanSnapshot(config, { model: "combo/msgCombo", inbound: "messages", features: [] });
+    expect(snapshot.candidates.map(c => [c.provider, c.nativeEligible, c.declineReasons])).toEqual([
+      ["anth", true, []],
+      ["r", false, ["cross-wire-ir"]],
+    ]);
+    const plan = previewProtocolPlan(config, { model: "combo/msgCombo", inbound: "messages", features: [] });
+    expect(plan.mode).toBe("native");
+    expect(plan.candidates.map(c => c.mode)).toEqual(["native", "translated"]);
+  });
+
   test("a policy alias expands its configured candidates", () => {
     const snapshot = buildProtocolPlanSnapshot(baseConfig(), { model: "ocx/fast", inbound: "responses", features: [] });
     expect(snapshot.routeKind).toBe("policy");

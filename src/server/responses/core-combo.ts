@@ -1233,9 +1233,9 @@ export async function executeComboResponses(
       return clientCancelledResponse();
     }
 
-    // A native Chat child reports a pre-stream failure by status before any byte, so its body
+    // A native child reports a pre-stream failure by status before any byte, so its body
     // is never peeked; a non-OK one takes the ordinary failure path below.
-    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && !clientWireOf(response)) {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;

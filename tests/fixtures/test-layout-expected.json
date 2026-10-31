@@ -95,6 +95,7 @@
   "api-key-selection-cooldown.test.ts": "providers", "api-key-auto-pause-distribution.test.ts": "providers", "explicit-key-pause-oauth-boundary.test.ts": "providers", "server-chat-native-key-selection.test.ts": "server", "compact-key-selection.test.ts": "responses",
   "messages-native-key-selection.test.ts": "claude-integration",
   "messages-native-empty-inline.test.ts": "claude-integration",
+  "messages-native-combo.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
   "gentle-shell-path.test.ts": "clients", "gentle-shell-client.test.ts": "clients", "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",

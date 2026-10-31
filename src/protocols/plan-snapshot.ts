@@ -127,10 +127,13 @@ function candidateFor(
   let declineReasons: ProtocolReasonCode[] = [];
   let nativeEligible = false;
   let directEligible = false;
-  // With `nativeChatCombos` on, the combo loop judges each Chat candidate as the concrete route it
-  // is (PF-07), so the preview must too; a policy still resolves one candidate on the bridge.
-  const comboChildNative = inbound === "chat" && routeKind === "combo"
-    && resolveProtocolSettings(config).rollout.nativeChatCombos;
+  // With `nativeChatCombos` on, or with `managedMessagesNative` on for a Messages combo candidate,
+  // the combo loop judges each candidate as the concrete route it is (PF-07), so the preview
+  // must too; a policy still resolves one candidate on the bridge.
+  const comboChildNative = routeKind === "combo" && (
+    (inbound === "chat" && resolveProtocolSettings(config).rollout.nativeChatCombos)
+    || (inbound === "messages" && resolveProtocolSettings(config, route.providerName).rollout.managedMessagesNative)
+  );
   const settled: RouteResult = {
     ...route,
     provider,

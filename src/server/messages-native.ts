@@ -1,6 +1,8 @@
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
-import { createPhysicalSendReporter } from "../lib/request-execution-budget";
+import { createPhysicalSendReporter, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
+import type { ComboProtocolSource } from "./responses/core-combo-native";
+import type { ProtocolEnvelope } from "../protocols/envelope";
 /**
  * Managed native Messages lane (PF-08, behind `protocols.rollout.managedMessagesNative`).
  *
@@ -96,7 +98,7 @@ import {
   sanitizePassthroughToolCallIds,
   tapAnthropicSseForLog,
 } from "./messages-shared";
-import { beginInferenceAttempt } from "./inference/attempt";
+import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
@@ -185,7 +187,20 @@ export interface HandleNativeMessagesOptions {
   modelScope?: AdmissionModelScope;
 }
 
-type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
+export type NativeMessagesFinishLog = (
+  status: number,
+  message?: string,
+  meta?: FinalRequestLogMeta | "non_stream" | "terminal" | "client_cancel",
+) => void;
+type FinishLog = NativeMessagesFinishLog;
+
+export interface NativeMessagesExecution extends HandleNativeMessagesOptions {
+  finishLog: NativeMessagesFinishLog;
+  sendBudget?: RequestExecutionBudget;
+  comboDispatchPermit?: SingleUseDispatchPermit;
+  onFirstOutput?: () => void;
+  turnAdmissionLease?: AdmissionLease;
+}
 
 /** Relay an upstream body unchanged, recording first output on its first non-empty chunk. */
 function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
@@ -320,7 +335,35 @@ async function prepareNativeBody(body: Rec, signal: AbortSignal): Promise<void> 
  * log row, and answers in the Messages wire (SSE or JSON per the caller's own `stream`).
  */
 export async function handleNativeMessages(options: HandleNativeMessagesOptions): Promise<Response> {
-  const { req, config, logCtx, logIds, route, body, requestedModel, translatorBudget } = options;
+  const { logCtx, logIds, route } = options;
+  logCtx.inboundProtocol = "messages";
+  const attemptHandle = beginInferenceAttempt(logCtx, {
+    provider: route.providerName,
+    model: route.modelId,
+    adapter: "anthropic",
+  });
+  attemptHandle.seal(logCtx.accountLogLabel);
+  const finalLog = createFinalRequestLog(logIds, logCtx);
+  const finishLog: NativeMessagesFinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
+    if (finalLog.finished()) return;
+    if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+    const resolvedMeta: FinalRequestLogMeta = typeof meta === "string" ? { closeReason: meta } : meta;
+    finalLog.finish(status, resolvedMeta);
+  };
+  return runNativeMessagesAttempt({ ...options, finishLog }, attemptHandle);
+}
+
+/**
+ * Run one native Messages attempt on an already-open attempt row.
+ * Used for both standalone native Messages requests and native combo children.
+ */
+export async function runNativeMessagesAttempt(
+  execution: NativeMessagesExecution,
+  attemptHandle: InferenceAttempt,
+): Promise<Response> {
+  const options = execution;
+  const { req, config, logCtx, logIds, route, body, requestedModel, translatorBudget, finishLog } = execution;
+  const { sendBudget } = execution;
   const nativeInstance = configuredAnthropicInstance(config, route.providerName);
   const requestedStream = body.stream === true;
   const clientDeclaredEmptyToolCatalog = Array.isArray(body.tools) && body.tools.length === 0;
@@ -351,20 +394,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     logCtx.spendOutputCeilingTokens = Math.trunc(body.max_tokens);
   }
 
-  const attemptHandle = beginInferenceAttempt(logCtx, {
-    provider: route.providerName,
-    model: route.modelId,
-    adapter: "anthropic",
-  });
-  attemptHandle.seal(logCtx.accountLogLabel);
   recordAttemptRequestedEffort(logCtx);
   const { attempt } = attemptHandle;
-  const finalLog = createFinalRequestLog(logIds, logCtx);
-  const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
-    if (finalLog.finished()) return;
-    if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    finalLog.finish(status, meta);
-  };
   const bindUsage = (usage: OcxUsage | undefined) => {
     if (!usage) return;
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
@@ -416,7 +447,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const cleanupAbort = linkAbortSignal(upstream, req.signal);
   let streamTurnRegistered = false;
   const transferTurnToStream = () => {
-    const lease = logIds?.turnAdmissionLease;
+    const lease = execution.turnAdmissionLease ?? logIds?.turnAdmissionLease;
     if (!lease || typeof (lease as { bindAbortController?: unknown }).bindAbortController !== "function") return;
     registerTurn(upstream, lease);
     streamTurnRegistered = true;
@@ -461,8 +492,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
-  const spendTracker = attachRequestSpendTracker(req, logCtx);
-  const physicalBudget = createInferenceSendBudget(req, logCtx);
+  const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
+  const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);
+  const onFirstOutput = execution.onFirstOutput ?? (logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined);
   // Observe-only spend is already booked by the tracker; count billing sends without booking again.
   let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
@@ -627,16 +659,18 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
-            }));
+            }), execution.comboDispatchPermit);
             let sendOwner: AnthropicPhysicalSendOwnership | null = null;
             try {
               if (init.signal?.aborted) throw init.signal.reason;
               // Capture before either accounting path so this request retains its start policy.
               if (spendReport.beforeSend && !spendReport.beforeSend()) {
-                if (spendTracker.refusals) throw new NativeMessagesSpendRefusal();
+                if (spendTracker?.refusals || (logCtx.spendTracker as { refusals?: number } | undefined)?.refusals) {
+                  throw new NativeMessagesSpendRefusal();
+                }
                 throw new SendBudgetExhaustedError();
               }
-              if (!physicalBudget.spendEnforced && !spendTracker.charge()) throw new NativeMessagesSpendRefusal();
+              if (spendTracker && !physicalBudget.spendEnforced && !spendTracker.charge()) throw new NativeMessagesSpendRefusal();
               noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // Last synchronous ownership reservation before the physical fetch. Retain this
               // exact incarnation across its await; a returned response can never reserve one.
@@ -892,7 +926,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
     };
-    const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
+    const observed = onFirstOutput ? observeFirstChunk(response.body, onFirstOutput) : response.body;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
@@ -1005,7 +1039,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     return fail(502, undeclaredToolCallMessage(undeclaredTool), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
-  if (logIds) recordFirstOutput(logCtx, logIds.start);
+  if (onFirstOutput) onFirstOutput();
   try {
     translatorBudget.chargeRetained(Buffer.byteLength(read.text) * 2, { kind: "live_transient" });
   } catch (error) {
@@ -1144,4 +1178,45 @@ export function nativeMessagesCountBody(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The Messages source a combo hands its native children. A child runs on the attempt the
+ * combo opened and reports through the combo's callbacks, so the final row stays the parent's.
+ */
+export function createNativeMessagesComboSource(input: {
+  req: Request;
+  config: OcxConfig;
+  envelope: ProtocolEnvelope;
+  requestedModel: string;
+  translatorBudget: TranslatorBudget;
+  callerAnthropicBeta?: string | null;
+  clientIdentity?: AnthropicClientIdentity;
+  sessionKey?: string | null;
+  modelScope?: AdmissionModelScope;
+  selector?: NativeMessagesSelector;
+}): ComboProtocolSource {
+  return {
+    inbound: "messages",
+    ...(input.selector ? { selector: input.selector } : {}),
+    envelope: input.envelope,
+    dispatchNativeChild: child => runNativeMessagesAttempt({
+      req: input.req,
+      config: input.config,
+      logCtx: child.childLog,
+      route: child.route,
+      body: child.body,
+      requestedModel: input.requestedModel,
+      translatorBudget: input.translatorBudget,
+      finishLog: child.finishLog,
+      sendBudget: child.sendBudget,
+      comboDispatchPermit: child.comboDispatchPermit,
+      onFirstOutput: child.onFirstOutput,
+      callerAnthropicBeta: input.callerAnthropicBeta,
+      clientIdentity: input.clientIdentity,
+      sessionKey: input.sessionKey,
+      modelScope: input.modelScope,
+      ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
+    }, child.attemptHandle),
+  };
 }

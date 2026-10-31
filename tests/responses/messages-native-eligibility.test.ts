@@ -119,11 +119,21 @@ describe("planner mirrors the native Messages rule", () => {
     expect(plan.guaranteedFeatures).toEqual(["request.top_k"]);
   });
 
-  test("switch on: OAuth and combo candidates report the rule that declined them", () => {
+  test("switch on: OAuth candidate reports the rule that declined it, while combo judges concrete candidates", () => {
     const oauth = buildProtocolPlanSnapshot(config(ON), { model: "anthoauth/claude-o", inbound: "messages", features: [] });
     expect(oauth.candidates[0]).toMatchObject({ nativeEligible: false, declineReasons: ["auth-mode-not-native"] });
     const combo = buildProtocolPlanSnapshot(config(ON), { model: "combo/pair", inbound: "messages", features: [] });
-    expect(combo.candidates[0]).toMatchObject({ provider: "anth", nativeEligible: false, declineReasons: ["combo-or-policy-route"] });
+    expect(combo.candidates[0]).toMatchObject({ provider: "anth", nativeEligible: true, declineReasons: [] });
+    expect(combo.candidates[1]).toMatchObject({ provider: "chat", nativeEligible: false, declineReasons: ["cross-wire-ir"] });
+    const plan = previewProtocolPlan(config(ON), { model: "combo/pair", inbound: "messages", features: [] });
+    expect(plan.mode).toBe("native");
+  });
+
+  test("switch off: combo candidate declines native Messages lane", () => {
+    const combo = buildProtocolPlanSnapshot(config(), { model: "combo/pair", inbound: "messages", features: [] });
+    expect(combo.candidates[0]).toMatchObject({ provider: "anth", nativeEligible: false, declineReasons: [] });
+    const plan = previewProtocolPlan(config(), { model: "combo/pair", inbound: "messages", features: [] });
+    expect(plan.mode).toBe("legacy-bridge");
   });
 });
 

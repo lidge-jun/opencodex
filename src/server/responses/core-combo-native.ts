@@ -21,7 +21,6 @@ import type { AdmissionLease } from "../../lib/admission";
 import type { RequestExecutionBudget, SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { ResponsesTerminalStatus } from "../../bridge";
-import type { NativeChatFinishLog } from "../chat-native";
 import type { InferenceAttempt } from "../inference/attempt";
 import type { ProtocolEnvelope } from "../../protocols/envelope";
 import type { ProtocolFeature } from "../../protocols/features";
@@ -40,7 +39,10 @@ import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transpor
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { assertRouteAllowedByScope } from "../admission-model-scope";
 import { isNativeChatRouteEligible } from "../chat-native-eligibility";
+import { isNativeMessagesRouteEligible, type NativeMessagesSelector } from "../messages-native-eligibility";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
+import { anthropicErrorResponse } from "../../claude/outbound";
+import type { FinalRequestLogMeta } from "../inference/final-log";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -54,10 +56,19 @@ import { markClientWire } from "../inference/client-wire";
 type Rec = Record<string, unknown>;
 type ComboTarget = { provider: string; model: string };
 
+/** Records the outcome on whichever final row owns this attempt; the first call wins. */
+export type NativeComboChildFinishLog = (
+  status: number,
+  message?: string,
+  closeReasonOrMeta?: "non_stream" | "terminal" | "client_cancel" | FinalRequestLogMeta,
+) => void;
+
+export type NativeChatFinishLog = NativeComboChildFinishLog;
+
 /** What the source needs to run one native child on the combo's open attempt. */
 export interface NativeComboChildRun {
   route: RouteResult;
-  /** A fresh copy of the source Chat body, never another candidate's rewritten one. */
+  /** A fresh copy of the source body, never another candidate's rewritten one. */
   body: Rec;
   childLog: RequestLogContext;
   attemptHandle: InferenceAttempt;
@@ -66,14 +77,16 @@ export interface NativeComboChildRun {
   turnAdmissionLease?: AdmissionLease;
   onFirstOutput: () => void;
   /** Reports to the combo's child callbacks; it never writes the parent's final row itself. */
-  finishLog: NativeChatFinishLog;
+  finishLog: NativeComboChildFinishLog;
 }
 
-/** Supplied by the Chat ingress for a combo route when `nativeChatCombos` is on. */
+/** Supplied by the Chat or Messages ingress for a combo route when native combo candidates are active. */
 export interface ComboProtocolSource {
-  readonly inbound: "chat";
+  readonly inbound: "chat" | "messages";
+  /** The request facts the standalone Messages path judges eligibility with (selector-keyed effort pins). */
+  readonly selector?: NativeMessagesSelector;
   readonly envelope: ProtocolEnvelope;
-  /** Runs `runNativeChatAttempt`; the response it returns is in the Chat wire. */
+  /** Runs native child attempt; the response it returns is in the child's wire. */
   dispatchNativeChild(input: NativeComboChildRun): Promise<Response>;
 }
 
@@ -120,18 +133,19 @@ export function createComboProtocolLanes(input: {
   const reject = resolveProtocolSettings(config).unrepresentable === "reject";
   const selector = (target: ComboTarget): string => `${target.provider}/${target.model}`;
 
-  // The Chat ingress's own settlement of a single route, applied to the concrete target: the
-  // key's model scope, the static policy captured for a Chat inbound, the wire override and the
+  // The ingress's own settlement of a single route, applied to the concrete target: the
+  // key's model scope, the static policy captured for an inbound wire, the wire override and the
   // OpenCode Go transport. A refusal here keeps the bridge, which reports it in its own shape.
   const settle = (target: ComboTarget, targetRoute: RouteResult): RouteResult | undefined => {
     try {
       const route: RouteResult = { ...targetRoute };
       assertRouteAllowedByScope(admissionScope, selector(target), route);
       const routedProvider = route.provider;
+      const inboundWire = source.inbound === "messages" ? "anthropic" : "chat";
       route.staticPolicy = captureRouteStaticPolicy(
-        route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, "chat",
+        route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, inboundWire,
       );
-      const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat", route.staticPolicy);
+      const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, inboundWire, route.staticPolicy);
       route.provider = resolveOpenCodeGoTransport(wireProvider, getOrAllocateRequestSessionLane(req), routedProvider);
       return route;
     } catch {
@@ -142,12 +156,20 @@ export function createComboProtocolLanes(input: {
   // Eligibility reads a body, and a body is a charged copy, so the adapter is checked first:
   // a candidate that can never go native costs no copy at all.
   const nativeBody = (target: ComboTarget, route: RouteResult | undefined): Rec | undefined => {
-    if (!route || route.provider.adapter !== "openai-chat") return undefined;
-    const body = envelope.freshBody();
-    // The concrete selector, as the bridge child's body carries it; the wire model comes from
-    // the route either way, and the pinned-effort lookup reads this.
-    body.model = selector(target);
-    return isNativeChatRouteEligible(route, body, config) ? body : undefined;
+    if (!route) return undefined;
+    if (source.inbound === "chat") {
+      if (route.provider.adapter !== "openai-chat") return undefined;
+      const body = envelope.freshBody();
+      body.model = selector(target);
+      return isNativeChatRouteEligible(route, body, config) ? body : undefined;
+    }
+    if (source.inbound === "messages") {
+      if (route.provider.adapter !== "anthropic") return undefined;
+      const body = envelope.freshBody();
+      body.model = selector(target);
+      return isNativeMessagesRouteEligible(route, body, config, source.selector) ? body : undefined;
+    }
+    return undefined;
   };
 
   const verdicts = new Map<string, CandidateVerdict>();
@@ -167,10 +189,10 @@ export function createComboProtocolLanes(input: {
     if (targetRoute) {
       const settled = settle(target, targetRoute);
       const native = nativeBody(target, settled) !== undefined;
-      const upstream = native ? "chat" : upstreamWireForAdapter((settled ?? targetRoute).provider.adapter);
+      const upstream = native ? source.inbound : upstreamWireForAdapter((settled ?? targetRoute).provider.adapter);
       const checked = checkRepresentable({
-        inbound: "chat",
-        requestPath: requestPathForLane("chat", native ? "native" : "bridge", upstream),
+        inbound: source.inbound,
+        requestPath: requestPathForLane(source.inbound, native ? "native" : "bridge", upstream),
         features: envelope.features(),
         policy: "reject",
       });
@@ -198,13 +220,18 @@ export function createComboProtocolLanes(input: {
       const skipped = enabled.map(judge);
       if (skipped.some(verdict => verdict.skip === undefined)) return undefined;
       const features = [...new Set(skipped.flatMap(verdict => verdict.skip ?? []))];
-      // The same refusal the ingress gives a single route: 400 in the Chat shape, feature keys
+      // The same refusal the ingress gives a single route: 400 in the inbound shape, feature keys
       // only, a blocked trace, and no upstream send.
-      markProtocolBlocked(logCtx, { inbound: "chat", reasonCodes: ["feature-unrepresentable"], features });
+      markProtocolBlocked(logCtx, { inbound: source.inbound, reasonCodes: ["feature-unrepresentable"], features });
       logCtx.errorCode = "unsupported_feature";
-      return markClientWire(chatCompletionsErrorResponse(
-        400, unrepresentableMessage(features), "invalid_request_error", "unsupported_feature",
-      ), "chat");
+      return markClientWire(
+        source.inbound === "messages"
+          ? anthropicErrorResponse(400, unrepresentableMessage(features), "invalid_request_error")
+          : chatCompletionsErrorResponse(
+              400, unrepresentableMessage(features), "invalid_request_error", "unsupported_feature",
+            ),
+        source.inbound,
+      );
     },
     nativeChild: (target, targetRoute, targetSendBudget, initialDecision) => {
       // Without the request's execution budget a native child could not share its sends, so it
@@ -217,22 +244,27 @@ export function createComboProtocolLanes(input: {
         provider: targetRoute.provider,
         modelId: targetRoute.modelId,
       });
-      if (initialDecision) {
-        // A validated JEV choice owns only this first dispatch, including explicit no-effort.
-        // Do not run ordinary force defaults for null: they require a non-null default.
-        delete body.service_tier;
-        delete body.thinking_budget;
-        delete body.thinking;
-        const reasoning = body.reasoning;
-        if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
-          const preserved = { ...reasoning as Rec };
-          delete preserved.effort;
-          if (Object.keys(preserved).length > 0) body.reasoning = preserved;
-          else delete body.reasoning;
-        }
-        if (initialDecision.effort === null) delete body.reasoning_effort;
-        else body.reasoning_effort = initialDecision.effort;
-      } else applyComboEffort(body, config, comboId, target, targetRoute);
+      // Native Messages has no effort rewrite yet: keep the bridge when combo effort policy applies.
+      if (source.inbound === "messages"
+        && (initialDecision !== undefined || comboDefaultEffort(config, comboId) != null)) return undefined;
+      if (source.inbound === "chat") {
+        if (initialDecision) {
+          // A validated JEV choice owns only this first dispatch, including explicit no-effort.
+          // Do not run ordinary force defaults for null: they require a non-null default.
+          delete body.service_tier;
+          delete body.thinking_budget;
+          delete body.thinking;
+          const reasoning = body.reasoning;
+          if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+            const preserved = { ...reasoning as Rec };
+            delete preserved.effort;
+            if (Object.keys(preserved).length > 0) body.reasoning = preserved;
+            else delete body.reasoning;
+          }
+          if (initialDecision.effort === null) delete body.reasoning_effort;
+          else body.reasoning_effort = initialDecision.effort;
+        } else applyComboEffort(body, config, comboId, target, targetRoute);
+      }
       return { route, body, sendBudget: targetSendBudget };
     },
   };
@@ -280,7 +312,7 @@ export interface ComboChildCallbacks {
 }
 
 /**
- * Run one native child on the attempt the combo opened, and mark its answer as Chat wire.
+ * Run one native child on the attempt the combo opened, and mark its answer as client wire.
  *
  * The child's outcomes map onto the combo's existing child callbacks: a terminal or cancellation
  * after the response was handed over publishes through the gate (and so reaches the parent's
@@ -300,14 +332,24 @@ export async function dispatchNativeComboChild(input: {
   onFirstOutput: () => void;
   callbacks: ComboChildCallbacks;
 }): Promise<Response> {
-  const { plan, logCtx, childLog, attempt, startedAt, callbacks } = input;
+  const { plan, logCtx, childLog, attempt, startedAt, callbacks, source } = input;
   childLog.providerAdapter = plan.route.provider.adapter;
+  const pathHop = source.inbound;
   markAttemptProtocolPath(attempt, {
-    mode: deliveryModeForLane("chat", "native", "chat"),
-    requestPath: requestPathForLane("chat", "native", "chat"),
+    mode: deliveryModeForLane(source.inbound, "native", source.inbound),
+    requestPath: requestPathForLane(source.inbound, "native", source.inbound),
+    responsePath: [pathHop, pathHop],
   });
   let outputSeen = false;
-  const finishLog: NativeChatFinishLog = (status, message, closeReason = "non_stream") => {
+  const finishLog: NativeComboChildFinishLog = (
+    status: number,
+    message?: string,
+    closeReasonOrMeta: "non_stream" | "terminal" | "client_cancel" | FinalRequestLogMeta = "non_stream",
+  ) => {
+    const meta: FinalRequestLogMeta = typeof closeReasonOrMeta === "string"
+      ? { closeReason: closeReasonOrMeta }
+      : closeReasonOrMeta;
+    const closeReason = meta.closeReason ?? "non_stream";
     if (message) childLog.upstreamError = redactSecretString(message).slice(0, 500);
     if (closeReason !== "non_stream") {
       // A streamed body ends after the combo merged this child into the parent row, so what the
@@ -320,7 +362,10 @@ export async function dispatchNativeComboChild(input: {
       callbacks.onResponseComplete(plan.route.modelId);
       return;
     }
-    if (closeReason === "terminal") {
+    if (meta.terminalStatus) {
+      childLog.terminalHttpStatus = status;
+      callbacks.onTerminal(meta.terminalStatus);
+    } else if (closeReason === "terminal") {
       childLog.terminalHttpStatus = status;
       callbacks.onTerminal("failed");
     }
@@ -331,6 +376,11 @@ export async function dispatchNativeComboChild(input: {
     seal: label => sealRequestAttemptIdentity(attempt, childLog.provider, childLog.providerAdapter ?? attempt.adapter, label),
     finish: (status, usage) => finishRequestAttempt(attempt, status, Date.now() - startedAt, usage),
   };
+  markAttemptProtocolPath(attemptHandle, {
+    mode: deliveryModeForLane(source.inbound, "native", source.inbound),
+    requestPath: requestPathForLane(source.inbound, "native", source.inbound),
+    responsePath: [pathHop, pathHop],
+  });
   const response = await input.source.dispatchNativeChild({
     route: plan.route,
     body: plan.body,
@@ -346,5 +396,5 @@ export async function dispatchNativeComboChild(input: {
     finishLog,
   });
   if (!response.ok && outputSeen) markResponseNonReplayable(response);
-  return markClientWire(response, "chat");
+  return markClientWire(response, source.inbound);
 }
