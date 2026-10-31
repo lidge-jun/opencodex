@@ -50,7 +50,9 @@ export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAc
   if (typeof record.installation_id !== "string" || !record.installation_id.trim()) return rawMetadata;
   const nextId = deriveCodexAccountInstallationId(chatgptAccountId, record.installation_id);
   if (nextId === record.installation_id) return rawMetadata;
-  return JSON.stringify({ ...record, installation_id: nextId });
+  // Turn metadata is also sent as an HTTP header, so keep JSON ASCII-safe.
+  return JSON.stringify({ ...record, installation_id: nextId })
+    .replace(/[\u0080-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountId: string): void {
