@@ -1,6 +1,6 @@
 /**
  * The `Select` extensions that let it replace every native `<select>` (form-controls-rule):
- * disabled options, type-ahead, native-like change semantics, `required`/`name` through a
+ * disabled options, type-ahead, unchanged re-pick semantics, `required`/`name` through a
  * proxy input, in-place menus inside a `<dialog>`, and the field sizes.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -100,16 +100,16 @@ test("type-ahead jumps to the next matching option and cycles on a repeated lett
   expect(trigger(host).getAttribute("aria-expanded")).toBe("false");
 });
 
-test("re-picking the current value is not a change, like a native select", async () => {
+test("re-picking the current value still reports it (\"Custom…\" entries rely on that)", async () => {
   const changes: string[] = [];
   const host = await mount(<Harness initial="a" onChange={value => changes.push(value)} />);
   await act(async () => { trigger(host).click(); });
   await act(async () => { document.querySelector<HTMLButtonElement>('[role=option][data-value="a"]')!.click(); });
-  expect(changes).toEqual([]);
+  expect(changes).toEqual(["a"]);
   expect(trigger(host).getAttribute("aria-expanded")).toBe("false");
   await act(async () => { trigger(host).click(); });
   await act(async () => { document.querySelector<HTMLButtonElement>('[role=option][data-value="c"]')!.click(); });
-  expect(changes).toEqual(["c"]);
+  expect(changes).toEqual(["a", "c"]);
 });
 
 test("required and name keep native form validation through a hidden proxy input", async () => {

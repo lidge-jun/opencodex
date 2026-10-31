@@ -273,9 +273,10 @@ export function Select({
     if (disabled) return;
     const option = options[index];
     if (!option || option.disabled) return;
-    // Like a native `change` event: re-picking the current value is not a change, so a
-    // save-on-change caller does not write the same value again.
-    if (option.value !== value) onChange(option.value);
+    // Unlike a native `change`, re-picking the current value still calls `onChange`: entries
+    // such as "Custom…" (shown as the value for an unlisted number) rely on it to open their
+    // editor. A save-on-change caller compares with its current value itself.
+    onChange(option.value);
     close(true);
   };
 
@@ -314,7 +315,7 @@ export function Select({
         // Select-only combobox: commit the active option, then let focus leave naturally.
         if (open) {
           const option = options[activeIndex];
-          if (option && !option.disabled && option.value !== value) onChange(option.value);
+          if (option && !option.disabled) onChange(option.value);
           setOpen(false);
         }
         break;

@@ -108,7 +108,7 @@ export default function ClaudeFirstPartyBindings({
                   label={t("claudeDesktop.firstParty.bindings.routeLabel")}
                   value={bound}
                   disabled={pending !== null}
-                  onChange={next => void save({ set: { [id]: next } }, id)}
+                  onChange={next => { if (next !== bound) void save({ set: { [id]: next } }, id); }}
                   options={[
                     ...(known ? [] : [{ value: bound, label: bound }]),
                     ...routes.map(model => ({ value: model.route, label: routeOptionLabel(model) })),

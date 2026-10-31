@@ -1158,7 +1158,7 @@ function AutoCleanupPolicyPanel({
               fullWidth
               value={policy.schedule}
               disabled={saving || running}
-              onChange={value => { void savePolicy({ schedule: value as CleanupPolicy["schedule"] }); }}
+              onChange={value => { if (value !== policy.schedule) void savePolicy({ schedule: value as CleanupPolicy["schedule"] }); }}
               options={[
                 { value: "manual", label: t("storage.policy.schedule.manual") },
                 { value: "startup", label: t("storage.policy.schedule.startup") },
@@ -1175,7 +1175,7 @@ function AutoCleanupPolicyPanel({
               fullWidth
               value={policy.mode}
               disabled={saving || running}
-              onChange={value => { void savePolicy({ mode: value as CleanupPolicy["mode"] }); }}
+              onChange={value => { if (value !== policy.mode) void savePolicy({ mode: value as CleanupPolicy["mode"] }); }}
               options={[
                 { value: "quarantine", label: t("storage.policy.mode.quarantine") },
                 { value: "permanent", label: t("storage.policy.mode.permanent") },

@@ -122,7 +122,8 @@ export default function SubagentForceControl({ apiBase, roster, id, onForceChang
           <Select fullWidth className="max-w-[22rem] sm:w-auto sm:min-w-[16rem]" triggerClassName="text-[13px]"
             label={t("sub.forceModel")} value={selected} disabled={!state || pending}
             onChange={value => {
-              if (state?.force) void save(value);
+              // Re-picking the pinned model is not a change; only a different model saves.
+              if (state?.force) { if (value !== state.force) void save(value); }
               else setSelection(value);
             }}
             options={[
