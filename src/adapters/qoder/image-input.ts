@@ -4,6 +4,8 @@ import { buildConversationInput } from "../coding-agent/protocol";
 // Local resource policy: #7516 verifies a 96x96 PNG, not a vendor size maximum.
 // 1 MiB leaves ample room over its 36 KiB RGBA raster while bounding stdin copies.
 const MAX_CN_PNG_BYTES = 1024 * 1024;
+const MAX_CN_PNG_EDGE = 8192;
+const MAX_CN_PNG_PIXELS = 16_000_000;
 const PNG_DATA_PREFIX = "data:image/png;base64,";
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const PNG_DEPTHS: Readonly<Record<number, readonly number[]>> = {
@@ -25,8 +27,9 @@ function boundedPngDataUrl(imageUrl: string): boolean {
     || bytes.readUInt32BE(8) !== 13 || bytes.readUInt32BE(12) !== 0x49484452) return false;
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
-  // Minimal IHDR validation only; this does not decompress or validate all chunks.
-  return width > 0 && width <= 0x7fffffff && height > 0 && height <= 0x7fffffff
+  // Bound declared raster work before the child can decode compressed pixels.
+  return width > 0 && width <= MAX_CN_PNG_EDGE && height > 0 && height <= MAX_CN_PNG_EDGE
+    && width * height <= MAX_CN_PNG_PIXELS
     && (PNG_DEPTHS[bytes[25]!] ?? []).includes(bytes[24]!)
     && bytes[26] === 0 && bytes[27] === 0 && (bytes[28] === 0 || bytes[28] === 1);
 }

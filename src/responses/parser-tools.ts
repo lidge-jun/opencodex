@@ -16,6 +16,7 @@ export function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
     if (t === "image_generation" || t === "image_gen") {
       return { name: IMAGE_GEN_TOOL_NAME };
     }
+    if (t === "tool_search") return { name: "tool_search" };
     if (t === "allowed_tools" && Array.isArray(value.tools)) {
       const names = value.tools
         .map(allowedToolName)

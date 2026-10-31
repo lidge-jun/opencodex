@@ -10,7 +10,8 @@ import {
   readSync,
   statSync,
 } from "node:fs";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
+import { sameFileIdentity } from "../lib/file-identity";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
@@ -57,7 +58,7 @@ type ReadResult =
 
 type PathResult =
   | { kind: "absent" }
-  | { kind: "path"; path: string; stat: Stats }
+  | { kind: "path"; path: string; stat: BigIntStats }
   | { kind: "indeterminate"; reason: string };
 
 type CatalogTarget = {
@@ -95,14 +96,17 @@ function errorReason(error: unknown): string {
   return String(error);
 }
 
+function milliseconds(ns: bigint): number {
+  return Number(ns / 1_000_000_000n) * 1000 + Number(ns % 1_000_000_000n) / 1e6;
+}
+
 function sameStat(
-  left: Stats,
-  right: Stats,
+  left: BigIntStats,
+  right: BigIntStats,
 ): boolean {
-  return left.dev === right.dev
-    && left.ino === right.ino
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs;
+  return sameFileIdentity(left, right)
+    && Number(left.size) === Number(right.size)
+    && milliseconds(left.mtimeNs) === milliseconds(right.mtimeNs);
 }
 
 function resolveRegularFile(path: string): PathResult {
@@ -124,7 +128,7 @@ function resolveRegularFile(path: string): PathResult {
   }
 
   try {
-    const before = statSync(target);
+    const before = statSync(target, { bigint: true });
     if (!before.isFile()) {
       return { kind: "indeterminate", reason: "surface is not a regular file" };
     }
@@ -141,12 +145,12 @@ function readRegularFile(path: string): ReadResult {
   // depend on who ran the suite. No read bit means the configured surface is
   // operationally unreadable to an ordinary Codex process and must remain
   // indeterminate even when the inspector itself has elevated privileges.
-  if (process.platform !== "win32" && (resolved.stat.mode & 0o444) === 0) {
+  if (process.platform !== "win32" && (Number(resolved.stat.mode) & 0o444) === 0) {
     return { kind: "indeterminate", reason: "EACCES: surface has no read permission bits" };
   }
   try {
     const content = readFileSync(resolved.path, "utf8");
-    const after = statSync(resolved.path);
+    const after = statSync(resolved.path, { bigint: true });
     if (!sameStat(resolved.stat, after)) {
       return { kind: "indeterminate", reason: "surface changed while it was being observed" };
     }
@@ -497,11 +501,11 @@ function classifyReferencedRollout(
         latest = payload.payload;
       }
     }
-    const after = fstatSync(handle);
+    const after = fstatSync(handle, { bigint: true });
     if (!sameStat(resolved.stat, after)) {
       return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
     }
-    const pathAfter = statSync(resolved.path);
+    const pathAfter = statSync(resolved.path, { bigint: true });
     if (!sameStat(resolved.stat, pathAfter)) {
       return indeterminate(surface, resolved.path, "rollout pathname was replaced while it was being observed");
     }
@@ -591,7 +595,7 @@ function classifyHistoryDatabase(path: string, budget: RolloutInspectionBudget):
       budget,
     );
     if (rollouts.kind !== "clean") return rollouts;
-    const after = statSync(resolved.path);
+    const after = statSync(resolved.path, { bigint: true });
     if (!sameStat(resolved.stat, after)) {
       return indeterminate("history", resolved.path, "history database changed while it was being observed");
     }

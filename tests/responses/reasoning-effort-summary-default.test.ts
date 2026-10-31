@@ -111,6 +111,26 @@ describe("reasoning effort preserves visible thinking when summary is omitted", 
     expect(child.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  test("final route removes a rejected thinking toggle from native passthrough", async () => {
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "native",
+      providers: { native: {
+        adapter: "openai-responses", baseUrl: "https://example.test/v1", reasoningWireFormat: "gateway-object",
+        models: ["test"],
+        modelCapabilities: { test: { supportsReasoning: false, supportsThinkingToggle: false, supportsReasoningEffort: false } },
+      } },
+    };
+    const parsed = parseRequest({ model: "native/test", input: [], reasoning: { enabled: true, effort: "high", summary: "auto" } });
+    const route = routeModel(config, parsed.modelId);
+    await applyFinalRouteRequestNormalization({
+      parsed, route, config, req: new Request("http://localhost/v1/responses"),
+      logCtx: { model: parsed.modelId, provider: route.providerName }, inboundWire: "responses",
+    });
+    expect(parsed.options.thinkingEnabled).toBeUndefined();
+    expect((parsed._rawBody as { reasoning?: unknown }).reasoning).toEqual({ summary: "auto" });
+  });
+
   test("Chat final-route normalization strips both shapes without losing summary or later-route effort", async () => {
     const config: OcxConfig = {
       port: 0,

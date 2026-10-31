@@ -21,11 +21,15 @@ and `tests/responses/responses-combo-exhausted-error.test.ts`.
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
-for well-formed mandatory `tool_choice` selectors, including required allowed-tools lists. Normal and
+for well-formed mandatory `tool_choice` selectors, including direct hosted/MCP choices and required allowed-tools lists. MCP's optional name may be null; an invalid name or server label still abstains. Normal and
 recovery picks share the check, resolving the inbound wire's static model policy and actual Responses
 transport URL; malformed and unknown selectors retain their ordinary error path. The next target
 receives the original selector, and an all-Meta exhaustion names the constraint before any send.
-Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
+The child parser accepts `tool_search`, `computer_use` and `image_gen` as recognized hosted choices.
+Its raw body preserves the selector; existing destination compatibility, including routed private
+tool-search lowering, still applies after parsing. Chat translation maps a direct `tool_search`
+choice to its existing synthetic function name. MCP null names also parse inside required allowed-tools lists; function/custom null names remain invalid. A Chat destination is skipped before send when translation would degrade a mandatory choice to auto/none, including the resolved model's auto-only tool-choice policy; exhaustion reports the tool-choice constraint. Eligibility resolves synthetic Fast/effort selectors before model policy, matching child request preparation while preserving exact configured IDs.
+Registered OpenAI API virtual models resolve to their wire model before adapter and auto-only policy checks, using the same registry resolver as child normalization. Other providers and unregistered IDs remain literal. Coverage: `tests/server/server-combo-required-tool-contract.test.ts`.
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
 uses `src/server/responses/combo-required-tool-contract.ts` to check successful native

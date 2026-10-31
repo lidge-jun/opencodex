@@ -243,6 +243,8 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 **自动分配** 会为每个已评估、且所选模型的推理强度级别列表不为空的角色提出推理强度；**应用**、**全部应用** 或 `ocx agent roles suggest --apply` 会插入或替换该角色的 `model_reasoning_effort`。推理强度取自所选模型自身的级别：最低级别、默认级别、比默认高一级，或最高级别。级别列表为空时不提出推理强度（`proposedEffort: null`）；此时 **应用** 会省略 `effort`，保留已有的固定强度。`null` 提案永远不会清除固定的推理强度。
 
+CLI 命令 `ocx agent roles suggest --apply` 在一个历史批次中最多应用 **50 个需要更改的角色**。设置已一致、未完成评估或未分配的角色不计入限额。超过 50 个时，命令会在发送任何角色更新之前以退出码 5 拒绝操作。请先不带 `--apply` 预览，再用 `ocx agent roles set <role> <model> [--effort <level>]` 逐个应用更改。中途中断后如何区分已确认的写入、结果未确认的请求以及安全重试，请参阅 [CLI 应用与恢复约定](/reference/cli/agents/)。
+
 ## Kilo
 
 Kilo CLI、VS Code 和 JetBrains 共用一份全局配置。此集成只在 `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json` 中写入 `provider.opencodex`。`XDG_CONFIG_HOME` 可以迁移该目录；如果候选文件均不存在，则创建 `kilo.jsonc`。不会修改项目配置。

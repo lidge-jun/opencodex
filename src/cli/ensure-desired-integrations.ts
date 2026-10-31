@@ -48,7 +48,7 @@ export interface EnsureDesiredIntegrationsDeps {
   syncGrokConfig: (
     port: number,
     config: OcxConfig,
-    opts?: { hostname?: string; probeHostname?: string },
+    opts?: { hostname?: string; probeHostname?: string; admit?: () => boolean },
   ) => Promise<GrokInjectResult>;
   removeDesktop3pStandardPivot: typeof removeDesktop3pStandardPivot;
   removeDesktopFirstParty?: typeof removeDesktopFirstParty;
@@ -67,7 +67,7 @@ export interface EnsureDesiredIntegrationsDeps {
 async function defaultSyncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string; probeHostname?: string } = {},
+  opts: { hostname?: string; probeHostname?: string; admit?: () => boolean } = {},
 ): Promise<GrokInjectResult> {
   const { syncGrokConfig } = await import("../grok/sync");
   return syncGrokConfig(port, config, opts);
@@ -133,7 +133,8 @@ export async function ensureGrokFenceMatchesDesired(
       port,
       config,
       { ...(hostname !== undefined ? { hostname } : {}),
-        ...(opts.probeHostname !== undefined ? { probeHostname: opts.probeHostname } : {}) },
+        ...(opts.probeHostname !== undefined ? { probeHostname: opts.probeHostname } : {}),
+        admit: () => shouldSyncGrokOnStart(deps.loadConfig()) },
     );
     if (g.changed) log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!g.ok) error(`⚠️  ${g.message}`);

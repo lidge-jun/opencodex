@@ -7,6 +7,7 @@ import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { spawnTestChild } from "../helpers/spawn-test-child";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { startWindowsCliChild, type WindowsCliChild } from "../../src/codex/windows-cli-child";
 import { windowsInstallNamespaceSupported } from "../../src/codex/cli-update-windows-observation";
 import { createWindowsApplyFixtures, native, WINDOWS_APPLY_BUDGET_MS, WINDOWS_APPLY_CHILD_BUDGET_MS, mainRoot, backingRoot, write } from "../helpers/codex-cli-windows-apply-fixture";
@@ -31,9 +32,13 @@ native("Windows shared prefix preserves unrelated package and shims while execut
   ].join("\n"));
   const compiler = join(process.env.SystemRoot ?? "C:/Windows", "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
   expect(existsSync(compiler), "x64 fixture compiler must be available; do not substitute a synthetic PE").toBe(true);
+  // A cold .NET Framework compiler on a fresh runner can take seconds before it emits anything;
+  // it is a real external binary, so it gets the shared spawn budget (still well inside the test's).
   const compiled = await spawnTestChild([compiler, "/nologo", "/platform:x64", "/target:exe", `/out:${exe}`, source],
-    { cwd: build, env: process.env, deadlineMs: 10000 });
-  expect(compiled.reaped && compiled.pipesClosed).toBe(true); expect(compiled.exitCode, compiled.stdout + compiled.stderr).toBe(0);
+    { cwd: build, env: process.env, deadlineMs: SPAWN_BUDGET_MS });
+  const compileReport = JSON.stringify({ timedOut: compiled.timedOut, elapsedMs: compiled.elapsedMs, signal: compiled.signal });
+  expect(compiled.reaped && compiled.pipesClosed, compileReport).toBe(true);
+  expect(compiled.exitCode, `${compileReport}\n${compiled.stdout}${compiled.stderr}`).toBe(0);
   const f = await fixture(readFileSync(exe));
   const unrelated = { "node_modules/unrelated/package.json": '{"name":"unrelated","version":"2.0.0","bin":"index.js"}',
     "node_modules/unrelated/index.js": '#!/usr/bin/env node\nconsole.log("unrelated");\n',

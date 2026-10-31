@@ -1,5 +1,5 @@
 import { capturePoolQuotaWriter, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
-import { getAccountQuotaHistory, isValidWhamHistoryObservation } from "../../src/codex/quota";
+import { getAccountQuotaHistory, isValidWhamHistoryObservation, settleQuotaPersistenceForTests } from "../../src/codex/quota";
 import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,12 +75,14 @@ function installPersistenceClock() {
 }
 
 /** Run the captured quota persistence callback and read its actual disk snapshot without a sleep. */
-function flushPersistence(): string {
+async function flushPersistence(): Promise<string> {
   if (!pendingPersist) throw new Error("Expected a scheduled quota persistence");
   const pending = pendingPersist;
   pendingPersist = undefined;
   clearTimeout(pending.timer);
   pending.run();
+  // The callback admits its write after any overlapping config-root ACL flight (#7815).
+  await settleQuotaPersistenceForTests();
   return readFileSync(join(testDir, "codex-quota-cache.json"), "utf8");
 }
 
@@ -276,7 +278,7 @@ describe("main policy quota writes", () => {
     });
   }
 
-  test("header writer carries provenance and untagged main writes invalidate it", () => {
+  test("header writer carries provenance and untagged main writes invalidate it", async () => {
     const writer = writerFor();
     const headers = new Headers({ "x-codex-primary-used-percent": "99" });
     applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
@@ -289,10 +291,10 @@ describe("main policy quota writes", () => {
     updateAccountQuota(MAIN, 20);
     expect(getMainPolicyQuota()).toBeNull();
     expect(getAccountQuota(MAIN)?.weeklyPercent).toBe(20);
-    expect(JSON.parse(flushPersistence()).mainPolicyQuota).toBeUndefined();
+    expect(JSON.parse(await flushPersistence()).mainPolicyQuota).toBeUndefined();
   });
 
-  test("public quota mutation and serializers cannot expose or mutate policy provenance", () => {
+  test("public quota mutation and serializers cannot expose or mutate policy provenance", async () => {
     const writer = writerFor();
     observeMainQuotaCredential("fixture-private-bearer", "fixture-main-a");
     setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99 }, undefined, writer);
@@ -301,7 +303,7 @@ describe("main policy quota writes", () => {
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
     const publicJson = JSON.stringify(Object.fromEntries(listAccountQuotas()));
     expect(publicJson).not.toContain("identityKey");
-    const disk = flushPersistence();
+    const disk = await flushPersistence();
     expect(disk).not.toContain("fixture-private-bearer");
     expect(disk).not.toContain("fixture-main-a");
     expect(disk).not.toContain("bearerHmac");
@@ -310,7 +312,7 @@ describe("main policy quota writes", () => {
   });
 });
 
-test("window replacement persists without carrying its proof into later partial updates", () => {
+test("window replacement persists without carrying its proof into later partial updates", async () => {
   const cfg = { codexMainAccountHardLock: true };
   const writer = writerFor();
   /** Publish both parsed projections with the captured writer throughout the simulated restart. */
@@ -324,7 +326,7 @@ test("window replacement persists without carrying its proof into later partial 
     allowed: true, primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null,
   } });
   // Execute quota's actual debounced serializer through the existing deterministic clock.
-  const persisted = flushPersistence();
+  const persisted = await flushPersistence();
   expect(JSON.parse(persisted).mainPolicyQuota.quota.weeklyPercent).toBe(35);
   expect(persisted).not.toContain("shortWindowAbsent");
   clearAccountQuota();
@@ -359,11 +361,11 @@ describe("main policy quota durability and lifecycle", () => {
     { name: "startup file replacement", account: "fixture-main-b", tag: "known", selected: true, source: "file" },
     { name: "startup same-account file", account: "fixture-main-a", tag: "known", selected: false, source: "file", refusal: "CodexMainAccountHardLockError" },
   ]) {
-    test(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, () => {
+    test(`cold keyring Pool preserves quota unless replacement is proven: ${scenario.name}`, async () => {
       const writer = writerFor("fixture-main-a");
       setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() / 1000 + 3600 }, undefined, writer);
       setAccountQuotaFromParsed("fixture-stored", { weeklyPercent: 33 });
-      const snapshot = JSON.parse(flushPersistence());
+      const snapshot = JSON.parse(await flushPersistence());
       if (scenario.tag === "missing") delete snapshot.mainPolicyQuota;
       if (scenario.tag === "invalid") snapshot.mainPolicyQuota.identityKey = "invalid-fixture-identity";
       writeSnapshot(snapshot);
@@ -431,7 +433,7 @@ describe("main policy quota durability and lifecycle", () => {
   }
 
   for (const unavailable of [true, false]) {
-    test(`persisted ${unavailable ? "unavailable" : "legacy"} null remains identity-bound and cannot authorize spending`, () => {
+    test(`persisted ${unavailable ? "unavailable" : "legacy"} null remains identity-bound and cannot authorize spending`, async () => {
       const writer = writerFor();
       const resetAt = Date.now() + 86_400_000;
       setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: resetAt,
@@ -447,7 +449,7 @@ describe("main policy quota durability and lifecycle", () => {
       expect(quota?.creditObservationUnavailable).toBe(unavailable ? true : undefined);
       expect(hasSpendableCodexCredits(quota)).toBe(false);
       expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [MAIN] }, MAIN, quota, "plus", Date.now())).toBe(true);
-      const persisted = JSON.parse(flushPersistence());
+      const persisted = JSON.parse(await flushPersistence());
       expect(persisted.mainPolicyQuota).toEqual({ identityKey: writer.identityKey, quota });
       // Read the actual serializer output in a fresh process, without clearing or rewriting it.
       const script = `
@@ -474,7 +476,7 @@ describe("main policy quota durability and lifecycle", () => {
     }, SPAWN_BUDGET_MS);
   }
 
-  test("stale main writers cannot replace unavailable evidence or attach it to a new identity", () => {
+  test("stale main writers cannot replace unavailable evidence or attach it to a new identity", async () => {
     const oldA = writerFor();
     const unavailable = parseUsageQuota({ credits: {} });
     const positive = { hasCredits: true, balance: 5, observedAt: Date.now() };
@@ -498,7 +500,7 @@ describe("main policy quota durability and lifecycle", () => {
     expect(getAccountQuota(MAIN)?.credits).toBeNull();
     expect(hasSpendableCodexCredits(getMainPolicyQuota())).toBe(false);
     expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [MAIN] }, MAIN, getMainPolicyQuota(), "plus", Date.now())).toBe(true);
-    expect(JSON.parse(flushPersistence()).mainPolicyQuota).toEqual({ identityKey: newA.identityKey, quota: before });
+    expect(JSON.parse(await flushPersistence()).mainPolicyQuota).toEqual({ identityKey: newA.identityKey, quota: before });
   });
 
   for (const resetAt of [undefined, 4_000_000_000]) {
@@ -535,12 +537,12 @@ describe("main policy quota durability and lifecycle", () => {
     }, SPAWN_BUDGET_MS);
   }
 
-  test("unrelated persistence hydrates and retains policy after legacy TTL expiry", () => {
+  test("unrelated persistence hydrates and retains policy after legacy TTL expiry", async () => {
     const writer = writerFor();
     const quota = { weeklyPercent: 99, updatedAt: Date.now() - 7 * 60 * 60_000 };
     writeSnapshot({ version: 1, quotas: { [MAIN]: quota }, mainPolicyQuota: { identityKey: writer.identityKey, quota } });
     setAccountQuotaFromParsed("fixture-pool", { weeklyPercent: 12 });
-    const saved = JSON.parse(flushPersistence());
+    const saved = JSON.parse(await flushPersistence());
     expect(saved.quotas[MAIN]).toBeUndefined();
     expect(saved.mainPolicyQuota.quota).toEqual(quota);
     expect(getMainPolicyQuota()).toEqual(quota);
@@ -549,7 +551,7 @@ describe("main policy quota durability and lifecycle", () => {
     setAccountQuotaFromParsed(MAIN, { resetCredits: 0 }, undefined, writer);
     expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99, resetCredits: 0 });
     expect(getAccountQuota(MAIN)).toEqual({ resetCredits: 0, updatedAt: expect.any(Number) });
-    const afterCredits = JSON.parse(flushPersistence());
+    const afterCredits = JSON.parse(await flushPersistence());
     expect(afterCredits.quotas[MAIN].weeklyPercent).toBeUndefined();
     expect(afterCredits.mainPolicyQuota.quota.weeklyPercent).toBe(99);
     expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
@@ -557,7 +559,7 @@ describe("main policy quota durability and lifecycle", () => {
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
     clearAccountQuota(MAIN);
     expect(getMainPolicyQuota()).toBeNull();
-    expect(JSON.parse(flushPersistence()).mainPolicyQuota).toBeUndefined();
+    expect(JSON.parse(await flushPersistence()).mainPolicyQuota).toBeUndefined();
   });
 
   test("clear before first hydration cannot resurrect disk policy", () => {
@@ -612,7 +614,7 @@ describe("main policy quota durability and lifecycle", () => {
 });
 
 
-test("pool history records fresh windows only and preserves identity across token refresh", () => {
+test("pool history records fresh windows only and preserves identity across token refresh", async () => {
   const credential = { accessToken: "history-token", refreshToken: "history-refresh", chatgptAccountId: "history-account", expiresAt: Date.now() + 3600_000 };
   const generation = saveCodexAccountCredential("history-pool", credential);
   const writer = capturePoolQuotaWriter("history-pool", { ...credential, generation })!;
@@ -637,7 +639,7 @@ test("pool history records fresh windows only and preserves identity across toke
   expect(rows).toHaveLength(2);
   expect(isValidWhamHistoryObservation({ rate_limit: { primary_window: { used_percent: 101 } } })).toBe(false);
   expect(isValidWhamHistoryObservation({ additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: -1 } } }] })).toBe(false);
-  const body = flushPersistence();
+  const body = await flushPersistence();
   expect(JSON.parse(body).history.accounts["history-pool"].samples).toHaveLength(2);
   expect(body).not.toContain("history-token");
   expect(body).not.toContain("history-refresh");
@@ -648,11 +650,11 @@ test("pool history records fresh windows only and preserves identity across toke
   expect(getAccountQuotaHistory("history-pool").observations).toEqual([]);
 });
 
-test("native main observations and oversized cache never become pool history", () => {
+test("native main observations and oversized cache never become pool history", async () => {
   const raw = { weeklyPercent: 20 };
   setAccountQuotaFromParsed(MAIN, raw, undefined, writerFor());
   expect(getAccountQuotaHistory(MAIN).observations).toEqual([]);
-  const persisted = JSON.parse(flushPersistence());
+  const persisted = JSON.parse(await flushPersistence());
   expect(persisted.history.accounts).not.toHaveProperty(MAIN);
   clearAccountQuota();
   const credential = { accessToken: "large-cache-access", refreshToken: "large-cache-refresh", chatgptAccountId: "large-cache-account", expiresAt: Date.now() + 3600_000 };

@@ -971,10 +971,10 @@ function scanCcSwitchJsonBytesInternal(bytes: Uint8Array): RawExtractedRow[] {
 
 export function readSourceRows(sourcePath: string, requireSqlite = false): RawExtractedRow[] {
   const resolved = resolve(sourcePath);
-  let beforeStat: ReturnType<typeof lstatSync>;
+  let beforeStat: import("node:fs").BigIntStats;
   try {
     assertPlainLocalPath(resolved);
-    beforeStat = lstatSync(resolved);
+    beforeStat = lstatSync(resolved, { bigint: true });
   } catch {
     throw new CcSwitchImportError("CC-Switch source path must be a plain regular local file without symlink traversal.");
   }
@@ -993,7 +993,7 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
         resolved,
         constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
       );
-      const opened = fstatSync(fd);
+      const opened = fstatSync(fd, { bigint: true });
       if (!opened.isFile()) {
         throw new CcSwitchImportError("CC-Switch source path must be a regular file.");
       }
@@ -1006,7 +1006,7 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
       ) {
         throw new CcSwitchImportError("CC-Switch source file changed while opening.");
       }
-      size = opened.size;
+      size = Number(opened.size);
       const n = readSync(fd, header, 0, 16, 0);
       if (hasSqliteMagicBytes(header, n)) {
         isSqlite = true;
@@ -1038,8 +1038,8 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
         assertNoUncheckpointedSqliteWal(resolved);
       }
       assertPlainLocalPath(resolved);
-      const afterStat = lstatSync(resolved);
-      const afterFd = fstatSync(fd);
+      const afterStat = lstatSync(resolved, { bigint: true });
+      const afterFd = fstatSync(fd, { bigint: true });
       if (isSqlite && afterFd.nlink > 1) {
         throw new CcSwitchImportError("CC-Switch SQLite source has multiple hard links; import the original CC-Switch database path directly.");
       }
@@ -1051,7 +1051,7 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
         || afterStat.gid !== opened.gid
         || afterStat.mode !== opened.mode
         || afterStat.size !== opened.size
-        || afterStat.mtimeMs !== opened.mtimeMs
+        || afterStat.mtimeNs !== opened.mtimeNs
         || afterFd.dev !== opened.dev
         || afterFd.ino !== opened.ino
         || afterFd.nlink !== opened.nlink
@@ -1059,7 +1059,7 @@ export function readSourceRows(sourcePath: string, requireSqlite = false): RawEx
         || afterFd.gid !== opened.gid
         || afterFd.mode !== opened.mode
         || afterFd.size !== opened.size
-        || afterFd.mtimeMs !== opened.mtimeMs
+        || afterFd.mtimeNs !== opened.mtimeNs
       ) {
         throw new CcSwitchImportError("CC-Switch source file changed while reading.");
       }
