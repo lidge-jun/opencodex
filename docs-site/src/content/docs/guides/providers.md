@@ -744,7 +744,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 86 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -837,6 +837,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| AI/ML API | `https://api.aimlapi.com/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -957,6 +958,21 @@ The provider editor also accepts an optional `inputModalities` fallback: a nonem
 are rejected on save; a malformed value in a hand-edited config loads as `["text"]` with a warning.
 The preset's text-only fallback is applied at runtime, including when saved under another provider
 name at the same URL and Chat adapter. It does not follow a custom URL or another adapter.
+
+**AI/ML API** is an OpenAI-compatible gateway at `https://api.aimlapi.com/v1`. Create a key at
+[aimlapi.com/app/keys](https://aimlapi.com/app/keys), then select **AI/ML API** in `ocx init` or the
+dashboard's **Add provider** picker, or run `ocx provider add aimlapi`, and give it the key directly
+or as the reference `${AIMLAPI_API_KEY}`. The preset uses Chat Completions for every client. Model
+ids keep the vendor prefix: `aimlapi/openai/gpt-5.6-terra` sends `openai/gpt-5.6-terra` upstream.
+Seven models are seeded and were verified with chat, streaming and tool calls: `openai/gpt-5.6-terra`
+(the default), `openai/gpt-6.1-terra`, `anthropic/claude-sonnet-5-5`, `google/gemini-3.5-flash`, `deepseek/deepseek-v4-flash`,
+`z-ai/glm-5.3-flash` and `moonshot/kimi-k3`. Live discovery reads the public
+[model catalog](https://docs.aimlapi.com/api-references/model-database) and keeps only rows whose
+`type` is `openai/chat-completions`, so image, video, audio and embedding models do not appear in
+the picker. The catalog is public, so the dashboard cannot verify a key before the first request.
+Requests to `https://api.aimlapi.com` carry two attribution headers, `X-AIMLAPI-Source` and
+`X-AIMLAPI-Partner-ID`; a header you set yourself with the same name takes precedence there. When
+the provider points at another host, no header with either name is sent, including one you set.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly

@@ -1322,6 +1322,69 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
+  {
+    // AI/ML API: OpenAI-compatible gateway at https://api.aimlapi.com/v1. Contract checked
+    // 2026-10-27: https://docs.aimlapi.com/api-references/model-database. GET /v1/models is
+    // public and answers 200 for any Bearer value, so it cannot validate a key. It lists ~950
+    // rows, and only the row `type` separates chat models from image, video, audio, embedding
+    // and Anthropic-batch rows; one id can appear in several rows. Discovery admits only
+    // `openai/chat-completions` rows. The seven seeds answered chat, streaming and tool calls
+    // through the proxy on 2026-10-27; context and output limits are the /v1/models `info`
+    // values. The env reference derived from the id is ${AIMLAPI_API_KEY}.
+    id: "aimlapi",
+    label: "AI/ML API",
+    adapter: "openai-chat",
+    baseUrl: "https://api.aimlapi.com/v1",
+    authKind: "key",
+    dashboardUrl: "https://aimlapi.com/app/keys",
+    // Client attribution requested by AI/ML API. Registry static headers reach the upstream only
+    // while the row still targets this host (withoutRegistryStaticHeaderCopies).
+    staticHeaders: {
+      "X-AIMLAPI-Source": "agent/opencodex",
+      "X-AIMLAPI-Partner-ID": "part_FwTskAwKV3EJU7Du1hqXx75d",
+    },
+    liveModels: true,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "openai/gpt-5.6-terra",
+    models: [
+      "openai/gpt-5.6-terra", "openai/gpt-6.1-terra", "anthropic/claude-sonnet-5-5", "google/gemini-3.5-flash",
+      "deepseek/deepseek-v4-flash", "z-ai/glm-5.3-flash", "moonshot/kimi-k3",
+    ],
+    modelContextWindows: {
+      "openai/gpt-5.6-terra": 1_050_000,
+      "openai/gpt-6.1-terra": 1_050_000,
+      "anthropic/claude-sonnet-5-5": 1_000_000,
+      "google/gemini-3.5-flash": 1_048_576,
+      "deepseek/deepseek-v4-flash": 1_000_000,
+      "z-ai/glm-5.3-flash": 1_048_576,
+      "moonshot/kimi-k3": 1_048_576,
+    },
+    // moonshot/kimi-k3 has no output cap here: /v1/models gives it no `outputMax` and its
+    // docs-json sets no maximum for max_tokens, so there is no published value to seed.
+    modelMaxOutputTokens: {
+      "openai/gpt-5.6-terra": 128_000,
+      "openai/gpt-6.1-terra": 128_000,
+      "anthropic/claude-sonnet-5-5": 128_000,
+      "google/gemini-3.5-flash": 65_536,
+      "deepseek/deepseek-v4-flash": 384_000,
+      "z-ai/glm-5.3-flash": 131_072,
+    },
+    modelInputModalities: {
+      "openai/gpt-5.6-terra": ["text", "image"],
+      "openai/gpt-6.1-terra": ["text", "image"],
+      "anthropic/claude-sonnet-5-5": ["text", "image"],
+      "google/gemini-3.5-flash": ["text", "image"],
+      "deepseek/deepseek-v4-flash": ["text"],
+      "z-ai/glm-5.3-flash": ["text", "image"],
+      "moonshot/kimi-k3": ["text", "image"],
+    },
+    modelDiscovery: {
+      path: "models",
+      filter: { allOf: [{ path: ["type"], equalsAny: ["openai/chat-completions"] }] },
+    },
+    note: "OpenAI-compatible gateway with one key for OpenAI, Anthropic, Google, DeepSeek, GLM, Kimi and other chat models. Model ids carry the vendor prefix (openai/gpt-5.6-terra). Live discovery lists only the Chat Completions models from the public catalog; image, video, audio and embedding models are left out. The public catalog cannot validate keys. Requests to api.aimlapi.com carry X-AIMLAPI-Source and X-AIMLAPI-Partner-ID attribution headers.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.

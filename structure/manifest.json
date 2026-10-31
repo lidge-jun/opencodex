@@ -613,6 +613,19 @@
       ]
     },
     {
+      "path": "providers/aimlapi.md",
+      "tier": 4,
+      "title": "AI/ML API",
+      "scope": "Type-filtered Chat discovery, seeded models and attribution headers bound to the preset destination.",
+      "documents": [
+        "src/providers/registry/entries-extended.ts",
+        "src/providers/registry.ts",
+        "src/providers/registry-static-headers.ts",
+        "src/providers/routed-config.ts",
+        "src/oauth/index.ts"
+      ]
+    },
+    {
       "path": "providers/jev-decision.md",
       "tier": 4,
       "title": "JEV Decision Routing",

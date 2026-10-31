@@ -8,6 +8,7 @@ import type {
 import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
 import { anthropicInstanceRowShapeMatches } from "./anthropic-instance-id";
+export { withoutRegistryStaticHeaderCopies } from "./registry-static-headers";
 export type {
   ProviderAuthKind,
   MetadataModelIdNormalize,
