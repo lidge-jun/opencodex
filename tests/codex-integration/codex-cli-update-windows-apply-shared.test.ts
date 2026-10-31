@@ -37,7 +37,7 @@ native("Windows shared prefix preserves unrelated package and shims while execut
   const compiled = await spawnTestChild([compiler, "/nologo", "/platform:x64", "/target:exe", `/out:${exe}`, source],
     { cwd: build, env: process.env, deadlineMs: SPAWN_BUDGET_MS });
   const compileReport = JSON.stringify({ timedOut: compiled.timedOut, elapsedMs: compiled.elapsedMs, signal: compiled.signal });
-  expect(compiled.reaped && compiled.pipesClosed).toBe(true);
+  expect(compiled.reaped && compiled.pipesClosed, compileReport).toBe(true);
   expect(compiled.exitCode, `${compileReport}\n${compiled.stdout}${compiled.stderr}`).toBe(0);
   const f = await fixture(readFileSync(exe));
   const unrelated = { "node_modules/unrelated/package.json": '{"name":"unrelated","version":"2.0.0","bin":"index.js"}',
