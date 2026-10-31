@@ -136,10 +136,11 @@ describe("Chat-wire dispatcher for ToolSearch-loaded tools", () => {
     expect(projectChatToolDispatch(parse(raw), raw as any)).toBeNull();
   });
 
-  test("only tools with a discovery result in this request are dispatchable", () => {
+  test("only discovered or already visible tools are dispatch targets", () => {
     const raw = request(["WebFetch", "NotebookEdit"], search("call_search", ["WebFetch"]));
     const projection = projectChatToolDispatch(parse(raw), raw as any)!;
     expect([...projection.loaded]).toEqual(["WebFetch"]);
+    expect([...projection.targets].sort()).toEqual(["Bash", "ToolSearch", "WebFetch"]);
     // Both deferred tools stay out of the catalog; only the discovered one is reachable.
     expect(projection.parsed.context.tools!.map(t => t.name)).toEqual(["ToolSearch", "Bash", CHAT_TOOL_DISPATCH_NAME]);
   });
@@ -183,11 +184,35 @@ describe("dispatcher response rewrite", () => {
     expect(await collect(malformed)).toEqual(malformed);
   });
 
-  test("a dispatcher call naming a tool outside the loaded set passes through unchanged", async () => {
+  test("a dispatcher call naming a tool outside the target set passes through unchanged", async () => {
     for (const name of ["NotebookEdit", "Bash", CHAT_TOOL_DISPATCH_NAME, ""]) {
       const events = dispatchCall("c5", JSON.stringify({ name, arguments: {} }));
       expect(await collect(events)).toEqual(events);
     }
+  });
+
+  test("a dispatch must be exactly {name, arguments}; extra top-level keys are never dropped silently", async () => {
+    for (const args of [
+      JSON.stringify({ name: "WebFetch", url: "https://x" }),
+      JSON.stringify({ name: "WebFetch", arguments: { url: "https://x" }, url: "https://y" }),
+      JSON.stringify({ name: "WebFetch", arguments: "not json" }),
+      JSON.stringify({ name: "WebFetch", arguments: "[1]" }),
+      JSON.stringify({ name: "WebFetch", arguments: [1] }),
+    ]) {
+      const events = dispatchCall("c10", args);
+      expect(await collect(events)).toEqual(events);
+    }
+  });
+
+  test("string-encoded arguments holding an object are decoded once; absent arguments are empty", async () => {
+    const encoded = await collect(dispatchCall("c11", JSON.stringify({ name: "WebFetch", arguments: JSON.stringify({ url: "https://x" }) })));
+    expect(encoded).toEqual([
+      { type: "tool_call_start", id: "c11", name: "WebFetch" },
+      { type: "tool_call_delta", arguments: '{"url":"https://x"}' },
+      { type: "tool_call_end" },
+    ]);
+    const bare = await collect(dispatchCall("c12", JSON.stringify({ name: "WebFetch" })));
+    expect(bare[1]).toEqual({ type: "tool_call_delta", arguments: "{}" });
   });
 
   test("consecutive dispatcher calls in one response are rewritten independently", async () => {

@@ -1307,13 +1307,15 @@ route that is a direct `openai-chat` provider. On a selected route:
   result that loaded it. The model calls the tool through `use_loaded_tool` with
   `{"name": ..., "arguments": {...}}`, and earlier calls are replayed in that same shape.
 - opencodex rewrites those calls back to the real tool before Claude Code sees them, and only for
-  tools discovered in that conversation. Claude Code always receives its own tool names.
+  tools discovered in that conversation or already in the catalog. Claude Code always receives its
+  own tool names; a malformed wrapper call reaches it unchanged and fails as an unknown tool.
 
 Limitations: the definitions are text, so provider-side strict schema enforcement does not apply to
 them and an invalid argument costs a turn; arguments of a dispatched call are not streamed until
 the call completes; the instruction sits inside a tool result, which some models may not follow, so
-verify each model before selecting it. A request that forces an undiscovered tool, or whose history
-is ambiguous, is sent unchanged. Absent, empty or unlisted configuration sends exactly the same
+verify each model before selecting it. A request that forces a hidden tool, or whose history is
+ambiguous, is sent unchanged. If a model calls an undiscovered deferred tool directly, that tool
+returns to the catalog and the cached prefix is lost once. Absent, empty or unlisted configuration sends exactly the same
 request bytes as before. This does not guarantee cache hits either.
 
 #### Claude models behind a gateway that also serves GPT

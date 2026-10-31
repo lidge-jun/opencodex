@@ -73,12 +73,15 @@ function from the first request with an eager `ToolSearch`; unused deferred tool
 so the catalog and the nudge never change on load. A discovered definition is appended as text to
 the ToolSearch result that loaded it, and earlier calls to discovered tools are re-encoded as
 dispatcher calls so replay is byte-stable. Both parse paths (`parseStream`, `parseResponse`) map a
-dispatcher call back to the client tool only when it names a tool discovered in that request;
-anything else, malformed or incomplete passes through unchanged. Dispatcher-call arguments are
-buffered until the call ends. Tools called before discovery keep their native slot. A forced
-choice of an undiscovered tool, duplicate tool_use ids, a discovery result that is not present
-exactly once, a duplicate declared name, or a client tool already named `use_loaded_tool` sends
-the request unprojected and leaves its response untouched. Absent, empty or unlisted
+dispatcher call back to the client tool only when its payload is exactly `{name, arguments?}`
+(`arguments` an object, or a JSON string holding one) and the name is a tool discovered in that
+request or already in the visible catalog; an undiscovered deferred tool, extra top-level keys,
+malformed or incomplete calls pass through unchanged. Dispatcher-call arguments are buffered
+until the call ends. Tools called before discovery, including a hidden deferred tool the model
+called directly, keep or regain their native slot, which changes the catalog once. A forced
+choice of any tool the projection would hide, duplicate tool_use ids, a discovery result that is
+not present exactly once, a duplicate declared name, or a client tool already named
+`use_loaded_tool` sends the request unprojected and leaves its response untouched. Absent, empty or unlisted
 configuration is byte-identical to no configuration. Definitions travel as text, so provider-side
 strict schema enforcement does not apply to them.
 `tests/claude-integration/claude-chat-tool-dispatch.test.ts` covers projection, prefix stability on

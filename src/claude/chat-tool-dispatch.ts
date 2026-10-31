@@ -38,6 +38,8 @@ export interface ChatToolDispatchProjection {
   parsed: OcxParsedRequest;
   /** Client tools the dispatcher currently stands in for. */
   loaded: ReadonlySet<string>;
+  /** Names a dispatcher call may map back to: the loaded tools plus the visible catalog. */
+  targets: ReadonlySet<string>;
 }
 
 /** Loaded definitions as transcript text; deterministic so the same history re-encodes identically. */
@@ -123,27 +125,40 @@ export function projectChatToolDispatch(parsed: OcxParsedRequest, raw: Rec): Cha
     return message;
   });
 
+  const visible = tools.filter(tool => !hidden.has(tool.name));
   return {
-    parsed: {
-      ...parsed,
-      context: {
-        ...parsed.context,
-        messages,
-        tools: [...tools.filter(tool => !hidden.has(tool.name)), DISPATCH_TOOL],
-      },
-    },
+    parsed: { ...parsed, context: { ...parsed.context, messages, tools: [...visible, DISPATCH_TOOL] } },
     loaded,
+    // A visible tool named through the dispatcher grants nothing new, so it maps back too.
+    targets: new Set([...loaded, ...visible.map(tool => tool.name)]),
   };
 }
 
 /**
- * Rewrites dispatcher calls back to the client tool they name, one adapter event at a time.
- * Only a tool in `loaded` (discovered in this request's history) is a valid target, so the
- * dispatcher can never reach a deferred tool ToolSearch has not loaded. A call whose arguments are
- * not a well-formed `{name, arguments}` pair for such a tool passes through unchanged, and the
- * client reports the unknown dispatcher call instead of the proxy guessing.
+ * Read a dispatcher call's arguments as exactly `{name, arguments?}`. `arguments` may be an object
+ * or a JSON string holding one (a common double-encoding). Anything else, including extra
+ * top-level keys that would otherwise be dropped silently, is not a dispatch.
  */
-function chatToolDispatchRewriter(loaded: ReadonlySet<string>) {
+function dispatchTarget(text: string, targets: ReadonlySet<string>): { name: string; args: string } | null {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return null; }
+  if (!isRec(value) || typeof value.name !== "string" || !targets.has(value.name)) return null;
+  if (Object.keys(value).some(key => key !== "name" && key !== "arguments")) return null;
+  let args: unknown = value.arguments ?? {};
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { return null; }
+  }
+  return isRec(args) ? { name: value.name, args: JSON.stringify(args) } : null;
+}
+
+/**
+ * Rewrites dispatcher calls back to the client tool they name, one adapter event at a time.
+ * Only a name in `targets` (a tool discovered in this request's history, or one already in the
+ * visible catalog) is valid, so the dispatcher can never reach a deferred tool ToolSearch has not
+ * loaded. A call that is not a well-formed dispatch for such a tool passes through unchanged, and
+ * the client reports the unknown dispatcher call instead of the proxy guessing.
+ */
+function chatToolDispatchRewriter(targets: ReadonlySet<string>) {
   let pending: { start: Extract<AdapterEvent, { type: "tool_call_start" }>; args: string } | null = null;
   const release = (): AdapterEvent[] => {
     if (!pending) return [];
@@ -156,16 +171,7 @@ function chatToolDispatchRewriter(loaded: ReadonlySet<string>) {
     if (pending) {
       if (event.type === "tool_call_delta") { pending.args += event.arguments; return []; }
       if (event.type === "tool_call_end") {
-        let target: { name: string; args: string } | null = null;
-        if (!event.incomplete) {
-          try {
-            const value = JSON.parse(pending.args) as unknown;
-            if (isRec(value) && typeof value.name === "string" && loaded.has(value.name)
-              && (value.arguments === undefined || isRec(value.arguments))) {
-              target = { name: value.name, args: JSON.stringify(value.arguments ?? {}) };
-            }
-          } catch { /* pass through unchanged */ }
-        }
+        const target = event.incomplete ? null : dispatchTarget(pending.args, targets);
         if (!target) return [...release(), event];
         const start = { ...pending.start, name: target.name };
         pending = null;
@@ -187,16 +193,16 @@ function chatToolDispatchRewriter(loaded: ReadonlySet<string>) {
 /** Streaming form: rewrite dispatcher calls in an adapter stream (see chatToolDispatchRewriter). */
 export async function* rewriteChatToolDispatchEvents(
   events: AsyncIterable<AdapterEvent>,
-  loaded: ReadonlySet<string>,
+  targets: ReadonlySet<string>,
 ): AsyncGenerator<AdapterEvent> {
-  const rewriter = chatToolDispatchRewriter(loaded);
+  const rewriter = chatToolDispatchRewriter(targets);
   for await (const event of events) yield* rewriter.push(event);
   yield* rewriter.flush();
 }
 
 /** Non-streaming form of rewriteChatToolDispatchEvents for adapter `parseResponse` results. */
-export function rewriteChatToolDispatchEventList(events: readonly AdapterEvent[], loaded: ReadonlySet<string>): AdapterEvent[] {
-  const rewriter = chatToolDispatchRewriter(loaded);
+export function rewriteChatToolDispatchEventList(events: readonly AdapterEvent[], targets: ReadonlySet<string>): AdapterEvent[] {
+  const rewriter = chatToolDispatchRewriter(targets);
   return [...events.flatMap(event => rewriter.push(event)), ...rewriter.flush()];
 }
 
@@ -209,20 +215,20 @@ export function applyChatToolDispatch(adapter: ProviderAdapter, discovery: Rec):
   const build = adapter.buildRequest.bind(adapter);
   const parseStream = adapter.parseStream.bind(adapter);
   const parseResponse = adapter.parseResponse?.bind(adapter);
-  let loaded: ReadonlySet<string> | null = null;
+  let targets: ReadonlySet<string> | null = null;
   adapter.buildRequest = (parsed, incoming) => {
     const projection = projectChatToolDispatch(parsed, discovery);
-    loaded = projection?.loaded ?? null;
+    targets = projection?.targets ?? null;
     return build(projection ? projection.parsed : parsed, incoming);
   };
   adapter.parseStream = (...args) => {
     const events = parseStream(...args);
-    return loaded ? rewriteChatToolDispatchEvents(events, loaded) : events;
+    return targets ? rewriteChatToolDispatchEvents(events, targets) : events;
   };
   if (parseResponse) {
     adapter.parseResponse = async (...args) => {
       const events = await parseResponse(...args);
-      return loaded ? rewriteChatToolDispatchEventList(events, loaded) : events;
+      return targets ? rewriteChatToolDispatchEventList(events, targets) : events;
     };
   }
 }

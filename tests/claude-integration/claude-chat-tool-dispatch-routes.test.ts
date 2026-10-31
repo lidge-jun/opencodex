@@ -196,6 +196,17 @@ describe("applyChatToolDispatch adapter wrapping", () => {
     return { adapter, built };
   };
   const parsedOf = (raw: Record<string, unknown>) => parseRequest(anthropicToResponsesTranslation(raw, {}).body as any);
+  /** A fresh wrapped adapter whose stream yields `events`, after one projected build of `raw`. */
+  async function* applyAgain(events: AdapterEvent[], raw: Record<string, unknown>) {
+    const adapter = {
+      name: "stub",
+      buildRequest: () => ({ url: "https://chat.example.com/v1/chat/completions", headers: {}, body: "{}" }),
+      async *parseStream() { yield* events; },
+    } as unknown as ProviderAdapter;
+    applyChatToolDispatch(adapter, raw);
+    await adapter.buildRequest(parsedOf(raw), { headers: new Headers() } as any);
+    yield* adapter.parseStream(new Response(""), {} as any);
+  }
 
   test("both parse paths are rewritten after a projected build", async () => {
     const raw = loadedRequest("chatgw/test-model");
@@ -207,6 +218,27 @@ describe("applyChatToolDispatch adapter wrapping", () => {
     for await (const e of adapter.parseStream(new Response(""), {} as any)) streamed.push(e);
     const listed = await adapter.parseResponse!(new Response(""), {} as any);
     for (const out of [streamed, listed]) expect(out).toEqual(event("WebFetch", '{"q":"u"}'));
+  });
+
+  test("a visible tool named through the dispatcher maps back without widening access", async () => {
+    const raw = loadedRequest("chatgw/test-model");
+    const out: AdapterEvent[] = [];
+    for await (const e of applyAgain(event(CHAT_TOOL_DISPATCH_NAME, JSON.stringify({ name: "Bash", arguments: { q: "ls" } })), raw)) out.push(e);
+    expect(out).toEqual(event("Bash", '{"q":"ls"}'));
+  });
+
+  test("each build decides afresh: a bail-out between two projected builds leaves only its response untouched", async () => {
+    const raw = loadedRequest("chatgw/test-model");
+    const forced = { ...raw, tool_choice: { type: "tool", name: "WebFetch" } };
+    const { adapter, built } = stubAdapter();
+    applyChatToolDispatch(adapter, raw);
+    const outcomes: AdapterEvent[][] = [];
+    for (const body of [raw, forced, raw]) {
+      await adapter.buildRequest(parsedOf(body), { headers: new Headers() } as any);
+      outcomes.push(await adapter.parseResponse!(new Response(""), {} as any));
+    }
+    expect(built.map(p => p.context.tools!.some(t => t.name === CHAT_TOOL_DISPATCH_NAME))).toEqual([true, false, true]);
+    expect(outcomes).toEqual([event("WebFetch", '{"q":"u"}'), dispatched, event("WebFetch", '{"q":"u"}')]);
   });
 
   test("a build that bails out sends the request unchanged and leaves responses untouched", async () => {
