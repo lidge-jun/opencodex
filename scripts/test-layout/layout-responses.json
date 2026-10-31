@@ -1,4 +1,5 @@
 {
+  "responses-native-output-identity.test.ts": "responses",
   "graceful-max-output-tokens.test.ts": "responses",
   "graceful-max-output-tokens-exclusions.test.ts": "responses",
   "advisor-web-search.test.ts": "advisor",

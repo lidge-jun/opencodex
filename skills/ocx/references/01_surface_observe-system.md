@@ -417,7 +417,8 @@ Drives no management route.
 | `--request-id` | string | Optional stable retry key. |
 | `--json` | boolean | Emit the public job status. |
 
-- Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a trusted loopback GUI session.
+- Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a current paired dashboard session on trusted loopback ingress, matching origin, CSRF and confirmed: true.
+- Standalone HTTP pairing requires the configured literal 127.0.0.1 or ::1 origin; localhost aliases, wildcard binds and connected-client roles use the local CLI --yes path instead.
 - Admission is stored under the protected current-user config root before the installer can run.
 - Exit 0 requires an applied job; refused, not_applied, ambiguous and pending duplicate jobs exit 1, including with --json.
 - Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused.

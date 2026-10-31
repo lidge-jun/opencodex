@@ -32,6 +32,16 @@ Anthropic managed sends recheck [family admission](../providers/anthropic-accoun
 
 ## Transport inventory
 
+### Native output identity
+
+`src/server/responses/native-response-json.ts` compares ID-less output records by canonical JSON.
+Transient keys use `json:` plus that JSON when it fits 64 UTF-8 bytes; larger records retain
+`body:` plus SHA-256. String IDs retain the distinct `id:` namespace. Body keys remain at most
+69 bytes, without skipping duplicate, relative-order or same-ID content checks in
+`native-response-output.ts`. Exported fingerprints retain their SHA-256 format. The unchanged
+750,000-item replay cases and `tests/responses/responses-native-output-identity.test.ts` cover
+key-order equivalence, both key families, sparse output, contradictions and byte bounds.
+
 The sections above cover the transports with load-bearing invariants. The rest of the transport
 surface is listed here so a maintainer can find the owner without grepping:
 
