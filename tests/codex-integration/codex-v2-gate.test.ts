@@ -1633,7 +1633,7 @@ describe("cli surface", () => {
     }
     const out = logs.join("\n");
     expect(out).toContain("agents.enabled: false");
-    expect(out).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
+    expect(out).toContain("agents.max_depth: 2 (V1-only — ignored by V2 sessions)");
     expect(out).toContain("subagent_developer_instructions: (unset — children inherit)");
     expect(out).toContain("multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)");
   });
