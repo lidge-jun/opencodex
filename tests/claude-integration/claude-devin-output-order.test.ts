@@ -115,11 +115,11 @@ describe("Devin Messages late signatures", () => {
       { type: "tool_call_end" }, { type: "thinking_signature", signature }, terminal,
     ]);
     expect(result.stop_reason).toBe("tool_use");
-    expect(result.content.at(-1)).toMatchObject({ type: "tool_use", id: "call_read", name: "Read",
+    expect(result.content.at(-1)).toMatchObject({ type: "tool_use", id: "toolu_call_read", name: "Read",
       input: { file_path: "/synthetic/file.txt" } });
     const translated = messagesToResponsesTranslation({ model: "devin/swe-2", max_tokens: 64,
       messages: [{ role: "user", content: "Read" }, { role: "assistant", content: result.content },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: "call_read", content: "marker" }] }],
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_call_read", content: "marker" }] }],
     }, undefined, createTestTranslatorBudget());
     const history = mapOcxMessagesToDevin(parseRequest(translated.body));
     expect(history.find(row => row.role === "assistant")).toMatchObject({
