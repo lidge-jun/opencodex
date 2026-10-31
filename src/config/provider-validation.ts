@@ -1,6 +1,7 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { assertWorkBuddyDestination } from "../providers/workbuddy";
 import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
+import { M365_COPILOT_BASE_URL } from "../providers/m365-copilot-models";
 import { redactSecretString } from "../lib/redact";
 import {
   isValidModelDiscoveryModelId,
@@ -426,6 +427,15 @@ export function credentialPinnedProviderConfigError(
     if (provider.adapter !== undefined && provider.adapter !== "workbuddy-ai") return 'adapter must stay "workbuddy-ai"';
     try { if (typeof provider.baseUrl === "string") assertWorkBuddyDestination(provider.baseUrl); }
     catch { return "WorkBuddy AI credentials require https://www.workbuddy.ai/v2"; }
+    return null;
+  }
+  if (providerName === "m365-copilot") {
+    if (provider.adapter !== undefined && provider.adapter !== "m365-copilot") {
+      return 'adapter must stay "m365-copilot": its Microsoft account token is pinned to that adapter';
+    }
+    if (typeof provider.baseUrl === "string" && provider.baseUrl.replace(/\/+$/, "") !== M365_COPILOT_BASE_URL) {
+      return `baseUrl must stay on ${M365_COPILOT_BASE_URL}: its Microsoft account token is pinned to that host`;
+    }
     return null;
   }
   if (providerName !== "dsh-account") return null;

@@ -512,6 +512,7 @@ export default function ProviderAuthPanel({
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
                   <LoginHintView
+                    providerId={item.name}
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,

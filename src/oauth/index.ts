@@ -49,6 +49,7 @@ import { loginZed, refreshZedToken } from "./zed";
 import { assertDevinCliAdoptionOwnership, loginDevin, refreshDevinToken } from "./devin";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
+import { loginM365Copilot, refreshM365CopilotToken } from "./m365-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
@@ -101,6 +102,8 @@ import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
+  /** Private M365 discovery session; never projected into account summaries. */
+  m365?: import("./types").M365CopilotWebSession;
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
   provider: string;
   accountId: string;
@@ -250,6 +253,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "m365-copilot": {
+    login: loginM365Copilot, refresh: refreshM365CopilotToken,
+    providerConfig: oauthConfig("m365-copilot"), defaultModel: oauthDefaultModel("m365-copilot"),
+    defaultRefreshPolicy: "lazy-only",
+  },
   "workbuddy-ai": {
     login: loginWorkBuddy, refresh: refreshWorkBuddyToken,
     providerConfig: oauthConfig("workbuddy-ai"), defaultModel: oauthDefaultModel("workbuddy-ai"),
@@ -572,6 +580,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(oauthProvider === "workbuddy-ai" && cred.workbuddy ? { workbuddy: { ...cred.workbuddy } } : {}),
+    ...(oauthProvider === "m365-copilot" && cred.m365 ? { m365: { ...cred.m365 } } : {}),
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
@@ -836,6 +845,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
     ...(fresh.accountId === undefined && previous.accountId ? { accountId: previous.accountId } : {}),
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
+    ...(fresh.m365 === undefined && previous.m365 && fresh.accountId?.toLowerCase() === previous.accountId?.toLowerCase() ? { m365: previous.m365 } : {}),
   };
 }
 export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const row=getAccountCredentialWithStatus(provider,accountId);if(!row)throw new OAuthLoginRequiredError(provider);if(row.paused)throw new OAuthAccountPausedError();const stored=row.credential;const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}

@@ -103,6 +103,7 @@ function normalizedEndpoint(value: unknown): string | undefined {
 const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   "workbuddy-ai": Object.freeze({ "": "workbuddy-ai" }),
   "dsh-account": Object.freeze({ "": "dsh-account" }),
+  "m365-copilot": Object.freeze({ "": "m365-copilot" }),
 });
 
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {

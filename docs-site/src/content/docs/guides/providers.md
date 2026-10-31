@@ -744,7 +744,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
+opencodex ships 107 built-in presets: 85 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1877,3 +1877,7 @@ An access-denied result does not by itself prove an expired login or an ineligib
 ## Large inline images on Chat providers
 
 Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.
+
+## Microsoft 365 Copilot
+
+The experimental native `m365-copilot` provider uses Microsoft work/school sign-in, account-specific live model discovery and text/image chat input. See [Microsoft 365 Copilot setup](/guides/m365-copilot/) for its isolated browser flow, account requirements and limitations. It is separate from GitHub Copilot.
