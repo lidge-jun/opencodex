@@ -253,7 +253,7 @@
   text-align: center;
 }
 .acc-pool-empty__title { margin: 0; font-size: 14px; font-weight: 500; color: var(--ocx-fg); }
-.acc-pool-empty__hint { margin: 0 0 6px; max-width: 46ch; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); }
+.acc-pool-empty__hint { margin: 0 0 6px; max-width: 60ch; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); text-wrap: balance; }
 
 /* Native main-login profiles (its own component, drawn as a v2 card here). */
 .acc-native-main > .panel {
@@ -715,6 +715,15 @@
 .pws-overview-sidebar > .pws-usage-block .pws-usage-block-head { align-items: center; }
 .pws-overview-sidebar > .pws-usage-block .pws-section-title { margin: 0; }
 .pws-overview-layout .pws-section-title { margin-bottom: 8px; }
+/* Usage tab: each block is its own card instead of a rule-separated stack. */
+.pws-detail-panel > .pws-section > .pws-usage-block {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-detail-panel > .pws-section > .pws-usage-block + .pws-usage-block { margin-top: 16px; padding-top: 14px; border-top: 0; }
+.pws-usage-metric { border-radius: 10px; }
 .pws-overview-layout .pws-kv-row { padding: 7px 0; font-size: 13px; }
 .pws-overview-layout .pws-kv-row + .pws-kv-row { box-shadow: inset 0 1px 0 var(--ocx-line); }
 .pws-overview-layout .pws-kv-row dt { color: var(--ocx-fg-muted); }
