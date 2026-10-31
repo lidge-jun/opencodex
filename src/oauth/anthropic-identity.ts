@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import type { OAuthCredentials } from "./types";
-import { normalizeOAuthPlan } from "./plan";
+import { normalizeAnthropicPlan } from "../providers/anthropic-subscription";
 
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const PROFILE_TIMEOUT_MS = 10_000;
@@ -55,12 +55,7 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
     const organization = "organization" in data ? data.organization : undefined;
     const org = organization && typeof organization === "object"
       ? organization as Record<string, unknown> : undefined;
-    const strip = (value: unknown, prefix: string) => {
-      const label = normalizeOAuthPlan(value === "Ultra" ? "ultra" : value);
-      const tier = label?.startsWith(prefix) ? label.slice(prefix.length) : label;
-      return normalizeOAuthPlan(tier?.startsWith("claude_") ? tier.slice("claude_".length) : tier);
-    };
-    const plan = strip(org?.rate_limit_tier, "default_claude_") ?? strip(org?.organization_type, "claude_");
+    const plan = normalizeAnthropicPlan(org?.rate_limit_tier) ?? normalizeAnthropicPlan(org?.organization_type);
     return { ...identity, ...(plan ? { plan } : {}) };
   } catch {
     // Unavailable identity is an explicit unresolved result, never an ownership guess.

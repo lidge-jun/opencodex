@@ -104,7 +104,7 @@ test("raw decision windows retain invalid reset evidence instead of display norm
 
 for (const [tier, plan] of [["default_claude_ultra", "ultra"], ["claude_ultra", "ultra"],
   ["Ultra", "ultra"], ["claude_max_20x", "max_20x"], ["default_claude_max_20x", "max_20x"],
-  ["default_claude_max_5x", "max_5x"], ["default_claude_future_tier", "future_tier"]]) {
+  ["default_claude_max_5x", "max_5x"], ["default_claude_future_tier", "default_claude_future_tier"]]) {
   test(`profile accepts display tier ${tier} without assigning entitlements`, async () => {
     globalThis.fetch = (async () => Response.json({ account: { uuid: "synthetic-account" },
       organization: { rate_limit_tier: tier } })) as typeof fetch;
@@ -119,3 +119,21 @@ test("no-grant and future ineligibility reasons remain displayable and refuse sp
     expect(anthropicResetGrantBlocker(status!, "synthetic-grant")).toBe("ineligible");
   }
 });
+
+for (const tier of ["claude_pro", "default_claude_max_5x"]) {
+  test(`${tier} retains its real five-hour and weekly meters`, async () => {
+    const body = { five_hour: { utilization: 16 }, seven_day: { utilization: 37 }, limits: [
+      { kind: "session", percent: 18, is_active: true }, { kind: "weekly_all", percent: 39, is_active: true },
+    ] };
+    const quota = await parse(body);
+    expect(quota).toMatchObject({ fiveHourPercent: 18, weeklyPercent: 39 });
+    expect(rawAnthropicUsageWindows(body, now).map(row => row.window)).toEqual(["5h", "weekly"]);
+    expect(providerQuotaWindows(quota!, "measured", now).map(row => row.id)).toEqual(["5h", "weekly"]);
+  });
+}
+for (const [status, failure] of [[401, "access_denied"], [429, "rate_limited"]] as const) {
+  test(`HTTP ${status} is a closed failure diagnosis and exposes no upstream text`, async () => {
+    globalThis.fetch = (async () => Response.json({ error: { message: "synthetic-private-detail" } }, { status })) as typeof fetch;
+    expect(await probeAnthropicUsageQuota("synthetic-usage-bearer")).toEqual({ quota: null, failure });
+  });
+}

@@ -39,13 +39,18 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `src/oauth/anthropic-identity.ts` reads organization tiers from the authenticated profile
 without changing bearer-bound UUID proof. Browser login, refresh, local import and proven
 CLI rotation persist a validated display-only `plan`; both Anthropic instances project it
-through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_` or `claude_`, with organization
-kinds stripping `claude_` as fallback. Safe future tier strings remain displayable; malformed
+through `src/oauth/index.ts`. Known tiers strip `default_claude_` or `claude_`, with organization
+kinds as fallback. Safe future tier strings retain their original spelling; malformed
 or absent tiers project null and never come from quota percentages. Same-account refreshes
 retain an unobserved plan; an observed invalid tier clears it.
 Refresh gives the profile read a 2-second deadline because a refresh can sit on a request path;
 a missed read leaves the stored label in place.
-An account replacement cannot inherit another account's label.
+An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
+projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
+or the original unfamiliar validated tier. Dashboard Claude account rows use ordinal labels,
+omit account IDs/emails and show the subscription beside quota. The current quota section keeps
+that label even if usage is unavailable. Pro and Max 5x keep their measured five-hour and
+weekly windows; an explicitly absent/inactive session never fabricates a meter.
 
 `src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
 to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
