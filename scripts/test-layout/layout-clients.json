@@ -1,5 +1,6 @@
 {
   "omo-responses-loop.test.ts": "clients",
+  "codex-launcher-endpoint.test.ts": "codex-integration",
   "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
