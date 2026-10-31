@@ -8,6 +8,11 @@ import {
   restoreMuseToolNamesInJson,
   rewriteMuseToolNamesForUpstream,
 } from "../../src/responses/muse-tool-name-alias";
+import {
+  aliasMuseSubscriptionBuiltinTools,
+  mergeMuseToolNameAliases,
+  MUSE_CODE_BUILTIN_TOOL_NAMES,
+} from "../../src/responses/muse-subscription-tool-alias";
 import { expandPreviousResponseInput } from "../../src/responses/state";
 import { GROK_REFUSED_TERMINAL_EVENT_TYPE } from "../../src/server/grok-responses-snapshot-repair";
 import { handleResponses } from "../../src/server/responses";
@@ -625,5 +630,165 @@ describe("muse tool-name inbound restore through handleResponses", () => {
     expect(metaReq.convertedMuseToolNameAliases?.get(wire)).toBe(original);
     expect(otherReq.convertedMuseToolNameAliases).toBeUndefined();
     expect(JSON.parse(otherReq.body).tools[0].name).toBe(original);
+  });
+});
+
+/**
+ * Meta's Muse Code subscription gate: live 403 `client_attestation_denied` ("Muse Code
+ * subscriptions cover requests from the Muse Code client only") whenever a flat function tool
+ * carries one of Muse Code's own builtin names. Aliasing them is the whole fix; nothing about the
+ * credential or the client identity changes.
+ */
+describe("muse subscription builtin aliasing", () => {
+  const declared = (...names: string[]): Array<Record<string, unknown>> =>
+    names.map(name => ({ type: "function", name, parameters: { type: "object" } }));
+
+  test("aliases exactly the builtin collisions and leaves the host's other tools alone", () => {
+    const { body, aliases } = aliasMuseSubscriptionBuiltinTools({
+      model: "muse-wonder-1.0",
+      tools: declared("apply_patch", "update_plan", "request_user_input", "exec_command", "view_image"),
+    });
+    const names = (body as { tools: Array<{ name: string }> }).tools.map(tool => tool.name);
+    expect(names).toEqual([
+      "client_apply_patch",
+      "client_update_plan",
+      "client_request_user_input",
+      "exec_command",
+      "view_image",
+    ]);
+    expect(aliases.get("client_apply_patch")).toBe("apply_patch");
+    expect(aliases.get("client_update_plan")).toBe("update_plan");
+    expect(aliases.get("client_request_user_input")).toBe("request_user_input");
+    expect(aliases.size).toBe(3);
+    // The measured set is what the gate reads; membership is the contract under test.
+    expect(MUSE_CODE_BUILTIN_TOOL_NAMES.has("apply_patch")).toBe(true);
+    expect(MUSE_CODE_BUILTIN_TOOL_NAMES.has("exec_command")).toBe(false);
+  });
+
+  test("leaves a catalog with no collisions byte-identical", () => {
+    const body = { model: "muse-wonder-1.0", tools: declared("exec_command", "view_image") };
+    expect(aliasMuseSubscriptionBuiltinTools(body).body).toBe(body);
+    expect(aliasMuseSubscriptionBuiltinTools(body).aliases.size).toBe(0);
+  });
+
+  test("an alias already owned by another tool falls through to a numbered suffix", () => {
+    const { body, aliases } = aliasMuseSubscriptionBuiltinTools({
+      model: "muse-wonder-1.0",
+      tools: declared("apply_patch", "client_apply_patch"),
+    });
+    const names = (body as { tools: Array<{ name: string }> }).tools.map(tool => tool.name);
+    expect(names).toEqual(["client_apply_patch_2", "client_apply_patch"]);
+    expect(aliases.get("client_apply_patch_2")).toBe("apply_patch");
+  });
+
+  test("replayed history and a named tool_choice use the same wire names", () => {
+    const { body } = aliasMuseSubscriptionBuiltinTools({
+      model: "muse-wonder-1.0",
+      tools: declared("apply_patch"),
+      tool_choice: { type: "function", name: "apply_patch" },
+      input: [
+        { type: "function_call", call_id: "c1", name: "apply_patch", arguments: "{}" },
+        { type: "function_call_output", call_id: "c1", output: "ok" },
+      ],
+    });
+    const rewritten = body as {
+      input: Array<Record<string, unknown>>;
+      tool_choice: Record<string, unknown>;
+    };
+    expect(rewritten.tool_choice).toEqual({ type: "function", name: "client_apply_patch" });
+    expect(rewritten.input[0]).toMatchObject({ type: "function_call", name: "client_apply_patch" });
+    expect(rewritten.input[1]).toMatchObject({ type: "function_call_output", call_id: "c1" });
+  });
+
+  test("restoration maps every aliased call back to the declared name", () => {
+    const { aliases } = aliasMuseSubscriptionBuiltinTools({
+      model: "muse-wonder-1.0",
+      tools: declared("apply_patch", "update_plan"),
+    });
+    const restored = restoreMuseToolNames({
+      output: [
+        { type: "function_call", name: "client_apply_patch", call_id: "c1", arguments: "{}" },
+        { type: "function_call", name: "client_update_plan", call_id: "c2", arguments: "{}" },
+      ],
+    }, aliases).value as { output: Array<{ name: string }> };
+    expect(restored.output.map(item => item.name)).toEqual(["apply_patch", "update_plan"]);
+  });
+
+  test("merged with the length rewrite, both maps restore through one sidecar", () => {
+    const long = "mcp__plugin_with_a_very_long_server_name_for_muse__a_long_tool_identity_here";
+    const first = aliasMuseSubscriptionBuiltinTools({
+      model: "muse-wonder-1.0",
+      tools: declared(long, "apply_patch"),
+    });
+    const second = rewriteMuseToolNamesForUpstream(first.body);
+    const merged = mergeMuseToolNameAliases(first.aliases, second.aliases);
+    const tools = (second.body as { tools: Array<{ name: string }> }).tools;
+    for (const tool of tools) expect(tool.name.length).toBeLessThanOrEqual(64);
+    const restored = restoreMuseToolNames({ output: tools.map(tool => ({ type: "function_call", name: tool.name })) }, merged)
+      .value as { output: Array<{ name: string }> };
+    expect(restored.output.map(item => item.name)).toEqual([long, "apply_patch"]);
+  });
+
+  test("only the meta-muse route aliases; a Meta destination on another provider keeps names", () => {
+    const body = {
+      model: "muse-wonder-1.0",
+      input: "ping",
+      tools: declared("apply_patch"),
+    };
+    const metaMuse = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+      apiKey: "test-key",
+    } as never).buildRequest({
+      modelId: "muse-wonder-1.0",
+      context: { messages: [] },
+      stream: false,
+      options: {},
+      _rawBody: body,
+    } as never, { headers: new Headers(), providerName: "meta-muse" } as never);
+    const payAsYouGo = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+      apiKey: "test-key",
+    } as never).buildRequest({
+      modelId: "muse-wonder-1.0",
+      context: { messages: [] },
+      stream: false,
+      options: {},
+      _rawBody: body,
+    } as never, { headers: new Headers(), providerName: "meta-model" } as never);
+
+    expect(JSON.parse(metaMuse.body).tools[0].name).toBe("client_apply_patch");
+    expect(metaMuse.convertedMuseToolNameAliases?.get("client_apply_patch")).toBe("apply_patch");
+    expect(JSON.parse(payAsYouGo.body).tools[0].name).toBe("apply_patch");
+    expect(payAsYouGo.convertedMuseToolNameAliases?.size ?? 0).toBe(0);
+  });
+
+  test("a native custom apply_patch is lowered, then aliased past the gate", () => {
+    const request = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+      apiKey: "test-key",
+      supportsResponsesCustomTools: false,
+    } as never).buildRequest({
+      modelId: "muse-wonder-1.0",
+      context: { messages: [] },
+      stream: false,
+      options: {},
+      _rawBody: {
+        model: "muse-wonder-1.0",
+        input: "patch it",
+        tools: [{
+          type: "custom",
+          name: "apply_patch",
+          description: "Apply a patch",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        }],
+      },
+    } as never, { headers: new Headers(), providerName: "meta-muse" } as never);
+    const tools = JSON.parse(request.body).tools as Array<Record<string, unknown>>;
+    expect(tools.some(tool => tool.type === "custom")).toBe(false);
+    expect(tools.map(tool => tool.name)).toEqual(["client_apply_patch"]);
+    expect(request.convertedMuseToolNameAliases?.get("client_apply_patch")).toBe("apply_patch");
   });
 });

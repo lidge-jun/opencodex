@@ -56,6 +56,10 @@ import { observeOutbound } from "../../usage/cache-diagnostic";
 
 import { normalizeMuseToolCatalog } from "./muse-tool-catalog";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
+import {
+  aliasMuseSubscriptionBuiltinTools,
+  mergeMuseToolNameAliases,
+} from "../../responses/muse-subscription-tool-alias";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
 import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
@@ -166,6 +170,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
       const { url, headers } = buildResponsesTransport(provider, incoming);
+      // Meta refuses a Muse Code subscription credential when the request declares a flat
+      // function tool named after one of its own builtins (403 client_attestation_denied).
+      // The gate is credential-scoped, so only the provider that carries that credential
+      // opts into the alias; a pay-as-you-go Model API key keeps its declared names.
+      const museSubscriptionCredential = incoming.providerName === "meta-muse";
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
@@ -376,9 +385,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // including default muse-spark-1.3. Do not reuse the contributor/Zen web_search
         // predicates. Namespace flattening has already produced the public wire names.
         if (isMetaAiResponsesDestination(url)) {
+          const subscription = museSubscriptionCredential
+            ? aliasMuseSubscriptionBuiltinTools(outBody)
+            : { body: outBody, aliases: new Map<string, string>() };
+          outBody = subscription.body;
           const rewritten = rewriteMuseToolNamesForUpstream(outBody);
           outBody = rewritten.body;
-          convertedMuseToolNameAliases = rewritten.aliases;
+          convertedMuseToolNameAliases = mergeMuseToolNameAliases(subscription.aliases, rewritten.aliases);
         }
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
