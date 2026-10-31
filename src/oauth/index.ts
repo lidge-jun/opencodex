@@ -97,6 +97,7 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
@@ -1819,6 +1820,8 @@ export interface OAuthAccountSummary {
    * Missing or invalid labels remain null; quota percentages never establish a subscription.
    */
   plan: string | null;
+  /** Anthropic display-only subscription name; absent when no tier was observed. */
+  planLabel?: string;
 }
 
 /**
@@ -1846,6 +1849,8 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     expiresAt: a.credential.expires,
     // Explicitly null rather than omitted when upstream tier metadata is unknown.
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,
+    ...((provider === "anthropic" || provider === "anthropic2") && anthropicSubscriptionLabel(a.credential.plan)
+      ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

@@ -18,7 +18,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "message",
-    usage: "ocx message <sessions|send|enable|disable|status|hosts|serve> [options]",
+    usage: "ocx message <sessions|send|mcp|enable|disable|status|hosts|serve> [options]",
     summary: "Discover loaded Codex sessions and queue messages locally or through explicit SSH peers.",
     details: ["Remote listeners/tunnels require explicit foreground serve; no daemon start. queued is submission, not processing; never replay an unknown send."],
   },

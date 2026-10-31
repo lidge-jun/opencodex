@@ -1,9 +1,11 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
-import { hasMandatoryToolChoice } from "./combo-required-tool-contract";
+import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
+import { parseSyntheticRowId } from "../fast-row";
+import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { comboCooldownRetryAfterSeconds, isDefiniteContextOverflow, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
@@ -539,13 +541,15 @@ export async function executeComboResponses(
   const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
     if (!hasMandatoryToolChoice(body)) return true;
     try {
-      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
+      const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
       const inboundWire = options.inboundWire ?? "responses";
-      const policy = captureRouteStaticPolicy(route.providerName, route.modelId, route.provider,
+      const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
         route.staticPolicy.effectiveAlias, inboundWire);
-      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, policy);
-      return provider.adapter !== "openai-responses"
-        || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
+      const provider = resolveWireProtocolOverride(route.providerName, modelId, route.provider, inboundWire, policy);
+      return provider.adapter === "openai-chat" ? chatCanPreserveMandatoryToolChoice(body, provider, modelId)
+        : provider.adapter !== "openai-responses" || !isMetaAiResponsesDestination(buildResponsesTransport(provider, { headers: req.headers }).url);
     } catch {
       return true;
     }
@@ -674,7 +678,7 @@ export async function executeComboResponses(
         { parentThreadId: inboundClientThreadId },
       );
       if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-        return comboUnavailableResponse(`No available targets for combo: ${comboId}; Meta Responses does not support mandatory tool_choice`);
+        return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
       }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
@@ -694,7 +698,7 @@ export async function executeComboResponses(
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-      return comboUnavailableResponse(`No available targets for combo: ${comboId}; Meta Responses does not support mandatory tool_choice`);
+      return comboUnavailableResponse(`No available targets for combo: ${comboId}; targets cannot preserve mandatory tool_choice`);
     }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()

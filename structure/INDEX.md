@@ -47,7 +47,7 @@ The wire surfaces a client actually talks to.
 | --- | --- |
 | [`transports/timeouts.md`](transports/timeouts.md) | Local header and JSON body deadlines, cancellation and optional OpenCode timeout export. |
 | [`remote-messaging.md`](remote-messaging.md) | Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies. |
-| [`local-messaging.md`](local-messaging.md) | Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds. |
+| [`local-messaging.md`](local-messaging.md) | Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
 | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) | Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization. |

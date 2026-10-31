@@ -165,6 +165,189 @@ function requiredRequest(extra: Record<string, unknown> = {}): Request {
 }
 
 describe("combo required-tool contract on buffered children (#7456)", () => {
+  test.each(["chat", "chat-fast", "chat-effort", "chat-only", "wire-chat", "virtual-chat", "other-provider", "unknown-virtual"])(
+    "virtual Chat eligibility follows the actual wire policy: %s", async mode => {
+      const virtual = mode === "unknown-virtual" ? "gpt-5.6-sol-pro-unknown" : "gpt-5.6-sol-pro";
+      const wire = "gpt-5.6-sol", name = mode === "other-provider" ? "fixture" : "openai-apikey";
+      const sent: Array<{ path: string; model: string; tool_choice: unknown }> = [];
+      const fetchWire = (async (input, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model: string; tool_choice: unknown };
+        const path = new URL(input instanceof globalThis.Request ? input.url : String(input)).pathname; sent.push({ path, ...body });
+        return path.endsWith("/responses") ? Response.json(completedNoCall(body.model, "virtual wire response"))
+          : Response.json({ id: "chat-virtual", object: "chat.completion", choices: [{ index: 0,
+            message: { role: "assistant", content: null, tool_calls: [{ id: "call_search", type: "function",
+              function: { name: "tool_search", arguments: '{"query":"lookup"}' } }] }, finish_reason: "tool_calls" }] });
+      }) as typeof fetch;
+      const primary = provider(mode === "wire-chat" || mode === "virtual-chat" ? "openai-responses" : "openai-chat", "https://api.openai.com/v1", "key-a", {
+        fetch: fetchWire,
+        models: [virtual], autoToolChoiceOnlyModels: [mode === "virtual-chat" ? virtual : wire],
+        // The registry defaults this provider to Responses; explicit per-model overrides
+        // distinguish virtual and wire policy, rather than relying on the provider fallback.
+        ...(mode.startsWith("chat") ? { modelAdapters: { [virtual]: "openai-chat", [wire]: "openai-chat" } }
+          : mode === "wire-chat" ? { modelAdapters: { [wire]: "openai-chat" } }
+          : mode === "virtual-chat" || mode === "unknown-virtual" ? { modelAdapters: { [virtual]: "openai-chat" } } : {}),
+      });
+      const cfg = comboConfig({ [name]: primary, ...(mode === "chat-only" ? {} : { backup: provider("openai-chat", "https://backup.fixture.invalid/v1", "key-b", { fetch: fetchWire }) }) });
+      cfg.combos!.free!.targets[0]!.model = virtual + (mode === "chat-fast" ? "--fast" : mode === "chat-effort" ? "--high" : "");
+      cfg.cursorEffortRows = mode === "chat-effort";
+      const response = await handleResponses(requiredRequest({ tools: [{ type: "tool_search" }], tool_choice: { type: "tool_search" } }), cfg, {} as RequestLogContext);
+      if (mode === "chat-only") {
+        expect(response.status).toBe(503); expect(await response.text()).toContain("mandatory tool_choice"); expect(sent).toEqual([]); return;
+      }
+      expect(response.status).toBe(200); await response.text();
+      expect(sent).toHaveLength(1);
+      if (mode.startsWith("chat") || mode === "wire-chat") {
+        expect(sent[0]).toMatchObject({ model: "m2", path: "/v1/chat/completions", tool_choice: { type: "function", function: { name: "tool_search" } } });
+      } else if (mode === "virtual-chat") {
+        expect(sent[0]).toMatchObject({ model: wire, path: "/v1/responses", tool_choice: { type: "function", name: "tool_search" } });
+      } else expect(sent[0]).toMatchObject({ model: virtual, path: "/v1/chat/completions", tool_choice: { type: "function", function: { name: "tool_search" } } });
+    });
+
+  for (const choice of ["required", { type: "function", name: "tool_search" }, { type: "tool_search" },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "tool_search" }] }]) {
+    for (const [backup, suffix] of [[false, ""], [true, ""], [false, "--fast"], [true, "--fast"], [false, "--high"], [true, "--high"]] as const) {
+      test(`auto-only Chat cannot consume a mandatory choice (${JSON.stringify(choice)}, backup=${backup}, suffix=${suffix})`, async () => {
+        const sent: Array<{ model: string; tool_choice: unknown }> = [];
+        const upstream = serve(async request => {
+          const body = await request.json() as { model: string; tool_choice: unknown }; sent.push(body);
+          return Response.json({ id: "chat-auto-policy", object: "chat.completion",
+            choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{
+              id: "call_search", type: "function", function: { name: "tool_search", arguments: '{"query":"lookup"}' },
+            }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+        });
+        const providers = { a: provider("openai-chat", baseUrl(upstream), "key-a", { autoToolChoiceOnlyModels: ["m1"] }),
+          ...(backup ? { b: provider("openai-chat", baseUrl(upstream), "key-b") } : {}) };
+        const cfg = comboConfig(providers);
+        cfg.cursorEffortRows = suffix === "--high";
+        cfg.combos!.free!.targets[0]!.model += suffix;
+        const response = await handleResponses(requiredRequest({ tools: [{ type: "tool_search" }], tool_choice: choice }),
+          cfg, {} as RequestLogContext);
+        expect(response.status).toBe(backup ? 200 : 503);
+        const text = await response.text();
+        if (!backup) { expect(text).toContain("mandatory tool_choice"); expect(sent).toEqual([]); }
+        else {
+          expect(sent).toHaveLength(1); expect(sent[0]?.model).toBe("m2");
+          expect(sent[0]?.tool_choice).toEqual(typeof choice === "string" || choice.type === "allowed_tools"
+            ? "required" : { type: "function", function: { name: "tool_search" } });
+        }
+      });
+    }
+  }
+
+  for (const choice of [{ type: "computer_use" },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "docs", name: null }] }]) {
+    test(`untranslatable mandatory Chat choice skips before send: ${JSON.stringify(choice)}`, async () => {
+      let chatSends = 0; let backupSends = 0;
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { chatSends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const backup = serve(() => { backupSends++; return Response.json(completedNoCall("m2", "eligible Responses target")); });
+      const response = await handleResponses(requiredRequest({ tool_choice: choice }),
+        comboConfig({ a: chat, b: provider("openai-responses", baseUrl(backup), "key-b") }), {} as RequestLogContext);
+      expect(response.status).toBe(200); expect(await response.text()).toContain("eligible Responses target");
+      expect(chatSends).toBe(0); expect(backupSends).toBe(1);
+    });
+    test(`untranslatable mandatory Chat choice fails closed without a backup: ${JSON.stringify(choice)}`, async () => {
+      let sends = 0;
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { sends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const response = await handleResponses(requiredRequest({ tool_choice: choice }), comboConfig({ a: chat }), {} as RequestLogContext);
+      expect(response.status).toBe(503); expect(await response.text()).toContain("mandatory tool_choice");
+      expect(sends).toBe(0);
+    });
+  }
+
+  test.each(["ordinary", "exact-suffix", "disabled-fast"])("translated Chat child preserves forced tool_search on its actual wire: %s", async mode => {
+    const bodies: unknown[] = [];
+    const upstream = serve(async request => {
+      bodies.push(await request.json());
+      return Response.json({ id: "chat-forced-search", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{
+          id: "call_search", type: "function", function: { name: "tool_search", arguments: '{"query":"lookup"}' },
+        }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    });
+    const model = mode === "ordinary" ? "m1" : "m1--fast";
+    const cfg = comboConfig({ a: provider("openai-chat", baseUrl(upstream), "key-a", {
+      autoToolChoiceOnlyModels: [mode === "ordinary" ? "another-model" : "m1"],
+      ...(mode === "exact-suffix" ? { models: [model] } : {}),
+    }) });
+    cfg.combos!.free!.targets[0]!.model = model;
+    if (mode === "disabled-fast") cfg.fastRows = false;
+    const response = await handleResponses(requiredRequest({ tools: [{ type: "tool_search" }],
+      tool_choice: { type: "tool_search" } }), cfg, {} as RequestLogContext);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("tool_search");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ model, tool_choice: { type: "function", function: { name: "tool_search" } } });
+  });
+
+  test.each(["auto", "none"])("auto-only Chat retains optional %s behavior on its wire", async choice => {
+    const bodies: unknown[] = [];
+    const upstream = serve(async request => { bodies.push(await request.json());
+      return Response.json({ id: "chat-optional", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "optional done" }, finish_reason: "stop" }] }); });
+    const response = await handleResponses(requiredRequest({ tool_choice: choice }), comboConfig({
+      a: provider("openai-chat", baseUrl(upstream), "key-a", { autoToolChoiceOnlyModels: ["m1"] }),
+    }), {} as RequestLogContext);
+    expect(response.status).toBe(200); expect(await response.text()).toContain("optional done");
+    expect(bodies).toHaveLength(1); expect(bodies[0]).toMatchObject({ model: "m1" });
+    if (choice === "auto") expect(bodies[0]).toMatchObject({ tool_choice: "auto" });
+    else { expect(bodies[0]).not.toHaveProperty("tools"); expect(bodies[0]).not.toHaveProperty("tool_choice"); }
+  });
+
+  for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" },
+    { type: "tool_search" }, { type: "computer_use" }, { type: "image_gen" },
+    { type: "mcp", server_label: "docs", name: null },
+    { type: "allowed_tools", mode: "required", tools: [{ type: "mcp", server_label: "docs", name: null }] }]) {
+    for (const stream of [false, true]) {
+      test(`direct hosted choice skips Meta before send (${JSON.stringify(choice)}, stream=${stream})`, async () => {
+        const bodies: unknown[] = []; let metaSends = 0;
+        const upstream = serve(async request => {
+          bodies.push(await request.json());
+          const response = completedNoCall("m2", "hosted terminal owner");
+          return stream ? new Response(`data: ${JSON.stringify({ type: "response.completed", response })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } }) : Response.json(response);
+        });
+        const declaration = choice.type === "mcp" ? { ...choice, server_url: "https://docs.example.invalid/mcp" } : choice;
+        const response = await handleResponsesWith(comboConfig({
+          a: provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+            fetch: (async () => { metaSends++; throw new Error("unexpected Meta send"); }) as typeof fetch }),
+          b: provider("openai-responses", baseUrl(upstream), "key-b"),
+        }), requiredRequest({ tools: [declaration], tool_choice: choice, stream }));
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("hosted terminal owner");
+        expect(metaSends).toBe(0); expect(bodies).toHaveLength(1);
+        // Noncanonical Responses targets retain the existing private tool-search lowering.
+        const upstreamChoice = choice.type === "tool_search" ? { type: "function", name: "tool_search" } : choice;
+        expect(bodies[0]).toMatchObject({ tool_choice: upstreamChoice });
+      });
+    }
+    test(`direct hosted choice reports all-Meta exhaustion (${JSON.stringify(choice)})`, async () => {
+      let sends = 0;
+      const meta = provider("openai-responses", "https://api.meta.ai/v1", "key-a", {
+        fetch: (async () => { sends++; throw new Error("unexpected Meta send"); }) as typeof fetch });
+      const response = await handleResponsesWith(comboConfig({ a: meta, b: meta }), requiredRequest({ tool_choice: choice }));
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("mandatory tool_choice");
+      expect(sends).toBe(0);
+    });
+  }
+  test("direct hosted selectors keep their terminal owner and reject malformed selector shapes", async () => {
+    const { hasMandatoryToolChoice, requiredToolContractOf } = await import("../../src/server/responses/combo-required-tool-contract");
+    const { createComboRequiredToolStreamGuard } = await import("../../src/server/responses/combo-required-tool-stream");
+    for (const choice of [{ type: "web_search" }, { type: "mcp", server_label: "docs" }, { type: "tool_search" },
+      { type: "mcp", server_label: "docs", name: null }, { type: "computer_use" }, { type: "image_gen" }]) {
+      const body = { tools: [choice], tool_choice: choice };
+      expect(hasMandatoryToolChoice(body)).toBe(true);
+      expect(requiredToolContractOf(body)).toBeUndefined();
+      expect(createComboRequiredToolStreamGuard(body, new Set())).toBeUndefined();
+    }
+    for (const choice of [{ type: "web_search", name: 5 }, { type: "web_search", name: " " },
+      { type: "mcp" }, { type: "mcp", server_label: 5 }, { type: "mcp", server_label: " " },
+      { type: "mcp", server_label: "docs", name: " " }, { type: "mcp", server_label: "docs", name: 123 },
+      { type: "function", name: null }, { type: "custom", name: null }, { type: "unknown_hosted" }]) {
+      expect(hasMandatoryToolChoice({ tool_choice: choice })).toBe(false);
+    }
+  });
   for (const choice of ["required", { type: "function", name: "shell" },
     { type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "shell" }] }]) {
   test(`Meta mandatory tool choice selects the next target before send (#7964): ${JSON.stringify(choice)}`, async () => {
