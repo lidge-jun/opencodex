@@ -8,11 +8,13 @@
      migrated component's utilities always win over v1 element/class rules.
    ============================================================================ */
 
-@layer theme, legacy, bridge, components, utilities;
+@layer theme, base, legacy, bridge, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 /* v1 stylesheets, below the utilities layer until each page migrates */
+/* defaults for anything no stylesheet claims (native fields); every layer above wins */
+@import "./base.css" layer(base);
 @import "../styles.css" layer(legacy);
 @import "../styles/usage-chart-accessibility.css" layer(legacy);
 @import "../styles/sidebar-brand.css" layer(legacy);

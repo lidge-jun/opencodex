@@ -458,3 +458,38 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
 }
+
+/* ---- disclosure summaries: long text wraps cleanly, marker on line one -------
+   A summary is often a whole sentence. Centred in a flex row, the chevron
+   floated between two wrapped lines. Rule: the marker sits on the first line
+   and the text wraps evenly (text-wrap: pretty) whatever the summary's length. */
+details > summary { align-items: flex-start; text-wrap: pretty; }
+details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
+
+/* ---- vertical rhythm inside cards: nothing sits flush against the block above -
+   v1 zeroes every heading margin, so a heading or a section that follows a
+   form row or a button stuck to it. Inside a panel or card, a sub-section or a
+   heading that is not the first thing gets room above it. Header rows (flex)
+   carry their own spacing and are left alone. */
+:is(.panel, .card, section) > section:not(:first-child) { margin-top: 24px; }
+:is(.panel, .card, section) > :is(h2, h3, h4):not(:first-child) { margin-top: 24px; }
+:is(.panel, .card, section) > :is(h2, h3, h4) + :is(p, .muted) { margin-top: 6px; }
+
+/* ---- a .btn with no variant is a secondary button, not a bare label --------
+   It had no background or text colour of its own, so it inherited whatever the
+   platform gave a <button> and nearly vanished in dark mode once disabled. */
+.btn:not(.btn-primary, .btn-ghost, .btn-danger, .btn-icon, .btn-link) {
+  border-color: var(--ocx-line-strong);
+  background: light-dark(#ffffff, rgb(255 255 255 / 0.04));
+  color: var(--ocx-fg);
+}
+.btn:not(.btn-primary, .btn-ghost, .btn-danger, .btn-icon, .btn-link):hover:not(:disabled) {
+  border-color: light-dark(rgb(9 9 11 / 0.3), rgb(255 255 255 / 0.28));
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Native select popup safety net (see base.css): the opt-in has to outrank v1's
+   `select.input { appearance: none }`, so it lives here; the menu look stays in base. */
+@supports (appearance: base-select) {
+  select, select::picker(select) { appearance: base-select; }
+}
