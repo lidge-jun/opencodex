@@ -88,6 +88,20 @@ describe("Codex metadata integrity", () => {
     expect(headers.get("originator")).toBeNull();
   });
 
+  test("drops malformed turn metadata instead of throwing while isolating a pool account", () => {
+    const deleted: string[] = [];
+    const headers = {
+      delete(name: string) { deleted.push(name); },
+      get(name: string) {
+        return name === "x-codex-turn-metadata" ? '{"installation_id":"ok"}\n' : null;
+      },
+      set() { throw new TypeError("invalid header value"); },
+    } as unknown as Headers;
+
+    expect(() => isolateCodexPoolAccountHeaders(headers, accountA.chatgptAccountId)).not.toThrow();
+    expect(deleted).toContain("x-codex-turn-metadata");
+  });
+
   test("outgoing chatgpt-account-id matches selected pool credential", () => {
     const incoming = new Headers({
       authorization: "Bearer caller_token",
