@@ -169,7 +169,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 `import-orca` dışındaki alt komutlar proxy'nin çalışmasını gerektirir ve kaydedilen çalışma zamanı portunu otomatik çözer; `import-orca` önizlemesi tamamen yereldir ve `import-orca --apply` proxy'nin durdurulmuş olmasını gerektirir. Başarılı işlemler 0 ile çıkar. Geçersiz kullanım,
 bilinmeyen bir sağlayıcı veya hesap/anahtar kimliği, erişilemeyen bir proxy veya
-bir API hatası 1 ile çıkar. Kimlik bilgisi alanları tam olarak yönetim API'sinin
+bir API hatası normalde 1 ile çıkar. `reset-affinity` için HTTP 404 çıkış kodu 4, HTTP 409 çıkış kodu 5 döndürür; diğer API hataları ve doğrulanmamış sonuçlar 1 döndürür. Kimlik bilgisi alanları tam olarak yönetim API'sinin
 döndürdüğü gibi (maskelemesi dahil) görüntülenir; ham API anahtarları ve OAuth
 belirteçleri asla döndürülmez. Görüntüleme kolaylıkları kontrol paneli gibi
 istemci tarafında sentezlenir: `main`, `openai` hesap havuzundaki Codex App

@@ -622,7 +622,7 @@ A selection-order change applies from the next unbound request and never moves a
 Account subcommands require the proxy to be running and auto-resolve its recorded runtime port,
 except `import-orca`: preview is local-only, and `import-orca --apply` requires the proxy to be stopped.
 Successful operations exit 0. Invalid usage, an unknown provider or account/key id, an unreachable
-proxy, or an API failure exits 1. Credential fields are displayed exactly as the management API
+proxy, or an API failure normally exits 1. For `reset-affinity`, HTTP 404 exits 4 and HTTP 409 exits 5; other API failures and unconfirmed results exit 1. Credential fields are displayed exactly as the management API
 returns them (including its masking); raw API keys and OAuth tokens are never returned. Display
 conveniences are synthesized client-side, same as the dashboard: `main` is the CLI alias for the
 Codex App login in the `openai` account pool, OAuth accounts without an email appear as `Account N`,

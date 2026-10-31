@@ -161,7 +161,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 Les sous-commandes nécessitent que le proxy soit en cours d'exécution et résolvent automatiquement son port d'exécution enregistré, sauf `import-orca` : l'aperçu est purement local, et `import-orca --apply` exige que le proxy soit arrêté.
 Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur ou un identifiant inconnu, un
-proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
+proxy inaccessible ou un échec API renvoient normalement le code 1. Pour `reset-affinity`, HTTP 404 renvoie 4 et HTTP 409 renvoie 5 ; les autres échecs API et les résultats non confirmés renvoient 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
 les commodités sont synthétisées côté client, comme dans le tableau de bord : `main` désigne la connexion
 Codex App du groupe de comptes `openai`, les comptes OAuth sans adresse e-mail apparaissent sous la forme `Account N`,

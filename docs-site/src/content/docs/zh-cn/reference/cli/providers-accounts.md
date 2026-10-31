@@ -146,7 +146,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 除 `import-orca` 外，子命令都要求代理正在运行，CLI 会自动解析其记录的运行时端口；`import-orca` 的预览完全在本地进行，而 `import-orca --apply` 要求代理已停止。成功操作的
 退出码为 0。无效用法、未知的提供方或账号/密钥 id、无法访问的代理，或 API 失败
-都会以 1 退出。凭据字段会严格按管理 API 返回的样子显示（包括其屏蔽格式）；
+通常以 1 退出。但 `reset-affinity` 遇到 HTTP 404 时退出码为 4，遇到 HTTP 409 时为 5；其他 API 失败或未确认的结果退出码为 1。凭据字段会严格按管理 API 返回的样子显示（包括其屏蔽格式）；
 原始 API 密钥和 OAuth token 永远不会返回。显示上的便利字段都像仪表盘一样在
 客户端侧合成：`main` 是 `openai` 账号池中 Codex App 登录的 CLI 别名，没有邮箱的
 OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后的邮箱、label 和
