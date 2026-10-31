@@ -168,22 +168,23 @@ CL-05 adds a read-only Models tab (`#models/compatibility`) that visualizes the 
 
 ## Public-evidence mutation, purge and revocation
 
-Public-evidence mutation is serialized across processes by `src/lab/public/mutation-lock.ts`. A live,
-non-reclaimable owner is a fail-fast condition: the caller receives `PublicEvidenceValidationError`
-code `community_cache_busy` without running the protected work, and
+Public-evidence mutation is serialized across processes by `src/lab/public/mutation-lock.ts`: an
+OS-held SQLite write transaction (`BEGIN IMMEDIATE`, `busy_timeout=0`) on
+`lab/public-evidence-mutation.sqlite`, outside the community cache, the same primitive as the
+config mutation lock. A second holder is a fail-fast condition: the caller receives
+`PublicEvidenceValidationError` code `community_cache_busy` without running the protected work, and
 `src/server/management/lab-routes.ts` maps that code to HTTP 503 with `Retry-After: 1`. Other
-public-evidence validation failures stay 400. Rejection leaves the owner's lock bytes and directory
-identity untouched.
+public-evidence validation failures stay 400. Closing the handle, including at process exit or
+crash, releases the lock, so there is no stale-owner recovery and no step renames or removes another
+process's lock state. A lock path that is not a single-link regular file fails closed.
 
-Release and failed-acquisition cleanup never move the canonical lock directory. The holder moves
-its `owner.json` to a name only it uses, puts the record straight back if the moved token is not
-its own, and otherwise removes the directory only while it is empty, so a directory holding
-another owner's record or a reclaim claim stays. Stale reclaim still detaches the directory it
-claimed, but removes it only when the moved directory has the claimed identity and its own claim
-token; anything else goes back or stays detached. Detached cleanup skips a directory with a live
-owner. An acquisition whose fresh directory is removed as empty before its first owner write
-retries. `tests/lab/lab-community-mutation-lock.test.ts` replaces the lock between each path's
-checks and its first move or removal.
+Older builds serialized through a `lab/community/.mutation-lock` directory. While holding the
+transaction, this build still refuses to run beside such a directory whose owner PID is alive
+within the seven-day ceiling, or which is ownerless and less than a day old, and fails closed when
+that path is not a directory. It never creates, moves or removes that directory. It only removes
+the older builds' UUID-named detached copies. `tests/lab/lab-community-mutation-lock.test.ts`
+covers cross-process refusal, release on crash, and that acquire and release never rename or
+remove the canonical lock path.
 
 Sensitive purge removes a community cache pathname that durable local provenance marks as locally
 originated, even when the cached object is oversized, hardlinked, symlinked or otherwise unreadable
