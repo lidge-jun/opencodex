@@ -354,3 +354,21 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 }
 .sidebar-foot .sidebar-orb--update:hover:not(:disabled) { color: var(--blue); }
 .sidebar-foot .sidebar-orb svg { width: 15px; height: 15px; }
+
+/* ---- shadow-call source levers: the same switch as every other lever -------
+   Each source used to sit in its own green-outlined pill, and a disabled group
+   faded only the switch, so its track and knob turned grey and stopped looking
+   like the switches around it. Now a source is a bare switch + name; while the
+   master switch is off only the name dims and the switch keeps its usual look. */
+.shadow-source-toggle-list { gap: 6px 18px; }
+.shadow-source-toggle,
+.shadow-source-toggle.on {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.shadow-source-toggle .switch:disabled { opacity: 1; cursor: not-allowed; }
+.shadow-source-toggle:has(> .switch:disabled) > :not(.switch) { opacity: 0.45; }
+.shadow-source-id { font-size: 12px; }

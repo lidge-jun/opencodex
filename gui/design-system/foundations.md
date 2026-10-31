@@ -97,3 +97,10 @@ v2는 위 v1 토큰을 `src/design/bridge.css`에서 아래 `--ocx-*` 토큰으�
 - `prefers-reduced-motion: reduce`에서는 transition과 animation을 제거한다.
 
 모션은 상태 이해를 돕는 범위에서만 사용하며 장식 목적의 반복 애니메이션은 추가하지 않는다.
+
+### v2 둥글기 주의
+
+v1 토큰 `--radius-xs`, `--radius-sm`, `--radius-lg`는 Tailwind의 `rounded-xs`, `rounded-sm`,
+`rounded-lg`가 읽는 변수와 이름이 같다. v1 값(8px, 10px, 20px)이 이기므로 v2 컴포넌트에서는
+이 세 유틸리티를 쓰지 않는다. `rounded-control`, `rounded-card`처럼 v2 이름을 쓰거나
+`rounded-[8px]`처럼 값을 명시한다.

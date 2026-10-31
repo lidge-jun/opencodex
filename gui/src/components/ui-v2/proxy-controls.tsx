@@ -51,7 +51,7 @@ export function ProxyControls({
   const live = !stopping;
 
   return (
-    <div className={cn("ui-v2 relative rounded-xl bg-surface p-1 ring-1 ring-line ring-inset", className)}>
+    <div className={cn("ui-v2 relative rounded-[12px] bg-surface p-1 ring-1 ring-line ring-inset", className)}>
       <div className="flex items-center gap-2 px-2 pt-0.5 pb-1.5">
         <span className="min-w-0 flex-1 truncate text-xs leading-4 font-medium text-fg-muted">{label}</span>
         <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-xs leading-4 font-medium", live ? "text-success" : "text-fg-subtle")}>
@@ -63,7 +63,7 @@ export function ProxyControls({
         </span>
       </div>
 
-      <div className={cn("ocx-beam relative flex items-center gap-1 rounded-lg bg-raised py-1 pr-1 pl-2.5 shadow-sm ring-1 ring-line ring-inset", live && "ocx-beam--on")}>
+      <div className={cn("ocx-beam relative flex items-center gap-1 rounded-[8px] bg-raised py-1 pr-1 pl-2.5 shadow-sm ring-1 ring-line ring-inset", live && "ocx-beam--on")}>
         <span className="min-w-0 flex-1 truncate text-xs leading-4 text-fg-muted tabular-nums">{detail ?? label}</span>
         {session && (
           <TrayButton onClick={session.onClick} disabled={session.busy}
@@ -115,7 +115,7 @@ function TrayButton({ onClick, disabled, label, title, danger, children }: {
       aria-label={label}
       title={title}
       className={cn(
-        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent text-fg-muted",
+        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[6px] bg-transparent text-fg-muted",
         "transition-[background-color,color,scale] duration-150 ease-soft active:scale-95",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5",
