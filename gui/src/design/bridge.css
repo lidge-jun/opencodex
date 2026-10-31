@@ -493,3 +493,36 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
 @supports (appearance: base-select) {
   select, select::picker(select) { appearance: base-select; }
 }
+
+/* ---- type: monospace is for machine text only --------------------------------
+   A monospace space is a full cell wide, so a Korean label in Geist Mono reads as
+   "네이티브   라우팅". Badges carry words (status, plan, role), so they use the UI
+   face; ids, commands and numbers keep monospace through .mono / <code>. */
+.badge { font-family: var(--font-ui); letter-spacing: 0; }
+
+/* ---- one switch ----------------------------------------------------------------
+   v1 grew three switch drawings (.switch with a knob span, .toggle with a
+   .toggle-knob or an input + .slider, and Remote Link's own ::after switch), each
+   with its own size and knob colour. All of them draw the .switch spec now:
+   34×20 track, 14px knob, raised track with a hairline when off, the primary
+   track with a contrasting knob when on. gui/tests/switch-rule.test.ts keeps new
+   switches on one of these three classes. */
+:is(.switch, .toggle, .remote-link-switch) {
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+}
+:is(.toggle.on, .remote-link-switch[aria-checked="true"]) { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.toggle-knob { width: 14px; height: 14px; left: 2px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
+.toggle.on .toggle-knob { left: 16px; background: var(--toggle-dot-color); }
+.toggle:has(> input) { border: 0; background: transparent; }
+.toggle .slider { border: 1px solid var(--border); background: var(--raised); }
+.toggle .slider::after { left: 2px; width: 14px; height: 14px; background: light-dark(#ffffff, #ececec); }
+.toggle input:checked + .slider { background: var(--toggle-on-bg); border-color: var(--toggle-on-bg); }
+.toggle input:checked + .slider::after { transform: translate(14px, -50%); background: var(--toggle-dot-color); }
+.remote-link-switch { display: inline-flex; align-items: center; padding: 2px; }
+.remote-link-switch::after { width: 14px; height: 14px; background: light-dark(#ffffff, #ececec); box-shadow: 0 0 0 1px rgb(16 24 40 / 0.08), 0 1px 1px rgb(16 24 40 / 0.18); }
+.remote-link-switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--toggle-dot-color); }
