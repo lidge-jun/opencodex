@@ -62,7 +62,9 @@ function runAcl(args: string[]): IcaclsResult {
 }
 
 beforeEach(() => {
-  root = native.mkdtempSync(join(tmpdir(), "ocx-atomic-acl-rearm-"));
+  // The writer resolves the destination's real parent, and macOS tmpdir() is a symlink
+  // (/var -> /private/var); the unlink fixture must match the path the writer actually uses.
+  root = native.realpathSync(native.mkdtempSync(join(tmpdir(), "ocx-atomic-acl-rearm-")));
   native.writeFileSync(join(root, "secret.json"), "previous", "utf8");
   previousTimeout = process.env.OPENCODEX_ACL_TIMEOUT_MS;
   previousVerify = process.env.OPENCODEX_ACL_VERIFY_EXISTING;

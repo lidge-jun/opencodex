@@ -202,7 +202,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds.",
+      "scope": "Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"
@@ -321,6 +321,8 @@
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/advisor-admission-scope.ts",
+        "src/server/capture-admission-policy.ts",
+        "src/types/admission-policy.ts",
         "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"
       ]
@@ -375,6 +377,21 @@
       "documents": [
         "src/adapters/openai-responses/",
         "src/bridge/"
+      ]
+    },
+    {
+      "path": "transports/max-output-completion.md",
+      "tier": 3,
+      "title": "Opt-in Responses Text Completion",
+      "scope": "Default-off translated Responses text-only token-limit completion and exclusions.",
+      "documents": [
+        "src/bridge/max-output-completion.ts",
+          "src/bridge/sse.ts",
+          "src/bridge/response-json.ts",
+        "src/config/schema/config-schema.ts",
+        "src/types/config.ts",
+        "src/server/responses/adapter-delivery.ts",
+        "src/server/responses/run-turn-execution.ts"
       ]
     },
     {
@@ -738,6 +755,13 @@
       ]
     },
     {
+      "path": "providers/codex-installation-identity.md",
+      "tier": 3,
+      "title": "Codex Installation Identity",
+      "scope": "Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery.",
+        "documents": ["src/codex/installation-id.ts", "src/codex/auth-context.ts", "src/codex/auth-context-provider.ts", "src/codex/forward-transport-headers.ts", "src/adapters/openai-responses/transport.ts", "src/adapters/openai-responses/passthrough.ts", "src/server/ws-bridge.ts", "src/server/responses/codex-ws-request.ts", "src/server/responses/codex-ws-pool.ts", "src/server/responses/compact.ts", "src/server/responses/passthrough-build-error.ts", "src/server/context-history.ts", "src/server/search.ts", "src/server/images.ts", "src/server/live.ts", "src/server/audio-live.ts", "src/server/audio-dictation.ts", "src/server/index/serve-options.ts", "src/server/index/websocket-handler.ts", "src/server/index/live-sideband.ts", "src/server/claude-messages.ts", "src/codex/affinity-debug.ts"]
+    },
+    {
       "path": "providers/openai-accounts.md",
       "tier": 4,
       "title": "OpenAI Account Identity And Pool Operations",
@@ -882,6 +906,9 @@
       "scope": "Terminal help and capability metadata, management-client output and the generated operating reference.",
       "documents": [
         "src/cli/",
+        "src/providers/cc-switch-import-bytes.ts",
+        "src/providers/cc-switch-import-source.ts",
+        "src/providers/cc-switch-import.ts",
         "scripts/generate-ocx-skill-surface.ts",
         "skills/ocx/"
       ]
@@ -985,6 +1012,13 @@
         "src/cli/",
         "src/server/management/"
       ]
+    },
+    {
+      "path": "clients/omo-export-dialect.md",
+      "tier": 5,
+      "title": "omo Client Export Dialect",
+      "scope": "Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle.",
+      "documents": ["src/clients/config-export.ts", "src/types/config.ts", "src/config/schema/leaf-validators.ts", "src/config/schema/config-schema.ts"]
     },
     {
       "path": "clients/integrations.md",

@@ -69,6 +69,14 @@ response headers on streaming, JSON and upstream-error responses, so compatible 
 statusLine consumers can read the provider's quota observations. Missing observations are
 not filled with invented values. This relay does not change account selection or retry behavior.
 
+Usage reads support Ultra (formerly Max 20x). Pro and Max 5x retain their five-hour and weekly meters. A null five-hour limit leaves that meter
+absent and still allows weekly usage to display. Current `limits` counters take precedence
+over legacy duplicates; only active model-specific weekly limits affect that model family.
+The dashboard shows Pro, Max 5x, or Ultra beside Claude account quotas, using subscription
+metadata from the authenticated profile. Both `ultra` and `claude_max_20x` display as Ultra
+(the existing `ultra` and `max_20x` tier aliases are retained). Unfamiliar validated tiers retain their original name without
+failing the usage read. Claude account rows use ordinal labels and omit account IDs and emails.
+
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 
@@ -856,6 +864,11 @@ Proxy startup/ensure, `ocx claude`, and relevant dashboard saves sync your featu
   overwritten or pruned; your own agents are never touched.
 - Files are atomically synced per file (write + rename).
 - `enabled: false` or `injectAgents: false` prunes all verified-owned definitions.
+- Turning Claude Code off with the dashboard's integration toggle also prunes them right away
+  (best effort), so a native `claude` session started afterwards stops seeing proxy-only agents.
+  A file that cannot be deleted stays, and while a sibling OpenCodex instance owns
+  `~/.claude/agents` nothing is touched; turning it off again retries and also removes
+  definitions an older version left behind.
 - Successful CLI first-party saves and persisted Desktop first-party setup also attempt best-effort
   roster sync, including repeated setup to repair missing definitions. Refused setup and rollback
   do not sync agents. Turning first-party off alone does not disable agent registration.

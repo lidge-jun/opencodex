@@ -1,5 +1,7 @@
 # Responses Transport
-Optional upload reduction follows [its contract](upload-reduction.md). WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
+
+Optional upload reduction follows [its contract](upload-reduction.md). Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
+WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -17,6 +19,7 @@ provider, lets the selected adapter speak the upstream protocol, then bridges ad
 Responses-compatible streaming output. Every Responses serializer projects unreferenced hosted-search history when the final body declares no hosted search tool; with search declared, the canonical Codex ordinary serializer retains structural hosted history by default, and only selected-provider `projectResponsesLiteHostedSearchHistory === true` plus exact canonical `/responses` and explicit Lite intent enables model-independent projection under the [hosted-search history boundary](../providers-and-adapters.md#hosted-search-continuation-binding), shared by HTTP/SSE and WS. The routed provider name follows every adapter build, including retries and continuations; only `github-copilot` injects a configured `modelContextTiers` value as upstream `contextTier`, while unconfigured passthrough retains the caller field. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding). The native passthrough undeclared-tool guard fails closed on the Responses inbound wire in SSE and buffered JSON before continuation state is stored. Chat and Anthropic inbounds defer to the caller's own registry except an explicit empty catalog; the [declared-tool contract](responses-wire-shapes.md#declared-tool-membership-by-inbound-wire) also covers managed native, translated, directly encoded, and final media output while preserving internal hosted operations. GitHub Copilot Auto admission rechecks the negotiated provider/model against the key scope captured at request admission (a key edited or removed mid-request cannot widen it) before route mutation or dispatch, on initial and renewal negotiation; denial returns the standard `model_not_allowed_for_key` 403 naming the caller's inbound selector without disclosing the destination. The web-search and image sidecars answer a denial during their credential rotation with that 403 instead of the original 429, and a combo child's denial keeps the same envelope. Local model-scope refusals are non-replayable. A denial during Copilot dispatch renewal propagates as an admission exception to the request boundary, never as a provider fetch response; account recovery and combo/policy fallback cannot continue after that denial. A committed continuation, including OAuth account rotation after a 429, emits the same refusal type in-stream without dispatching another inference; ordinary negotiation failures still preserve the original provider refusal.
 
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
+Final route capability normalization removes rejected reasoning effort and toggle fields from the native passthrough body when those fields were parsed into options, before custom gateway-object serialization.
 `forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
 Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
@@ -203,27 +206,24 @@ when the shared xAI normalizer can preserve its meaning; an unsafe function is o
 letting one incompatible declaration reject the entire request before inference. This is scoped to
 `cli-chat-proxy.grok.com`: public `api.x.ai` keeps native root unions, as do unrelated Responses
 gateways. Both top-level `tools` and Responses Lite `additional_tools` pass through this policy.
+Codex Desktop packages client tools inside an `additional_tools` input item; strict gateways rejecting non-ResponseItem input types—including official xAI endpoints (`api.x.ai`, `cli-chat-proxy.grok.com`), OpenCode Go, and custom providers opting in with `promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair; historical/live tags survive replacements, synthesized outputs and bridge restoration; transformed-input consumers read each tag, never a recalculated prefix. The numeric replay prefix tags only input that carries no tag yet, so a rewrite that already tagged and then shortened the input (Zed lifting a replayed wrapper) keeps a current-turn `tool_search_output` current.
+Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets. Only current-turn `tool_search_output` discoveries join a live wrapper, top-level tools or the top-level fallback; source provenance is checked before merging declarations. Historical discoveries remain replay context and grant no current hosted-tool authority. `tests/providers/xai/xai-loaded-tool-provenance.test.ts` covers these paths and stored two-turn continuations.
 
-Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening
-it: a root `oneOf` whose branches differ in one property becomes that property's `oneOf`, or its
-`anyOf` when the branches are provably disjoint and the two keywords describe the same set. That
-property is also promoted into `required`, because absent it matched every branch — which the root
-`oneOf` rejects. Branches that are wholly identical validate nothing and have no faithful
-flattening, so they omit the tool. The walk carries depth, node, and variant budgets, since nested
-unions are combinatorial and a `$ref` diamond amplifies the same way without ever cycling;
-exceeding a budget omits that one function rather than expanding until memory is gone.
+Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening it:
+a root `oneOf` whose branches differ in one property becomes that property's `oneOf`, or its `anyOf`
+when the branches are provably disjoint and the two keywords describe the same set. That property is also
+promoted into `required`, because absent it matched every branch — which the root `oneOf` rejects.
+Branches that are wholly identical validate nothing and have no faithful flattening, so they omit the tool.
+The walk carries depth, node, and variant budgets, since nested unions are combinatorial and a `$ref`
+diamond amplifies the same way without ever cycling; exceeding a budget omits that one function.
 
-Omitting a function makes `tool_choice` the loose end. A selector naming a dropped tool would reach
-Grok as a dangling reference, and relaxing it to `auto` is worse — the turn would quietly run
-without the tool the caller required. So an `allowed_tools` list drops the omitted entries while any
-remain, and a selection with nothing left to point at fails locally with the same 400 a tool catalog
-this proxy cannot lower already returns.
+Omitting a function makes `tool_choice` the loose end: a selector naming a dropped tool would reach
+Grok as a dangling reference, and relaxing to `auto` runs without the tool the caller required.
+An `allowed_tools` list drops omitted entries while any remain, and an empty selection fails with 400.
 
 The same noncanonical boundary strips ChatGPT's private `external_web_access` bit from routed
-`web_search` declarations. The public tool remains enabled and all other options remain intact;
-canonical OpenAI forwarding preserves the bit. xAI's public Responses schema enables browsing by
-the presence of `web_search` and rejects the private argument, so forwarding it made the first
-post-namespace request fail with HTTP 400.
+`web_search` declarations while keeping the public tool and other options intact (canonical OpenAI
+forwarding preserves the bit; xAI rejects the private argument with HTTP 400).
 
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
@@ -424,6 +424,7 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
+| `passthrough-build-error.ts` | Shared adapter-build refusal mapping, including installation-identity unavailability as a sanitized 503. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, Chat raw-reasoning preference forwarded to both loop bridges under [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary), per-build adapter prompt estimates for usage logging, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
@@ -573,6 +574,7 @@ reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 
 
 ## Adapter-to-Responses bridge
 
+Opt-in translated Responses text-only token-limit completion follows [the text completion policy](max-output-completion.md).
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body

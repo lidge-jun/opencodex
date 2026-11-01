@@ -18,7 +18,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "message",
-    usage: "ocx message <sessions|send|enable|disable|status|hosts|serve> [options]",
+    usage: "ocx message <sessions|send|mcp|enable|disable|status|hosts|serve> [options]",
     summary: "Discover loaded Codex sessions and queue messages locally or through explicit SSH peers.",
     details: ["Remote listeners/tunnels require explicit foreground serve; no daemon start. queued is submission, not processing; never replay an unknown send."],
   },
@@ -310,6 +310,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "  show <name>           Show provider config details",
       "  set-default <name>    Change the default provider",
       "  add/remove/set-default support --live; live removal also requires --yes.",
+      "  import-cc-switch      Preview, apply, or restore keyless CC-Switch provider entries",
       "  selected <name>       Show or set the provider model allowlist",
       "  quota                 Show provider quota reports",
       "  resets                Show recently detected quota resets",

@@ -280,7 +280,7 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         emit({
           type: "error", status: 400, errorType: "invalid_request_error",
           code: "unsupported_input_modality", retryable: false,
-          message: "Qoder CN raw-image routing is verified only with qoderclicn 1.1.70, DeepSeek-Flash or Qwen3.8-Flash, and one base64 PNG in a single user turn on stream-json stdin. URL, multiple-image, tool-result and history replay surfaces remain unverified; use the vision sidecar for those inputs.",
+          message: "Qoder CN raw-image routing is verified only with qoderclicn 1.1.70, DeepSeek-Flash or Qwen3.8-Flash, and one base64 PNG in a single user turn on stream-json stdin. The PNG must be at most 1 MiB decoded, with each edge at most 8192 pixels and at most 16,000,000 total pixels. URL, multiple-image, tool-result and history replay surfaces remain unverified; use the vision sidecar for those inputs.",
         });
         return;
       }

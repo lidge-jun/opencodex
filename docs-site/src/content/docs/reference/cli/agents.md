@@ -34,6 +34,23 @@ prints a proposed model and effort per role without writing anything. `--apply` 
 through the same write as `set`, skipping and naming the roles whose model and effort already match.
 See [Auto-assign](/guides/integrations/#auto-assign).
 
+One `--apply` accepts at most **50 changed roles**, so its recorded changes fit one complete
+history batch and can be restored together in the dashboard's **Change history**. Already-set,
+unsized and unassigned roles do not count toward this limit. If more than 50 roles would change,
+the command exits 5 before sending any role update. Preview without `--apply`, then use
+`ocx agent roles set <role> <model> [--effort <level>]` for individual changes.
+
+Updates run sequentially. If a request fails, earlier confirmed writes remain applied, later
+roles are not attempted, and the command keeps the original nonzero error exit. The receipt names
+confirmed writes, the role whose write was not confirmed, roles not attempted, and the server-issued
+history batch when known. A lost response can follow a saved write, including the first write before
+its batch id is received; inspect `ocx agent roles --json` and the dashboard history before retrying.
+No automatic retry or rollback occurs. History remains subject to its existing availability and
+retention limits; a batch id does not guarantee that every write was recorded or is still restorable.
+With `--json`, an interrupted apply adds `complete: false`, `unconfirmedRole` and `unattemptedRoles`
+beside the existing `applied`, `skipped` and `omoJsoncNotWritten` arrays. A preflight refusal instead
+adds `refusal` with code `too_many_role_changes`, the limit and the proposed change count.
+
 Human-readable suggestion output displays terminal control characters as visible escapes.
 Use `--json` when you need the original suggestion values without presentation escaping.
 
@@ -993,6 +1010,8 @@ Ensure the proxy is running, then launch Codex with the original arguments. Rout
 A missing `OPENCODEX_API_AUTH_TOKEN` is read from this installation's `service-api-token` only when the selected provider's complete transport configuration matches the managed block for the configured loopback listener or persisted local client connection. Names and injection comments alone grant no credential access. Unknown or remote destinations, default profiles, project configuration, `OPENAI_BASE_URL`, and forwarded `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, or `--remote` options skip automatic loading. User-exported credentials and arguments are preserved; token-file overrides cannot select a different credential, and management-token collisions are refused.
 
 Only a matched autostart wrapper launches its backing Codex directly. Unknown state, including an inspection exception, requires a verified bypass; Windows CMD managed wrappers must match the complete current generated template before the selected absolute command runs with `OCX_SHIM_BYPASS=1`. Ordinary npm launchers remain supported. Unverifiable or obsolete wrappers refuse with exit 1 and start no Codex; run `ocx codex-shim install` to refresh them. This launch does not repair shims. The content check does not establish Windows backing-file provenance or prevent concurrent pathname replacement.
+
+On macOS, every launch, including help/version, verifies the selected executable when its selected path or canonical location is inside any `.app` bundle. Renamed bundles and symlinks into bundles require the same safe ownership, permissions and OpenAI signatures for the bundle and executable. A selected bundle member must stay inside that bundle's canonical `Contents/`, including through executable, directory or whole-bundle symlinks. Failed verification exits 1 without starting Codex. Ordinary non-bundle executables, including npm installations, retain their behavior.
 
 Use `ocx help codex` for launcher help and `ocx codex --help` for Codex help. Launching plain `codex` later retains its existing behavior.
 

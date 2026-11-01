@@ -92,6 +92,7 @@ function isCredential(value: unknown): value is CodexAccountCredentials {
     && typeof value.refreshToken === "string"
     && typeof value.expiresAt === "number"
     && typeof value.chatgptAccountId === "string"
+    && value.chatgptAccountId.trim().length > 0
     && (hasNoSource || hasCompleteSource);
 }
 

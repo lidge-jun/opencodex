@@ -13,6 +13,7 @@ import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
 import { reconcileQuotaRecovery, sweepExpiredQuotaRecovery } from "../codex/quota-401-recovery";
 import { bindUpstreamRequestCompressionConfig } from "../server/responses/request-compression";
+import { bindWorkflowBudgetConfig } from "./workflow-budget-config";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -86,6 +87,7 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   bindUpstreamRequestCompressionConfig(config);
   bindUpstreamHistorySlimConfig(config);
   bindCodexWsIncrementalConfig(config);
+  bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
 }
 

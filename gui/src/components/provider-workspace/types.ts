@@ -45,6 +45,8 @@ export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required
 
 export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 export interface AccountQuotaReading {
+  /** Subscription name supplied by management independently of quota availability. */
+  planLabel?: string;
   quotaMode?: AccountQuotaMode;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;
@@ -58,6 +60,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   alias?: string;
   email?: string;
   active: boolean;
+  expiresAt?: number;
   needsReauth?: boolean;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";

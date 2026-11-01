@@ -39,12 +39,23 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `src/oauth/anthropic-identity.ts` reads organization tiers from the authenticated profile
 without changing bearer-bound UUID proof. Browser login, refresh, local import and proven
 CLI rotation persist a validated display-only `plan`; both Anthropic instances project it
-through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_`, with organization
-kinds stripping `claude_` as fallback. Unknown tiers remain null and never come from quota
-percentages. Same-account refreshes retain an unobserved plan; observed unknown tiers clear it.
+through `src/oauth/index.ts`. Known tiers strip `default_claude_` or `claude_`, with organization
+kinds as fallback. Safe future tier strings retain their original spelling; malformed
+or absent tiers project null and never come from quota percentages. Same-account refreshes
+retain an unobserved plan; an observed invalid tier clears it.
 Refresh gives the profile read a 2-second deadline because a refresh can sit on a request path;
 a missed read leaves the stored label in place.
-An account replacement cannot inherit another account's label.
+An account replacement cannot inherit another account's label. `src/providers/anthropic-subscription.ts`
+projects optional management `planLabel`: Pro, Max 5x, Ultra (both `ultra` and `max_20x`),
+or the original unfamiliar validated tier. Dashboard Claude account rows use ordinal labels,
+omit account IDs/emails and show the subscription beside quota. The same ordinal policy in
+`gui/src/provider-workspace/auth.ts` covers reset-grant dialogs and account mutation
+confirmations/notifications through `gui/src/hooks/useProviderAccountPools.ts`; custom providers
+retain their existing alias/email labels. `gui/src/pages/providers-page-utils.ts` also strips
+Claude email metadata from the catalog/Add Provider account-status projection without mutating
+the source OAuth status; generic/custom account-status labels remain intact. The current quota section keeps
+that label even if usage is unavailable. Pro and Max 5x keep their measured five-hour and
+weekly windows; an explicitly absent/inactive session never fabricates a meter.
 
 `src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
 to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
@@ -172,6 +183,25 @@ preserves, `null` deletes and an instance sets; an unset choice is never written
 `vision-sidecar-options.ts` report the selected, parent, mixed and available pools.
 
 ## Pool-bound quota and reset grants
+
+`src/providers/quota/anthropic-usage-windows.ts` selects the same source windows for
+`src/providers/claude-cli-usage.ts` display and the raw advisory projection in
+`src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits` rows take
+precedence over their legacy buckets: `session`, `weekly_all`, and model-scoped
+`weekly_scoped`. An inactive row suppresses its legacy duplicate; an absent/null
+five-hour bucket contributes no measurement. Older rows without `is_active` retain
+their original active semantics. Unknown flags are not active, and unknown kinds
+or model families preserve usable shared windows without claiming a complete
+family enumeration. An authoritative inactive family row can retire a previous
+passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
+still requires finite headroom for each rejected window, never an invented zero.
+`tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
+admission, raw precision, pool projection and legacy compatibility.
+
+Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
+and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy
+Ultra alias. Unknown safe tier strings remain display metadata and never grant
+quota, reset eligibility, billing credit or routing capacity.
 
 `src/providers/quota/anthropic-account-quota.ts` probes per-account usage for either
 instance. It refuses an unconfigured instance, resolves token renewal before keying its

@@ -151,8 +151,8 @@ async function maybeFetchProviderQuota(
  *
  * No previous snapshot is passed. The observer keeps its own persisted last-seen map,
  * because `previous` here is bound only when `cache.key === key` and the key digest at
- * cacheKeyWithAggregationState includes quota values and updatedAt — so it is empty exactly
- * when a reset happened.
+ * cacheKeyWithAggregationState includes quota values and their freshness — so it is empty
+ * exactly when a reset happened.
  *
  * Account identity is resolved SYNCHRONOUSLY, before any await. Two reasons, both observed:
  * pool failover rewrites `activeAccountId` during request routing
