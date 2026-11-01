@@ -522,7 +522,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
     note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
-  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
+  // Venice returns 400 for any image under 64x64, which a wide screenshot hits after
+  // the shared normalizer floors older images to a 320px long edge (320x25).
+  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api", minImageEdge: 64 },
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
   // devlog/_plan/260710_provider_hardening/002_research_cn.md.
   // 260814: glm-5.3 / glm-5.3[1m] added per docs.z.ai/devpack/latest-model, which lists them as
