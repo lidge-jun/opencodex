@@ -5,7 +5,7 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-The desktop Cargo package requires Rust 1.88 or newer.
+The desktop Cargo package requires Rust 1.90 or newer, matching its pinned Tauri build, runtime, utils and updater crates.
 The manual-poll test in `desktop/src-tauri/src/process_spawn.rs` uses `std::task::Waker::noop()` (stable since Rust 1.85).
 The lockfile selects patched `serde_with` and `time` releases, with compatible exact
 `serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
