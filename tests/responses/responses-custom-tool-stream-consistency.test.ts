@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as patchEnvelope from "../../src/responses/apply-patch-envelope";
 import {
   createRoutedCustomToolRestoreBlockRewrite,
   RoutedCustomToolProgressError,
@@ -157,6 +158,56 @@ describe("routed Responses custom-tool stream consistency", () => {
     const result = restoreExecStream(opening + operation + closing, [opening, operation, closing], "apply_patch");
     expect(result.previews).toEqual([opening, opening + operation, opening + operation + closing]);
     expect(result.previews[1]).not.toContain(closing);
+  });
+
+  test.each([
+    ["LF", "\n", ""], ["LF decorated", "\n", " ***"],
+    ["CRLF", "\r\n", ""], ["CRLF decorated", "\r\n", " ***"],
+  ])("preserves a fragmented long patch through the routed tail: %s", (_label, newline, decoration) => {
+    const opening = `*** Begin Patch${newline}*** Add File: long.txt${newline}`;
+    const body = `+${"x".repeat(65_536)}${newline}+last line${newline}`;
+    const closing = `*** End Patch${decoration}${newline}`;
+    const fragments = [...Array.from(opening), ...body.match(/[\s\S]{1,37}/g)!, ...Array.from(closing)];
+    const raw = opening + body + closing;
+    const normalized = `${opening}${body}*** End Patch${newline}`;
+    const result = restoreExecStream(raw, fragments, "apply_patch");
+    // Every marker byte is a separate delta after the rolling tail has wrapped repeatedly.
+    const closingStart = fragments.length - closing.length;
+    expect(result.previews[closingStart - 1]).toBe(opening + body);
+    for (const preview of result.previews.slice(closingStart)) {
+      expect(normalized.startsWith(preview)).toBe(true);
+    }
+    expect(result.preview).toBe(decoration ? normalized.slice(0, -newline.length) : normalized);
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
+    expect(result.identity).toEqual([
+      "ctc_apply_patch", "ctc_apply_patch", "ctc_apply_patch", "call_apply_patch", "apply_patch",
+      "ctc_apply_patch", "call_apply_patch", "apply_patch",
+    ]);
+  });
+
+  test("preserves a fragmented long wrapped patch through the decoded tail", () => {
+    const opening = "*** Begin Patch\n*** Add File: long.txt\n";
+    const body = `+${"x".repeat(65_536)}\n+last line\n`;
+    const wrapped = JSON.stringify({ input: `${opening}${body}*** End Patch ***\n` });
+    const normalized = `${opening}${body}*** End Patch\n`;
+    const original = patchEnvelope.stableCanonicalPatchPrefix;
+    let longChecks = 0;
+    const spy = spyOn(patchEnvelope, "stableCanonicalPatchPrefix").mockImplementation((...args) => {
+      expect(args[1]).toBe(args[0].slice(-64));
+      if (args[0].length > 64) longChecks++;
+      return original(...args);
+    });
+    let result: ReturnType<typeof restoreExecStream>;
+    try { result = restoreExecStream(wrapped, wrapped.match(/[\s\S]{1,37}/g)!, "apply_patch"); }
+    finally { spy.mockRestore(); }
+    expect(longChecks).toBeGreaterThan(0);
+    for (const preview of result.previews) expect(normalized.startsWith(preview)).toBe(true);
+    expect(result.preview).toBe(normalized.slice(0, -1));
+    expect(result.doneInput).toBe(normalized);
+    expect(result.itemInput).toBe(normalized);
+    expect(result.terminalInput).toBe(normalized);
   });
 
   test.each([
