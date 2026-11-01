@@ -1542,7 +1542,7 @@
   "command-code-tool-text-prose-split.test.ts": "providers", "cli-effort-slug.test.ts": "cli",
   "grok-47-build-fast-metadata.test.ts": "providers/xai", "grok-47-fast-model.test.ts": "providers/xai",
   "grok-47-fast-model-wire.test.ts": "providers/xai", "client-link-connect.test.ts": "clients",
-  "client-link-relay.test.ts": "clients", "client-link-runtime.test.ts": "clients",
+  "client-link-relay.test.ts": "clients", "client-link-runtime.test.ts": "clients", "client-link-stop.test.ts": "clients",
   "link-routes.test.ts": "clients", "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients", "client-link-teardown.test.ts": "clients",
   "client-link-tunnel.test.ts": "clients", "link-ports.test.ts": "clients",

@@ -50,6 +50,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+Gözetimsiz Link Child kapanma sinyalinde her yazmadan önce bağlantıyı doğrular ve dinleyiciyi bırakmadan önce yerel Codex ile yönetilen Grok ayarlarını geri yükler. Servis/Desktop, sibling, yeniden başlatma devri ve üst stop makbuzu ayarları korur. Kapanma sırasında yeniden başlatma `409 runtime_stopping` döndürür. Zorla sonlandırma sinyali atlayabilir; üst `ocx stop` geri yüklemesi yine gereklidir.
+
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.

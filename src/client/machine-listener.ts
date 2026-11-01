@@ -324,6 +324,9 @@ async function handleBoundRestart(
   );
   if (!authorized) return Response.json({ success: false, error: "restart capability required" }, { status: 401, headers: noStore });
   const admission = await restart.request();
+  if (admission.kind === "stopping") {
+    return Response.json({ success: false, error: { code: "runtime_stopping" } }, { status: 409, headers: noStore });
+  }
   if (admission.kind === "supervised") {
     return Response.json({
       success: false,

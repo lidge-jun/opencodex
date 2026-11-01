@@ -28,6 +28,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+无人监督的 Link Child 处理退出信号时，会在每次写入前核对连接，并在关闭监听器前恢复 Codex 原生配置及受管理的 Grok。服务/Desktop、sibling、重启交接和父进程 stop 收据会保留配置。退出中的重启请求返回 `409 runtime_stopping`。强制终止可能跳过信号处理，仍需父进程 `ocx stop` 的恢复路径。
+
 停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
 
 对于已连接的 hub 客户端，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
