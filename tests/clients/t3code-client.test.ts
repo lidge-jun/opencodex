@@ -64,6 +64,30 @@ describe("T3 Code client integration", () => {
     ]);
   });
 
+  test("a model declares the efforts Claude Code accepts, so T3 Code can start it with one", () => {
+    const modelsWith = (efforts: Partial<(typeof context.models)[number]>) => buildT3CodeClientConfig({
+      ...context,
+      models: [{ ...context.models[0]!, ...efforts }],
+    }).providerInstances.opencodex;
+    const instance = modelsWith({ reasoningEfforts: ["none", "low", "medium", "xhigh", "ultra"], defaultReasoningEffort: "medium" });
+    expect(instance.accentColor).toMatch(/^#[0-9a-f]{6}$/);
+    expect(instance.config.customModels[0]!.capabilities).toEqual({
+      optionDescriptors: [{
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium", isDefault: true },
+          { id: "xhigh", label: "Extra High" },
+        ],
+      }],
+    });
+    // Declaring an empty control would offer a choice that does not exist.
+    expect(modelsWith({ reasoningEfforts: ["none"] }).config.customModels[0]).not.toHaveProperty("capabilities");
+    expect(modelsWith({ reasoningEfforts: ["low"], supportsReasoningEffort: false }).config.customModels[0]).not.toHaveProperty("capabilities");
+  });
+
   test("refuses any listener that would need an admission header", () => {
     expect(() => buildT3CodeClientConfig({ ...context, config: { ...config, hostname: "0.0.0.0" } })).toThrow("loopback");
     expect(() => buildT3CodeClientConfig({ ...context, baseUrl: "http://192.168.1.4:10100/v1" })).toThrow("loopback");
