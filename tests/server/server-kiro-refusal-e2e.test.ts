@@ -745,3 +745,89 @@ describe("Kiro content-filter stop through Responses streaming", () => {
     });
   }
 });
+
+/**
+ * A tool-less turn runs in `disabled` completion mode. Kiro's safety filter answers it with no
+ * content at all, only a CONTENT_FILTERED metadataEvent (frame shape captured live). That used to
+ * fall through to the replay-safe `empty_kiro_stream`, which Claude clients saw as a retryable
+ * 502 overload and resent a refusal that repeats deterministically.
+ */
+describe("Kiro content-filter stop on a tool-less turn", () => {
+  const explanation = "The selected model cannot continue this conversation.";
+  const frame = (eventType: string, payload: Record<string, unknown>) => encodeMessage(
+    { ":message-type": "event", ":event-type": eventType },
+    new TextEncoder().encode(JSON.stringify(payload)));
+  const filteredWithoutText = () => new Response(Buffer.concat([
+    frame("initial-response", { conversationId: "" }),
+    frame("metadataEvent", { stopDetails: { refusal: { category: "BIO", explanation } }, stopReason: "CONTENT_FILTERED" }),
+    frame("contextUsageEvent", { contextUsagePercentage: 1.79 }),
+  ]), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
+
+  async function serve(run: (server: ReturnType<typeof startServer>) => Promise<void>): Promise<number> {
+    await seed(); saveConfig(config());
+    let sends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/")) {
+        sends++;
+        return filteredWithoutText();
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try { await run(server); } finally { await server.stop(true); }
+    return sends;
+  }
+  const messages = (server: ReturnType<typeof startServer>, stream: boolean) => realFetch(
+    new URL("/v1/messages", server.url), {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "kiro/claude-sonnet-4.5", max_tokens: 64, stream,
+        messages: [{ role: "user", content: "hello" }] }),
+    });
+
+  test("/v1/messages answers with stop_reason refusal, not a retryable overload", async () => {
+    const sends = await serve(async server => {
+      const response = await messages(server, false);
+      expect(response.status).toBe(200);
+      const body = await response.json() as Record<string, unknown>;
+      expect(body.type).toBe("message");
+      expect(body.stop_reason).toBe("refusal");
+    });
+    // Neither replayed on the same account nor rotated to the other one.
+    expect(sends).toBe(1);
+  });
+
+  test("/v1/messages streaming ends with a refusal message_delta", async () => {
+    const sends = await serve(async server => {
+      const response = await messages(server, true);
+      expect(response.status).toBe(200);
+      const wire = await response.text();
+      expect(wire).not.toContain("overloaded_error");
+      expect(wire).toContain('"stop_reason":"refusal"');
+      expect(wire).toContain("event: message_stop");
+    });
+    expect(sends).toBe(1);
+  });
+
+  test("/v1/responses streaming fails terminally with Kiro's refusal explanation", async () => {
+    const sends = await serve(async server => {
+      const response = await post(server, true);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const terminals = text.split("\n\n").flatMap(block => {
+        const name = block.split("\n").find(line => line.startsWith("event: "))?.slice(7) ?? "";
+        const data = block.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+        return /^response\.(completed|incomplete|failed)$/.test(name) && data
+          ? [{ name, response: JSON.parse(data).response as Record<string, any> }] : [];
+      });
+      expect(terminals.map(terminal => terminal.name)).toEqual(["response.failed"]);
+      const failed = terminals[0]!.response;
+      expect(failed.error.code).toBe("invalid_prompt");
+      expect(failed.error.message).toContain("CONTENT_FILTERED");
+      expect(failed.error.message).toContain("BIO");
+      expect(failed.error.message).toContain(explanation);
+      expect(failed.retryable).toBe(false);
+    });
+    expect(sends).toBe(1);
+  });
+});
