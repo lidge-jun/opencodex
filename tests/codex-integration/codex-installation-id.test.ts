@@ -34,11 +34,11 @@ test("a corrupt secret is refused without overwrite or sensitive error details",
 });
 
 test("concurrent processes publish one complete secret and retain the same identity", async () => {
-  const modulePath = new URL("../../src/codex/installation-id.ts", import.meta.url).pathname;
+  const modulePath = new URL("../../src/codex/installation-id.ts", import.meta.url).href;
   const script = `import { codexInstallationIdForAccount } from ${JSON.stringify(modulePath)}; process.stdout.write(codexInstallationIdForAccount("account-race", process.argv[1]));`;
   const children = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", script, root], { stdout: "pipe", stderr: "pipe" }));
   const results = await Promise.all(children.map(async child => ({ id: await new Response(child.stdout).text(), error: await new Response(child.stderr).text(), exit: await child.exited })));
-  for (const result of results) { expect(result.exit).toBe(0); expect(result.error).toBe(""); expect(result.id).toMatch(uuid); }
+  for (const result of results) { expect(result.exit, result.error).toBe(0); expect(result.error).toBe(""); expect(result.id).toMatch(uuid); }
   expect(new Set(results.map(result => result.id)).size).toBe(1);
   expect(readFileSync(join(root, "codex-installation-secret")).length).toBe(32);
 });

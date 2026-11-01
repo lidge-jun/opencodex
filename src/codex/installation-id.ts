@@ -3,7 +3,7 @@ import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, mkdir
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { hardenSecretDir, hardenSecretPath, windowsSecretAclApplies, windowsSecretAclReapPendingAtOrBelow } from "../lib/windows-secret-acl";
+import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 
 const SECRET_BYTES = 32;
 const DOMAIN = "opencodex-codex-installation-id-v1\0";
@@ -32,8 +32,8 @@ function readSecret(path: string): Buffer {
 
 function installationSecret(dir: string): Buffer {
   assertNotRealHomeUnderTest(dir);
-  // A synchronous request cannot await an overlapping ACL child; refuse until it exits.
-  if (windowsSecretAclApplies() && windowsSecretAclReapPendingAtOrBelow(dir, true)) throw new CodexInstallationIdUnavailableError();
+  // Each secret file gets its own required, inheritance-protected DACL before reading or
+  // writing bytes. Optional parent/sibling hardening cannot admit or refuse this file.
   const path = join(dir, "codex-installation-secret");
   try { return readSecret(path); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

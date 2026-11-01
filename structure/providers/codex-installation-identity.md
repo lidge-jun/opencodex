@@ -8,7 +8,9 @@ the remaining bits are deterministic HMAC output. Tokens, slot aliases and calle
 are not inputs. Atomic no-replace publication selects one complete secret across processes;
 corrupt or unreadable secrets are refused rather than replaced. POSIX mode is 0600; Windows uses
 the shared required secret ACL hardener on the parent and empty temporary file before writing any
-key bytes. Synchronous derivation refuses overlapping async ACL work on the path or its ancestors.
+key bytes. Each secret file's required hardening protects its DACL from inheritance before bytes
+are written or read; optional parent or sibling ACL work does not refuse derivation. Real
+secret-file or creation-directory hardening failures still fail closed.
 `src/server/responses/passthrough-build-error.ts` preserves this refusal even after auth preparation.
 Required operations return a sanitized retryable 503 on identity failure; optional helpers disable
 themselves without aborting an independent routed request.
