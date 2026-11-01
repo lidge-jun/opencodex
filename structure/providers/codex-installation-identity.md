@@ -17,7 +17,10 @@ themselves without aborting an independent routed request.
 
 `src/codex/auth-context.ts` and `src/codex/auth-context-provider.ts` carry the selected Pool identity
 in the runtime provider override. Only `kind: pool` rewrites existing installation headers and
-client-metadata fields; `main` and `main-pool` preserve caller values. Absent surfaces remain absent.
+client-metadata fields; `main` and `main-pool` preserve caller values. Absent surfaces remain absent
+and do not read identity storage. Provider overrides carry account credentials; derivation occurs
+only when a wire installation surface exists. Empty credential/routing headers remain omitted,
+while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
@@ -30,9 +33,14 @@ identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as w
 Native compact in `src/server/responses/compact.ts` projects the body per physical send, so a quota
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account. `src/server/context-history.ts` applies the same clone
-and header contract; search, vision, audio and sidecar credential selection share materialization.
+and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
+retain the selected context and project cloned client metadata immediately before each physical
+JSON send, including live's converted multipart session. Their selected headers authoritatively
+replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
+Vision, audio and sidecar credential selection share materialization.
 `src/codex/affinity-debug.ts` reports only process-local keyed equality tags, never raw identities.
 The regression contracts are in `tests/codex-integration/codex-installation-id.test.ts`,
 `tests/codex-integration/codex-installation-wire.test.ts`,
 `tests/codex-integration/codex-installation-acl.test.ts` and
-`tests/responses/codex-installation-failover.test.ts`.
+`tests/responses/codex-installation-failover.test.ts`; auxiliary wire coverage is in
+`tests/codex-integration/codex-installation-sidecars.test.ts`.

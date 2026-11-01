@@ -123,7 +123,7 @@ export class WsSendDroppedError extends Error {
 
 export function selectForwardHeaders(
   headers: Headers,
-  codexOverride?: { accessToken: string; chatgptAccountId: string; installationId?: string; kind?: "pool" | "main-pool" },
+  codexOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" },
 ): Headers {
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {

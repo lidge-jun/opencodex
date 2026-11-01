@@ -1,4 +1,5 @@
 {
+  "codex-installation-sidecars.test.ts": "codex-integration",
   "codex-role-configured-credentials.test.ts": "server",
   "codex-role-capability-consent.test.ts": "routing",
   "codex-role-capability-redirects.test.ts": "routing",

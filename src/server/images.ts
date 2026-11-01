@@ -1,4 +1,5 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
+import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 /**
  * /v1/images/{generations,edits} relay (issue #83).
  *
@@ -755,7 +756,7 @@ export async function handleImages(
     }
   }
 
-  const headers = new Headers({ "content-type": "application/json" });
+  let headers = new Headers({ "content-type": "application/json" });
   const releaseForwardProbe = (): void => {
     try { forward?.releaseProbeLease?.(); }
     catch { console.error("[images] Failed to release probe lease"); }
@@ -776,8 +777,7 @@ export async function handleImages(
     }
     const { provider } = forward;
     try {
-      for (const [name, value] of Object.entries(provider.headers ?? {})) headers.set(name, value);
-      for (const [name, value] of forward.headers) headers.set(name, value);
+      headers = mergeCodexSelectedHeaders({ "content-type": "application/json", ...provider.headers }, forward.headers);
       assertImagesUpstreamAuthorization(headers, config);
     } catch {
       releaseForwardProbe();
@@ -869,7 +869,9 @@ export async function handleImages(
     upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(isolateCodexPoolClientMetadata(
+        body, forward?.authContext.kind === "pool" ? forward.authContext.chatgptAccountId : undefined,
+      )),
       signal: linkedSignal.signal,
       // Do not follow a cross-origin 3xx while carrying Codex credentials. Bun strips
       // `Authorization` across origins but forwards nonstandard headers, so
@@ -913,6 +915,10 @@ export async function handleImages(
       // lease taken by the selected Pool account must be returned explicitly.
       releaseForwardProbe();
       return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
+    }
+    if (err instanceof CodexInstallationIdUnavailableError) {
+      releaseForwardProbe();
+      return formatErrorResponse(503, "server_busy", err.message);
     }
     if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {
       forward?.recordOutcome?.("timeout");

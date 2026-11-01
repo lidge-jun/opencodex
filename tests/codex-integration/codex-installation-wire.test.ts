@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyCodexAuthContextToProvider, headersForCodexAuthContext, materializeCodexUpstreamAuthAsync, type CodexAuthContext } from "../../src/codex/auth-context";
@@ -9,6 +9,8 @@ import { selectForwardHeaders } from "../../src/server/ws-bridge";
 import { codexWsReuseIdentity } from "../../src/server/responses/codex-ws-pool";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { codexInstallationIdForAccount } from "../../src/codex/installation-id";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 
 const key = "x-codex-installation-id";
 const original = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
@@ -84,7 +86,7 @@ for (const headerPresent of [false, true]) for (const bodyPresent of [false, tru
   const ws = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, { headers: request.headers, body: request.body })!;
   expect(Object.hasOwn(ws.headers, key)).toBe(headerPresent);
   expect(Object.hasOwn(JSON.parse(ws.frameText).client_metadata ?? {}, key)).toBe(bodyPresent);
-  if (bodyPresent) expect(JSON.parse(ws.frameText).client_metadata[key]).toBe(provider._codexAccountOverride!.installationId);
+  if (bodyPresent) expect(JSON.parse(ws.frameText).client_metadata[key]).toBe(codexInstallationIdForAccount("account-a"));
 });
 
 test("mixed-case static identity cannot revive caller data on Pool sends", async () => {
@@ -92,8 +94,38 @@ test("mixed-case static identity cannot revive caller data on Pool sends", async
   const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider));
   const parsed: OcxParsedRequest = { modelId: "gpt-5", stream: true, context: { messages: [] }, options: {}, _rawBody: { model: "gpt-5", input: [] } };
   const request = await adapter.buildRequest(parsed, { headers: incoming() });
-  expect(new Headers(request.headers).get(key)).toBe(provider._codexAccountOverride!.installationId);
+  expect(new Headers(request.headers).get(key)).toBe(codexInstallationIdForAccount("account-a"));
   expect(new Headers(request.headers).has("x-oai-attestation")).toBe(false);
+});
+
+test("absent installation surfaces do not require identity storage during provider or wire preparation", async () => {
+  const path = join(root, "codex-installation-secret");
+  writeFileSync(path, "corrupt");
+  const provider = applyCodexAuthContextToProvider(base, pool(), "pool");
+  const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider));
+  const headers = new Headers({ authorization: "Bearer caller-token" });
+  const parsed: OcxParsedRequest = { modelId: "gpt-5", stream: true, context: { messages: [] }, options: {}, _rawBody: { model: "gpt-5", input: [] } };
+  const selected = await materializeCodexUpstreamAuthAsync(headers, pool());
+  const request = await adapter.buildRequest(parsed, { headers: selected });
+  expect(new Headers(request.headers).has(key)).toBe(false);
+  expect(JSON.parse(request.body).client_metadata?.[key]).toBeUndefined();
+  const ws = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, { headers: request.headers, body: request.body })!;
+  expect(ws.headers[key]).toBeUndefined();
+  expect(readFileSync(path, "utf8")).toBe("corrupt");
+  expect(() => headersForCodexAuthContext(incoming(), pool())).toThrow("Codex installation identity unavailable");
+});
+
+test("Direct recovers a blank account header from its bearer while preserving empty identity surfaces", async () => {
+  const token = fakeChatGptJwt({ chatgpt_account_id: "caller-account" });
+  const headers = new Headers({ authorization: `Bearer ${token}`, "chatgpt-account-id": "", [key]: "", "x-codex-turn-metadata": "", "session-id": "" });
+  const ctx: CodexAuthContext = { kind: "main", accountId: null };
+  for (const selected of [headersForCodexAuthContext(headers, ctx), await materializeCodexUpstreamAuthAsync(headers, ctx)]) {
+    expect(selected.get("authorization")).toBe(`Bearer ${token}`);
+    expect(selected.get("chatgpt-account-id")).toBe("caller-account");
+    expect(selected.get(key)).toBe("");
+    expect(selected.get("x-codex-turn-metadata")).toBe("");
+    expect(selected.has("session-id")).toBe(false);
+  }
 });
 
 for (const kind of ["pool", "main", "main-pool"] as const) test(`${kind} provider defaults do not invent an installation surface`, async () => {

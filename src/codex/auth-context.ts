@@ -78,7 +78,6 @@ import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, isValid
 import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
-import { codexInstallationIdForAccount } from "./installation-id";
 import { isolateCodexPoolAccountHeaders } from "./forward-transport-headers";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
@@ -1795,7 +1794,6 @@ export function applyCodexAuthContextToProvider(
       accessToken: ctx.accessToken,
       chatgptAccountId: ctx.chatgptAccountId,
       kind: ctx.kind,
-      ...(ctx.kind === "pool" ? { installationId: codexInstallationIdForAccount(ctx.chatgptAccountId) } : {}),
     },
     _codexAccountRequired: true,
   };
@@ -1841,7 +1839,7 @@ export function materializeCodexUpstreamAuth(
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value !== null) selected.set(name, value);
+    if (value || (value !== null && (name === "x-codex-installation-id" || name === "x-codex-turn-metadata"))) selected.set(name, value);
   }
   if (ctx.kind === "pool" || ctx.kind === "main-pool") {
     assertCodexAccountValidationReady(ctx.accountId);
@@ -1951,7 +1949,7 @@ export async function materializeCodexUpstreamAuthAsync(
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value !== null) selected.set(name, value);
+    if (value || (value !== null && (name === "x-codex-installation-id" || name === "x-codex-turn-metadata"))) selected.set(name, value);
   }
   if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
     reconcileMainCodexAccountRuntimeState();

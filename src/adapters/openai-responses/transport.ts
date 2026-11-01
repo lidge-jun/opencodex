@@ -47,7 +47,7 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
     url = `${baseUrl}/responses`;
     if (provider.headers) Object.assign(headers, provider.headers);
     const runtimeProvider = provider as {
-      _codexAccountOverride?: { accessToken: string; chatgptAccountId: string; installationId?: string; kind?: "pool" | "main-pool" };
+      _codexAccountOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" };
       _codexAccountRequired?: boolean;
     };
     if (mayForwardCallerCredentials && runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
