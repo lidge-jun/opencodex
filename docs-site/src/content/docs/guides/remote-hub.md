@@ -154,6 +154,13 @@ This does not widen what the machine could reach at connect time: the same crede
 per-client key. It does mean the stored session's own TTL bounds what a local process can do
 without a fresh `ocx connect`.
 
+The session keeps the browser origin it was minted for — the client's own `http://localhost:<port>`
+at connect time — so the hub must already allow it. `ocx hub invite` refuses to print a command
+until `corsAllowOrigins` names the joining machine's origin, and that same entry is what the relay
+later needs. If the client's port changes after connecting, the session's origin no longer matches
+its own listener and management reads are refused with `cross-origin request blocked`; re-run
+`ocx connect rotate` and keep the port stable.
+
 ## Linux systemd or macOS launchd
 
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's

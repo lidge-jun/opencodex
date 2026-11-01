@@ -174,13 +174,17 @@ export function filterRelayHeaders(
  */
 export function stampStoredSession(headers: Headers, state: HubCredentialState): boolean {
   if (state.kind !== "present") return false;
-  if (headers.get("x-opencodex-api-key")) return false;
-  const credential = state.credential;
-  headers.set("x-opencodex-api-key", credential.token);
-  if (credential.kind === "admin") return true;
-  headers.set("X-OpenCodex-GUI-Origin", credential.browserOrigin);
-  headers.set("Origin", credential.browserOrigin);
-  headers.set("x-opencodex-csrf-token", credential.csrfToken);
+  // A hub-issued session is the only caller credential that is valid at the hub. Anything else —
+  // including this machine's OWN admin token, which the CLI attaches from its config home —
+  // belongs to the local proxy and is unknown upstream, so the stored credential replaces it.
+  const credential = headers.get("x-opencodex-api-key");
+  if (credential?.startsWith("ocx_session_")) return false;
+  const stored = state.credential;
+  headers.set("x-opencodex-api-key", stored.token);
+  if (stored.kind === "admin") return true;
+  headers.set("X-OpenCodex-GUI-Origin", stored.browserOrigin);
+  headers.set("Origin", stored.browserOrigin);
+  headers.set("x-opencodex-csrf-token", stored.csrfToken);
   return true;
 }
 

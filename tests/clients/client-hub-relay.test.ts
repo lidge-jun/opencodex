@@ -84,6 +84,54 @@ describe("fixed-target hub management relay", () => {
     expect(captured!.get("x-opencodex-api-key")).toBe("ocx_session_hub");
   });
 
+  test("replaces this machine's own admin token, which the hub does not know", async () => {
+    // The CLI attaches the LOCAL config home's admin token. It is meaningless upstream, so a
+    // naive "caller already sent one" check would leave it in place and the hub would 401.
+    let captured: Headers | null = null;
+    await relayHubManagementRequest(
+      new Request("http://127.0.0.1:10100/api/codex-auth/accounts", {
+        headers: { "x-opencodex-api-key": `ocx_admin_${"l".repeat(43)}` },
+      }),
+      "/api/codex-auth/accounts",
+      { managementUrl: "https://hub.example.test", browserOrigin: "" },
+      {
+        readSession: () => ({ kind: "present", credential: {
+          kind: "session", token: `ocx_session_${"s".repeat(43)}`, csrfToken: "c".repeat(43),
+          browserOrigin: "http://localhost:10100",
+        } }),
+        fetchImpl: (async (_input, init) => {
+          captured = new Headers(init?.headers);
+          return Response.json({ accounts: [] });
+        }) as typeof fetch,
+      },
+    );
+    expect(captured!.get("x-opencodex-api-key")).toBe(`ocx_session_${"s".repeat(43)}`);
+    expect(captured!.get("origin")).toBe("http://localhost:10100");
+  });
+
+  test("reaches the hub for a CLI even when its local port differs from the session's origin", async () => {
+    // A CLI sends no Origin at all. The stamp supplies the session's, so the origin gate must
+    // accept the stamped value rather than demanding the caller's own port.
+    let captured: Headers | null = null;
+    const response = await relayHubManagementRequest(
+      new Request("http://127.0.0.1:18100/api/codex-auth/accounts"),
+      "/api/codex-auth/accounts",
+      { managementUrl: "https://hub.example.test", browserOrigin: "" },
+      {
+        readSession: () => ({ kind: "present", credential: {
+          kind: "session", token: `ocx_session_${"s".repeat(43)}`, csrfToken: "c".repeat(43),
+          browserOrigin: "http://localhost:10100",
+        } }),
+        fetchImpl: (async (_input, init) => {
+          captured = new Headers(init?.headers);
+          return Response.json({ accounts: [] });
+        }) as typeof fetch,
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(captured!.get("origin")).toBe("http://localhost:10100");
+  });
+
   test("raw header validation rejects CL/TE ambiguity, duplicate lengths, upgrade, and CRLF", () => {
     for (const headers of [
       [["Content-Length", "1"], ["Transfer-Encoding", "chunked"]],
