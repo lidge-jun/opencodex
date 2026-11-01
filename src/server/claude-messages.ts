@@ -1232,7 +1232,8 @@ async function handleClaudeMessagesWithBudget(
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
     // Preserve the original catalog through late fallback; only the physical adapter projects it.
     anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
-      && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
+      && ((Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0)
+        || (Array.isArray(cc?.chatToolDispatchModels) && cc.chatToolDispatchModels.length > 0))
       ? { tools: anthropicBody.tools, messages: anthropicBody.messages, tool_choice: anthropicBody.tool_choice } : undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,

@@ -727,6 +727,10 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 
 OpenCode Go의 Responses 엔드포인트와 공식 xAI Responses 호스트는 선택 목록에 있어도 원래 전체 도구 카탈로그를 유지합니다. 이 목적지들은 `additional_tools`를 초기 `tools`로 승격하거나 거절하므로 시간순 로딩 prefix를 보존할 수 없습니다. 검색 결과의 정의를 초기 `tools`로 승격하는 다른 게이트웨이에서도 이 옵션을 꺼 두세요.
 
+`additional_tools`를 받아들이지만 오류 없이 버리는 Responses 공급자도 이 옵션의 대상이 아닙니다. 불러온 정의가 모델에게 전달되지 않기 때문입니다. 2026-10-31 측정에서 DeepSeek 공식 Responses API가 이렇게 동작했습니다. DeepSeek에는 아래 Chat 경로 옵션을 사용하세요.
+
+Chat Completions 경로에는 `additional_tools`에 해당하는 수단이 없습니다. 변환된 Chat 경로에서는 ToolSearch로 도구를 불러올 때마다 도구 카탈로그와 시스템 메시지의 도구 이름 목록이 바뀌어, 다음 요청이 대화 전체에서 공급자 프롬프트 캐시를 놓칩니다. 사용하는 모델로 검증한 직접 Chat 경로라면 `claudeCode.chatToolDispatchModels`(예: `["deepseek/deepseek-flash"]`)로 둘을 고정할 수 있습니다. 선택자 문법, 제한, 메타데이터와 eager `ToolSearch` 전제, combo·policy·늦은 대체 경로 규칙은 `appendOnlyToolLoadingModels`와 같고, 최종 물리 경로가 직접 `openai-chat` 공급자일 때만 적용됩니다. 선택된 경로에서는 첫 요청부터 카탈로그에 `use_loaded_tool` 함수 하나를 더하고 사용하지 않은 지연 도구는 뺍니다. 검색으로 찾은 도구의 이름, 설명, 매개변수 스키마는 그 도구를 불러온 ToolSearch 결과 뒤에 텍스트로 붙습니다. 모델은 `use_loaded_tool`로 그 도구를 호출하고, opencodex는 그 대화에서 검색됐거나 이미 카탈로그에 있는 도구에 한해 호출을 원래 도구로 되돌려 Claude Code에 전달합니다. 형식이 맞지 않는 호출은 그대로 전달되어 알 수 없는 도구로 실패합니다. 모델이 검색하지 않은 지연 도구를 직접 호출하면 그 도구가 카탈로그로 돌아와 캐시 prefix를 한 번 잃습니다. 정의가 텍스트로 전달되므로 공급자 측 strict 스키마 검사는 적용되지 않습니다. 호출 인자는 호출이 끝날 때까지 스트리밍되지 않습니다. 안내가 도구 결과 안에 있어 따르지 않는 모델이 있을 수 있으니 모델마다 검증한 뒤 켜세요. 옵션이 없거나 비어 있거나 목록에 없는 경로는 이전과 같은 요청 바이트를 보냅니다. 캐시 적중을 보장하지는 않습니다. [영문 설정 안내](/guides/claude-code/#chat-routes)를 참고하세요.
+
 **서브에이전트가 잘못된 모델로 디스패치됨** — 로스터 에이전트(`ocx-*`)는 Agent 도구의 `model`
 인자가 아니라 `<!-- ocx-route: ... -->` 지시문을 사용해요. 지시문이 원하는 라우트와 일치하는지
 확인하고, 모델 자리 표시자로 `"haiku"`를 전달하세요.
