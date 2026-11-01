@@ -1082,7 +1082,7 @@
     "kiro-adapter.test.ts": "providers/kiro",
     "kiro-auth-context-continuation.test.ts": "providers/kiro",
     "kiro-builder-id-profile.test.ts": "providers/kiro",
-    "kiro-calibration.test.ts": "providers/kiro",
+    "kiro-calibration.test.ts": "providers/kiro", "kiro-content-filter.test.ts": "providers/kiro",
     "kiro-device-builder.test.ts": "providers/kiro", "kiro-device-iam.test.ts": "providers/kiro", "kiro-device-social.test.ts": "providers/kiro",
     "kiro-fallback-error-body.test.ts": "providers/kiro",
     "kiro-images.test.ts": "providers/kiro",
