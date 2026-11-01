@@ -54,8 +54,10 @@ const completionAnswer = [
   frame("metadataEvent", { stopReason: "TOOL_USE" }),
   ...tail,
 ];
+/** A Kiro event-stream response that replays the given frames in order. */
 function response(frames: Uint8Array[]): Response {
   return new Response(new ReadableStream<Uint8Array>({
+    /** Enqueue every frame, then close the stream. */
     start(controller) {
       for (const value of frames) controller.enqueue(value);
       controller.close();
@@ -64,6 +66,11 @@ function response(frames: Uint8Array[]): Response {
 }
 afterEach(resetKiroThrottleStateForTests);
 
+/**
+ * Run one Claude Code-shaped turn through the adapter: the first send answers with `first`, the
+ * bounded retry with `retry`. Returns the client events, the physical send ordinals, every request
+ * body, and the retry's parsed `conversationState` when a retry was sent.
+ */
 async function run(first: Uint8Array[], retry: Uint8Array[]) {
   const adapter = createKiroAdapter(provider);
   const budget = createTranslatorBudget();
@@ -73,6 +80,7 @@ async function run(first: Uint8Array[], retry: Uint8Array[]) {
   try {
     const request = await adapter.buildRequest(structuredClone(parsed));
     const upstream = await adapter.fetchResponse!(request, {
+      /** Record each request body and answer the first send and the retry with their frames. */
       executor: (async (_url, init) => {
         bodies.push(String(init?.body));
         return response(bodies.length === 1 ? first : retry);
