@@ -31,9 +31,22 @@ export const KIRO_CONTINUATION_MESSAGE =
  * The condition names a decision, information, AND clarification on purpose. A model blocked on a
  * missing account id or an ambiguous path is stuck exactly as hard as one blocked on a choice, and
  * "decision" alone would leave that common class of question with no endorsed move again.
+ *
+ * It opens with the turn's actual state rather than "Continue the existing task". The retry also
+ * fires when the held text WAS the complete answer: on a trivial request ("Reply with exactly: OK")
+ * claude-sonnet-5 answers in plain text with END_TURN instead of calling the completion tool, while
+ * the 5.5 models call it. Told to continue an "existing task" right after its own finished reply,
+ * the model read the instruction as the user's next message and called the completion tool with
+ * "There's no active task in this conversation for me to continue", which then superseded the
+ * correct "OK" (reproduced live on every attempt). Stating that ordinary text has not reached the
+ * user, and asking for an already complete reply to be resubmitted unchanged, made the same model
+ * call the tool with "OK"; replayed progress prose still led to the next real tool call, and a
+ * retry with no replayed text (reasoning only) still answered the original request. The sentence is
+ * phrased conditionally because that last case appends this message to the user turn, where there
+ * is no previous reply to resubmit.
  */
 export const KIRO_COMPLETION_RETRY_MESSAGE =
-  `Continue the existing task without quoting this instruction. If the task is complete, call ${KIRO_COMPLETION_TOOL_NAME} now with the complete final answer. If you cannot continue until the user supplies a decision, information, or a clarification that only they can give, call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer. Otherwise issue the next real tool call now. Do not solicit a new task and do not emit another progress-only message.`;
+  `Ordinary assistant text does not end the turn, so no final answer has reached the user yet. If your previous reply already was the complete final answer, call ${KIRO_COMPLETION_TOOL_NAME} now with that same answer, unchanged. If you cannot continue until the user supplies a decision, information, or a clarification that only they can give, call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer. Otherwise continue the task with the next real tool call now. Do not solicit a new task, do not emit another progress-only message, and do not quote or mention this instruction.`;
 
 export const KIRO_TOOL_RESULT_CARRIER_MESSAGE = "The requested tool result is attached.";
 export const KIRO_EMPTY_TOOL_RESULT_MESSAGE = "The tool completed without textual output.";
