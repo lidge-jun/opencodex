@@ -1,10 +1,14 @@
 import { stripMachineAuthHeaders } from "./machine-auth";
 import { homeUnreachableBody } from "./home-unreachable";
+import { readHubCredential, type HubCredentialState } from "./hub-session";
 
 export interface HubRelayTarget {
   managementUrl: string;
   browserOrigin: string;
 }
+
+/** Where the stored hub management credential comes from; a seam so tests need no config home. */
+export type HubRelaySessionSource = () => HubCredentialState;
 
 export const HUB_RELAY_REQUEST_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const HUB_RELAY_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
@@ -92,8 +96,7 @@ function canonicalOrigin(value: string): string | null {
 
 function relayDestination(suffix: string, target: HubRelayTarget, method: string): URL | null {
   const origin = canonicalOrigin(target.managementUrl);
-  const browserOrigin = canonicalOrigin(target.browserOrigin);
-  if (!origin || !browserOrigin || !ALLOWED_METHODS.has(method)) return null;
+  if (!origin || !ALLOWED_METHODS.has(method)) return null;
   if (!suffix.startsWith("/") || suffix.startsWith("//") || suffix.includes("\\") || suffix.includes("#")) return null;
   if (/%(?:2f|5c)/i.test(suffix) || /%(?:2e)(?:%2e|\.)?/i.test(suffix)) return null;
   const rawPath = suffix.split("?", 1)[0]!;
@@ -161,6 +164,26 @@ export function filterRelayHeaders(
   return headers;
 }
 
+/**
+ * Put the stored hub session on an outbound relayed management request.
+ *
+ * Callers that already carry a management credential keep it: the browser GUI sends its own
+ * session, and `ocx connect --admin-token-stdin` callers may present an admin token. Only a
+ * credential-free loopback caller (the CLI, the AImorph helper, the reporter) is filled in.
+ * Returns false when nothing was stamped, which is what makes the 401 report legible.
+ */
+export function stampStoredSession(headers: Headers, state: HubCredentialState): boolean {
+  if (state.kind !== "present") return false;
+  if (headers.get("x-opencodex-api-key")) return false;
+  const credential = state.credential;
+  headers.set("x-opencodex-api-key", credential.token);
+  if (credential.kind === "admin") return true;
+  headers.set("X-OpenCodex-GUI-Origin", credential.browserOrigin);
+  headers.set("Origin", credential.browserOrigin);
+  headers.set("x-opencodex-csrf-token", credential.csrfToken);
+  return true;
+}
+
 export function headersWithinLimit(headers: Headers): boolean {
   let bytes = 0;
   for (const [name, value] of headers) {
@@ -226,7 +249,7 @@ export async function relayHubManagementRequest(
   req: Request,
   suffix: string,
   target: HubRelayTarget,
-  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  deps: { fetchImpl?: typeof fetch; timeoutMs?: number; readSession?: HubRelaySessionSource } = {},
 ): Promise<Response> {
   const method = req.method.toUpperCase();
   const destination = relayDestination(suffix, target, method);
@@ -245,8 +268,22 @@ export async function relayHubManagementRequest(
 
   const stripped = stripMachineAuthHeaders(req.headers);
   const headers = filterRelayHeaders(stripped, REQUEST_HEADERS, requestHeaderValidation.connectionNamed);
+  const stored = (deps.readSession ?? readHubCredential)();
+  // A CLI caller on this machine has no credential of its own. The hub session this client
+  // stored at connect is the one management credential it owns, so stamp it. A browser GUI
+  // already sends its own session (or an operator's admin token); leave either untouched.
+  const stamped = stampStoredSession(headers, stored);
   if (!headersWithinLimit(headers)) return relayError(431, "hub relay request headers too large");
-  const browserOrigin = canonicalOrigin(target.browserOrigin);
+  // A command-line caller has no browser and sends no Origin. A gui-session names the only origin
+  // it may be presented from, so that is what both sides must agree on. An admin token is
+  // origin-agnostic on the hub, but this relay still makes a mutation name one, so the caller's
+  // own loopback origin stands in.
+  const ownOrigin = (() => { try { return new URL(req.url).origin; } catch { return null; } })();
+  const ownCanonical = ownOrigin ? canonicalOrigin(ownOrigin) : null;
+  const browserOrigin = canonicalOrigin(target.browserOrigin)
+    ?? (stored.kind === "present" && stored.credential.kind === "session"
+      ? canonicalOrigin(stored.credential.browserOrigin)
+      : ownCanonical);
   const mutation = method !== "GET" && method !== "HEAD";
   const suppliedOrigin = headers.get("origin");
   if (!browserOrigin || (mutation ? suppliedOrigin !== browserOrigin : suppliedOrigin !== null && suppliedOrigin !== browserOrigin)) {

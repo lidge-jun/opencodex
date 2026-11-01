@@ -29,6 +29,61 @@ function relayRequest(path: string, init: RequestInit = {}): Request {
 }
 
 describe("fixed-target hub management relay", () => {
+  test("stamps the stored hub session for a credential-free local caller and supplies its origin", async () => {
+    // A CLI process: no browser, no Origin, no credential of its own.
+    let captured: { headers: Headers } | null = null;
+    const response = await relayHubManagementRequest(
+      new Request("http://127.0.0.1:10100/api/codex-auth/accounts"),
+      "/api/codex-auth/accounts",
+      { managementUrl: "https://hub.example.test", browserOrigin: "" },
+      {
+        readSession: () => ({ kind: "present", credential: {
+          kind: "session", token: `ocx_session_${"s".repeat(43)}`, csrfToken: "c".repeat(43),
+          browserOrigin: "http://localhost:10100",
+        } }),
+        fetchImpl: (async (_input, init) => {
+          captured = { headers: new Headers(init?.headers) };
+          return Response.json({ accounts: [] });
+        }) as typeof fetch,
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(captured!.headers.get("x-opencodex-api-key")).toBe(`ocx_session_${"s".repeat(43)}`);
+    expect(captured!.headers.get("origin")).toBe("http://localhost:10100");
+    expect(captured!.headers.get("x-opencodex-gui-origin")).toBe("http://localhost:10100");
+    expect(captured!.headers.get("x-opencodex-csrf-token")).toBe("c".repeat(43));
+  });
+
+  test("stamps a stored admin token without inventing a browser origin header", async () => {
+    let captured: Headers | null = null;
+    await relayHubManagementRequest(
+      new Request("http://127.0.0.1:10100/api/codex-auth/accounts"),
+      "/api/codex-auth/accounts",
+      { managementUrl: "https://hub.example.test", browserOrigin: "" },
+      {
+        readSession: () => ({ kind: "present", credential: { kind: "admin", token: `ocx_admin_${"a".repeat(43)}` } }),
+        fetchImpl: (async (_input, init) => {
+          captured = new Headers(init?.headers);
+          return Response.json({ accounts: [] });
+        }) as typeof fetch,
+      },
+    );
+    expect(captured!.get("x-opencodex-api-key")).toBe(`ocx_admin_${"a".repeat(43)}`);
+    expect(captured!.get("x-opencodex-gui-origin")).toBeNull();
+  });
+
+  test("leaves a browser's own credential alone even when one is stored", async () => {
+    let captured: Headers | null = null;
+    await relayHubManagementRequest(relayRequest("/api/usage"), "/api/usage", target, {
+      readSession: () => ({ kind: "present", credential: { kind: "admin", token: `ocx_admin_${"a".repeat(43)}` } }),
+      fetchImpl: (async (_input, init) => {
+        captured = new Headers(init?.headers);
+        return Response.json({ ok: true });
+      }) as typeof fetch,
+    });
+    expect(captured!.get("x-opencodex-api-key")).toBe("ocx_session_hub");
+  });
+
   test("raw header validation rejects CL/TE ambiguity, duplicate lengths, upgrade, and CRLF", () => {
     for (const headers of [
       [["Content-Length", "1"], ["Transfer-Encoding", "chunked"]],

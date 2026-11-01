@@ -19,10 +19,18 @@ import { readClientLinkState } from "../client/link-state";
 import { teardownClientLink } from "../client/link-teardown";
 import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
+import { readHubCredential } from "../client/hub-session";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { linkKnownHostsPath } from "../link/paths";
 import { createSshRunner, type SshRunner } from "../link/ssh-runner";
 import type { OrphanTunnelResult } from "../client/link-tunnel";
+
+/** One-word state of the stored relay credential, for status reporting (never the value). */
+function managementCredentialState(): "session" | "admin" | "missing" | "unsafe" {
+  const state = readHubCredential();
+  if (state.kind === "present") return state.credential.kind;
+  return state.kind === "unsafe" ? "unsafe" : "missing";
+}
 import { inspectRemoteDesktopStore } from "../claude/desktop-remote-store";
 import type { OcxConnectedClientId } from "../types";
 import {
@@ -102,6 +110,8 @@ export type ClientConnectionStatus = {
   catalog: "present" | "missing" | "unsafe";
   token: "owned" | "missing" | "changed" | "unsafe";
   rotation: "clean" | "orphan-cleaned" | "recovery-required" | "unsafe";
+  /** The stored hub management credential the loopback relay stamps; its expiry is the hub's. */
+  managementCredential?: "session" | "admin" | "missing" | "unsafe";
   /**
    * Whether the selected local Codex CLI can actually launch against this connection (#4207).
    *
@@ -231,6 +241,10 @@ export function collectClientConnectionStatus(
     catalog,
     token,
     rotation,
+    // Local callers (the menu-bar panel, `ocx account list`, the usage reporter) relay through
+    // this credential. Without it every one of them 401s while inference keeps working, so it is
+    // reported beside the data token rather than left to a surprise.
+    ...(state.value.transport === "link" ? {} : { managementCredential: managementCredentialState() }),
     readiness: readiness.kind,
     ...(readiness.kind === "ready" ? {} : { readinessReason: readiness.reason }),
   };
@@ -356,6 +370,10 @@ function statusLines(status: ClientConnectionStatus): string[] {
     `Clients: ${status.selectedClients?.join(", ")}`,
     `Token file: ${status.token}`,
     `Key rotation: ${status.rotation}`,
+    ...(status.managementCredential
+      ? [`Management credential: ${status.managementCredential}${status.managementCredential === "missing"
+        ? " (run 'ocx connect rotate' with a fresh code; local account reads 401 until then)" : ""}`]
+      : []),
     `Catalog: ${status.catalog}${status.catalogAgeSeconds !== undefined ? ` (${status.catalogAgeSeconds}s old)` : ""}`,
   ];
 }

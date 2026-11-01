@@ -321,7 +321,8 @@ describe("start and ensure journal ownership (#1230)", () => {
         expect(health.role).toBe("client");
         expect(runtime.hostname).toBe("127.0.0.1");
         expect((await fetch(`http://127.0.0.1:${runtime.port}/v1/models`)).status).toBe(404);
-        expect((await fetch(`http://127.0.0.1:${runtime.port}/api/config`)).status).toBe(404);
+        // Management paths relay to the hub; this fixture has no hub behind it, so 502.
+        expect((await fetch(`http://127.0.0.1:${runtime.port}/api/config`)).status).toBe(502);
         expect(readFileSync(fx.configPath, "utf8")).toBe(matches ? injected : original);
         expect(existsSync(fx.journalPath)).toBe(matches);
       } finally {

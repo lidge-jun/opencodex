@@ -15,8 +15,9 @@ import type { OcxClientConnectionConfig, OcxConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
-import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
+import { MACHINE_GUI_ORIGIN_HEADER, MACHINE_SESSION_HEADER, requireMachineAuth } from "./machine-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./hub-relay";
+import { readHubCredential } from "./hub-session";
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
@@ -44,6 +45,16 @@ import type { ClientRestartAdmission } from "./runtime-restart";
 import { isLinkConnectionGeneration } from "../link/relay-auth";
 
 const VERSION = packageVersion("0.0.0");
+/**
+ * A bare `/api/*` path this client answers itself instead of relaying to the hub.
+ *
+ * Everything else under `/api/*` belongs to the hub's management plane: resolvers, accounts,
+ * quotas, config. Keeping the client-local surface a fixed list is what lets a CLI or helper that
+ * only knows `/api/codex-auth/accounts` work unchanged on a connected machine.
+ */
+function clientLocalApiPath(pathname: string): boolean {
+  return pathname === "/api/machine" || pathname.startsWith("/api/machine/");
+}
 const GUI_SPA_PATHS = new Set([
   "/dashboard", "/startup", "/providers", "/models", "/subagents",
   "/logs", "/usage", "/storage", "/codex-set", "/integrations",
@@ -98,6 +109,13 @@ function machinePolicyConfig(config: OcxConfig): OcxConfig {
   return { ...config, hostname: "127.0.0.1" };
 }
 
+/** A bare management path a hub client relays; never true on a link Child, which reads its Home. */
+function relayedManagementPath(url: URL, linkMode: boolean): boolean {
+  if (linkMode) return false;
+  if (url.pathname.startsWith("/api/machine/hub-relay/")) return false;
+  return url.pathname.startsWith("/api/") && !clientLocalApiPath(url.pathname);
+}
+
 export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolean, linkMode = false): boolean {
   if (req.headers.get("upgrade")) return false;
   if (linkMode && linkRouteAllowed(url, req)) return true;
@@ -110,6 +128,10 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (linkMode && (req.method === "GET" || req.method === "HEAD") && path === "/api/link/status") return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
+  // A hub client relays the hub's management plane; the hub answers its own method rules. This is
+  // independent of `managementTransport`: `direct` is how the browser reaches the hub, but a CLI
+  // on this machine has no route to it at all, so it always comes through here.
+  if (relayedManagementPath(url, linkMode)) return true;
   // Known machine endpoints are admitted for every method so an unsupported
   // method reaches the authenticated method restriction (403) instead of a
   // bare 404 that hides the endpoint entirely.
@@ -238,6 +260,28 @@ export function startMachineListener(
         const authError = requireMachineAuth(req, managementAuth, config);
         if (authError) return authError;
         const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
+        const response = await relayHubManagementRequest(req, suffix, {
+          managementUrl: connection.managementUrl,
+          browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",
+        }, { fetchImpl: deps.fetchImpl });
+        if (response.status === 401) hubReachability = "unauthorized";
+        else if (response.status >= 500) hubReachability = "offline";
+        else hubReachability = "online";
+        return response;
+      }
+      // Bare management paths are relayed to the hub, so a caller that knows only the standalone
+      // routes (the CLI, the AImorph helper, the reporter) reaches the hub's real management plane
+      // without learning a relay prefix. Machine routes stay local; `/opencodex-session` below
+      // mints the browser's local session.
+      if (relayedManagementPath(url, linkMode)) {
+        // The listener binds 127.0.0.1 and carries no data key, so a credential-free loopback
+        // caller (the CLI, the AImorph helper, the reporter) is admitted as itself. A browser
+        // that presents a machine session is still checked against it.
+        if (req.headers.get(MACHINE_SESSION_HEADER) || req.headers.get("Origin")) {
+          const authError = requireMachineAuth(req, managementAuth, config);
+          if (authError) return authError;
+        }
+        const suffix = `${url.pathname}${url.search}`;
         const response = await relayHubManagementRequest(req, suffix, {
           managementUrl: connection.managementUrl,
           browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",

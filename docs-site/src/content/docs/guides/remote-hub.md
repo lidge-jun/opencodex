@@ -130,6 +130,30 @@ only; no admin token and no provider secret ever reaches a client.
 status snapshot and the data-token file matches that connection. If either check fails, it skips
 the request and shows matching cached hub state, or `unavailable` if no matching cache exists.
 
+### Management reads from a connected client
+
+The data key admits `/v1/*` and nothing under `/api/*`, but the tools that live on a teammate's
+machine ask the loopback listener for `/api/codex-auth/accounts`, `/api/oauth/accounts` and
+`/api/provider-quotas` directly — the menu-bar panel, `ocx account list`, the usage reporter. A
+client listener therefore **relays** management paths it does not own to the hub and answers them
+with the hub's own handler. Only `/api/machine/*` stays local; the data plane is unaffected.
+
+Those callers are local processes with no credential of their own, so the client stores the
+management credential `ocx connect` already obtained — a gui-session from the pairing exchange, or
+the admin token when `--admin-token-stdin` was used — in `~/.opencodex/hub-management-session.json`
+(mode `0600`) and stamps it on the relayed request. A browser that brings its own session or admin
+token keeps it; the stored value only fills a credential-free call. `ocx connect rotate` refreshes
+it, and `ocx disconnect` removes it.
+
+`ocx status` and `ocx connect status` report the stored credential's state without its value. A
+pairing grant is single-use, so an expired session is not re-exchanged automatically: re-run
+`ocx connect rotate` on the hub with a fresh code. Until then management reads from that machine
+answer `401` while inference keeps working.
+
+This does not widen what the machine could reach at connect time: the same credential issued the
+per-client key. It does mean the stored session's own TTL bounds what a local process can do
+without a fresh `ocx connect`.
+
 ## Linux systemd or macOS launchd
 
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's
