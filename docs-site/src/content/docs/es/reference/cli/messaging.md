@@ -3,7 +3,44 @@ title: "Mensajería de Codex"
 description: "Envía mensajes correlacionados a sesiones de Codex cargadas localmente o mediante pares SSH registrados expresamente."
 ---
 
-`ocx message` es una superficie opt-in para Codex sesiones existentes. No inicia ningún proxy o servidor de aplicaciones, no reanuda ningún hilo ni instala ninguna habilidad. Linux / macOS Sockets Unix son compatibles; Windows falla explícitamente. El demonio Codex existente debe soportar el experimento `thread/queue/add`. No se requiere un pin de versión CLI o selección `CODEX_CLI_PATH`.
+`ocx message sessions` y `ocx message send` son funciones opcionales para sesiones existentes de Codex. No inician un proxy ni un app-server, no reanudan hilos ni instalan skills. Admiten sockets Unix en Linux y macOS; la mensajería local en Windows falla explícitamente. El daemon de Codex existente debe admitir el método experimental `thread/queue/add`. No requieren fijar una versión de la CLI ni seleccionar `CODEX_CLI_PATH`.
+
+El [servidor MCP de colas](#mcp-queue-host) descrito a continuación es independiente: puede dirigirse a UUID de hilos almacenados sin un socket de control. No cambia la restricción de sesiones cargadas de los comandos anteriores.
+
+<a id="mcp-queue-host"></a>
+
+## Servidor MCP de colas
+
+Ejecuta `ocx message mcp` solo cuando quieras que un cliente MCP, como Claude Code o Claude Desktop, descubra hilos almacenados de Codex y les envíe texto a la cola. Este servidor se comunica mediante stdio, no abre ningún listener de red ni se registra automáticamente en clientes. Configura el cliente MCP con una CLI de Codex explícita y un directorio personal existente:
+
+```json
+{
+  "mcpServers": {
+    "opencodex-queue": {
+      "command": "ocx",
+      "args": [
+        "message", "mcp",
+        "--codex", "/absolute/path/to/codex",
+        "--codex-home", "/absolute/path/to/.codex"
+      ]
+    }
+  }
+}
+```
+
+Sustituye ambas rutas por las rutas locales reales y usa una ruta absoluta para `ocx` si el cliente no hereda PATH. Esta primera versión admite macOS y Linux; Windows se rechaza explícitamente.
+
+- `codex_threads` enumera como máximo 50 hilos almacenados y no archivados. Para obtener otra página, pasa `nextCursor` como `cursor`. Devuelve identificadores y nombres, sin historial, vista previa ni directorios de trabajo. `liveStateVerified: false` significa que no demuestra que el hilo esté abierto en la aplicación ni listo para procesar un mensaje.
+- `codex_queue_message` acepta un UUID exacto `threadId` y un `message`. Envía solo mensajes autorizados por el usuario. El texto junto con la etiqueta fija de par tiene un límite de 16 KiB; se rechazan el texto vacío y NUL. No se adivinan nombres ni se cambia el modelo. Tampoco se conceden permisos ni se generan respuestas automáticas.
+
+Cada llamada a una herramienta inicia por stdio un app-server de corta duración de la CLI de Codex seleccionada explícitamente. Usa `thread/list` o el mismo método experimental `thread/queue/add` que `codex queue`, sin incluir el texto en los argumentos del proceso. No solicita iniciar un daemon, iniciar sesión, reanudar un hilo, empezar un turno ni redirigir un turno activo. El inicio normal de OpenCodex no ejecuta estos auxiliares. La CLI nativa puede mantener su propio estado en el directorio elegido; esta función no crea un almacén de OpenCodex.
+
+`queued` significa que una respuesta de cola correlacionada confirmó el almacenamiento, **no el procesamiento**. Un rechazo explícito produce `not_sent`; una desconexión, un tiempo de espera agotado o un recibo inválido después de escribir en la cola produce `unknown`. Nunca repitas un envío incierto. Un hilo no cargado puede seguir esperando, y un objetivo o turno activo puede retrasar el consumo. El servidor no activa un hilo no cargado ni lee la respuesta resultante. Verifica esos comportamientos con la combinación instalada de aplicación y CLI antes de depender de la entrega.
+
+Cada servidor permite como máximo cuatro llamadas simultáneas a auxiliares. Cada operación dispone de 20 segundos, incluida la validación del ejecutable, con un plazo RPC de 12 segundos y un límite de salida de 1 MiB. La limpieza pasa a SIGKILL después de 600 ms. La desconexión o cancelación detiene los auxiliares de esa invocación y espera su terminación; nunca detiene al destinatario. El ejecutable seleccionado en macOS pasa por la comprobación existente de confianza de ejecución del paquete. El acceso MCP y el directorio elegido establecen un límite de confianza del usuario local, no una autorización por proyecto o hilo. El texto entrante de un par es contexto, nunca prueba de aprobación del usuario ni de autoridad delegada.
+
+Esta ruta de colas almacenadas es distinta de `sessions` y `send`: estos siguen exigiendo un descubrimiento completo de sesiones cargadas mediante el socket de control existente y nunca inician un auxiliar de la CLI nativa. Los pares remotos, el transporte de bandejas de Claude, los traspasos persistentes, la lectura de respuestas, la redirección de turnos y la configuración automática de clientes quedan fuera de este servidor.
+
 
 <a id="discover-and-send"></a>
 
@@ -15,19 +52,19 @@ printf '%s\n' 'Please review the current change and send your findings back.' |
   ocx message send --name 'reviewer' --stdin --json
 ```
 
-Discovery devuelve solo ID de subproceso cargados, nombres y estados en entorno de ejecución, no historial, Vista previa o directorios de trabajo. Utilice una UUID exacta (`--thread`) o una única exacta nombre (`--name`) Los destinos faltantes, duplicados, incompletos o descargados fallan; no hay coincidencia difusa o retroceso a las sesiones almacenadas.
+El descubrimiento devuelve únicamente los identificadores de los hilos cargados, sus nombres y sus estados de ejecución, sin historial, vistas previas ni directorios de trabajo. `--thread` exige un UUID exacto y `--name`, un único nombre exacto de sesión cargada. Los destinos inexistentes, duplicados, incompletos o no cargados producen un error. No se usan coincidencias aproximadas ni se recurre a sesiones almacenadas.
 
-El socket de control existente se resuelve bajo `CODEX_HOME` efectivo, usando la misma política de inicio que otros comandos de integración Codex. Antes de conectar, el socket resuelto debe ser propiedad de su uid y ser un socket. Cada padre real a través de root debe ser propiedad de su uid o root y no debe ser escribible en grupo u otro, excepto los directorios sticky propiedad de root como `/tmp`. Se permiten casas conectadas cuando pasan sus caminos resueltos. Las rutas no confiables fallan con `untrusted_socket` y sin detalles de ruta resuelta.
+El socket de control existente se localiza dentro del `CODEX_HOME` efectivo, con la misma política de selección del directorio que los demás comandos de integración de Codex. Antes de conectar, se comprueba que la ruta resuelta sea un socket y pertenezca a tu uid. Cada directorio padre hasta la raíz debe pertenecer a tu uid o a root y no permitir escritura al grupo ni a otros usuarios, salvo directorios con sticky bit propiedad de root, como `/tmp`. Se admiten directorios personales enlazados si sus rutas resueltas superan las comprobaciones. Una ruta no confiable produce `untrusted_socket` sin revelar la ruta resuelta.
 
-Discovery, la comprobación final de destino cargado y la cola usan una conexión a ese socket. No se produce ningún ayudante nativo CLI, instalación, reparación o reconexión. Un demonio sin soporte de cola local devuelve `unsupported_queue`.
+El descubrimiento, la comprobación final de que el destino sigue cargado y el envío a la cola usan una misma conexión a ese socket. No se ejecuta un auxiliar de la CLI nativa ni se instala, repara o reconecta nada. Un daemon sin soporte de cola local devuelve `unsupported_queue`.
 
-Solo se acepta UTF-8 stdin, como máximo 16 KiB de texto no vacío sin NUL. Una fecha límite de 30 segundos cubre la entrada, el descubrimiento, la revalidación y la presentación. Cada RPC tiene un límite de 10 segundos. El sobre completo está limitado a 32 KiB. El texto del mensaje se envía a través de la conexión RPC de Unix y nunca se coloca en los argumentos de proceso generados.
+Solo se acepta texto UTF-8 por stdin: como máximo 16 KiB, no vacío y sin NUL. Un único plazo de 30 segundos cubre la lectura, el descubrimiento, la revalidación y el envío. Cada RPC tiene un máximo de 10 segundos y la envolvente completa, de 32 KiB. El texto viaja por la conexión RPC Unix y nunca se incluye en los argumentos de procesos auxiliares.
 
 <a id="sender-and-replies"></a>
 
 ## Remitente y respuestas
 
-La envoltura genera un UUID de mensaje y adjunta el ID/nombre del remitente a partir de metadatos `CODEX_THREAD_ID` y daemon cargados. Este contexto **no constituye una autoridad de pares autenticada** y nunca otorga aprobación o escalamiento al usuario. Un remitente reclamado no válido/descargado falla; el contexto ausente permanece desconocido, sin adivinar una ruta de respuesta. Los mensajes de pares se ponen en cola como texto, no como aprobaciones de permisos o anulaciones de configuración. El arnés del agente receptor hace cumplir sus permisos; la guía del sobre no es un límite de autorización técnica o una garantía del comportamiento del modelo.
+El wrapper genera un UUID para el mensaje y adjunta el identificador y el nombre del remitente a partir de un `CODEX_THREAD_ID` cargado y los metadatos del daemon. Este contexto **no autentica la autoridad del par** y nunca constituye aprobación del usuario ni permite elevar privilegios. Si el remitente declarado es inválido o no está cargado, la operación falla. Si falta el contexto, queda como desconocido y no se inventa una ruta de respuesta. Los mensajes de pares se encolan como texto, no como aprobaciones de permisos ni cambios de configuración. El entorno del agente receptor aplica sus permisos; las instrucciones de la envolvente no establecen una barrera técnica de autorización ni garantizan el comportamiento del modelo.
 
 El tipo predeterminado es `request`. Contesta usando el `replyCommand` generado en el sobre, o correlaciona explícitamente una respuesta:
 
@@ -37,11 +74,11 @@ printf '%s\n' 'Review findings: ...' |
     --in-reply-to <request-message-uuid> --stdin --json
 ```
 
-`response` requiere `--in-reply-to`; otros tipos lo rechazan. Utilice `--kind notification` para un FYI. Responses y las notificaciones no solicitan reconocimientos. Una respuesta final normal del agente no se envía de vuelta a su compañero; las rutas faltantes no deben adivinarse. No se introducen cambios globales de solicitud ni bucles de acuse de recibo.
+`response` requiere `--in-reply-to`; los demás tipos lo rechazan. Usa `--kind notification` para informar sin pedir respuesta. Las respuestas y notificaciones no solicitan acuses de recibo. La respuesta final normal de un agente no se envía a su par; nunca deben inventarse rutas que falten. No se modifican los prompts globales ni se crean bucles de confirmación.
 
 <a id="receipts-and-exit-codes"></a>
 
-## Recepción y códigos de salida
+## Recibos y códigos de salida
 
 `--json` emite un recibo versionado (`ocx-message/1`) que contiene el mensaje UUID, tipo, correlación de respuesta, metadatos de remitente/objetivo y estado de envío. Nunca incluye el texto del cuerpo o la salida del demonio en bruto. Fallos de entrada/configuración antes de que exista un recibo, use `ocx-message-error/1` con `not_sent`; los fallos de detección usan el mismo esquema de error sin un estado de envío. El uso no válido sale 64 en stderr antes de E/S.
 
@@ -57,7 +94,7 @@ El UUID de mensaje de aplicación es también el `clientUserMessageId` de la pet
 
 ## Pares remotos explícitos
 
-La mensajería remota es independiente del enlace remoto y el inicio proxy normal. No redirige proveedores, comparte credenciales de proveedores o inicia un demonio nativo. Ambos nodos necesitan un OpenCodex CLI compatible y un demonio con capacidad de cola existente. Linux tiene pruebas aisladas de interoperabilidad; macOS requiere su propia calificación. Windows el transporte remoto no es compatible.
+La mensajería remota es independiente de Remote Link y del inicio normal del proxy. No redirige proveedores, no comparte sus credenciales ni inicia un daemon nativo. Ambos nodos necesitan una CLI OpenCodex compatible y un daemon existente que admita colas. Linux cuenta con pruebas aisladas de interoperabilidad. macOS requiere una validación propia. El transporte remoto en Windows no está soportado.
 
 En cada nodo, habilite explícitamente la mensajería. En el nodo receptor, mantenga el propietario en primer plano en ejecución:
 
@@ -77,7 +114,7 @@ ocx message serve --host worker --json
 
 Los registros de sondeo privados mantienen su formato prefijado por alias incluso cuando su configuración SSH normal habilita `HashKnownHosts`; su archivo known_hosts normal no cambia. Cada intento de inscripción utiliza su propio archivo de rascado de clave fija calificado para la transacción, eliminado después de que su ayudante SSH se resuelva, incluidos los fallos, sin depender del bloqueo del propietario de otra mutación. Si la limpieza no se puede confirmar, el comando informa de un resultado de almacenamiento desconocido, no de éxito. El diario de recuperación está separado.
 
-`hosts add worker` autoriza mensajes salientes a `worker`, **mensajes no arbitrarios en este nodo de inicio**. El intercambio de control SSH autoriza esa dirección de salida en el nodo receptor usando su inicio de sesión SSH existente. El recibo de inscripción y `hosts list` muestran la política de entrada local de cada nodo. En el nodo iniciador, el valor predeterminado es `responses-only`: el par puede ver y responder solo a las sesiones de remitente local originales que esperan una respuesta correlacionada a una solicitud enviada por este nodo. Una respuesta debe coincidir con el UUID de solicitud, la inscripción y el destino local original; no puede dirigirse a otra sesión ni convertirse en una solicitud/notificación no solicitada.
+`hosts add worker` autoriza mensajes salientes desde este nodo iniciador hacia el `worker` registrado; **no concede acceso entrante arbitrario a las sesiones locales del iniciador**. El intercambio de control SSH autoriza esa dirección de salida en el receptor mediante tu sesión SSH existente. El recibo de inscripción y `hosts list` muestran la política de entrada local de cada nodo. En el iniciador, la política predeterminada es `responses-only`: el par solo puede ver y responder a las sesiones locales originales que esperan una respuesta correlacionada a una solicitud enviada por este nodo. La respuesta debe coincidir con el UUID de solicitud, la inscripción y el destino local original; no puede dirigirse a otra sesión ni convertirse en una solicitud o notificación no solicitada.
 
 Para conceder un acceso más amplio en cualquiera de los nodos, ejecute explícitamente en ese nodo:
 
@@ -87,7 +124,7 @@ ocx message hosts allow-inbound <peer-alias-or-machine-uuid> --json
 ocx message hosts deny-inbound <peer-alias-or-machine-uuid> --json
 ```
 
-`allow-inbound` permite los tres tipos de mensajes en **cualquier sesión local cargada Codex** y expone sus metadatos de directorio a ese par. No es una subvención de solo respuestas. Los cambios de consentimiento se aplican a las conexiones existentes antes de lecturas/envíos posteriores. Los registros más antiguos sin una política de entrada local tienen por defecto `responses-only`, no un acceso amplio. Las rutas de respuesta están limitadas a 256 solicitudes pendientes por propietario en primer plano y caducan después de 24 horas o el retiro / reinicio del propietario. Ningún contexto de remitente significa ninguna ruta de respuesta. Una respuesta en cola o incierta consume su ruta; un rechazo nativo definido no lo hace. Una ruta caducada/perdida requiere una reconciliación explícita entre el operador y el remitente, nunca una repetición automática.
+`allow-inbound` concede expresamente el acceso más amplio: permite los tres tipos de mensaje en **cualquier sesión local cargada de Codex** y expone a ese par los metadatos de su directorio. No es un permiso limitado a respuestas. Los cambios de consentimiento se aplican a las conexiones existentes antes de posteriores lecturas o envíos. Los registros antiguos sin una política local de entrada usan `responses-only` de forma predeterminada. Cada proceso propietario en primer plano admite como máximo 256 solicitudes de respuesta pendientes; las rutas caducan a las 24 horas o al retirar o reiniciar el proceso propietario. Si no hay contexto del remitente, no hay ruta de respuesta. Una respuesta encolada o incierta consume su ruta; un rechazo nativo confirmado no. Si la ruta se pierde o caduca, el operador y el remitente deben reconciliar el estado de forma explícita, sin repetición automática.
 
 Cada `serve` es propiedad de primer plano: manténgalo en funcionamiento y use un terminal separado para la mensajería. A lo sumo se pueden suministrar cuatro selecciones de `--host` distintas. Nada instala un servicio o inicia un propietario automáticamente. SSH utiliza claves de host ancladas confirmadas y sus claves/agente configurados; las solicitudes de contraseña están deshabilitadas. La envoltura posee rutas de retorno y de avance solo de bucle, por lo que el nodo receptor puede enviar respuestas correlacionadas sin un inicio de sesión SSH al iniciador, sujeto a la política anterior.
 

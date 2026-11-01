@@ -831,3 +831,127 @@ without waiting for its result. CodeRabbit's official command documentation
 distinguishes a full reanalysis from an incremental review; its configuration
 and review scope are unchanged. Keep Draft for fresh review, independent human
 language/render acceptance, current-head CI and maintainer integration approval.
+
+## 2026-10-31 — Full-review follow-up and current-dev synchronization
+
+Merged the 18 newer dev commits through
+`98bd8c07bdb999e883c68c89e1a932c3598912bb` (2.96.0) in ordinary merge
+`ab24a74ce`. The layout conflict preserves all 21 shards, including the new
+file-identity shard and this contribution's docs shard, with every upstream
+registration intact. A fresh fetch before staging found zero missing dev commits.
+
+| Review item | Published correction |
+| --- | --- |
+| Image relay | English/Spanish and affected retained translations distinguish an absent xAI provider from an existing provider without usable credentials. Normal ChatGPT image selection remains possible in the former case. |
+| MiniMax startup | Separate the foreground proxy from integration/launch commands in all nine copies, with explicit second-terminal instructions. |
+| Hub pairing | All shipped connect/rotate recipes read authority silently, pipe it to stdin and clear variables, including older admin-token and Korean text-fenced examples. |
+| Parser messages/tools | Rewrite the Spanish normalization, namespacing, hosted-tool and sidecar rules while preserving identifiers. |
+| OAuth/affinity | Explain refresh coordination, newer-credential protection, account affinity eviction and restart behavior in direct Spanish. |
+| Qwen effort | Explain direct Alibaba effort values and Codex compatibility-level clamping. |
+| CLI family table | Preserve command syntax and clarify experimental/default-disabled and proxy-launch behavior. |
+| Account exit mapping | Say HTTP 404 maps to exit 4, HTTP 409 to exit 5 and other failures to exit 1. |
+| Windows JSON | Name UTF-8 BOM explicitly and preserve UTF-16 refusal. |
+| Session selectors | Require exact UUIDs or unique exact loaded names and preserve refusal of missing, duplicate, incomplete or unloaded targets. |
+| Messaging platforms | Separate Unix-socket support, Windows refusal and independently qualified remote interoperability. |
+| Messaging direction | Outbound worker enrollment does not grant arbitrary inbound local-session access; the broader allow-inbound grant stays explicit. |
+| Diagnostic privacy | Use pull requests (PR), not public relations, in both affected Spanish privacy passages. |
+| Ledger ownership | English/Spanish state that owner comparison is skipped on Windows; other file checks remain intact. |
+
+The full review also had three comments outside the diff and one unverified
+comment. Corrected all four: Pi reasoning metadata in six retained translations;
+remote-bind credential guidance in seven Agent Quickstarts; mobile landing-page
+language selection; and the root CLI discovery description. Checked linked
+remote-access chapters too: all nine now distinguish configured client keys and
+token-file sources from independent management credentials. Added 13 stable
+localized anchors rather than pointing at missing translated section fragments.
+
+Additional Spanish corrections cover adjacent bridge/transport/caching language,
+consent wording, CLI help and error contracts. Current-dev synchronization covers
+Claude Ultra/active quota windows, mandatory-tool combo eligibility, Qoder raster
+ceilings, role-apply limits/recovery, and the new stored-thread MCP queue chapter.
+All 79 current canonical paths retain example, identifier, link and shape parity.
+This is technical and targeted semantic review, not independent human acceptance
+of every sentence in every locale.
+
+Verification uses Bun 1.4.4, frozen root/docs installs with no lockfile changes,
+the repository test wrapper/preload, synthetic homes and an ignored TEMP/TMP root.
+
+```powershell
+$env:OCX_TEST_RUNNER_BUN = (Get-Command bun).Source
+$docsTests = @(rg --files tests/ci-workflows -g 'docs-*.test.ts')
+$related = @(
+  'tests/ci-workflows/client-support-matrix.test.ts',
+  'tests/test-layout.test.ts', 'tests/test-layout-tooling.test.ts',
+  'tests/server/server-images.test.ts', 'tests/lib/spend-ledger-file-journal.test.ts',
+  'tests/clients/client-export-reasoning-controls.test.ts',
+  'tests/clients/client-export-reasoning-metadata.test.ts',
+  'tests/clients/client-connect.test.ts', 'tests/providers/minimax-clients.test.ts',
+  'tests/cli/cli-account.test.ts', 'tests/cli/cli-message-mcp.test.ts',
+  'tests/codex-integration/messaging-mcp-queue.test.ts',
+  'tests/codex-integration/messaging-remote-admission.test.ts',
+  'tests/cli/cli-role-suggestion-history.test.ts',
+  'tests/providers/provider-anthropic-usage-windows.test.ts',
+  'tests/providers/qoder-cn-image-validation.test.ts',
+  'tests/server/server-combo-required-tool-contract.test.ts',
+  'tests/responses/responses-parser.test.ts'
+)
+bun scripts/test.ts --timeout 120000 @docsTests @related
+# Initial expansion: 1052 pass, 35 platform skips, 4 fail, 1 post-timeout error.
+bun scripts/test.ts --timeout 120000 tests/clients/client-connect.test.ts
+# Complete isolated file: 53 pass, 0 fail; 309 assertions.
+bun scripts/test.ts --timeout 120000 tests/cli/cli-role-suggestion-history.test.ts
+# Final complete file: 9 pass, 0 fail; 197 assertions.
+bun scripts/test.ts --timeout 120000 @docsTests
+# Final documentation tree: 385 pass, 0 fail; 4811 assertions across 14 files.
+bun run typecheck
+# Final: 2259 files, zero errors.
+bun run structure:check
+bun scripts/file-size-ratchet.ts
+bun run privacy:scan
+git diff --cached --check
+```
+
+Three connection probes hit their unchanged 15-second internal deadline under
+parallel host load and passed in the complete isolated 53-case file. Source and
+tests match upstream; their deadlines were not altered. The role-history case
+also exceeded its explicit 30-second store budget in isolation. It applies 50
+durable updates and restores 50 more, so that one case now uses the existing
+bounded bulk-durable-I/O budget. Assertions, file limits and shared budget values
+are unchanged. A scratch-only counterfactual replaced the CLI's imported role
+limit with 49: the 50-role case failed its exit assertion in 234 ms with the larger
+budget. No production file was mutated. The final full nine-case file passes.
+The initial parallel command is not represented as passing or rerun wholesale.
+
+The first new recipe guards failed before correction. The post-merge baseline
+had 20 passes and two dev-sync failures. Subsequent guards exposed retained
+admin-token examples and a Korean text fence; the final 385-case docs selection
+passes without dropping those cases. Thirty shipped Hub scripts (six distinct
+bodies) execute with synthetic stdin and an in-process Bash stub; no real proxy,
+provider, authority or native acceptance is involved. The first stub driver used
+Windows text-mode CRLF input; binary LF fixture input corrected that driver.
+
+The first site build found 13 missing translated section fragments. After adding
+the anchors and finishing the linked credential guidance, the complete offline
+build, Pagefind and sitemap pass: **712 pages / 106109 internal links**.
+
+Actual-browser inspection verified the English-to-Spanish landing switch at
+390 px, selected Spanish state and lang=es, and no horizontal page overflow at
+320/390/1280 px. The mobile language panel is 272 px wide and fits the 320 px
+viewport; desktop retains its existing selector. Captures are kept on pr-assets,
+outside this source branch. A browser-session reset was needed after a tab expired
+across user continuation; the temporary viewport override was then reset.
+The personal Desktop listener remained in the same observed process on port
+10100; its configuration and credentials were not used.
+
+The full root suite was not repeated on this shared host: this 32-file expansion,
+the necessary isolated diagnostics, complete docs guards and full site build
+cover the scoped change. Windows skips include native MCP/remote interoperability
+and POSIX file checks; those are left to authorized hosted/platform validation.
+No full-root, packaged Desktop or live-provider success is claimed.
+
+Publish this batch once, update the English description with exact-head evidence,
+resolve the 14 corrected threads and record the three outside-diff dispositions
+plus the unverified comment. Request one full CodeRabbit review without waiting
+for its result. Keep Draft for fresh review, maintainer-arranged independent
+Spanish/render acceptance, authorized current-head CI and maintainer approval.
+Do not merge, dispatch CI, alter permissions or change CodeRabbit configuration.

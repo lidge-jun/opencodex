@@ -76,11 +76,11 @@ ocx combo set main \
 
 ## リモートとLANのバインド
 
-デフォルトのループバック バインドには API トークンは必要ありません。 `0.0.0.0` などの非ループバック バインドには `OPENCODEX_API_AUTH_TOKEN` が必要です。プロキシはそれなしでは起動を拒否します。変数を `ocx start` の前、または `ocx service install` の前に設定して、サービスがそれを受け取るようにします。
+通常のループバック上のモデルルートにはデータトークンは不要です。`0.0.0.0` などの非ループバックへのバインドには、`config.apiKeys` に設定したクライアントキー、または `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、所有者だけが読める `service-api-token` ファイルから解決される共有トークンが必要です。ファイルがなければ `ocx service install` が作成できます。環境変数でトークンを渡す場合は、`ocx start` または `ocx service install` より前に設定します。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-その後、クライアントは管理リクエストとモデルリクエストを認証する必要があります。 opencodex をローカル マシンの外に公開する前に、[構成](/reference/configuration/) のリモート アクセス ルールを読んでください。
+モデルリクエストはデータプレーン認証を使います。管理には独立した認証情報である `OPENCODEX_ADMIN_AUTH_TOKEN` または保護されたファイル内の生成済み管理トークンを使います。データトークンで管理アクセスはできません。ダッシュボードには[管理 API](/ja/reference/management-api/#authentication-model)のセッション・アクセス規則が適用されます。管理トークンをモデルクライアントに渡さないでください。外部公開前に[リモートアクセス](/ja/reference/configuration/server/#remote-access)を確認してください。

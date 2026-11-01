@@ -14,6 +14,11 @@ MiniMax는 서로 다른 두 명령줄 제품을 제공합니다. opencodex는 �
 
 ```bash
 ocx start
+```
+
+이 터미널에서 프록시를 계속 실행하세요. 다른 터미널에서 통합을 활성화하고 MiniMax Code를 시작하세요:
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

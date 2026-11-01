@@ -7,14 +7,14 @@ description: "Enruta las llamadas a la herramienta alojada image_generation haci
 
 ## Descripción general
 
-Cuando se enruta Codex a través de un modelo no OpenAI (Claude, Gemini, Grok, etc.), el `image_generation` **herramienta alojada** normalmente no funciona - se requiere OpenAI 's entorno de ejecución del lado del servidor. El puente de imágenes detecta estas llamadas y las redirige de forma transparente a xAI Grok Imagine, por lo que el modelo con el que estás chateando aún puede generar imágenes.
+Cuando enrutas Codex mediante un modelo distinto de OpenAI (Claude, Gemini, Grok, etc.), la **herramienta alojada** `image_generation` normalmente no funciona, porque requiere el entorno de ejecución de OpenAI en el servidor. El puente de imágenes detecta estas llamadas y las redirige de forma transparente a xAI Grok Imagine, de modo que el modelo con el que conversas pueda generar imágenes.
 
 <a id="prerequisites"></a>
 
 ## Requisitos previos
 
 - **Activa el puente** con `images.bridgeEnabled: true`. Está desactivado de forma predeterminada para evitar cargos inesperados de xAI; consulta [Configuración](#configuration).
-- Añade un proveedor `xai` con una **clave API**. El puente Responses usa el destino de imágenes de xAI del registro (`https://api.x.ai/v1`) e ignora cualquier cambio de `baseUrl` para esas llamadas. OAuth o `ocx login xai` por sí solos **no activan este bucle sidecar**. La misma opción `bridgeEnabled` sí activa el relé independiente de `/v1/images`, que permite al cliente integrado `image_gen` usar Imagine con la autorización de Grok CLI. Consulta [Generación de imágenes integrada](/es/guides/codex-integration/#built-in-image-generation-image_gen). Si falta esa autorización o una clave API de xAI, `/v1/images` devuelve un error y no recurre a ChatGPT.
+- Añade un proveedor `xai` con una **clave API**. El puente Responses usa el destino de imágenes de xAI del registro (`https://api.x.ai/v1`) e ignora cualquier cambio de `baseUrl` para esas llamadas. OAuth o `ocx login xai` por sí solos **no activan este bucle sidecar**. La misma opción `bridgeEnabled` sí activa el relé independiente de `/v1/images`, que permite al cliente integrado `image_gen` usar Imagine con la autorización de Grok CLI. Consulta [Generación de imágenes integrada](/es/guides/codex-integration/#built-in-image-generation-image_gen). Si existe un proveedor xAI pero carece tanto de esa autorización como de una clave API, `/v1/images` devuelve un error sin recurrir a ChatGPT. Si no existe ningún proveedor xAI, el relé no atiende la solicitud y la selección normal puede elegir un proveedor de imágenes ChatGPT configurado.
 
   El relé solo administra esa ruta si no se ha configurado un proveedor de imágenes: requiere `images.bridgeEnabled` en `true` y que se omita `images.provider`. Si estableces `images.provider` explícitamente, `/v1/images` usa ese proveedor y devuelve sus errores de validación sin volver a intentar mediante xAI.
 
@@ -32,7 +32,7 @@ Cuando se enruta Codex a través de un modelo no OpenAI (Claude, Gemini, Grok, e
 
 ## Configuración
 
-Las opciones de puente de imagen viven bajo `images` en `~/.opencodex/config.json`. Bridging es **opt-in** - debe configurar `bridgeEnabled: true` para habilitar la generación de imágenes pagada xAI Grok:
+Las opciones del puente de imágenes se encuentran en `images`, dentro de `~/.opencodex/config.json`. La función es **opcional**: debes establecer `bridgeEnabled: true` para habilitar la generación de pago mediante xAI Grok Imagine:
 
 ```json
 {

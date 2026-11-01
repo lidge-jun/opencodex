@@ -81,7 +81,11 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 输出上限使用目录或生成元数据中已知的模型上限，仅在未知时回退到 `32000`。输出上限始终不超过 context window；已知低于 `32000` 的上限也会保留。
 
-有两个字段是刻意省略的。`cost` 需要全部四个价格字段，而 opencodex 没有已路由模型的价格数据 - 如果输出 0，会等于断言所有模型都是免费的。`reasoning` 在 Pi 里是一个布尔值，而目录里是一个 effort 层级，把二者互相映射只能是猜测。
+`cost` 有意省略：它要求完整的四个价格字段，而 opencodex 没有路由模型的价格数据。输出零会误称所有模型都免费。
+
+当目录的 effort 层级**非空**时，导出 `"reasoning": true`；层级缺失或显式为空时则不声明推理支持。`thinkingLevelMap` 用 `null` 隐藏没有已声明目标的 Pi 层级，防止显示或发送列表之外的值。若声明了 `ultra` 而没有 `max`，则把 Pi 的 `max` 映射到 `ultra`。需要其他映射时，请按 Pi 文档手动修改 `thinkingLevelMap`。
+
+`reasoning` 是从目录派生的 Pi 界面元数据，不证明上游原生支持推理参数。实际 `reasoning_effort` 取决于适配器和模型，可被透传、转换、限制、模拟或省略（例如 `noReasoningModels`）。此布尔值只决定 Pi 是否提供该控件。
 
 ## Schema 状态
 

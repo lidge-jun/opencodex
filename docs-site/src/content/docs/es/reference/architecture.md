@@ -3,11 +3,11 @@ title: "Arquitectura"
 description: "Mapa de módulos de opencodex, puente AdapterEvent, analizador de solicitudes y caché."
 ---
 
-opencodex es un único proceso Bun. Una solicitud ingresa como OpenAI Responses, se normaliza a un modelo interno, se enruta, se envía a un proveedor a través de un adaptador y se vuelve a Responses SSE. Véase [Cómo funciona](/es/getting-started/how-it-works/) para el flujo de extremo a extremo.
+opencodex se ejecuta en un único proceso Bun. Una solicitud llega como OpenAI Responses, se normaliza al modelo interno, se enruta y se envía al proveedor mediante un adaptador. La respuesta vuelve a convertirse en Responses SSE. Consulta [Cómo funciona](/es/getting-started/how-it-works/) para conocer el flujo completo.
 
 <a id="module-map"></a>
 
-## Mapa del módulo
+## Mapa de módulos
 
 ```
 src/
@@ -35,7 +35,7 @@ src/
 └── index.ts            # public entry
 ```
 
-Varios archivos de entrada anteriormente grandes ahora preservan la compatibilidad como fachadas: `codex/catalog.ts` exporta sus `codex/catalog/*.ts` módulos enfocados, `server/management-api.ts` despachos a `server/management/*.ts`, `server/responses.ts` exportaciones `server/responses/*.ts`, y `bridge.ts` reexportaciones `bridge/*.ts`. Una fachada es la ruta de importación estable, no la implementación: cada paso a continuación nombra el módulo que posee el código, y `structure/transports/responses.md` lleva el inventario completo del propietario para la superficie Responses.
+Varios archivos de entrada que antes eran grandes conservan ahora la compatibilidad como fachadas: `codex/catalog.ts` exporta sus módulos especializados `codex/catalog/*.ts`; `server/management-api.ts` delega en `server/management/*.ts`; `server/responses.ts` exporta `server/responses/*.ts`; y `bridge.ts` reexporta `bridge/*.ts`. La fachada mantiene estable la ruta de importación, mientras la implementación reside en esos módulos. Los pasos siguientes indican el módulo responsable; `structure/transports/responses.md` contiene el inventario completo de responsables de la interfaz Responses.
 
 <a id="request-flow"></a>
 
@@ -59,10 +59,10 @@ La estimación de entrada previa al envío sigue lo que realmente envía el adap
 
 `responses/parser.ts` valida la solicitud entrante con `responses/schema.ts` (Zod), luego construye un `OcxParsedRequest`:
 
-- **Messages** - `input` elementos se convierten en un normalizado `OcxMessage[]`: usuario / desarrollador / asistente / toolResult. `reasoning` artículos se convierten en bloques de pensamiento; `function_call`, `custom_tool_call`, y `tool_search_call` artículos se convierten en llamadas de herramientas, sus `*_output` contrapartes se convierten en resultados de herramientas.
-- **Herramientas** - herramientas de función pasan a través; **namespaced (MCP) las herramientas se aplanan** a `namespace__name` (y restaurado en el camino de regreso); **freeform** herramientas (p. ej. `apply_patch`) y **tool_search** herramientas de descubrimiento están marcadas; **Herramientas alojadas** ( `web_search`, image gen,...) se dejan caer y se reinyectan por un sidecar sólo si va a manejarlos.
-- **Imágenes** - preservado como partes de contenido real (URL de datos o https remoto), nunca alineado como texto.
-- **Banderas de características** - `_webSearch` (búsqueda web alojada solicitada), `_structuredOutput` (`text.format` es json_schema / json_object), y `_compactionRequest` (compactación remota v2).
+- **Mensajes**: los elementos de `input` se normalizan como `OcxMessage[]`, con mensajes de usuario, desarrollador, asistente o resultados de herramientas (toolResult). Los elementos `reasoning` se convierten en bloques de pensamiento; `function_call`, `custom_tool_call` y `tool_search_call`, en llamadas a herramientas; y sus correspondientes elementos `*_output`, en resultados de herramientas.
+- **Herramientas**: las herramientas de función se conservan. Las herramientas con espacio de nombres (MCP) se aplanan como `namespace__name` y recuperan su espacio de nombres al devolver la respuesta. Se marcan las herramientas de formato libre (como `apply_patch`) y las de descubrimiento **tool_search**. Las herramientas alojadas (`web_search`, generación de imágenes, etc.) se eliminan del conjunto enviado al adaptador y un sidecar solo las vuelve a incorporar si va a ejecutarlas.
+- **Imágenes**: se conservan como partes de contenido reales (URL de datos o URL HTTPS remota), sin convertirlas en texto.
+- **Indicadores de funciones**: `_webSearch` indica una búsqueda web alojada solicitada; `_structuredOutput`, que `text.format` es json_schema o json_object; y `_compactionRequest`, una compactación remota v2.
 
 <a id="the-bridge"></a>
 
@@ -73,24 +73,24 @@ La estimación de entrada previa al envío sigue lo que realmente envía el adap
 | AdapterEvent | Responses SSE emitido |
 | --- | --- |
 | `text_delta` | `response.output_text.delta` → `…done`, `response.content_part.done`, `response.output_item.done` |
-| `thinking_delta` | `response.reasoning_summary_text.delta` → `…done`, artículo cerrar |
-| `reasoning_raw_delta` | Un artículo crudo `reasoning_text` (o un sobre de ida y vuelta oculto) |
+| `thinking_delta` | `response.reasoning_summary_text.delta` → `…done`, cierre del elemento |
+| `reasoning_raw_delta` | Un elemento `reasoning_text` sin procesar, o una envolvente oculta para conservarlo al reenviarlo |
 | `thinking_signature` / `redacted_thinking` | Conservado en un sobre de razonamiento `encrypted_content` |
 | `tool_call_start` | `response.output_item.added` (tipo: `function_call` / `custom_tool_call` / `tool_search_call` ) |
 | `tool_call_delta` | `response.function_call_arguments.delta` (omitido para forma libre / tool_search) |
 | `tool_call_end` | `response.function_call_arguments.done` → `response.output_item.done` |
-| `web_search_call_begin` / `web_search_call_end` | Un artículo vivo `web_search_call` más citas de URL |
-| `heartbeat` | Marca la actividad ascendente; ningún elemento de salida visible por el usuario |
+| `web_search_call_begin` / `web_search_call_end` | Un elemento activo `web_search_call` y citas de URL |
+| `heartbeat` | Señala actividad del proveedor, sin generar un elemento visible para el usuario |
 | `done` | `response.completed` (con uso) |
 | `error` | `response.failed` (con `last_error`) |
 
 El puente también envía un **latido para mantener la conexión activa** (RC3). Durante el silencio del proveedor, emite el comentario SSE `: opencodex heartbeat` cada 2 segundos para reiniciar el temporizador de inactividad de Codex. Los analizadores de eventos descartan estos comentarios sin generar eventos, por lo que los decodificadores estrictos de Responses no reciben variantes desconocidas. El **tiempo de espera por inactividad** predeterminado es de 300 segundos para un proveedor público y está desactivado para uno local (`stallTimeoutSec`; `0` lo desactiva en todos los casos). Al agotarse, se cancela el flujo del proveedor y se emite `response.incomplete` con la razón `upstream_stall_timeout`, para que una conexión bloqueada no detenga Codex indefinidamente.
 
-Las llamadas a herramientas se desambiguan en tres tipos de elementos Responses usando el mapa de espacios de nombres, el conjunto de formularios libres y el conjunto de búsqueda de herramientas capturados por el analizador, de modo que MCP espacios de nombres, `apply_patch` herramientas de formularios libres de estilo y `tool_search` ejecutados por el cliente son de ida y vuelta. Una variante `buildResponseJSON()` produce un único objeto de respuesta que no es de flujo continuo a partir de los mismos eventos.
+El mapa de espacios de nombres y los conjuntos de herramientas de formato libre y de búsqueda que registra el analizador permiten distinguir tres tipos de elementos Responses. Así se conservan al enviar y recibir los espacios de nombres MCP, las herramientas de formato libre como `apply_patch` y las llamadas `tool_search` ejecutadas por el cliente. `buildResponseJSON()` genera una única respuesta sin streaming a partir de los mismos eventos.
 
 <a id="management-api-oauth-and-usage"></a>
 
-## Administración API, OAuth y uso
+## API de administración, OAuth y uso
 
 `server/management-api.ts` sirve al panel y delega los grupos de rutas en
 `server/management/*.ts`. Sus rutas `/api/*` cubren la configuración y los ajustes
@@ -108,7 +108,11 @@ configuradas. `server/auth-cors.ts` exige una credencial de datos al escuchar fu
 de loopback. Un token de modelos no concede acceso administrativo.
 Las entradas de `corsAllowOrigins` amplían la lista de orígenes locales permitidos.
 
-OAuth implementaciones en vivo en `oauth/`; tokens de acceso se cargan o actualizan inmediatamente antes de una llamada enrutada, mientras que `oauth/token-guardian.ts` puede actualizar proactivamente sólo los proveedores cuya política lo permite. Refresh se coordina con un solo vuelo en proceso, un bloqueo de archivos por cuenta y CAS de generación para que los escritores concurrentes no puedan bloquear una credencial más nueva. Una proyección de salud compartida (`oauth/health.ts`) alimenta `ocx status`, `ocx doctor`, la administración API y el tablero de instrumentos. Codex / ChatGPT credenciales de grupo y afinidad proceso-local hilo vivo por debajo de `codex/` y se mantienen fuera de las respuestas de gestión; afinidad borra en `401` / `403` / `429` (no fijado a través de límites de velocidad) y no persiste a través de reinicios. El uso de solicitudes se normaliza a `OcxUsage`, aparece en Responses eventos de terminal y se agrega por `usage/` para el panel de control y los diagnósticos JSONL opcionales.
+Las implementaciones OAuth están en `oauth/`. Los tokens de acceso se cargan o renuevan inmediatamente antes de una llamada enrutada. `oauth/token-guardian.ts` puede renovarlos de forma anticipada únicamente en los proveedores cuya política lo permita. La renovación coordina una sola operación en curso por proceso, un bloqueo de archivo por cuenta y una comparación e intercambio (CAS) de generación, para impedir que escrituras simultáneas sobrescriban una credencial más reciente.
+
+La proyección compartida de estado (`oauth/health.ts`) alimenta `ocx status`, `ocx doctor`, la API de administración y el dashboard. Las credenciales del grupo Codex/ChatGPT y la afinidad de los hilos con las cuentas se gestionan en `codex/` y no se incluyen en las respuestas administrativas. La afinidad es local al proceso: se elimina ante `401`, `403` o `429`, sin mantener una cuenta fijada tras un límite de solicitudes, y no se conserva al reiniciar.
+
+El uso de cada solicitud se normaliza como `OcxUsage`, se incluye en los eventos finales de Responses y se agrega mediante `usage/` para el dashboard y los diagnósticos JSONL opcionales.
 
 <a id="transport-and-compaction"></a>
 
@@ -116,39 +120,41 @@ OAuth implementaciones en vivo en `oauth/`; tokens de acceso se cargan o actuali
 
 `server/index/serve-options.ts` sirve HTTP / SSE en `/v1/responses` por defecto. Si Codex intenta una actualización Responses WebSocket mientras que `websockets` es `false`, opencodex devuelve `426 upgrade_required`; Codex luego vuelve a HTTP para esa sesión. Cuando se establece `"websockets": true`, el mismo punto final acepta la actualización y utiliza el puente WebSocket.
 
-Independientemente de esa configuración orientada al cliente, las solicitudes canónicas de reenvío ChatGPT con nivel raíz `stream: true` pueden usar el transporte aguas arriba Codex de WebSocket en el estable Bun 1.4.0 o más reciente. La ruta canónica ChatGPT conserva la intent HTTP Responses Lite en los metadatos de la trama WS y deriva su sugerencia de enrutamiento del modelo saliente real y el nivel de servicio. Los metadatos iniciales de la cuota/modelo ascendente se convierten en cabeceras de respuesta HTTP limitadas; las actualizaciones de cuotas posteriores se atribuyen a la cuenta de servicio, no se agregan retroactivamente a las cabeceras ya enviadas. Un fallo después de que se envió una solicitud WS no desencadena un reenvío automático HTTP. Estas asignaciones no habilitan la configuración WebSocket orientada al cliente ni cambian la selección de transporte de otros proveedores. El paquete Bun 1.3.14, prelanzamientos e identidades de entorno de ejecución no verificables usa HTTP / SSE. Las respuestas WS ascendentes exitosas mantienen el contrato SSE descendente y la derivación `tee()` a través de un relé de un solo lector ansioso limitado (4 MiB por trama sin procesar / envolvente y una cola de productores de 8 MiB). El desbordamiento de cola cierra el flujo ascendente y emite un evento terminal de flujo descendente `response.failed` seguido por `[DONE]`.
+Independientemente de esa opción del cliente, las solicitudes canónicas de reenvío a ChatGPT con `stream: true` en la raíz pueden usar el transporte WebSocket de Codex hacia el proveedor en Bun estable 1.4.0 o posterior. Esa ruta conserva la intención de HTTP Responses Lite en los metadatos de la trama WS y calcula la indicación de enrutamiento a partir del modelo y el nivel de servicio que realmente envía. Los metadatos iniciales de cuota y modelo se convierten en encabezados HTTP de respuesta acotados. Las actualizaciones posteriores de cuota se atribuyen a la cuenta que atendió la solicitud, sin añadirlas a encabezados ya enviados. Un fallo posterior al envío WS no provoca un reenvío automático por HTTP. Estas reglas no habilitan la opción WebSocket del cliente ni cambian el transporte de otros proveedores.
+
+El Bun 1.3.14 incluido, las versiones preliminares y los entornos cuya identidad no se puede verificar usan HTTP/SSE. Las respuestas WS correctas conservan el contrato SSE hacia el cliente y evitan `tee()` mediante un relé acotado que lee anticipadamente con un solo lector: 4 MiB por trama, sin procesar o encapsulada, y una cola de producción de 8 MiB. Si la cola se desborda, se cierra la conexión con el proveedor y se envían al cliente un evento final `response.failed` y `[DONE]`.
 
 Para el modelo saliente final `gpt-5.3-codex-spark`, el reenvío canónico ChatGPT desactiva explícitamente Responses Lite tanto en la cabecera HTTP como en los metadatos de trama WS nativos, incluso cuando un alias selecciona Spark, pero solo cuando el cuerpo saliente no lleva ningún elemento `additional_tools` con una matriz `tools` no vacía. Ese grupo ES la forma de entrega de herramientas Lite, por lo que un cuerpo de Spark que todavía lo usa mantiene Lite ON incluso si un llamante o un encabezado configurado dijeron lo contrario; de lo contrario, el marco anunciaría que no es Lite mientras que las herramientas existen solo en la forma Lite. Una identidad Lite cambiada retira el socket anterior; las solicitudes elegibles posteriores con la misma identidad pueden reutilizar el socket nuevo. Otros modelos y puertas de enlace mantienen su política Lite existente. Los metadatos nativos mal formados todavía caen de nuevo a HTTP con su cuerpo sin cambios.
 
 Cuando un proveedor rechaza una solicitud de flujo continuo con HTTP 413 antes de que comience SSE, OpenCodex emite un evento de terminal `response.failed` con `context_length_exceeded` en lugar de retransmitir el estado desconocido reintentable. Esto permite que Codex detenga su bucle de reconexión y aplique su propia política de compresión de contexto en el siguiente turno. OpenCodex no elimina silenciosamente mensajes o imágenes; reduzca la entrada actual o reintente después de la compactación. Las llamadas a la API sin streaming siguen recibiendo el HTTP 413 del proveedor.
 
-La compactación de contexto Codex funciona para modelos enrutados. `server/responses/compact.ts` maneja `POST /v1/responses/compact` ejecutando un giro de resumen enrutado interno y devolviendo el historial compactado, mientras que `responses/parser.ts` y `bridge/sse.ts` manejan la compactación remota v2 `compaction_trigger` gira emitiendo exactamente un elemento de salida `compaction` sintético.
+La compactación de contexto de Codex funciona con modelos enrutados. `server/responses/compact.ts` atiende `POST /v1/responses/compact` mediante un turno interno de resumen enrutado y devuelve el historial compactado. Por su parte, `responses/parser.ts` y `bridge/sse.ts` atienden los turnos `compaction_trigger` de compactación remota v2 y emiten exactamente un elemento sintético de salida `compaction`.
 
 <a id="caching--the-catalog"></a>
 
 ## El almacenamiento en caché y el catálogo
 
-- `codex/model-cache.ts` mantiene una caché TTL por proveedor, en memoria, de resultados en vivo de `/models` (por defecto 5 min, que coincide con la propia caché de Codex), con una recuperación obsoleta cuando falla una extracción.
-- `codex/catalog/sync.ts`, exportado a través de la fachada `codex/catalog.ts`, fusiona modelos enrutados en el catálogo de Codex como entradas con nombre, clasifica primero [Modelos de subagentes](/es/guides/codex-integration/#the-subagent-picker), filtra `disabledModels` y puede restaurar completamente el catálogo prístino desde una copia de seguridad única.
+- `codex/model-cache.ts` mantiene en memoria una caché por proveedor con TTL de los resultados de `/models`: 5 minutos de forma predeterminada, como la de Codex. Si la consulta falla, puede usar los resultados anteriores aunque hayan caducado.
+- `codex/catalog/sync.ts`, exportado mediante la fachada `codex/catalog.ts`, incorpora los modelos enrutados al catálogo de Codex con sus espacios de nombres. Ordena primero los [modelos de subagentes](/es/guides/codex-integration/#the-subagent-picker) destacados, filtra `disabledModels` y permite restaurar el catálogo original desde una copia de seguridad creada una sola vez.
 
 <a id="reasoning-effort"></a>
 
 ## Esfuerzo de razonamiento
 
-`reasoning-effort.ts` traduce las etiquetas de razonamiento de Codex en los valores de cable de cada proveedor. El catálogo Codex anuncia etiquetas Codex acepta (`low` / `medium` / `high` / `xhigh` / `max`), pero los proveedores anteriores pueden admitir solo un subconjunto más pequeño o requerir un alias real. El módulo:
+`reasoning-effort.ts` traduce las etiquetas de esfuerzo de razonamiento de Codex a los valores enviados a cada proveedor. El catálogo anuncia etiquetas admitidas por Codex (`low` / `medium` / `high` / `xhigh` / `max`), pero el proveedor puede admitir solo algunas o necesitar un alias específico. El módulo:
 
-- Define el canónico `CODEX_REASONING_LEVELS` y su orden de clasificación.
-- Sujeta un esfuerzo solicitado al nivel soportado más cercano cuando el nivel exacto no está disponible.
-- Resuelve anulaciones por modelo y por proveedor `reasoningEffortMap` para asignaciones de cables personalizadas.
-- Deja de lado el esfuerzo por completo para los modelos enumerados en `noReasoningModels`.
+- Define los niveles canónicos `CODEX_REASONING_LEVELS` y su orden.
+- Ajusta el esfuerzo solicitado al nivel compatible más cercano si el nivel exacto no está disponible.
+- Resuelve las opciones `reasoningEffortMap` por modelo y proveedor para personalizar los valores del protocolo.
+- Omite por completo el esfuerzo en los modelos incluidos en `noReasoningModels`.
 
-Qwen3.8-Max es una excepción explícita de esfuerzo directo al antiguo contrato de presupuesto Qwen3.x. Alibaba Token Plan registra su escalera compatible con upstream como `low`, `medium` y `xhigh` (el valor predeterminado), y envía el valor efectivo como `reasoning_effort`; Codex -sólo las tapas de compatibilidad están sujetas a `xhigh` en el cable. El enriquecimiento del registro en entorno de ejecución repara metadatos preestablecidos persistentes anteriores que todavía clasifican este modelo como un modelo `thinking_budget`.
+Qwen3.8-Max constituye una excepción de esfuerzo directo frente al contrato anterior de presupuesto de Qwen3.x. Alibaba Token Plan declara los niveles `low`, `medium` y `xhigh` (predeterminado), y envía el valor efectivo como `reasoning_effort`. Solo los niveles superiores añadidos por compatibilidad con Codex se limitan a `xhigh` al enviarlos al proveedor. El enriquecimiento del registro durante la ejecución corrige los metadatos guardados de versiones anteriores que aún clasifican el modelo como `thinking_budget`.
 
 <a id="core-types"></a>
 
-## Tipos de núcleo
+## Tipos principales
 
-El modelo interno vive en `types.ts`: `OcxParsedRequest`, `OcxContext`, la unión `OcxMessage`, `OcxContentPart` (texto / imagen), `OcxToolCall`, `OcxTool`, `AdapterEvent`, y los tipos de configuración (`OcxConfig`, `OcxProviderConfig`). Dos ayudantes son ampliamente utilizados: `namespacedToolName()` y `modelInList()` (tolerante `:size` -etiqueta que coincide con `noVisionModels` / `noReasoningModels`).
+El modelo interno se define en `types.ts`: `OcxParsedRequest`, `OcxContext`, la unión `OcxMessage`, `OcxContentPart` (texto o imagen), `OcxToolCall`, `OcxTool`, `AdapterEvent` y los tipos de configuración `OcxConfig` y `OcxProviderConfig`. Se usan ampliamente las funciones auxiliares `namespacedToolName()` y `modelInList()`; esta última compara modelos en `noVisionModels` y `noReasoningModels` tolerando las etiquetas `:size`.
 
 
 <a id="incomplete-quota-terminals"></a>

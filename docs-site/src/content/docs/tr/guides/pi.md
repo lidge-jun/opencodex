@@ -98,13 +98,11 @@ its own defaults;
 
 Çıktı sınırı, katalogdaki veya oluşturulan meta verilerdeki bilinen model sınırını kullanır. Yalnızca sınır bilinmiyorsa `32000` kullanılır. Çıktı sınırı her zaman bağlam penceresiyle sınırlanır; `32000` altındaki bilinen sınırlar da korunur.
 
-Two fields are deliberately absent. `cost` requires all four price fields and
-opencodex has no
-price data for routed models — emitting zeros would assert that every model is
-free. `reasoning` is
-a boolean in Pi while the catalog carries an effort ladder, and mapping one onto
-the other would be
-a guess.
+`cost` bilerek atlanır: dört fiyat alanının tamamını gerektirir ve opencodex yönlendirilen modellerin fiyatlarını bilmez. Sıfır yazmak bütün modellerin ücretsiz olduğunu yanlış biçimde belirtirdi.
+
+Katalogdaki effort listesi **boş değilse** `"reasoning": true` dışa aktarılır; liste yoksa veya açıkça boşsa bu özellik bildirilmez. `thinkingLevelMap`, hedefi tanımlanmamış Pi düzeylerini `null` ile gizler; Pi listede olmayan düzeyleri sunmaz veya göndermez. `max` olmadan `ultra` tanımlanmışsa Pi’nin `max` düzeyi `ultra` ile eşleşir. Başka bir eşleme için Pi belgelerine göre `thinkingLevelMap` alanını elle düzenleyin.
+
+`reasoning`, katalogdan türetilen Pi arayüz metaverisidir; sağlayıcının yerel desteğini kanıtlamaz. Gerçek `reasoning_effort`, adaptöre ve modele göre aktarılabilir, dönüştürülebilir, sınırlandırılabilir, emüle edilebilir veya atlanabilir (örneğin `noReasoningModels`). Bu boolean yalnızca Pi’nin kontrolü sunup sunmayacağını belirler.
 
 ## Schema status
 

@@ -35,9 +35,12 @@ Las configuraciones del cliente exportadas o aplicadas a través de ese panel de
 Conecta usando exactamente una fuente de autorización temporal. Se lee desde stdin y no se escribe en la configuración ni en el archivo de token. En el ejemplo, el origen de datos usa HTTPS en 8443 y el de administración usa HTTPS en 443:
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -55,9 +58,15 @@ Si un cliente guardó una URL de concentrador remota `http://` antes de la regla
 Rotar un cliente conectado con una nueva autoridad transitoria:
 
 ```bash
-ocx connect rotate --pairing-code-stdin
-# or, only over HTTPS:
-ocx connect rotate --admin-token-stdin
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 La rotación mantiene las claves de datos antiguas y nuevas válidas durante un máximo de diez minutos bajo el mismo `apiKeyId`. El cliente realiza una copia de seguridad del token antiguo como `service-api-token.prev`, instala atómicamente y sondea la nueva clave, luego confirma. Si una respuesta de confirmación es incierta, vuelva a ejecutar el comando rotar con autoridad transitoria; la recuperación prueba ambos archivos antes de confirmar o restaurar. Nunca elimine ninguno de los archivos cuando se informe de recuperación de que ambos candidatos fueron rechazados.

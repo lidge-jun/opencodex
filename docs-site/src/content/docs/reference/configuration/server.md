@@ -21,7 +21,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | --- | --- | --- | --- |
 | `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
 | `port` | `number` | `10100` | Proxy listen port. |
-| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a data-admission token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token` — nothing has to be exported by hand. See [Remote access](#remote-access). |
+| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a configured client key in `config.apiKeys` or a shared data token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token`. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event and a Vertex AI `MALFORMED_FUNCTION_CALL` failure that arrives before any output. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
@@ -291,8 +291,7 @@ need it.
 
 ## Remote access
 
-The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet
-IP requires token authentication on both `/api/*` and the data plane.
+The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet IP requires a data-admission credential for model requests: a configured client key in `config.apiKeys` or a shared data token. Management routes `/api/*` use the independent `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token, including on loopback. A data credential does not grant management access; never give the admin token to a model client.
 
 You do not have to produce that token. `ocx service install` provisions one on a non-loopback bind,
 in this order: `OPENCODEX_API_AUTH_TOKEN` from the installing shell, then an existing owner-only

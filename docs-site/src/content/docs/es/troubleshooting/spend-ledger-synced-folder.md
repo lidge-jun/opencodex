@@ -15,14 +15,14 @@ Spend-ledger storage could not be opened safely (journal: extra-hard-link).
 
 ## Qué se comprueba
 
-opencodex guarda un registro de gastos en su directorio de estado (`~/.opencodex` de forma predeterminada, o `OPENCODEX_HOME`): el diario `spend-ledger.jsonl` y el archivo de sal `spend-ledger.salt`. Antes de escribir, comprueba que cada archivo sea regular, pertenezca al usuario, no sea un enlace simbólico y tenga exactamente una entrada de directorio. Un segundo enlace duro permitiría leer o modificar los mismos bytes desde otro nombre del volumen. Ante cualquier enlace inesperado, opencodex rechaza la escritura. La comprobación es estricta de forma deliberada.
+opencodex guarda un registro de gastos en su directorio de estado (`~/.opencodex` de forma predeterminada, o `OPENCODEX_HOME`): el diario `spend-ledger.jsonl` y el archivo de sal `spend-ledger.salt`. Antes de escribir, comprueba que cada archivo sea regular, no sea un enlace simbólico y tenga exactamente una entrada de directorio. Fuera de Windows también comprueba que pertenezca al usuario; en Windows no se realiza esa comparación de propietario. Un segundo enlace duro permitiría leer o modificar los mismos bytes desde otro nombre del volumen. Ante cualquier enlace inesperado, opencodex rechaza la escritura. La comprobación es estricta de forma deliberada.
 
 | Condición en el mensaje | Descripción |
 | --- | --- |
 | `extra-hard-link` | Otra entrada de directorio apunta al mismo archivo. |
 | `symbolic-link` | El archivo del registro de gastos es un enlace simbólico. |
 | `not-regular-file` | La ruta del registro de gastos contiene algo que no es un archivo regular. |
-| `foreign-owner` | El archivo pertenece a un usuario diferente. |
+| `foreign-owner` | El archivo pertenece a un usuario diferente; se comprueba fuera de Windows. |
 | `invalid-salt` | El archivo de sal existe pero su contenido no es una sal válida. |
 
 El tipo de archivo que indica el mensaje es `journal`, `journal-compaction` (el archivo temporal que se escribe al compactar el diario) o `salt`.

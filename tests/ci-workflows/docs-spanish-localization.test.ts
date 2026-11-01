@@ -181,6 +181,7 @@ describe("Spanish documentation localization", () => {
     for (const [guide, start, next] of [
       ["guides/remote-workspace.md", "OCX_REMOTE_WORKSPACE_ENABLED=1 ocx start", "ocx gui"],
       ["guides/web-dashboard.md", "ocx start\n", "bun run dev:gui"],
+      ["guides/minimax.md", "ocx start\n", "ocx integration client enable --client mcode\nocx mcode"],
     ] as const) {
       for (const locale of ["", ...localeFolders]) {
         const path = join(root, locale, guide);
@@ -275,6 +276,37 @@ describe("Spanish documentation localization", () => {
         expect(block, path).toMatch(/read -r -s|Read-Host [^\n]+-AsSecureString/);
         expect(block, path).toContain("--pairing-code-stdin");
         expect(block, path).toMatch(/unset pairing_code|Remove-Variable pairingCode/);
+      }
+    }
+  });
+
+  test("Hub pairing recipes provide stdin authority before connecting in every locale", () => {
+    for (const locale of ["", ...localeFolders]) {
+      const path = join(root, locale, "guides/remote-hub.md");
+      const examples = codeBlocks(source(path)).filter(block => block.includes("ocx connect")
+        && /--(?:pairing-code|admin-token)-stdin/.test(block));
+      expect(examples.length, path).toBeGreaterThan(0);
+      for (const block of examples) {
+        expect(block, path).toContain("read -r -s");
+        expect(block, path).toMatch(/printf '%s\\n' "\$[a-z_]+" \| ocx connect/);
+        expect(block, path).toMatch(/unset (?:pairing_code|admin_token)/);
+      }
+    }
+  });
+
+  test("Pi and agent quickstarts retain current reasoning and separate credential planes", () => {
+    for (const locale of ["", ...localeFolders]) {
+      const pi = source(join(root, locale, "guides/pi.md"));
+      for (const identifier of ['"reasoning": true', "thinkingLevelMap", "noReasoningModels"]) {
+        expect(pi, `${locale || "en"} Pi reasoning metadata`).toContain(identifier);
+      }
+      const agents = source(join(root, locale, "getting-started/for-agents.md"));
+      for (const identifier of ["config.apiKeys", "OCX_API_TOKEN_FILE", "service-api-token", "OPENCODEX_ADMIN_AUTH_TOKEN"]) {
+        expect(agents, `${locale || "en"} agent credential planes`).toContain(identifier);
+      }
+      const server = source(join(root, locale, "reference/configuration/server.md"));
+      for (const identifier of ["config.apiKeys", "OCX_API_TOKEN_FILE", "service-api-token", "OPENCODEX_ADMIN_AUTH_TOKEN"]) {
+        expect(server, `${locale || "en"} remote-access credential planes`).toContain(identifier);
       }
     }
   });

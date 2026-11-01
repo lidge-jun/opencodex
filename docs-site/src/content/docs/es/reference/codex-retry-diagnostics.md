@@ -103,7 +103,7 @@ Para la conversación afectada y el turno activo, distinga estos resultados:
 
 El asesoramiento aproximado del proveedor y la sobrecarga de programación pueden producir una pequeña diferencia de tiempo. Si la retransmisión llega a un error de cierre del socket y un intento posterior recibe un nuevo límite de velocidad, registre la retransmisión como operativa pero la recuperación del proveedor como incompleta. El nuevo retraso del rechazo es una nueva observación, no un temporizador heredado del rechazo anterior. Un giro `inProgress` por sí mismo no prueba ni la recuperación ni la representación correcta. El agotamiento, la cancelación y la recuperación de reinicio de la aplicación deben evaluarse por separado.
 
-Publique solo el alcance de validación y las duraciones/resultados agregados. Mantenga los registros en bruto, los cuerpos de solicitud, las credenciales, los datos de la cuenta, las rutas privadas y los identificadores de hilo/conversación/solicitud/traza fuera de las relaciones públicas y los informes de diagnóstico.
+Publica solo el alcance de validación y las duraciones y resultados agregados. Mantén los registros sin procesar, los cuerpos de las solicitudes, las credenciales, los datos de cuentas, las rutas privadas y los identificadores de hilo, conversación, solicitud o traza fuera de las solicitudes de extracción (PR) y los informes de diagnóstico.
 
 <a id="regression-test-scope"></a>
 

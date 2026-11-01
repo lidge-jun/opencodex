@@ -18,6 +18,11 @@ Primero instala MiniMax Code e inicia sesión siguiendo las instrucciones de Min
 
 ```bash
 ocx start
+```
+
+Deja el proxy ejecutándose en esta terminal. En otra terminal, habilita la integración e inicia MiniMax Code:
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

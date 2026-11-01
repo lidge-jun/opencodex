@@ -20,8 +20,10 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
   The same `bridgeEnabled` flag does arm the separate Codex `/v1/images` relay so the built-in
   `image_gen` client can call Imagine with the Grok CLI grant — see
   [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen).
-  If that grant (or an xAI API key) is missing, `/v1/images` returns an error instead of
-  falling through to ChatGPT.
+  If an xAI provider exists but has neither that grant nor an API key, `/v1/images`
+  returns an error instead of falling through to ChatGPT. If no xAI provider exists,
+  the relay does not handle the request; normal image-provider selection can still
+  choose a configured ChatGPT image provider.
 
   The relay only owns the route when no image provider is configured: it runs when
   `images.bridgeEnabled` is `true` **and** `images.provider` is omitted. Setting

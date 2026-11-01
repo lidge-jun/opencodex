@@ -10,7 +10,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理監聽連接埠。 |
-| `hostname?` | `string` | `"127.0.0.1"` | 綁定位址。非回送綁定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
+| `hostname?` | `string` | `"127.0.0.1"` | 繫結位址。非回環繫結需要 `config.apiKeys` 中的用戶端金鑰，或依序從 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、已安裝且僅擁有者可讀的 `service-api-token` 解析的共用資料權杖。參閱[遠端存取](#remote-access)。 |
 | `proxy?` | `string` | — | 對外 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`）或 `${ENV_VAR}`。HTTP URL 僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用內建的真實 SOCKS5 通道，也會套用至 `ALL_PROXY`（`ocx start --socks5`），並清除此行程繼承的 `HTTP(S)_PROXY`。回送保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 明確啟用：當 Responses 完成時沒有文字或工具呼叫，以相同請求重試一次。重試可能產生費用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不變更設定的情況下停用；combo 與 routed-compaction turn 不適用。 |
 | `stallTimeoutSec?` | `number` | `300`（public）/ 停用（local） | 上游無有效進展（Responses 與原生 Chat）多少秒後切斷串流。未設定時**本地**上游（loopback、private、`.local`/`.lan` 名稱）預設停用，公網上游預設 300 秒；正值對兩者生效（最小 1 秒）；`0` 全面停用靜默 watchdog。對於把 canonical ChatGPT SSE 折疊為非串流 JSON 的 Responses 請求，即使 watchdog 已停用，仍保留獨立的 15 分鐘整體上限。`/v1/responses/compact` 的擱置回應本文讀取共用此預算，但即使本地上游也預設 300 秒；明確值（含 `0`）優先。 |
@@ -38,16 +38,18 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 
 原生 Chat 等待上游輸出時也使用 `stallTimeoutSec`。非空文字、推理、拒絕內容、工具更新及完成事件會重設等待額度；保活註解、僅角色事件及單獨的用量資訊不會。等待慢速用戶端讀取時暫停計時。逾時產生 `upstream_stall_timeout`：串流請求收到錯誤事件，非串流請求回傳 HTTP 502。終態結果到達前取消請求會回傳取消錯誤，不會將部分答案當成成功。非串流 Chat 支援 LF、CRLF 與多行 data 的 SSE 格式。
 
+<a id="remote-access"></a>
+
 ## 遠端存取
 
-預設的 `127.0.0.1` 綁定僅限回送。如 `0.0.0.0` 的非回送位址需要在 `/api/*` 與 data plane 上都進行 token 認證。在啟動前匯出 token：
+預設的 `127.0.0.1` 僅繫結回環位址。繫結至 `0.0.0.0` 等非回環位址時，模型請求需要 `config.apiKeys` 中的用戶端金鑰或共用資料權杖。管理路由 `/api/*` 使用獨立的 `OPENCODEX_ADMIN_AUTH_TOKEN` 或產生的管理員權杖，在回環上也一樣。資料憑證不授予管理存取權；切勿將管理員權杖交給模型用戶端。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-代理在沒有此變數時拒絕遠端綁定。對於背景服務，請在 `ocx service install` 前匯出它，以便 launchd、systemd 或 Task Scheduler 接收它。客戶端應發送：
+範例使用環境變數權杖。若 `OCX_API_TOKEN_FILE` 或私有 `service-api-token` 已提供權杖，或已設定有效的用戶端金鑰，就不必匯出該變數。`ocx service install` 可以建立缺少的權杖檔案，不強制要求匯出此變數。模型用戶端可以傳送：
 
 ```text
 x-opencodex-api-key: your-secret-token

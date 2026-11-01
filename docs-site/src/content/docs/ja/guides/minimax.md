@@ -14,6 +14,11 @@ MiniMax は異なる 2 つのコマンドライン製品を提供しています
 
 ```bash
 ocx start
+```
+
+このターミナルでプロキシを実行したままにします。別のターミナルで連携を有効にし、MiniMax Code を起動します。
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

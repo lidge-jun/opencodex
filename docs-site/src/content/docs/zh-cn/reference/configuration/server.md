@@ -11,7 +11,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理监听端口。 |
-| `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
+| `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `config.apiKeys` 中的客户端密钥，或依次从 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、已安装且仅所有者可读的 `service-api-token` 解析的共享数据令牌。参见[远程访问](#remote-access)。 |
 | `proxy?` | `string` | — | 出站 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`），或 `${ENV_VAR}`。HTTP URL 仅在未设置时写入 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用内置的真实 SOCKS5 隧道，也会写入 `ALL_PROXY`（`ocx start --socks5`）；并清除本进程继承的 `HTTP(S)_PROXY`。回环地址始终保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses turn 既无文本也无工具调用时，使用相同请求重试一次，包括流在终止事件之前结束的情况。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | 从 Codex Responses 透传响应中移除 Codex safety-buffering 提示：`x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头、类型为 `safety_buffering` 的 `response.metadata` SSE 事件，以及其他 SSE 事件中的 `safety_buffering` 字段。Codex TUI 会将这些提示显示为“使用更快模型重试”的提示框，其默认操作会把会话切换到较弱的模型。其他 `x-codex-*` 响应头和其他所有 SSE 事件内容均保持不变，但会移除该字段。默认关闭。 |
@@ -42,18 +42,18 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 
 原生 Chat 等待上游输出时也使用 `stallTimeoutSec`。非空文本、推理、拒绝内容、工具更新和完成事件会重置等待额度；保活注释、仅角色事件和单独的用量信息不会。等待慢客户端读取期间暂停计时。超时产生 `upstream_stall_timeout`：流式请求收到错误事件，非流式请求返回 HTTP 502。在终态结果到达前取消请求会返回取消错误，而不会把部分答案当作成功。非流式 Chat 支持 LF、CRLF 及多行 data 的 SSE 格式。
 
+<a id="remote-access"></a>
+
 ## 远程访问
 
-默认的 `127.0.0.1` 绑定仅限回环地址。像 `0.0.0.0` 这样的非回环地址需要
-在 `/api/*` 和数据平面上都启用令牌认证。启动前先导出令牌：
+默认的 `127.0.0.1` 仅绑定回环地址。绑定到 `0.0.0.0` 等非回环地址时，模型请求需要 `config.apiKeys` 中的客户端密钥或共享数据令牌。管理路由 `/api/*` 使用独立的 `OPENCODEX_ADMIN_AUTH_TOKEN` 或生成的管理员令牌，在回环上也一样。数据凭据不授予管理访问权；切勿把管理员令牌交给模型客户端。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-如果没有这个变量，代理会拒绝远程绑定。对于后台服务，请在运行
-`ocx service install` 之前导出它，这样 launchd、systemd 或 Task Scheduler 都能接收到。客户端应发送：
+示例使用环境变量令牌。如果 `OCX_API_TOKEN_FILE` 或私有 `service-api-token` 已提供令牌，或已配置有效的客户端密钥，就不必导出该变量。`ocx service install` 可以创建缺失的令牌文件，不强制要求导出此变量。模型客户端可以发送：
 
 ```text
 x-opencodex-api-key: your-secret-token

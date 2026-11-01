@@ -16,6 +16,11 @@ OpenCodex'i başlatıp geri alınabilir dosya bütünleştirmesini bağlayın:
 
 ```bash
 ocx start
+```
+
+Proxy bu terminalde çalışmaya devam etsin. İkinci bir terminalde entegrasyonu etkinleştirip MiniMax Code’u başlatın:
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

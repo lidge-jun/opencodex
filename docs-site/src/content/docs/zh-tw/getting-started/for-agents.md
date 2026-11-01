@@ -81,12 +81,11 @@ ocx combo set main \
 
 ## 遠端與 LAN 綁定
 
-預設的回送綁定不需要 API token。非回送綁定（例如 `0.0.0.0`）需要
-`OPENCODEX_API_AUTH_TOKEN`；代理在沒有它時拒絕啟動。請在 `ocx start` 前，或在 `ocx service install` 前設定該變數，以便服務接收它：
+一般回環模型路由不需要資料權杖。繫結至 `0.0.0.0` 等非回環位址時，需要 `config.apiKeys` 中設定的用戶端金鑰，或從 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、僅擁有者可讀的 `service-api-token` 檔案解析出的共用權杖。檔案不存在時，`ocx service install` 可以建立它。若透過環境變數提供權杖，請在 `ocx start` 或 `ocx service install` 之前設定：
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-客戶端隨後必須認證其管理與模型請求。在將 opencodex 暴露到本機以外之前，請閱讀[設定](/zh-tw/reference/configuration/)中的遠端存取規則。
+模型請求使用資料平面驗證。管理使用獨立憑證：`OPENCODEX_ADMIN_AUTH_TOKEN` 或受保護檔案中產生的管理員權杖；資料權杖不授予管理存取權。儀表板遵循[管理 API](/zh-tw/reference/management-api/#authentication-model)的工作階段與存取規則。切勿將管理員權杖交給模型用戶端。向本機以外開放代理前，請閱讀[遠端存取](/zh-tw/reference/configuration/server/#remote-access)。

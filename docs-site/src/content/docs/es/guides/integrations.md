@@ -617,6 +617,8 @@ ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
 
+La CLI admite con `--apply` hasta 50 roles modificados en un único lote de historial. Si la operación es mayor, la rechaza antes de actualizar ningún rol: revisa la propuesta y aplica decisiones individuales con `ocx agent roles set`. Si se interrumpe, informa de las escrituras confirmadas y de la solicitud sin confirmar, y conserva las escrituras anteriores. Consulta el [contrato de aplicación y recuperación de la CLI](/es/reference/cli/agents/) antes de reintentar.
+
 Debajo de la tabla, **Historial de cambios** muestra los cambios más recientes escritos al guardar,
 aplicar una asignación automática o ejecutar `ocx agent roles set`, del más nuevo al más antiguo,
 en lotes completos y hasta un máximo de 50. Así, una operación Aplicar todo aparece con todos los

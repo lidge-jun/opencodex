@@ -60,9 +60,12 @@ Connect with exactly one transient authority source. The authority is read from 
 written to config or the token file:
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -91,9 +94,15 @@ to the Hub with `https://` (or use loopback HTTP when both sides are on the same
 Rotate a connected client with a fresh transient authority:
 
 ```bash
-ocx connect rotate --pairing-code-stdin
-# or, only over HTTPS:
-ocx connect rotate --admin-token-stdin
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 Rotation keeps the old and new data keys valid for at most ten minutes under the same `apiKeyId`.

@@ -12,9 +12,12 @@ Remote Hub はプロバイダー認証情報、カタログ、使用量を一台
 `standalone` は一台で完結し、`hub` はプロバイダー秘密情報と使用量を所有し、`client` は接続状態とクライアント専用データキーだけを保存します。
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -90,9 +93,12 @@ Serve が受け付ける HTTPS ポートは限られています。通ったと�
 接続時は二つの origin を別々に指定します。位置引数の URL が**データ** origin で、`/readyz` と `/v1/catalog` はここから取得されます。`--management-url` はペアリングとキー発行に使うダッシュボードの origin です。ポートが同じである必要はありません。
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash: enter the management admin token without echoing it.
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --admin-token-stdin
+unset admin_token
 ```
 
 `--management-url` を省略すると `/readyz` の応答が返す `hub.managementPublicOrigin` が使われます。二つの origin が異なる場合は明示したほうが明快です。
@@ -106,10 +112,15 @@ Serve が立ち上がったら、HTTPS のデータ origin に対して `/readyz
 ## OAuth、キー更新、切断
 
 ```bash
-ocx config set oauthOpenBrowser false
-ocx connect rotate --pairing-code-stdin
-# HTTPS のみ:
-ocx connect rotate --admin-token-stdin
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 OAuth は `POST /api/oauth/login` で開始し、コールバックできない場合は最終 URL またはコードを `{provider,input}` として `POST /api/oauth/login/code` へ渡します。コードを argv やログに残さないでください。

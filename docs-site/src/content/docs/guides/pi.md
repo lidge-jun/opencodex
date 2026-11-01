@@ -100,7 +100,7 @@ window. When it does not, both fields are omitted for that model and Pi applies 
 
 Output limits use the model’s known maximum from catalog or generated metadata. Only unknown limits fall back to `32000`. The output limit is always clamped to the context window, including known limits below `32000`.
 
-Two fields are deliberately absent. `cost` requires all four price fields and opencodex has no
+`cost` is deliberately absent. It requires all four price fields and opencodex has no
 price data for routed models — emitting zeros would assert that every model is free.
 
 `reasoning` is the one field that used to be absent and now is not: Pi stores a boolean while the

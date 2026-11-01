@@ -5,15 +5,15 @@ description: "Despacho de comandos, códigos de salida y enlaces a cada familia 
 
 La CLI de opencodex es `ocx`. El primer nombre determina qué comando se ejecuta. Los alias documentados `setup`/`init`, `restore`/`eject` y `models`/`model` realizan la misma operación. Los comandos desconocidos y las sintaxis no válidas producen errores.
 
-Ejecute `ocx`, `ocx help`, `ocx --help` o `ocx -h` para obtener el mismo índice de comandos compacto, agrupados en Inicio aquí, Tareas comunes, Explorar y Más ayuda. Utilice `ocx help --all` o `ocx --help --all` para la referencia completa de nivel superior, incluidas las variantes de comandos detalladas omitidas del índice compacto. Ejecutar `ocx help <command>`, `ocx <command> --help` o `ocx <command> -h` para un comando registrado en la tabla de ayuda; `ocx <command> help` también sigue siendo apoyado. Los comandos de ayuda y versión son de solo lectura: no inician, detienen, instalan, desinstalan o reescriben el estado Codex o opencodex.
+Ejecuta `ocx`, `ocx help`, `ocx --help` o `ocx -h` para ver el mismo índice compacto, agrupado en primeros pasos, tareas comunes, exploración y ayuda adicional. Usa `ocx help --all` o `ocx --help --all` para la referencia completa, incluidas las variantes omitidas del índice. Para un comando registrado en la tabla de ayuda, usa `ocx help <command>`, `ocx <command> --help` o `ocx <command> -h`; también se admite `ocx <command> help`. La ayuda y la versión son de solo lectura: no inician, detienen, instalan, desinstalan ni reescriben el estado de Codex u opencodex.
 
 <a id="nested-help"></a>
 
 ## Ayuda anidada
 
-La ayuda de una familia, como `ocx help models`, conserva su sintaxis y detalles y enumera los subcomandos declarados con sus resúmenes. Estas listas describen los subcomandos registrados; no garantizan que incluyan todas las variantes disponibles en ejecución. La ayuda de Alias conserva el propio uso y detalles del alias y apunta a su familia canónica: `ocx help model` conduce a `ocx help models`. Los modelos también ayudan a vincular el tema curado `models context` por separado de las capacidades declaradas.
+La ayuda de una familia, como `ocx help models`, conserva su sintaxis y sus detalles y enumera los subcomandos declarados con sus resúmenes. La lista describe los subcomandos registrados y no garantiza una cobertura exhaustiva de los disponibles durante la ejecución. La ayuda de un alias conserva su sintaxis y sus detalles y enlaza con la familia canónica: `ocx help model` conduce a `ocx help models`. La ayuda de modelos también enlaza el tema específico `models context`, aparte de las capacidades declaradas.
 
-Ayuda acepta una ruta con más de una palabra de comando:
+La ayuda acepta rutas con varios nombres de comando:
 
 ```bash
 ocx help models context
@@ -23,24 +23,24 @@ ocx help account list
 ocx help account main
 ```
 
-Las tres primeras formas muestran el mismo tema de contexto-cap, incluyendo el alias `model`:
+Las tres primeras formas muestran el mismo tema de límites de contexto, incluido el alias `model`:
 
 ```text
 ocx models context <status|value <tokens> [--set-all]|provider <name> on [--value <tokens>]|provider <name> off|all <on|off>> [--json]
 ```
 
-`ocx models context status --json` lee la configuración actual. `value <tokens>` establece el valor predeterminado para los cambios futuros; agregar `--set-all` lo aplica a todos los proveedores enrutados. `provider <name> on` permite una tapa de proveedor, opcionalmente con `--value <tokens>`; `off` lo deshabilita. `all on|off` cambia todos los proveedores enrutados juntos.
+`ocx models context status --json` lee los ajustes actuales. `value <tokens>` fija el valor predeterminado para las futuras activaciones; `--set-all` también lo aplica a todos los proveedores enrutados. `provider <name> on` habilita el límite de un proveedor y permite indicar `--value <tokens>`; `off` lo desactiva. `all on|off` cambia todos los proveedores enrutados a la vez.
 
-Temas de capacidad declarados tales como `account list` mostrar su resumen, banderas conocidas y detalles, con un puntero a la ayuda de los padres. Estos metadatos no cubren todos los operandos o tiempos de ejecución. subcomando, por lo que un tema puede mostrar `Command: ocx ...` Sin pretender una completa `Usage:` Gramática. Un prefijo como `account main` enumera a sus hijos declarados y marca esa cobertura como incompleta. Un tema explícito no declarado (`ocx help <path>`) sale 1 con una ayuda detallada concisa no disponible mensaje y un puntero padre conocido o de referencia completa en el error estándar. Salida estándar vacío, y no se imprime ningún banner de ayuda completo. Falta detalle no establece si el comando runtime es válido. Anexado `--help`/`-h` preserva el comportamiento de ayuda de comandos existente: cuando los metadatos detallados no están disponibles, Muestra la ayuda de padre conocida con éxito, sin ejecutar el comando.
+Los temas de capacidades declaradas, como `account list`, muestran su resumen, opciones conocidas y detalles, con un enlace a la ayuda superior. Esos metadatos no cubren todos los argumentos ni subcomandos disponibles, por lo que un tema puede mostrar `Command: ocx ...` sin prometer una gramática `Usage:` completa. Un prefijo como `account main` enumera sus subcomandos declarados e indica que la cobertura es incompleta. Un tema explícito no declarado (`ocx help <path>`) termina con código 1 y escribe en stderr un mensaje breve de ayuda no disponible junto con una referencia a la familia conocida o a la ayuda completa. stdout queda vacío y no se imprime toda la ayuda. La falta de detalles no determina si el comando existe. Añadir `--help` o `-h` conserva el comportamiento anterior: si faltan metadatos detallados, se muestra correctamente la ayuda superior conocida sin ejecutar el comando.
 
-En el cabezal Bun CLI, desnudo `help` se reconoce solo en la raíz o inmediatamente después de la raíz comando. Uso `--help` o `-h` para caminos anidados. Valores posteriores como el `help` en
+El despachador inicial de la CLI Bun reconoce `help` sin opciones solo en la raíz o inmediatamente después del comando raíz. Usa `--help` o `-h` en rutas anidadas. Los valores posteriores, como `help` en `ocx alias set demo help`, siguen siendo argumentos del comando. Un `--` exacto termina la búsqueda inicial de opciones de ayuda; por eso `ocx claude -- --help` conserva los argumentos para enviarlos al comando.
 `ocx alias set demo help` Siguen siendo argumentos de comando. Un exacto `--` termina la ayuda de la cabeza que explora, así que `ocx claude -- --help` conserva los argumentos para el despacho de comandos.
 
 <a id="recovering-from-command-typos"></a>
 
 ## Recuperación de errores tipográficos de comando
 
-Comandos raíz desconocidos y rutas de ayuda explícitas no resueltas salen de 1 con una breve guía de diagnóstico y navegación sobre el error estándar, dejando la salida estándar vacía. Los errores tipográficos cercanos pueden recibir sugerencias conservadoras extraídas de los nombres de comandos visibles y de los hijos documentados de la familia de ayuda actual. Las sugerencias son solo de orientación: el CLI nunca las ejecuta ni vuelve a intentar el comando.
+Los comandos raíz desconocidos y las rutas explícitas de ayuda no resueltas terminan con código 1, muestran un diagnóstico breve y orientación en stderr y dejan stdout vacío. Para errores tipográficos cercanos pueden sugerir nombres de comandos visibles o subcomandos documentados de la familia actual. Son sugerencias informativas: la CLI nunca las ejecuta ni reintenta el comando.
 
 | Entrada | Orientación |
 | --- | --- |
@@ -49,19 +49,19 @@ Comandos raíz desconocidos y rutas de ayuda explícitas no resueltas salen de 1
 | `ocx help qzxv` | Ofrece `ocx help --all` sin adivinar un comando. |
 | `ocx help models qzxv` | Indica que la ayuda detallada no está disponible y remite a la familia de comandos de modelos conocida. |
 
-El Bun CLI rechaza una raíz desconocida antes de la auto-restauración de la shim u otro comando previo al vuelo. Los comandos reconocidos conservan su prevuelo existente; los comandos ocultos y el corredor interno siguen siendo objetivos de despacho válidos, pero están excluidos del descubrimiento y las sugerencias. La opción alternativa de ayuda con bandera añadida, la capacidad JSON y el manejo de errores específicos del proveedor conservan su comportamiento existente.
+La CLI Bun rechaza una raíz desconocida antes de restaurar automáticamente el shim o ejecutar otras comprobaciones previas. Los comandos reconocidos conservan sus comprobaciones. Los comandos ocultos y el ejecutor interno siguen siendo destinos válidos, pero no aparecen en el descubrimiento ni en las sugerencias. Se conservan la ayuda alternativa al añadir una opción, las capacidades JSON y los errores específicos de proveedor.
 
 <a id="command-families"></a>
 
-## Familias de mando
+## Familias de comandos
 
 ### `ocx message`
 
-`ocx message sessions [--json]` descubre Codex sesiones locales cargadas. `ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]` envía un mensaje de igual correlacionado, sin iniciar un demonio o reanudar un hilo. Sin `--host`, estas operaciones son locales. Consulta [Mensajería de Codex](/es/reference/cli/messaging/) para el contexto del remitente, los tipos, el entorno de ejecución probado y los recibos `not_sent` / `queued` / `unknown`. El [transporte remoto mediante SSH](/es/reference/cli/messaging/#explicit-remote-peers) requiere un host registrado y la opción `--host`; no inicia automáticamente el receptor ni reenvía mensajes de forma automática.
+`ocx message sessions [--json]` descubre las sesiones locales de Codex cargadas y devuelve sus identificadores, nombres y estados de ejecución. `--thread` exige un UUID exacto; `--name`, un único nombre exacto. Los destinos inexistentes, duplicados, incompletos o no cargados producen un error. `ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]` envía un mensaje de par correlacionado sin iniciar un daemon ni reanudar un hilo. Sin `--host`, estas operaciones son locales. Consulta [Mensajería de Codex](/es/reference/cli/messaging/) para conocer el contexto del remitente, los tipos, el entorno probado y los recibos `not_sent` / `queued` / `unknown`. El [transporte remoto mediante SSH](/es/reference/cli/messaging/#explicit-remote-peers) requiere un host registrado y `--host`; no inicia automáticamente el receptor ni reenvía mensajes de forma automática.
 
 ### `ocx provider`
 
-`ocx provider`, `ocx help provider`, `ocx provider help`, `ocx provider --help` y `ocx provider -h` muestran la misma ayuda del proveedor, con sintaxis de comandos, ejemplos, orientación preestablecida / personalizada y punteros de temas declarados. La ayuda se imprime correctamente en la salida estándar y sale en 0. Bare `ocx provider` todavía sigue el prevuelo de comando ordinario; las formas explícitas de ayuda para la cabeza salen antes de ese prevuelo. Una acción de proveedor desconocido imprime su diagnóstico y ayuda del proveedor al error estándar, deja la salida estándar vacía y sale 1.
+`ocx provider`, `ocx help provider`, `ocx provider help`, `ocx provider --help` y `ocx provider -h` muestran la misma ayuda: sintaxis, ejemplos, orientación sobre proveedores predefinidos o personalizados y enlaces a los temas declarados. La ayuda correcta se imprime en stdout y termina con código 0. Ejecutar solo `ocx provider` conserva las comprobaciones previas normales; las formas explícitas de ayuda inicial terminan antes de ellas. Una acción desconocida escribe el diagnóstico y la ayuda en stderr, deja stdout vacío y termina con código 1.
 
 ### `ocx alias`
 
@@ -75,12 +75,12 @@ Familias de comandos adicionales:
 
 | Familia | Sintaxis y referencia |
 | --- | --- |
-| `ocx chatgpt` | `ocx chatgpt <launch\|restore\|status>` - macOS aplicación-servidor de calza experimental, desactivado de forma predeterminada. Véase [ChatGPT Escritorio](/es/guides/chatgpt-desktop/). |
-| `ocx hub` | `ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]`: crea un código de emparejamiento secreto de un solo uso en un concentrador en ejecución. Consulte [Hub remoto](/es/guides/remote-hub/); invite requiere autorización explícita y su código no debe ingresar una transcripción del agente. |
-| `ocx inspect` | `ocx inspect <subcommand>` - lea la configuración efectiva, el catálogo, el análisis de enrutamiento, el ritmo, el inventario del proveedor de claves, el indicador Codex, la configuración del cliente, el estado de estrella o el estado de la bandeja Windows. Ejecutar `ocx help inspect` para los enlaces del tema. |
-| `ocx mcode` | `ocx mcode [mcode args...]` - inicie el código MiniMax después de que su integración de archivos administrados esté habilitada. Véase [MiniMax clientes](/es/guides/minimax/). |
-| `ocx mmx` | `ocx mmx text <chat\|repl> [mmx args...]` - Lanzamiento MiniMax CLI texto a través del proxy; uso llano `mmx` para otras superficies. Véase [MiniMax clientes](/es/guides/minimax/). |
-| `ocx zcode` | `ocx zcode [status\|enable\|disable\|history\|restore] [--json]` - Comandos de integración ZCode administrados. Véase [Tiendas ZCode](/es/guides/integrations/#zcode-314-and-later). |
+| `ocx chatgpt` | `ocx chatgpt <launch\|restore\|status>`: shim experimental del app-server de macOS, desactivado de forma predeterminada. Consulta [ChatGPT Desktop](/es/guides/chatgpt-desktop/). |
+| `ocx hub` | `ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]`: crea un código secreto de emparejamiento de un solo uso en un Hub activo. Consulta [Remote Hub](/es/guides/remote-hub/). La invitación exige autorización explícita y su código no debe aparecer en la transcripción de un agente. |
+| `ocx inspect` | `ocx inspect <subcommand>`: lee la configuración efectiva, el catálogo, las trazas de enrutamiento, la cadencia, el inventario de claves, el prompt de Codex, la configuración de clientes, el estado de estrella o la bandeja de Windows. Ejecuta `ocx help inspect` para acceder a los temas. |
+| `ocx mcode` | `ocx mcode [mcode args...]`: inicia MiniMax Code después de habilitar su integración mediante archivos administrados. Consulta [Clientes MiniMax](/es/guides/minimax/). |
+| `ocx mmx` | `ocx mmx text <chat\|repl> [mmx args...]`: inicia los comandos de texto de MiniMax CLI mediante el proxy. Para las demás funciones, usa `mmx` directamente. Consulta [Clientes MiniMax](/es/guides/minimax/). |
+| `ocx zcode` | `ocx zcode [status\|enable\|disable\|history\|restore] [--json]`: administra la integración de ZCode. Consulta [Almacenes de ZCode](/es/guides/integrations/#zcode-314-and-later). |
 
 - [Ciclo de vida](/es/reference/cli/lifecycle/) - Configuración, proxy y ciclo de vida del servicio, estado, diagnóstico, sincronización del catálogo, el panel de control y actualizaciones.
 - [Proveedores, cuentas y modelos](/es/reference/cli/providers-accounts/) - configuración de proveedores, autenticación, grupos de credenciales, cuota, modelos personalizados, visibilidad, modelos seleccionados y límites de contexto.
@@ -88,7 +88,7 @@ Familias de comandos adicionales:
 
 <a id="headless-behavior"></a>
 
-## Comportamiento sin cabeza
+## Uso sin interfaz gráfica
 
 Los comandos de administración se comunican con la API del proxy activo mediante el puerto registrado y las comprobaciones de identidad, sin mantener una segunda ruta de configuración. Si el proxy está detenido o no es accesible, devuelven HTTP 503 y la CLI termina con un código distinto de cero. Los comandos documentados expresamente como operaciones sin conexión pueden validar y editar el archivo de configuración sin un proxy activo.
 
@@ -100,17 +100,17 @@ Para un plan npm-global revisado y aplicable, `ocx system codex-cli-update apply
 
 Para la observación de la instalación de Windows x64, véase [El comando `attest`](/es/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Sin rutas explícitas, observa el candidato seleccionado identificado a partir de la instantánea del lanzador de prueba; no otorga autoridad de actualización ni certifica la selección en entorno de ejecución.
 
-La lista o el estado es el valor predeterminado cuando no es ambiguo. Use `--json` solo en hojas que lo admitan, y `ocx observe logs --follow --jsonl` para la salida de fila modificada, o `ocx logs --follow --events` para instantáneas/agregados de ventana observada versionados. Tampoco es historia sin pérdida; [seguimiento, la línea de tiempo y el uso de key-scoped](/es/reference/cli/agents/#follow-request-windows-or-injection-sequences): Límites de cursor/reseteo/datos incompletos. [Modelo de clave seleccionada/comprobaciones de audio](/es/reference/cli/agents/#explicit-key-model-and-audio-checks) requieren el trabajo autorizado por el operador y la transferencia privada de datos; sus informes son observaciones, no certificados de alcance de clave. El tema, el idioma, la navegación y otros estados del navegador puramente visuales no tienen el equivalente CLI; La configuración de Cloudflare Tunnel está fuera de este conjunto de comandos.
+Cuando no hay ambigüedad, se muestra la lista o el estado de forma predeterminada. Usa `--json` solo en los subcomandos que lo admiten. `ocx observe logs --follow --jsonl` muestra filas actualizadas; `ocx logs --follow --events`, instantáneas e incorporaciones versionadas de la ventana observada. Ninguna modalidad garantiza un historial sin pérdidas: consulta los [límites de cursores, reinicios y datos incompletos](/es/reference/cli/agents/#follow-request-windows-or-injection-sequences). Las [comprobaciones de modelos y audio con una clave seleccionada](/es/reference/cli/agents/#explicit-key-model-and-audio-checks) requieren operaciones con el proveedor autorizadas por el operador y la entrega privada de datos por stdin. Sus informes son observaciones, no certificados del alcance de la clave. El tema, el idioma, la navegación y otros estados puramente visuales del navegador no tienen equivalente CLI; configurar Cloudflare Tunnel queda fuera de estos comandos.
 
-Para las tareas de lectura de estilo tablero, use [selección de registro limitado, búsqueda de modelo de uso y totales de compañeros guardados](/es/reference/cli/agents/#filter-a-bounded-log-snapshot). `logs filter` distingue la ventana escaneada de las coincidencias devueltas; `usage --search` cambia las filas del modelo sin recalcular los totales del informe; `companion usage` conserva la disponibilidad y la configuración de cada rango. [API - cuota de key pool](/es/reference/cli/providers-accounts/#accounts-and-key-pools) es una lectura explícita `account list --quota` y puede contactar a los proveedores.
+Para consultar información como en el dashboard, usa [la selección acotada de registros, la búsqueda de modelos en uso y los totales guardados de companion](/es/reference/cli/agents/#filter-a-bounded-log-snapshot). `logs filter` distingue la ventana examinada de las coincidencias devueltas; `usage --search` cambia las filas de modelos sin recalcular los totales del informe; `companion usage` conserva la disponibilidad de cada rango y los ajustes alternativos. La [consulta de cuota del grupo de claves API](/es/reference/cli/providers-accounts/#accounts-and-key-pools) con `account list --quota` es explícita y puede contactar a los proveedores.
 
 <a id="liveness-probe-ceiling-override"></a>
 
-## Sonda Liveness techo override
+## Ajustar el tiempo máximo de la sonda de actividad
 
-`ocx health`, `ocx status`, `ocx account *`, `ocx login codex` y `ocx ready` encuentran el proxy de ejecución a través de una sonda de vida corta: 750 ms por intento por defecto y 1500 ms con reintentos para detener y comenzar las decisiones. En los hosts donde una capa de seguridad (un filtro de contenido o una extensión de red de estilo EDR) agrega un costo fijo a cada conexión de bucle de retorno, esos límites pueden expirar antes de que un proxy saludable responda, por lo que estos comandos informan que el proxy está inactivo mientras `curl http://127.0.0.1:10100/healthz` tiene éxito.
+`ocx health`, `ocx status`, `ocx account *`, `ocx login codex` y `ocx ready` localizan el proxy activo mediante una sonda breve: 750 ms por intento de forma predeterminada y 1500 ms con reintentos para decidir la parada o el inicio. Si una capa de seguridad, como un filtro de contenido o una extensión de red de tipo EDR, añade un coste fijo a cada conexión de loopback, esos plazos pueden vencer antes de que responda un proxy saludable. Los comandos lo muestran entonces como detenido aunque `curl http://127.0.0.1:10100/healthz` funcione.
 
-Establecer `OCX_PROBE_TIMEOUT_MS` para elevar los techos en tales hosts, por ejemplo `OCX_PROBE_TIMEOUT_MS=5000 ocx status`. El valor es milisegundos enteros de 1 a 30000. La anulación solo aumenta: los presupuestos predeterminados de 750 ms y 1500 ms de parada / inicio mantienen sus pisos, por lo que `1000` solo alarga la sonda predeterminada. Los valores indefinidos, vacíos, fraccionarios, negativos, cero o mayores se ignoran y se aplican los límites máximos enviados.
+Establece `OCX_PROBE_TIMEOUT_MS` para ampliar esos plazos, por ejemplo `OCX_PROBE_TIMEOUT_MS=5000 ocx status`. Se admiten milisegundos enteros de 1 a 30000. La opción solo aumenta los límites: conserva los mínimos de 750 ms y 1500 ms, de modo que `1000` amplía únicamente la sonda predeterminada. Los valores ausentes, vacíos, fraccionarios, negativos, cero o superiores al máximo se ignoran y se usan los plazos originales.
 
 En Windows, el proxy también eleva su propio proceso a la prioridad ABOVE_NORMAL cuando se inicia, lo que reduce los retrasos de programación en un host saturado por otro trabajo de prioridad NORMAL (exploraciones de antivirus, codificadores, emuladores) sin garantizar que la sonda permanezca bajo estos techos a carga extrema. El impulso se aplica solo al proceso proxy (el trabajo que genera aún se ejecuta en NORMAL) y un proxy con CPU pesada puede retrasar las aplicaciones con prioridad NORMAL. El cambio es de mejor esfuerzo; establece `OCX_DISABLE_PRIORITY_BOOST=1` en el entorno del proxy para dejar la prioridad sin cambios.
 
@@ -120,7 +120,7 @@ En Windows, el proxy también eleva su propio proceso a la prioridad ABOVE_NORMA
 
 Los comandos exitosos terminan con código 0. Los argumentos no válidos, los comandos o recursos desconocidos, las operaciones de API fallidas y la falta de servicios necesarios producen un código distinto de cero. `ocx health` sale específicamente 0 solo cuando el proxy está sano y 1 cuando no se encuentra ningún proxy sano; los argumentos inválidos salen 2, por lo que se puede usar como una sonda de servicio. Los scripts deben probar el código de salida en lugar de raspar la salida legible por humanos.
 
-Muchos comandos de gestión comparten estas asignaciones; otras CLI familias conservan sus propios contratos de salida:
+Muchos comandos de administración comparten estas correspondencias; otras familias de la CLI conservan sus propios códigos:
 
 | Código | Causa |
 |---|---|
@@ -128,10 +128,10 @@ Muchos comandos de gestión comparten estas asignaciones; otras CLI familias con
 | 2 | rechazo de uso local en los controladores de gestión; también no compatible con `doctor --json` |
 | 64 | argumentos inválidos a `capabilities`, `ready` o `resolve`, antes de su descubrimiento / solicitud de trabajo |
 | 4 | HTTP 404 - la cuenta, el proveedor, la clave o la ruta con nombre no existe |
-| 5 | HTTP 409 - conflicto; se mantiene una cerradura o se cambia el estado debajo |
+| 5 | HTTP 409: conflicto, por un bloqueo ocupado o porque cambió el estado durante la operación |
 | 1 | todo lo demás, incluyendo fallos de transporte y otros errores HTTP |
 
-Salida 0 significa que no se informó ningún error. Los verbos de vista previa (por ejemplo `ocx storage cleanup` sin `--yes`) también salen 0 sin mutar. Una configuración guardada todavía puede llevar un resultado de aplicación omitido o incompleto; lea las advertencias de recibo y stderr.
+El código 0 significa que no se informó de ningún error. Las operaciones de vista previa, como `ocx storage cleanup` sin `--yes`, también terminan con 0 sin modificar nada. Un ajuste guardado puede incluir un resultado de aplicación omitido o incompleto: lee el recibo y las advertencias de stderr.
 
 Las operaciones de eliminación destructiva, importación, consumo de crédito y actualización que anuncian la confirmación requieren `--yes` en uso no interactivo. La bandera es un opt-in explícito; omitirla no debe confirmar silenciosamente la acción.
 
@@ -139,7 +139,7 @@ Las operaciones de eliminación destructiva, importación, consumo de crédito y
 
 <a id="driving-the-cli-from-an-agent"></a>
 
-## Conducir el CLI desde un agente
+## Usar la CLI desde un agente
 
 Descubra progresivamente, sin iniciar un proxy:
 
@@ -149,7 +149,7 @@ ocx help models
 ocx help models preset show
 ```
 
-Lea el capítulo correspondiente en el `skills/ocx/references/01_management_surface.md` del repositorio o en una de las páginas de la familia de comandos públicas anteriores. Full `ocx help --all` es un escape a la referencia de nivel superior. Un amplio inventario de máquinas es opcional:
+Lee el capítulo correspondiente en `skills/ocx/references/01_management_surface.md` o en las páginas públicas de familias de comandos anteriores. `ocx help --all` permite acceder a la referencia completa. El inventario amplio para lectura por máquinas es opcional:
 
 ```bash
 ocx capabilities --json
@@ -165,7 +165,7 @@ La búsqueda de ruta coincide con la plantilla declarada literal, no con los ID 
 
 Los indicadores de salida son por comando. `doctor` rechaza `--json` con la salida 2; [`v2` (referencia de la familia)](/es/reference/cli/agents/) soporta `--json` para objetivos locales y `--live`. Incluso para los comandos de gestión con capacidad JSON, los fallos API normalmente usan prosa stderr con líneas opcionales `reason:` y `hint:`, no una envolvente de error JSON. Mantén separados el estado stdout, stderr y exit.
 
-La cobertura se mide por flujos de trabajo con nombre, no por prefijos de rutas compartidas. Los ajustes preestablecidos de modelo existentes, la visibilidad, los controles de cuenta y las lecturas de perfil de enrutamiento no implican soporte para ediciones de nombre de pantalla de modelo descubierto o escrituras de perfil de enrutamiento. Las acciones de consentimiento de solo sesión y la presentación del navegador siguen siendo límites separados. Creación de clave de acceso y credenciales de texto plano de retorno de inicio de rotación: los agentes deben entregar esos pasos a un terminal operado por humanos fuera de la sesión y aceptar solo ID y confirmación no secretas. Nunca pida credenciales en el chat ni omita una acción de solo sesión con otro cliente API.
+La cobertura se determina por flujos de trabajo concretos, no por prefijos compartidos de rutas. Los ajustes de modelos, la visibilidad, los controles de cuentas y la lectura de perfiles de enrutamiento no implican que se puedan editar los nombres visibles de modelos descubiertos o escribir perfiles de enrutamiento. El consentimiento que exige una sesión y la presentación del navegador tienen límites independientes. Crear una clave de acceso o iniciar su rotación devuelve credenciales en texto plano: los agentes deben dejar esos pasos a una persona en una terminal fuera de la sesión y recibir solo identificadores no secretos y confirmaciones. Nunca pidas credenciales en el chat ni eludas una acción limitada a la sesión mediante otro cliente API.
 
 <a id="recent-behavior-changes"></a>
 
@@ -173,11 +173,11 @@ La cobertura se mide por flujos de trabajo con nombre, no por prefijos de rutas 
 
 Estas son correcciones a comandos que previamente informaron mal sus propios resultados:
 
-- `doctor` y `sync-cache` ahora salen no cero en caso de fallo. Previamente imprimieron un fracaso y salieron 0, por lo que un guión no podía distinguir el éxito del fracaso.
-- Los errores del cliente de `account` Mapa HTTP 404 a la salida 4 y HTTP 409 a la salida 5, en lugar de contraerse Todo en 1.
-- `ocx restore back --json` ahora honra su bandera de salida, que previamente aceptó e ignoró. Esto no hace que `--json` sea una opción global para cada comando.
-- `ocx logs --model` ahora en realidad filtros. Se aceptó y se ignoró silenciosamente, por lo que la salida parecía filtrada mientras mostraba cada fila.
-- `ocx storage` ganó `cleanup`, `trash` y `policy` subcomandos. Un `ocx storage` desnudo todavía imprime el informe de almacenamiento, como lo hizo cuando era un alias de `ocx observe storage`.
+- `doctor` y `sync-cache` ahora terminan con un código distinto de cero si fallan. Antes imprimían el fallo y terminaban con 0, por lo que los scripts no podían distinguirlo de un éxito.
+- Los errores de `account` convierten HTTP 404 en el código de salida 4 y HTTP 409 en el código 5. Los demás fallos siguen usando el código 1.
+- `ocx restore back --json` ahora respeta su opción de salida, que antes aceptaba pero ignoraba. Esto no convierte `--json` en una opción global.
+- `ocx logs --model` ahora filtra los resultados. Antes aceptaba la opción pero la ignoraba y mostraba todas las filas.
+- `ocx storage` incorpora los subcomandos `cleanup`, `trash` y `policy`. Ejecutar solo `ocx storage` sigue mostrando el informe de almacenamiento, como cuando era un alias de `ocx observe storage`.
 
 <a id="version-and-internal-dispatch-targets"></a>
 
@@ -201,9 +201,9 @@ Las opciones enteras como `--limit` requieren números enteros decimales dentro 
 
 <a id="windows-json-configuration-files"></a>
 
-## Windows JSON archivos de configuración
+## Archivos JSON de configuración en Windows
 
-`ocx config validate <file>` y `ocx config import <file> --yes` aceptan UTF-8 JSON con o sin una lista de materiales líder, incluyendo stdin (`-`). Esto soporta exportaciones UTF-8 desde Windows PowerShell y editores. No se acepta la entrada UTF-16.
+`ocx config validate <file>` y `ocx config import <file> --yes` aceptan JSON UTF-8 con o sin marca de orden de bytes (BOM) inicial, también desde stdin (`-`). Esto permite usar las exportaciones UTF-8 de Windows PowerShell y otros editores. La entrada UTF-16 se rechaza.
 
 <a id="default-alias-listing"></a>
 
@@ -221,7 +221,7 @@ Cuando la configuración guardada no es válida o ilegible, `ocx config`, `ocx c
 
 `ocx config export <file> --json` escribe la configuración raw en el archivo y emite solo `{ok:true,path}` en stdout. Exportar a `-` siempre emite el documento de configuración en bruto, incluidas las credenciales; manténgalo fuera de las transcripciones del agente.
 
-Local `ocx provider add` valida la configuración completa del candidato antes de guardar. Un error de validación deja el archivo guardado sin cambios. intencionalmente proveedores locales requieren `--allow-private-network` a menos que su entrada de registro ya permita destinos privados. El indicador no permite los puntos finales de metadatos bloqueados.
+`ocx provider add` valida toda la configuración candidata antes de guardarla localmente. Un fallo de validación deja intacto el archivo guardado. Los proveedores deliberadamente locales requieren `--allow-private-network`, salvo que su entrada del registro ya permita destinos privados. Esa opción no permite acceder a los endpoints de metadatos bloqueados.
 
 `ocx health` solo acepta una bandera opcional `--json`. Los argumentos desconocidos o los indicadores repetidos devuelven la salida 2 antes de sondear. Los errores de uso de Alias también devuelven la salida 2 con un error legible; las acciones desconocidas nombran `ocx help alias`.
 
@@ -229,6 +229,6 @@ Local `ocx provider add` valida la configuración completa del candidato antes d
 
 ### Selectores de modelo de registro
 
-`ocx logs --model` acepta un ID de modelo desnudo o la etiqueta completa `provider/model` impresa en filas humanas, incluidos los modelos cuyos ID desnudos contienen barras. Los intentos de conmutación por error se comparan como destinos completos. El filtrado se produce antes de `--limit`, y `--follow` utiliza el mismo filtro de servidor. Un resultado humano filtrado vacío dice que no hay entrada de registro coincidente; `--json` y `--jsonl` mantienen su salida legible por máquina.
+`ocx logs --model` admite un ID de modelo sin prefijo o la etiqueta completa `provider/model` que muestran las filas legibles por humanos, incluso si el ID contiene barras. Los intentos de failover se comparan como destinos completos. El filtro se aplica antes de `--limit`, y `--follow` usa el mismo filtro del servidor. Si no hay coincidencias, la salida humana lo indica; `--json` y `--jsonl` conservan sus formatos para máquinas.
 
 `ocx hub disable [--revoke-clients --client-key <id> ...] [--json]` devuelve un concentrador a autónomo en una escritura de configuración validada. La revocación de la clave del cliente requiere identificadores explícitos porque los nombres de clave no prueban el origen. Véase [Devolver un concentrador a autónomo](/es/guides/remote-hub/#return-a-hub-to-standalone).

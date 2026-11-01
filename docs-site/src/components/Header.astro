@@ -308,6 +308,19 @@ const contributing: NavLink = {
 				</svg>
 			</button>
 			<div class="lp-menu-panel" id="lp-menu-panel">
+				<div class="lp-menu-group lp-menu-languages">
+					<span>{t('Select language', '언어 선택', '选择语言', 'Выбрать язык', '言語を選択', '選擇語言', 'Dil seçin')}</span>
+					<ul>
+						{languages.map((language) => (
+							<li><a
+								href={languageHref(language.code)}
+								lang={language.code === 'root' ? 'en' : language.code}
+								hreflang={language.code === 'root' ? 'en' : language.code}
+								aria-current={language.code === (locale ?? 'root') ? 'true' : undefined}
+							>{language.label}</a></li>
+						))}
+					</ul>
+				</div>
 				{groups.map((group) => (
 					<div class="lp-menu-group">
 						<span>{group.label}</span>
@@ -696,6 +709,11 @@ const contributing: NavLink = {
 		translate: 0 0;
 	}
 	.lp-menu-group + .lp-menu-group { margin-top: 0.75rem; }
+	.lp-menu-languages ul { display: grid; grid-template-columns: repeat(2, 1fr); }
+	.lp-menu-languages a[aria-current='true'] { color: var(--sl-color-text-accent); font-weight: 600; }
+	@media (min-width: 50rem) {
+		.lp-menu-languages { display: none; }
+	}
 	.lp-menu-group > span {
 		display: block;
 		margin-bottom: 0.25rem;

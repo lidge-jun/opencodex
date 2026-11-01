@@ -10,7 +10,7 @@ description: リスナー、リモート アクセス、アドミッション �
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` |プロキシリッスンポート。 |
-| `hostname?` | `string` | `"127.0.0.1"` |バインドアドレス。非ループバック バインドには `OPENCODEX_API_AUTH_TOKEN` が必要です。 |
+| `hostname?` | `string` | `"127.0.0.1"` | バインド先。非ループバックでは `config.apiKeys` のクライアントキー、または `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 所有者専用のインストール済み `service-api-token` から解決される共有データトークンが必要です。[リモートアクセス](#remote-access)を参照してください。 |
 | `proxy?` | `string` | — |送信 HTTP(S) または SOCKS5 プロキシ URL（`socks5://host:port`）または `${ENV_VAR}`。HTTP URL は未設定時のみ `HTTP_PROXY` / `HTTPS_PROXY` に適用されます。SOCKS5 URL は組み込みの SOCKS5 トンネルを使用し、`ALL_PROXY` にも適用されます（`ocx start --socks5`）。このプロセスで継承した `HTTP(S)_PROXY` はクリアされます。ループバックは `NO_PROXY` に残ります。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | テキストもツール呼び出しもない Responses ターンを、ターミナルイベント前にストリームが終了した場合も含め、同一リクエストで 1 回再試行するよう明示的に有効化します。再試行は課金対象になる場合があります。`OCX_EMPTY_COMPLETION_RETRY=0` で設定を変更せず無効化できます。combo と routed-compaction turn は対象外です。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Codex Responses パススルーから Codex の safety-buffering ヒントを除去します。対象は `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 応答ヘッダー、`safety_buffering` 型の `response.metadata` SSE イベント、およびその他の SSE イベントにある `safety_buffering` フィールドです。Codex TUI はこれらを、既定の操作でセッションをより弱いモデルに切り替える「より高速なモデルで再試行」プロンプトとして表示します。その他の `x-codex-*` ヘッダーと SSE イベントの内容は、そのフィールドの除去を除いて変更せずに転送されます。既定ではオフです。 |
@@ -40,16 +40,18 @@ description: リスナー、リモート アクセス、アドミッション �
 
 ネイティブ Chat も上流出力の待機に `stallTimeoutSec` を使用します。空でないテキスト、推論、拒否内容、ツール更新、完了イベントは待機時間を更新しますが、キープアライブのコメント、ロールのみのイベント、使用量のみのイベントは更新しません。低速クライアントの読み取り待ちは計時を停止します。タイムアウト時は `upstream_stall_timeout` が返り、ストリーミングではエラーイベント、非ストリーミングでは HTTP 502 になります。終端結果より前のキャンセルは成功した部分回答ではなくキャンセルエラーになります。非ストリーミング Chat は LF、CRLF、複数行 data の SSE に対応します。
 
+<a id="remote-access"></a>
+
 ## リモートアクセス
 
-デフォルトの `127.0.0.1` バインドはループバックのみです。 `0.0.0.0` などの非ループバック アドレスには、`/api/*` とデータ プレーンの両方でトークン認証が必要です。開始する前にトークンをエクスポートします。
+既定の `127.0.0.1` はループバック専用です。`0.0.0.0` などへの非ループバックバインドでは、モデルリクエストに `config.apiKeys` のクライアントキーまたは共有データトークンが必要です。管理ルート `/api/*` はループバックでも独立した `OPENCODEX_ADMIN_AUTH_TOKEN` または生成済み管理トークンを使います。データ認証情報で管理アクセスはできません。管理トークンをモデルクライアントに渡さないでください。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-プロキシは、この変数がないとリモート バインドを拒否します。バックグラウンド サービスの場合は、`ocx service install` の前にエクスポートして、launchd、systemd、またはタスク スケジューラがそれを受信できるようにします。クライアントは以下を送信する必要があります:
+例は環境トークンを使います。`OCX_API_TOKEN_FILE` または所有者専用の `service-api-token` にトークンがある場合や、有効なクライアントキーを設定済みの場合、変数のエクスポートは不要です。`ocx service install` は不足するトークンファイルを作成でき、この変数のエクスポートを必須にしません。モデルクライアントは次のヘッダーを送れます。
 
 ```text
 x-opencodex-api-key: your-secret-token

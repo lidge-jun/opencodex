@@ -11,6 +11,8 @@ proxy est en cours d'exécution.
 Utilisez le [tableau de bord web](/fr/guides/web-dashboard/) comme client interactif, ou cette référence pour
 créer des automatisations. Les valeurs persistantes obéissent en dernier ressort à la [configuration](/fr/reference/configuration/).
 
+<a id="authentication-model"></a>
+
 ## Modèle d'authentification
 
 L'API de gestion possède son propre identifiant d'administrateur, indépendant des clés API du plan de données. Au démarrage,

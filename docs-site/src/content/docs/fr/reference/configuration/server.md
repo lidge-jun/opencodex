@@ -11,7 +11,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Port d'écoute proxy. |
-| `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
+| `hostname?` | `string` | `"127.0.0.1"` | Adresse d’écoute. Hors bouclage, il faut une clé client `config.apiKeys` ou un token de données résolu depuis `OPENCODEX_API_AUTH_TOKEN`, puis `OCX_API_TOKEN_FILE`, puis le fichier privé installé `service-api-token`. Voir [Accès à distance](#remote-access). |
 | `proxy?` | `string` | — | URL du proxy HTTP(S) ou SOCKS5 sortant (`socks5://host:port`) ou `${ENV_VAR}`. Les URL HTTP s’appliquent à `HTTP_PROXY` / `HTTPS_PROXY` si elles sont vides. Les URL SOCKS5 utilisent le tunnel SOCKS5 intégré et sont aussi exposées via `ALL_PROXY` (`ocx start --socks5`); `HTTP(S)_PROXY` héritées sont effacées dans ce processus. Le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
 | `stallTimeoutSec?` | `number` | `300` (public) / désactivé (local) | Secondes sans progression utile en amont (Responses et Chat natif) avant la coupure du flux. Sans réglage, un amont **local** (loopback, privé ou nom `.local`/`.lan`) est désactivé par défaut et un amont public vaut 300 s ; une valeur positive s'applique aux deux (minimum 1 s) ; `0` désactive partout le watchdog de silence. Pour Responses qui replie le SSE canonique ChatGPT en JSON non-streaming, un plafond total indépendant de 15 minutes subsiste même lorsque ce watchdog est désactivé. Les lectures de corps en attente de `/v1/responses/compact` partagent ce budget mais valent 300 s par défaut même pour un amont local ; une valeur explicite, y compris `0`, prime. |
@@ -40,20 +40,18 @@ La commande réétiquette chaque ligne `opencodex` contenant un message utilisat
 
 Le Chat natif utilise aussi `stallTimeoutSec` pendant l’attente de la sortie amont. Le texte non vide, le raisonnement, le refus, les mises à jour d’outils et les événements de fin renouvellent ce délai ; les commentaires de maintien de connexion, le rôle seul et les statistiques seules ne le renouvellent pas. L’attente d’un client lent suspend le décompte. Un blocage produit `upstream_stall_timeout` : un événement d’erreur en streaming, ou HTTP 502 sans streaming. Une annulation avant le résultat terminal renvoie une erreur d’annulation plutôt qu’une réponse partielle réussie. Le Chat sans streaming accepte les délimiteurs SSE LF et CRLF et les champs data multilignes.
 
+<a id="remote-access"></a>
+
 ## Accès à distance
 
-La liaison par défaut à `127.0.0.1` est limitée au bouclage. Une adresse hors bouclage telle que `0.0.0.0`
-exige un identifiant pour le plan de données : `OPENCODEX_API_AUTH_TOKEN` ou au moins une entrée `apiKeys`
-configurée. Pour utiliser le jeton d’environnement, exportez-le avant le démarrage :
+La liaison par défaut à `127.0.0.1` est limitée au bouclage. Hors bouclage, par exemple sur `0.0.0.0`, les requêtes de modèle exigent une clé client configurée dans `config.apiKeys` ou un token de données partagé. Les routes de gestion `/api/*` utilisent l’identifiant indépendant `OPENCODEX_ADMIN_AUTH_TOKEN` ou le token administrateur généré, y compris en bouclage. Un identifiant de données ne donne aucun accès de gestion ; ne donnez jamais le token administrateur à un client de modèle.
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-Le proxy refuse une liaison distante sans identifiant du plan de données. L’installation d’un service exige
-spécifiquement `OPENCODEX_API_AUTH_TOKEN` ; exportez-le avant `ocx service install` afin que launchd, systemd
-ou le Planificateur de tâches le reçoive. Les clients du plan de données peuvent envoyer :
+L’exemple utilise un token d’environnement. L’export est facultatif si un token est déjà disponible dans `OCX_API_TOKEN_FILE` ou le fichier privé `service-api-token`, ou si une clé client valide est configurée. `ocx service install` peut créer le fichier de token manquant ; il n’exige pas que cette variable soit exportée. Les clients de modèles peuvent envoyer :
 
 ```text
 x-opencodex-api-key: your-secret-token
