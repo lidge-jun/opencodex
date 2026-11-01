@@ -69,7 +69,8 @@ function sanitizeSchemaMap(value: unknown): unknown {
   return out;
 }
 
-function sanitizeKiroSchema(value: unknown): unknown {
+/** Strip the keywords Kiro's tool-spec validator rejects, everywhere in a schema tree. */
+export function sanitizeKiroSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeKiroSchema);
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};

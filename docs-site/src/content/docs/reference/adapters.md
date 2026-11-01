@@ -506,9 +506,15 @@ MiMo model Command Code serves.
   solely because the client permits parallel calls.
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
-  they are ignored rather than rejected. Structured output (`text.format` of type `json_schema`
-  or `json_object`) is still refused: the Kiro wire cannot constrain the response shape, and a
-  caller expecting JSON would otherwise receive prose.
+  they are ignored rather than rejected.
+- Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
+  Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
+  adapter advertises a private output tool whose input schema is the requested schema and returns
+  that tool's input as the response text. A plain-text reply that is already the requested JSON is
+  accepted as is. Any other reply gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
+  with an `invalid_kiro_structured_output` error. A caller expecting JSON never receives prose.
+  The check covers JSON syntax, the root type and the root's required properties, not every
+  schema keyword.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a

@@ -106,8 +106,9 @@ export function createResponsesEffects(
     // The compaction turn is a plain prose summary; a surviving structured-output format
     // would force schema-constrained JSON into the synthetic compaction item. The flag and
     // the raw `text` control go too: the key-mode openai-responses adapter builds from
-    // _rawBody, so a surviving format there would still reach the upstream. (The Kiro
-    // guard no longer reads _rawBody.text; it refuses structured output only.)
+    // _rawBody, so a surviving format there would still reach the upstream. (Kiro reads
+    // options.textFormat, never _rawBody.text, and would emulate a surviving format through
+    // its structured-output tool, so it must go here too.)
     delete parsed.options.textFormat;
     delete parsed._structuredOutput;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {

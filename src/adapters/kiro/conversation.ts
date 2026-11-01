@@ -7,6 +7,7 @@ import type {
 import type { KiroImage } from "../kiro-images";
 import type { KiroHistoryEntry, KiroToolResult, KiroToolUse } from "./wire";
 
+/** Refuse request controls the Kiro wire cannot honour (forced tool choice, service tiers) before a request is built. */
 export function validateKiroCapabilities(parsed: OcxParsedRequest): void {
   const choice = parsed.options.toolChoice;
   if (choice !== undefined && choice !== "auto" && choice !== "none") {
@@ -15,12 +16,14 @@ export function validateKiroCapabilities(parsed: OcxParsedRequest): void {
   if (parsed.options.serviceTier !== undefined) {
     throw new Error("Kiro does not support service tiers");
   }
-  // Structured output is a real contract Kiro cannot honour: the wire has no
-  // schema-constrained response mode, so a caller expecting parseable JSON would receive
-  // prose and fail downstream. Refuse it.
+  // Structured output is a real contract the wire has no response mode for, so it is not
+  // validated here: buildKiroPayload emulates it through the private structured-output tool
+  // (structured-output.ts), and the stream relays only JSON that tool or the bounded retry
+  // produced, or fails the turn. It used to be refused at this point, which kept the
+  // "no prose for a JSON caller" promise by failing every such turn instead.
   //
-  // The rest of the Responses `text` object is not that. `text.verbosity` is a length
-  // preference and `text.format: {type:"text"}` is ordinary prose — the default output
+  // The rest of the Responses `text` object is not a contract at all. `text.verbosity` is a
+  // length preference and `text.format: {type:"text"}` is ordinary prose — the default output
   // mode, which no capability flag governs and every correct client may send. Testing
   // `_rawBody.text !== undefined` refused those turns for the mere PRESENCE of the key,
   // the same mistake db040e70f removed one condition earlier where a permissive
@@ -30,9 +33,6 @@ export function validateKiroCapabilities(parsed: OcxParsedRequest): void {
   // buildKiroPayload composes conversationState field by field from `parsed` and never
   // spreads `_rawBody`, so a tolerated control is dropped by construction. The test
   // asserts that absence so it stays true.
-  if (parsed._structuredOutput) {
-    throw new Error("Kiro does not support Responses structured output");
-  }
 }
 
 export type KiroTurn =
