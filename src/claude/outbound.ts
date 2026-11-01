@@ -21,6 +21,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { sseFieldOffset, sseFieldValue } from "../lib/sse-decoder";
+import { claudeToolUseId } from "./tool-use-id";
 import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 
 type Rec = Record<string, unknown>;
@@ -658,7 +659,7 @@ export function responsesSseToAnthropicSse(
             const index = blockIndex++;
             const name = typeof item.name === "string" ? item.name : "";
             const bufferWebSearchArgs = isClaudeWebSearchToolName(name);
-            const callId = typeof item.call_id === "string" ? item.call_id : `toolu_${uuid()}`;
+            const callId = claudeToolUseId(item.call_id);
             emit("content_block_start", {
               type: "content_block_start", index,
               content_block: {
@@ -1063,7 +1064,7 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
         const name = typeof raw.name === "string" ? raw.name : "";
         content.push({
           type: "tool_use",
-          id: typeof raw.call_id === "string" ? raw.call_id : `toolu_${uuid()}`,
+          id: claudeToolUseId(raw.call_id),
           name,
           input: isClaudeWebSearchToolName(name) ? sanitizeWebSearchInput(input) : input,
         });

@@ -140,7 +140,8 @@ describe("Responses passthrough deferred tool delivery by inbound wire", () => {
                 const tool = wire === "anthropic" ? json.content[0]
                   : wire === "chat" ? json.choices[0].message.tool_calls[0] : json.output[0];
                 expect(wire === "chat" ? tool.function.name : tool.name).toBe(expectedName);
-                expect(wire === "responses" ? tool.call_id : tool.id).toBe("call_deferred");
+                // The Messages wire carries Anthropic-shaped ids (#8051).
+                expect(wire === "responses" ? tool.call_id : tool.id).toBe(wire === "anthropic" ? "toolu_call_deferred" : "call_deferred");
                 expect(wire === "anthropic" ? tool.input : JSON.parse(wire === "chat" ? tool.function.arguments : tool.arguments)).toEqual({ path: "todo.md" });
               }
             } finally {
