@@ -26,6 +26,7 @@
     "windows-config-root-async-writers.test.ts": "windows",
     "windows-atomic-write-acl-rearm.test.ts": "windows",
   "advisor-web-search.test.ts": "advisor",
+  "codex-launcher-endpoint.test.ts": "codex-integration",
     "t3code-client.test.ts": "clients",
     "t3code-client-lifecycle.test.ts": "clients",
   "fix-jsonc-cr-comments.test.ts": "lib",

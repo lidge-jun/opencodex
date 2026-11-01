@@ -990,6 +990,8 @@ Alternatively, supply the key yourself, for example by exporting `OPENCODEX_API_
 
 Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
 
+Automatic credentials also require a fresh ownership proof from the exact HTTP origin in the managed Codex provider configuration. A running proxy on a different port or loopback address does not authorize that destination. Direct clients use their saved server URL for this comparison. If the destinations differ, the launcher withholds the automatic token and leaves routing unchanged.
+
 The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS accepts deny-only and read-only allow ACLs, but refuses any allow entry granting write, append, delete, attribute/security changes or ownership changes, even after a deny entry. Unknown tags and inspection errors refuse.
 
 A fresh service token is loaded only when argv is within the allowlist below, the environment has no nonempty HTTP(S)/ALL proxy or `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` overrides (canonical `CODEX_HOME` is allowed), and the home/config/system namespaces pass ownership checks. The configuration must contain only audited keys and the exact managed loopback provider, with no additional credential consumers or configuration layers. Every unsupported argument, including `-c`/`--config`, `-p`/`--profile`, unknown flags and `resume`/`fork`, withholds the token with a value-free diagnostic; explicit user credentials and original arguments are preserved.
