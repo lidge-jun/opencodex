@@ -169,6 +169,7 @@ function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): v
   delete logCtx.affinityProviderName;
   delete logCtx.affinityModel;
   delete logCtx.cacheAffinityApplicable;
+  delete logCtx.terminalSource;
 }
 
 /**

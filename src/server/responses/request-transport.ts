@@ -87,7 +87,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { assignNativeLogConversationId, sessionIdHeaderFromRequest, sessionLaneIdFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -1201,7 +1201,7 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
-  const affinityLane = sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")) ?? (logCtx.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(logCtx.conversationId));
+  const affinityLane = affinityLaneFromRequest(req.headers, logCtx);
   if (affinityLane) logCtx.affinityLane = affinityLane;
   const proactiveKeyProvider = selectProactiveApiKeyTransport(
     config,
