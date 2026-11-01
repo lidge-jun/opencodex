@@ -15,6 +15,17 @@ OpenCodex デスクトップアプリはネイティブのトレイとウェブ�
 
 リリース版の `OpenCodex.app` は Developer ID で署名され、Apple による公証を受けています。そのため初回起動時、通常はダウンロードしたアプリの標準的な確認だけが表示されます。それでも macOS がブロックする場合は **System Settings → Privacy & Security → Open Anyway** を使ってください。
 
+#### Homebrew（デスクトップアプリ）
+
+Homebrew Cask を使ってデスクトップアプリをインストールすることもできます：
+
+```bash
+brew install --cask opencodex
+```
+
+- **アプリ内更新（`auto_updates`）**：デスクトップアプリには自動更新機能が組み込まれています。Cask は `auto_updates true` に設定されているため、アプリ内更新と `brew upgrade` が競合することなく連携します。
+- **CLI の個別インストール**：Cask がインストールするのは `OpenCodex.app` のみです。`ocx` CLI およびバックグラウンドプロキシサービスは別途インストールされ（npm またはリリースアーカイブ経由）、`~/.opencodex` の設定を共有します。
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi` をダウンロードしてインストーラーを実行します。まだコード署名されていないため、Windows SmartScreen が警告することがあります。リリースページからダウンロードしたことを確認してから **More info → Run anyway** を選んでください。

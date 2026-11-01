@@ -15,6 +15,17 @@ Kontrol paneli çözümlenen yerel proxy uç noktasından sunulur (varsayılan p
 
 `OpenCodex.app` sürüm derlemeleri Developer ID ile imzalanır ve Apple tarafından noterleştirilir. Dolayısıyla ilk açılışta macOS normalde yalnızca indirilen uygulamalar için standart onayı ister. macOS yine de engellerse **System Settings → Privacy & Security → Open Anyway** yolunu kullanın.
 
+#### Homebrew (masaüstü uygulaması)
+
+Masaüstü uygulamasını alternatif olarak Homebrew Cask ile de yükleyebilirsiniz:
+
+```bash
+brew install --cask opencodex
+```
+
+- **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulaması yerleşik bir güncelleyici içerir. Cask `auto_updates true` ile yapılandırılmıştır, böylece uygulama içi güncellemeler ile `brew upgrade` çakışma olmadan birlikte çalışır.
+- **CLI ayrımı**: Cask yalnızca `OpenCodex.app` uygulamasını kurar. `ocx` CLI ve arka plan proxy hizmeti ayrı olarak yüklenir (npm veya sürüm arşivleri aracılığıyla) ve `~/.opencodex` içindeki yapılandırmayı paylaşır.
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi` dosyasını indirip yükleyiciyi çalıştırın. Yükleyici henüz kod imzalı olmadığından Windows SmartScreen uyarı verebilir; sürüm sayfasından indirdiğinizi doğruladıktan sonra **More info → Run anyway** seçeneğini seçin.
