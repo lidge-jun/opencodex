@@ -838,6 +838,21 @@ describe("Kiro content-filter stop on a tool-less turn", () => {
         });
         expect(sends).toBe(1);
       });
+
+      test("/v1/responses non-streaming keeps the content-filter incomplete body", async () => {
+        const sends = await serve(async server => {
+          const response = await post(server, false);
+          expect(response.status).toBe(200);
+          const body = await response.json() as Record<string, any>;
+          // The buffered Responses wire keeps its incomplete body for a refusal (the shared contract in
+          // server-terminal-refusal-wiring.test.ts); partial text must not turn it into a completed
+          // response.
+          expect(body.status).toBe("incomplete");
+          expect(body.incomplete_details.reason).toBe("content_filter");
+          expect(body.error ?? null).toBeNull();
+        });
+        expect(sends).toBe(1);
+      });
     });
   }
 });
