@@ -205,7 +205,7 @@ export default function SubagentsWorkspace({
                     <button
                       type="button"
                       className={cn(
-                        "ui-v2 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-[8px] px-2.5 text-[12px] font-medium transition-colors",
+                        "ui-v2 inline-flex h-[var(--ocx-control-h-sm)] shrink-0 cursor-pointer items-center gap-1 rounded-[8px] px-2.5 text-[12px] font-medium transition-colors",
                         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight [&_svg]:size-3.5",
                         "disabled:cursor-not-allowed disabled:opacity-40",
                         isFeatured

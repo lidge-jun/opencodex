@@ -19,7 +19,9 @@ const VARIANTS = {
 
 const SIZES = {
   // Heights are the two control tokens (theme.css), shared with every v1 field and button.
-  sm: "h-[var(--ocx-control-h-sm)] gap-1.5 px-3 text-[13px]",
+  // In a row that holds a field or a select, bridge.css sets --ocx-row-control-h on the row's
+  // children so a small button matches its neighbour (foundations.md, "Control sizes").
+  sm: "h-[var(--ocx-row-control-h,var(--ocx-control-h-sm))] gap-1.5 px-3 text-[13px]",
   md: "h-[var(--ocx-control-h)] gap-2 px-4 text-[13px]",
   icon: "size-[var(--ocx-control-h)] p-0",
 } as const;

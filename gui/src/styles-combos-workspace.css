@@ -707,8 +707,7 @@
   margin-bottom: 4px;
 }
 
-.cwi-field .input,
-.cwi-field select.input {
+.cwi-field .input {
   width: 100%;
 }
 
@@ -772,11 +771,6 @@
   .cwi-target-row,
   .cwi-target-row--failover {
     grid-template-columns: 28px auto 1fr auto;
-  }
-
-  .cwi-target-row > .input:nth-child(3),
-  .cwi-target-row > .input:nth-child(4) {
-    grid-column: 3 / -1;
   }
 
   .cwi-target-row > .cwi-quota-badge {

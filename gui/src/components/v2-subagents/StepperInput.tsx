@@ -31,7 +31,7 @@ export function StepperInput({
   return (
     <span
       className={cn(
-        "ui-v2 inline-flex h-9 items-stretch overflow-hidden rounded-control bg-raised shadow-sm ring-1 ring-inset ring-line-strong",
+        "ui-v2 inline-flex h-[var(--ocx-control-h)] items-stretch overflow-hidden rounded-control bg-raised shadow-sm ring-1 ring-inset ring-line-strong",
         "transition-shadow focus-within:ring-2 focus-within:ring-highlight",
         "has-[input[aria-invalid=true]]:ring-danger",
         "has-[input:disabled]:opacity-60 has-[input[readonly]]:bg-surface",

@@ -112,7 +112,7 @@ function optionText(option: SelectOption): string {
  * because the browser paints it unstyled (grey, unreadable in dark mode).
  *
  * Sizing for form layouts: `fullWidth` fills the field like `.input`; `size="sm"` is the
- * compact 32px filter-bar control. `className` goes on the wrapper (layout hooks such as
+ * compact control (`--ocx-control-h-sm`, 28px) for filter bars. `className` goes on the wrapper (layout hooks such as
  * flex sizing), `triggerClassName` on the button. `required`/`name` keep native form
  * validation and submission through a visually hidden proxy input.
  */
@@ -387,7 +387,7 @@ export function Select({
         className={cn(
           "select-trigger",
           fullWidth && "w-full min-w-0 justify-between px-[11px] py-2 text-left",
-          size === "sm" && "h-8 px-2.5 py-0 text-[13px]",
+          size === "sm" && "h-[var(--ocx-control-h-sm)] min-h-0 px-2.5 py-0 text-[13px]",
           triggerClassName,
         )}
         onClick={() => {

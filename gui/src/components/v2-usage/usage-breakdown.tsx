@@ -130,7 +130,7 @@ export function UsageModelsTable({
         <label className="usw-section-toolbar relative m-0 flex w-full max-w-60 items-center">
           <span className="pointer-events-none absolute left-2.5 text-fg-subtle [&_svg]:size-3.5" aria-hidden="true"><IconSearch /></span>
           <input
-            className="input h-8 w-full rounded-control pl-8 text-[13px]"
+            className="input h-[var(--ocx-control-h)] w-full rounded-control pl-8 text-[13px]"
             aria-label={searchLabel}
             placeholder={searchLabel}
             value={modelQuery}

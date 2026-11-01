@@ -16,7 +16,7 @@ export function LiveToggle({ checked, onChange, label, title, className }: {
     <label
       title={title}
       className={cn(
-        "inline-flex h-8 shrink-0 cursor-pointer items-center gap-2 rounded-control px-2 text-[13px] font-medium text-fg-muted transition-colors select-none hover:bg-accent-soft hover:text-fg",
+        "inline-flex h-[var(--ocx-control-h)] shrink-0 cursor-pointer items-center gap-2 rounded-control px-2 text-[13px] font-medium text-fg-muted transition-colors select-none hover:bg-accent-soft hover:text-fg",
         className,
       )}
     >

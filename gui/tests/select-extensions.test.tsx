@@ -166,6 +166,7 @@ test("fullWidth fills the field and size sm is the compact filter control", asyn
   expect(wide!.className).toContain("w-full");
   expect(wide!.className).toContain("justify-between");
   expect(wide!.className).toContain("text-fg");
-  expect(small!.className).toContain("h-8");
+  // The compact size is the shared sm control height, not a height of its own.
+  expect(small!.className).toContain("h-[var(--ocx-control-h-sm)]");
   expect(small!.parentElement!.style.display).toBe("inline-block");
 });

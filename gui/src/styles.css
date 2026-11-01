@@ -1127,7 +1127,6 @@ a.btn, a.btn:hover { text-decoration: none; }
 .input:focus { border-color: var(--faint); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 textarea.input { resize: vertical; font-family: var(--font-code); line-height: var(--leading-relaxed); }
 .field-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); margin-bottom: 5px; display: block; }
-select.input { appearance: none; }
 .select-sm {
   padding: 6px 12px; border-radius: var(--radius-pill);
   background: color-mix(in oklab, canvas 75%, transparent);

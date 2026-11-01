@@ -488,8 +488,8 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-/* Native select popup safety net (see base.css): the opt-in has to outrank v1's
-   `select.input { appearance: none }`, so it lives here; the menu look stays in base. */
+/* Native select popup safety net (see base.css): the opt-in has to outrank any v1 rule
+   that sets `appearance` on a select, so it lives here; the menu look stays in base. */
 @supports (appearance: base-select) {
   select, select::picker(select) { appearance: base-select; }
 }
@@ -541,6 +541,12 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
 .select-sm { min-height: var(--ocx-control-h-sm); padding-block: 0; }
 :has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > .btn.btn-sm {
   min-height: var(--ocx-control-h);
+}
+/* The same pairing for v2 (Tailwind-sized) buttons: the row's direct children get the md
+   height in a non-inheriting property, which Button's sm size reads before its own token. */
+@property --ocx-row-control-h { syntax: "<length>"; inherits: false; }
+:has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > * {
+  --ocx-row-control-h: var(--ocx-control-h);
 }
 /* segmented tracks: 2px padding + (control - 4px) children = one control height */
 :is(.segmented, .usage-segmented, .cwi-strategy-seg, .section-switcher) > :is(button, .btn, .section-switcher-btn) {

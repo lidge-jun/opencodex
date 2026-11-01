@@ -15,7 +15,7 @@ import type { Range, UsageSurface } from "./usage-model";
  * the totals cover.
  */
 
-const SEGMENT_BUTTON = "h-7 gap-1.5 px-2.5 text-[13px]";
+const SEGMENT_BUTTON = "h-[calc(var(--ocx-control-h)-4px)] gap-1.5 px-2.5 text-[13px]";
 
 export function UsageFilters({
   surface,
@@ -103,7 +103,7 @@ export function UsageRangeToggle({ open, active, onToggle, t }: { open: boolean;
     <button
       type="button"
       className={cn(
-        "usage-range-toggle ui-v2 inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-control border-0 px-3 text-[13px] font-medium whitespace-nowrap",
+        "usage-range-toggle ui-v2 inline-flex h-[var(--ocx-control-h)] cursor-pointer items-center gap-1.5 rounded-control border-0 px-3 text-[13px] font-medium whitespace-nowrap",
         "transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-highlight",
         active || open
           ? "bg-raised text-fg shadow-sm ring-1 ring-inset ring-line-strong dark:bg-surface-2"
@@ -140,7 +140,7 @@ function RangeField({ label, value, invalid, describedBy, onChange }: {
   return (
     <label className="usage-range-field grid min-w-0 gap-1">
       <span className="field-label m-0 text-xs font-medium text-fg-muted">{label}</span>
-      <input className="input h-9" type="datetime-local" step="60" required
+      <input className="input h-[var(--ocx-control-h)]" type="datetime-local" step="60" required
         value={value}
         aria-invalid={invalid}
         aria-describedby={describedBy}

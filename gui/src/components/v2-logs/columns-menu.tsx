@@ -99,7 +99,7 @@ export function ColumnsMenu<K extends string>({ options, visible, onToggle, labe
               aria-checked={visible[option.key]}
               tabIndex={-1}
               onClick={() => onToggle(option.key)}
-              className="ui-v2 flex h-8 w-full cursor-pointer items-center gap-2 rounded-[6px] px-2 text-left text-[13px] text-fg hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+              className="ui-v2 flex h-[var(--ocx-control-h)] w-full cursor-pointer items-center gap-2 rounded-[6px] px-2 text-left text-[13px] text-fg hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
             >
               <span aria-hidden className="grid size-4 shrink-0 place-items-center text-fg">
                 {visible[option.key] && <IconCheck className="size-3.5" />}
