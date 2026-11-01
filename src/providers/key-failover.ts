@@ -21,6 +21,7 @@ import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPol
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
+import { ProviderApiKeyPausedError } from "./api-key-pause-state";
 // quota-key-accounts imports only node:crypto, the key store and the quota types -- NOT
 // providers/quota.ts -- so the cached reader reaches the dispatch path without dragging the
 // probe machinery onto it.
@@ -487,12 +488,14 @@ export function selectProactiveApiKey(
 ): OcxProviderConfig | null {
   const provider = config.providers?.[providerName];
   if (!provider) return null;
-  const strategy = provider.apiKeyPoolStrategy;
-  if (!strategy) return null;
   if (!hasKeyPoolFailover(provider)) return null;
   const pool = provider.apiKeyPool ?? [];
 
-  const activeEntry = pool.find(entry => entry.key === provider.apiKey);
+  const activeEntry = pool.find(entry => entry.key === provider.apiKey && !entry.disabled)
+    ?? pool.find(entry => entry.key === provider.apiKey);
+  const activeDisabled = Boolean(activeEntry?.disabled || (!provider.apiKey && pool.some(entry => entry.disabled)));
+  const strategy = provider.apiKeyPoolStrategy ?? (activeDisabled ? "fill-first" : undefined);
+  if (!strategy) return null;
   // A healthy committed key wins, whether the operator chose it or a previous rotation did.
   if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
 
@@ -521,7 +524,8 @@ export function selectProactiveApiKey(
     const target = freshPool.find(entry => entry.id === chosen.id);
     if (!target || target.disabled) return { changed: false, value: null };
     if (freshProvider.apiKey === target.key) return { changed: false, value: null };
-    const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey);
+    const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey && !entry.disabled)
+      ?? freshPool.find(entry => entry.key === freshProvider.apiKey);
     // Re-check under the lock: a concurrent manual selection may have landed a healthy key.
     if (freshActive && !freshActive.disabled && !isKeyInCooldown(providerName, freshActive.id, now)) {
       return { changed: false, value: null };
@@ -566,6 +570,7 @@ export function selectProactiveApiKeyTransport(
 const dispatchKeyCursor = new Map<string, string>();
 function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
   const pool = (provider.apiKeyPool ?? []).filter(entry => !entry.disabled).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
+  if (pool.length === 0) throw new ProviderApiKeyPausedError();
   const previous = dispatchKeyCursor.get(providerName);
   const start = pool.findIndex(entry => entry.id === previous);
   for (let offset = 1; offset <= pool.length; offset++) {
@@ -771,7 +776,8 @@ function rotateKeyAfterFailure(
       : pool.find(entry => entry.key === failedKey);
 
     if (freshProvider.apiKey !== failedKey) {
-      const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey);
+      const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey && !entry.disabled)
+        ?? pool.find(entry => entry.key === freshProvider.apiKey);
       if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) {
         return {
           changed: false,

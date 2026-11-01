@@ -109,7 +109,14 @@ distinct. A proxy admission bearer leaves managed Pool eligible: Pool replaces i
 credential, while Direct cannot forward it. A selected Pool authentication failure remains its own
 error rather than falling through to a separately billed keyed provider. The outbound Images send
 has one selected Authorization value, validated before the non-idempotent upstream POST.
-The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
+Images providers, including the default OpenAI API fallback, can recover a stale paused active key
+to an enabled pool entry inside the keyed branch. Audio and Live retain their strict snapshot
+selector; only Images opts in to deferred recovery. A fully paused pool never dispatches one of its
+keys. Implicit Images routing still tries eligible forward destinations and, for generations, CCA;
+if no alternative handles the request, the paused-pool error is 403 `permission_error`. An eligible
+alternative's own error retains its status, and an explicit custom provider remains fail-closed.
+The keyed path never
+enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
 returned clone rather than the earlier snapshot. Opt-in request-local round-robin uses that same selection seam and maps exhausted-key allocation to retryable 429. Genuine distributed 401/429 responses record the actual selected key cooldown, retaining Retry-After; synthetic replay refusals do not cool keys, and no paid POST is replayed. The standalone Images relay remains a single direct non-idempotent fetch outside the inference request-pacing executor; provider/key pacing limits do not cover that relay.
 

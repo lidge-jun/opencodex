@@ -13,6 +13,7 @@ import { GCP_CREDENTIAL_MARKER_PREFIX, isGcpCredentialMaterial, parseGcpCredenti
 import { invalidateResolvedProviderKeyCache, probeProviderKeychain, providerKeychainEntry } from "./api-key-resolve";
 import type { AccountQuotaFields } from "./quota-types";
 import { commitProviderApiKeySelection } from "./api-key-selection";
+import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { cleanupRemovedGcpCredentials } from "./gcp-credential-cleanup";
 
 export interface ProviderApiKeyInfo extends AccountQuotaFields {
@@ -204,6 +205,10 @@ export function sanitizeApiKeyValue(value: unknown): string | undefined {
 }
 
 /** Seed the pool from a legacy bare `apiKey`, and keep `apiKey` mirrored to the active entry. */
+export function providerHasStoredApiKey(provider: OcxProviderConfig): boolean {
+  return !!provider.apiKey || (isKeyAuthProvider(provider) && (provider.apiKeyPool?.length ?? 0) > 0);
+}
+
 function ensurePool(provider: OcxProviderConfig): NonNullable<OcxProviderConfig["apiKeyPool"]> {
   if (!provider.apiKeyPool) provider.apiKeyPool = [];
   if (provider.apiKeyPool.length === 0 && provider.apiKey) {
@@ -219,7 +224,7 @@ export function listProviderApiKeys(config: OcxConfig, name: string): { activeId
   const pool = provider.apiKeyPool?.length
     ? provider.apiKeyPool
     : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
-  const activeId = pool.find(entry => entry.key === provider.apiKey)?.id ?? null;
+  const activeId = captureProviderApiKeySelection({ ...provider, apiKeyPool: pool }).entryId ?? null;
   return {
     activeId,
     keys: pool.map(entry => ({
@@ -276,7 +281,8 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
               pool.push({ id, key: marker, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
             }
           }
-          fresh.apiKey = stored[0]!.marker;
+          const activeCandidate = stored.find(({ id }) => !pool.find(e => e.id === id)?.disabled);
+          if (activeCandidate) fresh.apiKey = activeCandidate.marker;
           return { changed: true, selectionChanged: true, value: stored[0]!.id };
         });
         if (committed.status === "committed") {
@@ -343,17 +349,24 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
   const committed = commitProviderApiKeySelection(config, name, provider => {
     const pool = provider.apiKeyPool?.length ? provider.apiKeyPool
       : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
+    const activeEntryIdBefore = captureProviderApiKeySelection({ ...provider, apiKeyPool: pool }).entryId;
     const entry = pool.find(e => e.id === id);
     if (!entry) return { changed: false, value: false };
+    const idx = pool.indexOf(entry);
     removed = entry.key;
     provider.apiKeyPool = pool.filter(e => e.id !== id);
-    if (provider.apiKey === entry.key) {
-      const next = provider.apiKeyPool.find(candidate => !candidate.disabled);
+    const hasEnabledSurvivor = provider.apiKeyPool.some(e => !e.disabled && e.key === entry.key);
+    if (provider.apiKey === entry.key && !hasEnabledSurvivor) {
+      const ordered = idx >= 0
+        ? [...provider.apiKeyPool.slice(idx), ...provider.apiKeyPool.slice(0, idx)]
+        : provider.apiKeyPool;
+      const next = ordered.find(candidate => !candidate.disabled);
       if (next) provider.apiKey = next.key;
       else delete provider.apiKey;
     }
     if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
-    return { changed: true, value: true };
+    const activeEntryIdAfter = captureProviderApiKeySelection(provider).entryId;
+    return { changed: true, selectionChanged: activeEntryIdBefore !== activeEntryIdAfter, value: true };
   });
   if (committed.status !== "committed" || !committed.value) return false;
   if (removed?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) cleanupRemovedGcpCredentials([removed]);

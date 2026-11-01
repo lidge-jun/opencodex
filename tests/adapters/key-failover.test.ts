@@ -119,6 +119,30 @@ describe("rotateKeyOn429", () => {
     } finally { unsubscribe(); }
   });
 
+  for (const status of [401, 429] as const) test(`a late ${status} only cools the attempted key when a healthy duplicate is selected`, () => {
+    const activeKey = "key-beta-444555666777";
+    const attemptedKey = "key-alpha-000111222333";
+    const config = makeConfig({
+      apiKey: activeKey,
+      apiKeyPool: [
+        { id: "attempted", key: attemptedKey },
+        { id: "next", key: "key-gamma-888999000111" },
+        { id: "paused-active-copy", key: activeKey, disabled: true },
+        { id: "active-copy", key: activeKey },
+      ],
+    });
+    const now = 1_000_000;
+
+    const result = status === 401
+      ? rotateKeyOn401(config, "p", now, attemptedKey)
+      : rotateKeyOn429(config, "p", null, now, attemptedKey);
+
+    expect(result?.apiKey).toBe(activeKey);
+    expect(config.providers.p.apiKey).toBe(activeKey);
+    expect(loadConfig().providers.p.apiKey).toBe(activeKey);
+    expect(getKeyCooldownUntil("p", "attempted", now)).not.toBeNull();
+  });
+
   test("manual and automatic selection events observe committed disk state", () => {
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const events: string[] = [];
@@ -540,6 +564,45 @@ describe("rotateKeyOn401", () => {
       // No cooldown recorded, so the committed key is healthy and must survive untouched.
       expect(selectProactiveApiKey(config, "p", now)).toBeNull();
       expect(config.providers.p.apiKey).toBe("key-alpha-000111222333");
+    });
+
+    test("keeps an enabled duplicate active when a paused row with the same key comes first", () => {
+      const config = makeConfig({
+        apiKey: "key-alpha-000111222333",
+        apiKeyPool: [
+          { id: "paused-copy", key: "key-alpha-000111222333", disabled: true },
+          { id: "other", key: "key-beta-444555666777" },
+          { id: "active-copy", key: "key-alpha-000111222333" },
+        ],
+      });
+
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+      expect(config.providers.p.apiKey).toBe("key-alpha-000111222333");
+      expect(config.providers.p.apiKeyPool?.find(entry => entry.id === "active-copy")?.disabled).toBeUndefined();
+    });
+
+    test("does not overwrite a healthy duplicate selected on disk during the locked recheck", () => {
+      const activeKey = "key-beta-444555666777";
+      const attemptedKey = "key-alpha-000111222333";
+      const config = makeConfig({
+        apiKey: attemptedKey,
+        apiKeyPool: [
+          { id: "attempted", key: attemptedKey },
+          { id: "next", key: "key-gamma-888999000111" },
+          { id: "paused-active-copy", key: activeKey, disabled: true },
+          { id: "active-copy", key: activeKey },
+        ],
+        apiKeyPoolStrategy: "round-robin",
+      });
+      forgetApiKeyRotationCursor("p");
+      rotateKeyOn429(config, "p", null, now, attemptedKey);
+      expect(setActiveProviderApiKey(config, "p", "active-copy")).toBe(true);
+      // Simulate a request holding its older in-memory snapshot while the transaction
+      // re-reads the healthy manual selection from persisted config.
+      config.providers.p.apiKey = attemptedKey;
+
+      expect(selectProactiveApiKey(config, "p", now)).toBeNull();
+      expect(loadConfig().providers.p.apiKey).toBe(activeKey);
     });
 
     test("moves off a committed key that is already cooling", () => {

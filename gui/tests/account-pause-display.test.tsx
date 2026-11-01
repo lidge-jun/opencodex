@@ -48,10 +48,47 @@ test.each(["fr", "ko"] as const)("provider OAuth and key tooltips use the app lo
       expect(win.document.querySelector(".badge-muted[title]")?.getAttribute("title")).toBe(expected);
       if (authMode === "key") {
         expect(win.document.querySelector(".pwi-auth-row-main")?.getAttribute("aria-label"))
-          .toBe(`${t("codexAuth.resume")} — Reserve key`);
+          .toBe(`${t("pws.resumeAndActivateKey")} — Reserve key`);
       }
     } finally { void win.happyDOM.close(); }
   }
+});
+
+test("API-key pool rows render dedicated Pause and Resume buttons when onPauseApiKey is supplied", () => {
+  const locale = "en";
+  const t = translator(locale);
+  const item = { name: "google-vertex", authMode: "key", adapter: "google", hasApiKey: true } as WorkspaceItem;
+  const win = render(<ProviderAuthPanel item={item} apiBase="" oauth={{ loggedIn: false }}
+    authHandlers={{ ...handlers, onPauseApiKey() {} }}
+    keys={[
+      { id: "k1", label: "Primary Vertex", masked: "AIza****1111", active: true, disabled: false },
+      { id: "k2", label: "Backup Vertex", masked: "AIza****2222", active: false, disabled: true, pauseDetails: details },
+    ]} />, locale);
+  try {
+    const buttons = Array.from(win.document.querySelectorAll("button")).map(btn => btn.getAttribute("aria-label")).filter(Boolean);
+    expect(buttons).toContain(`${t("codexAuth.pause")} — Primary Vertex`);
+    expect(buttons).toContain(`${t("codexAuth.resume")} — Backup Vertex`);
+    expect(buttons).toContain(`${t("pws.resumeAndActivateKey")} — Backup Vertex`);
+    expect(win.document.body.textContent).toContain(t("pws.accountPausedHint"));
+  } finally { void win.happyDOM.close(); }
+});
+
+test("API-key pool rows display switching badge and disable buttons when switchingAccountId matches", () => {
+  const locale = "en";
+  const t = translator(locale);
+  const item = { name: "google-vertex", authMode: "key", adapter: "google", hasApiKey: true } as WorkspaceItem;
+  const win = render(<ProviderAuthPanel item={item} apiBase="" oauth={{ loggedIn: false }}
+    authHandlers={{ ...handlers, onPauseApiKey() {} }}
+    switchingAccountId="k2"
+    keys={[
+      { id: "k1", label: "Primary Vertex", masked: "AIza****1111", active: true, disabled: false },
+      { id: "k2", label: "Backup Vertex", masked: "AIza****2222", active: false, disabled: true, pauseDetails: details },
+    ]} />, locale);
+  try {
+    expect(win.document.body.textContent).toContain(t("pws.accountSwitching"));
+    const buttons = Array.from(win.document.querySelectorAll(".pwi-auth-row button"));
+    expect(buttons.every(btn => btn.hasAttribute("disabled"))).toBe(true);
+  } finally { void win.happyDOM.close(); }
 });
 
 test("Codex tooltip shares the translated reason and app locale date", () => {
