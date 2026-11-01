@@ -174,10 +174,15 @@ export function sanitizeReasoningInputContent(
 
 /** Assistant-authored history items: what DeepSeek merges into one assistant message. */
 function isAssistantTurnItem(item: unknown): boolean {
-  if (!isPlainObject(item) || typeof item.type !== "string") return false;
-  if (item.type === "reasoning") return true;
-  if (item.type === "message") return item.role === "assistant";
-  return item.type.endsWith("_call");
+  if (!isPlainObject(item)) return false;
+  // Responses input accepts the message shorthand without `type`. ZCode sends its assistant
+  // text that way, directly ahead of the same turn's function calls; reading only a typed
+  // `message` would split the turn and place the placeholder backfill after the text, which
+  // DeepSeek refuses with the same reasoning_text 400.
+  const type = typeof item.type === "string" ? item.type : "role" in item ? "message" : undefined;
+  if (type === "reasoning") return true;
+  if (type === "message") return item.role === "assistant";
+  return type?.endsWith("_call") === true;
 }
 
 function isClientToolCallItem(item: unknown): boolean {

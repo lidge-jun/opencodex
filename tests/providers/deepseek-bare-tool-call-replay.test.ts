@@ -35,6 +35,14 @@ describe("backfillBareToolCallTurnReasoning (#7298)", () => {
     expect(backfillBareToolCallTurnReasoning(input)).toBe(input);
   });
 
+  test("a shorthand assistant message without `type` stays inside its tool-call turn", () => {
+    const shorthand: Item = { role: "assistant", content: [{ type: "output_text", text: "checking" }] };
+    const input = [user("go"), shorthand, call("c1"), output("c1")];
+    expect(backfillBareToolCallTurnReasoning(input)).toEqual([
+      user("go"), PLACEHOLDER, shorthand, call("c1"), output("c1"),
+    ]);
+  });
+
   test("custom tool calls count as tool calls", () => {
     const custom: Item = { type: "custom_tool_call", call_id: "p1", name: "apply_patch", input: "*** Begin" };
     const customOutput: Item = { type: "custom_tool_call_output", call_id: "p1", output: "ok" };
@@ -67,6 +75,16 @@ describe("DeepSeek Responses wire receives a replayable reasoning item for a for
   test("a GPT-issued bare call reaches DeepSeek preceded by reasoning_text", () => {
     const wire = build([user("weather?"), call("c1"), output("c1")], "deepseek");
     expect(wire.map(item => item.type)).toEqual(["message", "reasoning", "function_call", "function_call_output"]);
+    expect(wire[1]!.content).toEqual([{ type: "reasoning_text", text: " " }]);
+  });
+
+  test("ZCode's untyped assistant text keeps the placeholder ahead of the text", () => {
+    const shorthand: Item = { role: "assistant", content: [{ type: "output_text", text: "let me check" }] };
+    const wire = build([user("weather?"), shorthand, call("c1"), output("c1")], "deepseek");
+    expect(wire.map(item => item.type)).toEqual([
+      "message", "reasoning", undefined, "function_call", "function_call_output",
+    ]);
+    expect(wire[2]).toMatchObject({ role: "assistant" });
     expect(wire[1]!.content).toEqual([{ type: "reasoning_text", text: " " }]);
   });
 });
