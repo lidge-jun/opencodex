@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { normalizeV2Status, type V2Status } from "../src/pages/models-shared";
 
 const modelsSource = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 const workspaceCss = await Bun.file(new URL("../src/styles-models-workspace.css", import.meta.url)).text();
@@ -63,9 +64,25 @@ test("v2 setting writes adopt the response instead of a no-op refetch", () => {
   expect(helperAt).toBeGreaterThan(-1);
 
   const helper = modelsSource.slice(helperAt, modelsSource.indexOf("const setMultiAgentMode"));
-  expect(helper).toContain("setV2({");
-  expect(helper).toContain("keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true");
+  // The PUT response reaches state through the same normalizer loadV2 uses; an inline
+  // copy here is exactly the kind of drift the shared helper exists to prevent.
+  expect(helper).toContain("setV2(normalizeV2Status(data))");
   expect(helper).not.toContain("void loadV2()");
+});
+
+/**
+ * The switch reads `v2.keepNativeChatGptOnV1` out of state, so the value the server
+ * persisted in the write response has to survive normalization into that state.
+ */
+test("response normalization persists keep-native-v1 exactly as the server returned it", () => {
+  const base = { enabled: false, agentsMaxThreadsConflict: false, multiAgentMode: "v2" as const };
+
+  expect(normalizeV2Status({ ...base, keepNativeChatGptOnV1: true }).keepNativeChatGptOnV1).toBe(true);
+  expect(normalizeV2Status({ ...base, keepNativeChatGptOnV1: false }).keepNativeChatGptOnV1).toBe(false);
+  // An older runtime omits the field; state must come out off, not stale-truthy.
+  expect(normalizeV2Status(base).keepNativeChatGptOnV1).toBe(false);
+  // A malformed value cannot mint the setting.
+  expect(normalizeV2Status({ ...base, keepNativeChatGptOnV1: "yes" } as unknown as V2Status).keepNativeChatGptOnV1).toBe(false);
 });
 
 test("both v2 surface setters route through the shared writer", () => {

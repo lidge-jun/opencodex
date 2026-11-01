@@ -9,7 +9,7 @@ import { rememberResponseState, clearResponseStateForTests } from "../../src/res
 import { admitWorkflowTurn, workflowBudgetSnapshot, resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { beginRequestAttempt, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
-import { handleResponses } from "../../src/server/responses";
+import { handleOwnedResponses as handleResponses, ownedResponseStateOptions } from "../helpers/response-replay-owner";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -67,7 +67,7 @@ async function probe(options: {
     if (options.previous) rememberResponseState(
       { model: "mock/test", input: "earlier", store: true },
       { id: "resp_translated_prior", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "prior answer" }] }], status: "completed" },
-      undefined, { clientThreadId: root },
+      undefined, ownedResponseStateOptions(),
     );
     if (options.oauth) {
       clearGenericFailoverHealth();

@@ -4,6 +4,7 @@ import type { OcxConfig } from "../../src/types";
 import { createWebsocketHandler } from "../../src/server/index/websocket-handler";
 import type { ServeOptionsContext } from "../../src/server/index/serve-options";
 import type { WsData } from "../../src/server/ws-bridge";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import { clearRequestLogsForTests } from "../../src/server/request-log";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { acquireOwnedSpendHome } from "./owned-spend-home";
@@ -58,11 +59,13 @@ export const waitForInjection = async (condition: () => boolean) => {
   for (let i = 0; i < 1000; i++) { if (condition()) return; await Bun.sleep(1); }
   throw new Error("injection fixture condition timed out");
 };
-export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
+export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test", admission?: DataPlaneAdmission) {
   releaseSpendHome ??= acquireOwnedSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
-  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" }) } as WsData,
+  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" }),
+    ...(admission ? { admission } : {}),
+  } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws, 1000, "fixture close"); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
@@ -71,8 +74,8 @@ export function injectionClient(fields: Frame = {}, settings = injectionConfig()
     tools: [{ type: "function", name: "get_value", parameters: { type: "object", properties: {} } }], ...fields });
   return { ws, sent, send, handler };
 }
-export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
-  const client = injectionClient(fields, settings, credential);
+export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test", admission?: DataPlaneAdmission) {
+  const client = injectionClient(fields, settings, credential, admission);
   await waitForInjection(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = InjectionSocket.all.at(-1)!;
   expect(socket).toBeDefined();

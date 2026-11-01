@@ -26,7 +26,8 @@ import {
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
-import type { SubagentSurfaceAdvisory } from "../subagent-surface";
+import { confirmsPlaintextV2Mode } from "../subagent-surface";
+import type { SubagentSurfaceAdvisory, SubagentSurfaceMode } from "../subagent-surface";
 import {
   type DashboardSection,
   type HealthData,
@@ -75,7 +76,7 @@ type CachedOverview = {
   providers: ProviderInfo[];
 };
 
-type MaMode = "v1" | "default" | "v2";
+type MaMode = SubagentSurfaceMode;
 
 type CodexPreference = "codexAutoStart" | "codexDesktopAuthless" | "codexClientCompaction";
 type DashboardSettingsState = {
@@ -198,10 +199,12 @@ const [maBusy, setMaBusy] = useState(false);
    */
   const [maAdvisoryState, setMaAdvisoryState] = useState<{ advisory: SubagentSurfaceAdvisory | null; apiBase: string } | null>(null);
   const [maAdvisoryAnsweredFor, setMaAdvisoryAnsweredFor] = useState<string | null>(null);
-  const [pendingMaModeState, setPendingMaModeState] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
+  const [pendingMaModeState, setPendingMaModeState] = useState<{ mode: Exclude<MaMode, "v1">; apiBase: string } | null>(null);
   const maAdvisory = maAdvisoryState?.apiBase === apiBase ? maAdvisoryState.advisory : null;
   const maAdvisoryAnswered = maAdvisoryAnsweredFor === apiBase;
   const pendingMaMode = pendingMaModeState?.apiBase === apiBase ? pendingMaModeState.mode : null;
+  // Same endpoint tag: a capability read on one server must not offer the fourth option on another.
+  const [maPlaintextSupportState, setMaPlaintextSupportState] = useState<{ supports: boolean; apiBase: string } | null>(null);
  const [maHelpOpen, setMaHelpOpen] = useState(false);
   const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
   const [shadowCallHelpOpen, setShadowCallHelpOpen] = useState(false);
@@ -399,8 +402,16 @@ const [maBusy, setMaBusy] = useState(false);
     if (maModePoll.data === undefined) return;
     setMaMode(maModePoll.data.maMode);
     setMaAdvisoryState({ advisory: maModePoll.data.advisory ?? null, apiBase });
+    setMaPlaintextSupportState({ supports: maModePoll.data.supportsPlaintextV2, apiBase });
     writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
   }, [maModePoll.data, apiBase]);
+
+  // The runtime advertises the fourth mode with supportsPlaintextV2Mode, proven per
+  // apiBase by the live poll. A cached 'v2-plaintext' still renders as the stored
+  // selection, but it cannot prove this server accepts the write — the same apiBase
+  // may have been downgraded or replaced — so the option follows support only.
+  const maSupportsPlaintextV2 =
+    maPlaintextSupportState?.apiBase === apiBase && maPlaintextSupportState.supports === true;
 
   // Derived — avoids setState-on-prop-change for the resolved flag. Cache / poll / optimistic
   // save (which writes the same cache key) all count as resolved for MA UI.
@@ -641,19 +652,40 @@ const [maBusy, setMaBusy] = useState(false);
     }
   }
 
-  const writeMaMode = async (mode: "v1" | "default" | "v2", acknowledgeAdvisory = false) => {
+  const writeMaMode = async (
+    mode: MaMode,
+    acknowledgeAdvisory = false,
+    acknowledgePlaintext = false,
+  ) => {
     setMaBusy(true);
     setMaError(null);
     try {
-      const payload: { multiAgentMode: "v1" | "default" | "v2"; multiAgentSurfaceAdvisoryAcknowledged?: true } = { multiAgentMode: mode };
+      const payload: {
+        multiAgentMode: MaMode;
+        multiAgentSurfaceAdvisoryAcknowledged?: true;
+        plaintextAgentMessagesAcknowledged?: true;
+      } = { multiAgentMode: mode };
       // One request, so the recommended answer cannot leave the notice raised on a mode it applied.
       if (acknowledgeAdvisory) payload.multiAgentSurfaceAdvisoryAcknowledged = true;
+      // 'v2-plaintext' is rejected without the dedicated consent; the checkbox in
+      // PlaintextV2ConsentModal is what proved it before this write ran.
+      if (acknowledgePlaintext) payload.plaintextAgentMessagesAcknowledged = true;
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (r.ok) {
+        if (mode === "v2-plaintext") {
+          // Claim the mode only when the receipt proves it landed: the catalog pin is
+          // V2 while the global override must stay OFF. A 200 without those fields
+          // means an older or replaced proxy answered — keep the stored selection.
+          let confirmed = false;
+          try { confirmed = confirmsPlaintextV2Mode(await r.json()); } catch { /* unreadable receipt */ }
+          if (!confirmed) { setMaError(t("models.saveFailed")); return; }
+          // A confirmed write proves this apiBase supports the mode until the next poll.
+          setMaPlaintextSupportState({ supports: true, apiBase });
+        }
         setMaMode(mode);
         if (acknowledgeAdvisory) setMaAdvisoryAnsweredFor(apiBase);
         writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
@@ -671,11 +703,11 @@ const [maBusy, setMaBusy] = useState(false);
     finally { setMaBusy(false); }
   };
 
-  const switchMaMode = async (mode: "v1" | "default" | "v2") => {
+  const switchMaMode = async (mode: MaMode) => {
     if (maBusy || maMode === mode) return;
     // v1 applies immediately: confirming a move toward the safe default would be noise. base
     // and v2 both put ChatGPT-native parents on the surface whose task a routed child cannot
-    // read, so they wait for an answer.
+    // read, so they wait for an answer; 'v2-plaintext' waits for its dedicated consent modal.
     if (mode !== "v1") { setPendingMaModeState({ mode, apiBase }); return; }
     await writeMaMode("v1");
   };
@@ -702,6 +734,9 @@ const [maBusy, setMaBusy] = useState(false);
   const keepMaMode = async () => {
     const pending = pendingMaMode;
     setPendingMaModeState(null);
+    // 'v2-plaintext' writes with its dedicated acknowledgement in a single PUT — the mode
+    // itself records the consent, and the runtime rejects the write without the field.
+    if (pending === "v2-plaintext") { await writeMaMode(pending, false, true); return; }
     // A selection answers the advisory too. Without that, continuing to base or v2 leaves the
     // notice raised and the next poll asks the same question the operator just answered.
     // Unconditionally, not gated on the poll's current `required`: that projection goes false
@@ -944,6 +979,7 @@ const [maBusy, setMaBusy] = useState(false);
     sidecarSaving, shadowCallSaving, shadowCallError, modelsLoading, settingsSaving, syncing,
 maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
    maError,
+    maSupportsPlaintextV2,
     maAdvisory, maAdvisoryOpen, pendingMaMode, keepMaMode, chooseMaV1, dismissMaSurfaceDialog,
    effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,

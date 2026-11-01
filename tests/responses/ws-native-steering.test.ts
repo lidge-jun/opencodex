@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 import type { OcxConfig } from "../../src/types";
 import { createWebsocketHandler } from "../../src/server/index/websocket-handler";
 import type { ServeOptionsContext } from "../../src/server/index/serve-options";
+import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../../src/server/auth-cors";
 import { NativeSteeringChannel, MAX_NATIVE_STEERS, validateSteeringFrame } from "../../src/server/responses/native-steering";
 import { NativeSteeringReplay, MAX_NATIVE_STEERING_REPLAY_BYTES, nativeControlReplayRetainedStoreSnapshot, setNativeControlReplayTotalCapForTests } from "../../src/server/responses/native-steering-replay";
 import { NativeInjectionReplay } from "../../src/server/responses/native-injection-replay";
@@ -58,11 +59,13 @@ const waitFor = async (condition: () => boolean) => {
   for (let i = 0; i < 1000; i++) { if (condition()) return; await Bun.sleep(1); }
   throw new Error("fixture condition timed out");
 };
-function downstream(fields: Frame = {}, settings = config(), credential = "test") {
+function downstream(fields: Frame = {}, settings = config(), credential = "test", admission?: DataPlaneAdmission) {
   releaseSpendHome ??= acquireOwnedSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
-  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `fixture-${credential}`, session_id: `fixture-${credential}` }) } as WsData,
+  const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `fixture-${credential}`, session_id: `fixture-${credential}` }),
+    ...(admission ? { admission } : {}),
+  } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
@@ -70,8 +73,8 @@ function downstream(fields: Frame = {}, settings = config(), credential = "test"
   send({ type: "response.create", model: "gpt-5.5", input: "initial", ...fields });
   return { ws, sent, send, handler };
 }
-async function begin(fields: Frame = {}, credential = "test") {
-  const client = downstream(fields, config(), credential);
+async function begin(fields: Frame = {}, credential = "test", settings = config(), admission?: DataPlaneAdmission) {
+  const client = downstream(fields, settings, credential, admission);
   await waitFor(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = Socket.all.find(s => s.options.headers.authorization === `Bearer ${credential}`)!;
   expect(socket).toBeDefined();
@@ -192,7 +195,15 @@ test("pending results use one same-account/lane create and never replay accepted
 });
 
 test("subsequent ordinary turns retain committed steering through the scoped replay cache", async () => {
-  const { ws, socket, send, id, sent } = await begin();
+  const settings = config();
+  const localKey = "synthetic-native-steering-replay-owner";
+  settings.apiKeys = [{ id: "native-steering-replay-owner", key: localKey,
+    name: "Native steering replay owner", createdAt: "2026-10-01T00:00:00.000Z" }];
+  const admission = resolveDataPlaneAdmissionSecret(localKey, settings);
+  expect(admission).not.toBeNull();
+  // This direct handler fixture supplies verified local admission separately from
+  // the upstream bearer; the socket's own thread stays the same for both turns.
+  const { ws, socket, send, id, sent } = await begin({}, "test", settings, admission!);
   send({ type: "response.steer", previous_response_id: id, input: "committed instruction" });
   accept(socket, id); complete(socket, id);
   socket.emit({ type: "response.created", response: { id: "cached-successor", previous_response_id: id } });

@@ -498,8 +498,11 @@ Retrying only the same ID cannot recover missing state.
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
-exists. Retry with the complete conversation and omit `previous_response_id`; matching scopes and
-legacy continuations where both scopes are absent or blank continue to replay normally.
+exists. Local replay requires the same admitted OpenCodex caller and the request's own nonblank
+`thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
+that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
+conversation without `previous_response_id`. The default loopback Codex and DSH configurations
+do not establish that caller identity. This is separate from native upstream-owned Responses IDs.
 
 The same recovery signal applies to every routed destination, because only the native Responses
 passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`

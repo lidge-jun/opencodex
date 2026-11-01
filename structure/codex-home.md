@@ -418,7 +418,7 @@ this ceiling for up to `RESPONSE_SPILL_ORPHAN_GRACE_MS` past each crash. Without
 directory was limited only per file (256 MiB) and per entry (1000) — a 250 GiB product — which
 left `RESPONSE_TTL_MS` as the only effective limit and made disk use a function of client
 request rate rather than of anything the process controls. The durable snapshot that
-re-establishes these references after a restart is budgeted too, and its bounded stub and
+re-establishes file references after a restart (not caller replay authority; see the [Responses retention contract](transports/responses.md)) is budgeted too, and its bounded stub and
 tombstone rows are selected before resident payloads under that budget, so a full resident
 cohort cannot crowd a spill reference out of `responses-state.json` and strand a file the
 store still owns.
