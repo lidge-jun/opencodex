@@ -574,18 +574,18 @@ export async function prepareResponsesTransport(
     // Capture this physical adapter's destination. A retry/rebind gets a fresh decision, and
     // each build projects a copy so unselected fallbacks retain the original tool catalog.
     const discovery = options.anthropicToolLoadingSource;
-    const appendOnly = inboundWire === "anthropic" && discovery && provider.adapter === "openai-responses"
+    // Shared by both direct-route opt-ins: combo attempts and policy-owned requests keep the
+    // original catalog.
+    const directToolLoadingRoute = inboundWire === "anthropic"
       && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
-      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
-      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
-        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility;
+    const wireModel = `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`;
+    const appendOnly = discovery && directToolLoadingRoute && provider.adapter === "openai-responses"
+      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels, wireModel);
     // The Chat wire has no additional_tools; its own opt-in keeps the catalog stable through a
     // dispatcher instead, projected and un-projected at this one physical adapter (#7452).
-    const chatDispatch = inboundWire === "anthropic" && discovery && provider.adapter === "openai-chat"
-      && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
-      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
-      && appendOnlyToolLoadingMatches(config.claudeCode?.chatToolDispatchModels,
-        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+    const chatDispatch = discovery && directToolLoadingRoute && provider.adapter === "openai-chat"
+      && appendOnlyToolLoadingMatches(config.claudeCode?.chatToolDispatchModels, wireModel);
     if (chatDispatch) applyChatToolDispatch(resolved, discovery);
     if (appendOnly) {
       const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
