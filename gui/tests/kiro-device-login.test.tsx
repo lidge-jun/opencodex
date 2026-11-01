@@ -4,6 +4,7 @@ import { act, createRef, useEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import KiroDeviceLoginDialog from "../src/components/KiroDeviceLoginDialog";
+import { kiroVerificationLink } from "../src/kiro-device-login-helpers";
 import { useKiroDeviceLogin } from "../src/components/use-kiro-device-login";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
@@ -109,6 +110,37 @@ test("chooser starts native login, shows code and safe link, then confirms done"
   await tick();
   expect(settled).toEqual(["added"]);
   expect(host.textContent).toContain("Kiro account added");
+  expect(closed).toBeGreaterThan(0);
+});
+
+test("a success carrying a warning stays open and offers Close, not Cancel", async () => {
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending")) : json(view("done", { warning: "duplicate_profile_arn" }));
+  await mountDialog(); await start(); await tick();
+  expect(closed).toBe(0);
+  expect(host.textContent).toContain("already in the account list");
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
+});
+
+test("IAM region starts empty and suggests AWS regions without limiting the field to them", async () => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  const region = host.querySelector<HTMLInputElement>('input[id$="-region"]')!;
+  expect(region.value).toBe("");
+  const options = [...host.querySelectorAll(`datalist[id="${region.getAttribute("list")}"] option`)];
+  expect(options.find(option => option.getAttribute("value") === "eu-central-1")?.getAttribute("label")).toBe("Europe (Frankfurt)");
+  await iamInput("https://example.awsapps.com/start", "eu-west-9"); await submitIamForm();
+  expect(JSON.parse(String(requests[0]!.init?.body)).region).toBe("eu-west-9");
+});
+
+test("an Identity Center access portal is a link only on an IAM flow", async () => {
+  const portal = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-1234";
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending", { method: "iam-identity-center", verificationUriComplete: portal })) : json(view("cancelled"));
+  await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm();
+  expect(host.querySelector(`a[href="${portal}"]`)).not.toBeNull();
+  expect(host.textContent).not.toContain("Unexpected verification host");
+  expect(kiroVerificationLink(portal)).toBeNull();
+  expect(kiroVerificationLink("https://d-1234567890.awsapps.com/other", "iam-identity-center")).toBeNull();
 });
 
 test("IAM collects portal and region before starting and accepts regional AWS verification links", async () => {

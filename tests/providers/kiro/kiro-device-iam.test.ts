@@ -19,6 +19,8 @@ function transport(email = "first@example.test", profiles = [profile]) {
     if (url.endsWith("/client/register")) return response({ clientId: "id", clientSecret: "private-client-secret" });
     if (url.endsWith("/device_authorization")) return response(authorization);
     if (url.endsWith("/token")) return response({ accessToken: "private-access", refreshToken: `private-refresh-${email}`, expiresIn: 3600 });
+    // AWS answers an oversized page with 400; a permissive mock let maxResults: 50 ship.
+    if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles") && Number(body.maxResults) > 10) return response({ __type: "ValidationException" }, 400);
     if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles")) return response({ profiles: url.includes("us-east-1") ? profiles : [] });
     if (headers?.["x-amz-target"]?.endsWith("GetUsageLimits")) return response({ userInfo: { email, userId: "user-id" } });
     throw new Error("Unexpected upstream request");

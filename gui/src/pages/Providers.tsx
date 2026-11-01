@@ -15,7 +15,7 @@ import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
-import type { ProvidersConfig } from "./providers-shared";
+import { providerModelsSettled, type ProvidersConfig } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
@@ -346,9 +346,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const fetchConfig = useCallback(async () => { await refreshConfigResult(); }, [refreshConfigResult]);
   const modelsNotice = useProviderModelsNotice(apiBase, refreshConfigResult);
   const openModelsNotice = modelsNotice.open;
+  const settledConfigRef = useRef(config);
+  useEffect(() => { settledConfigRef.current = config; }, [config]);
   const onProviderLoginSettled = useCallback((provider: string) => {
     revealProviderAccounts(provider);
-    openModelsNotice(provider, false);
+    if (!providerModelsSettled(settledConfigRef.current, provider)) openModelsNotice(provider, false);
   }, [revealProviderAccounts, openModelsNotice]);
 
   // WP3: one Codex account controller for the whole Providers page, shared by the
