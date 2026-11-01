@@ -30,7 +30,7 @@ brew install --cask opencodex
 ```
 
 - **In-app updates (`auto_updates`)**: The desktop app includes a built-in updater. The Cask is configured with `auto_updates true` so in-app updates and `brew upgrade` work together without conflict.
-- **CLI separation**: The Cask installs `OpenCodex.app` only. The `ocx` CLI and background proxy service are installed separately (via npm or release archives) and share configuration in `~/.opencodex`.
+- **CLI and background service**: The Cask installs `OpenCodex.app` only, which bundles its own CLI and proxy runtime. If you prefer a standalone CLI or headless daemon, you can optionally install `ocx` separately (via npm or release archives) and run `ocx service install`; both share configuration in `~/.opencodex`.
 
 ### Windows
 

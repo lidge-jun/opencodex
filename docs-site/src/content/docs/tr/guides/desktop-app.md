@@ -24,7 +24,7 @@ brew install --cask opencodex
 ```
 
 - **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulaması yerleşik bir güncelleyici içerir. Cask `auto_updates true` ile yapılandırılmıştır, böylece uygulama içi güncellemeler ile `brew upgrade` çakışma olmadan birlikte çalışır.
-- **CLI ayrımı**: Cask yalnızca `OpenCodex.app` uygulamasını kurar. `ocx` CLI ve arka plan proxy hizmeti ayrı olarak yüklenir (npm veya sürüm arşivleri aracılığıyla) ve `~/.opencodex` içindeki yapılandırmayı paylaşır.
+- **CLI ve arka plan hizmeti**: Cask yalnızca `OpenCodex.app` uygulamasını kurar (kendi CLI ve proxy çalışma zamanını paketinde barındırır). Masaüstü uygulaması yerine bağımsız bir CLI veya arayüzsüz bir arka plan hizmeti isterseniz, isteğe bağlı olarak `ocx` paketini ayrıca yükleyebilir (npm veya sürüm arşivleri aracılığıyla) ve hizmeti kaydetmek için `ocx service install` çalıştırabilirsiniz; her ikisi de `~/.opencodex` içindeki yapılandırmayı paylaşır.
 
 ### Windows
 

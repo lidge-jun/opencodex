@@ -24,7 +24,7 @@ brew install --cask opencodex
 ```
 
 - **內建更新（`auto_updates`）**：桌面應用程式具備內建更新機制。Cask 設定了 `auto_updates true`，內建更新與 `brew upgrade` 可協同運作而不致衝突。
-- **CLI 獨立安裝**：此 Cask 僅安裝 `OpenCodex.app`。`ocx` CLI 與背景代理服務需另外安裝（透過 npm 或版本發布封包），並共用 `~/.opencodex` 的設定。
+- **CLI 與背景服務**：此 Cask 僅安裝 `OpenCodex.app`（其內部已隨附 CLI 與 proxy 執行環境）。若需獨立使用命令列或無前端的背景常駐服務，可額外安裝獨立的 `ocx`（透過 npm 或版本發布封包）並執行 `ocx service install` 註冊服務；兩者共用 `~/.opencodex` 的設定。
 
 ### Windows
 

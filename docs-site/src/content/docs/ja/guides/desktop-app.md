@@ -24,7 +24,7 @@ brew install --cask opencodex
 ```
 
 - **アプリ内更新（`auto_updates`）**：デスクトップアプリには自動更新機能が組み込まれています。Cask は `auto_updates true` に設定されているため、アプリ内更新と `brew upgrade` が競合することなく連携します。
-- **CLI の個別インストール**：Cask がインストールするのは `OpenCodex.app` のみです。`ocx` CLI およびバックグラウンドプロキシサービスは別途インストールされ（npm またはリリースアーカイブ経由）、`~/.opencodex` の設定を共有します。
+- **CLI とバックグラウンドサービス**：Cask がインストールするのは `OpenCodex.app` のみです（内部に CLI とプロキシランタイムを同梱しています）。デスクトップアプリを使わずにスタンドアロンの CLI やヘッドレスデーモンを利用したい場合は、別途 `ocx` をインストール（npm またはリリースアーカイブ経由）して `ocx service install` でサービスを登録できます。設定は `~/.opencodex` で共有されます。
 
 ### Windows
 

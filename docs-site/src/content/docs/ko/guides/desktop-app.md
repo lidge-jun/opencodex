@@ -24,7 +24,7 @@ brew install --cask opencodex
 ```
 
 - **인앱 업데이트 (`auto_updates`)**: 데스크톱 앱에는 자체 업데이트 기능이 내장되어 있습니다. Cask에 `auto_updates true`가 설정되어 있어 인앱 업데이트와 `brew upgrade`가 충돌 없이 함께 동작합니다.
-- **CLI 분리**: 해당 Cask는 `OpenCodex.app`만 설치합니다. `ocx` CLI와 백그라운드 프록시 서비스는 별도로 설치되며(npm 또는 릴리스 아카이브), `~/.opencodex`의 설정을 공유합니다.
+- **CLI 및 백그라운드 서비스**: 해당 Cask는 `OpenCodex.app`만 설치합니다(앱 내에 자체 CLI 및 프록시 런타임이 번들되어 있습니다). 데스크톱 앱 대신 독립형 CLI나 헤드리스 데몬을 사용하려는 경우 별도로 `ocx`를 설치(npm 또는 릴리스 아카이브)한 후 `ocx service install`을 실행하여 서비스를 등록할 수 있으며, 두 환경은 `~/.opencodex` 설정을 공유합니다。
 
 ### Windows
 
