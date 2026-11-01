@@ -7,6 +7,8 @@ export type KiroIamReply = (url: string, body: Record<string, unknown>, headers?
 const REGION = /^(?:af|ap|ca|eu|il|me|mx|sa|us)-(?:central|east|north|northeast|northwest|south|southeast|southwest|west)-[1-9][0-9]?$/;
 const CONTROL = /[\u0000-\u0020\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
 const PROFILE = /^arn:aws:codewhisperer:([a-z0-9-]+):\d{12}:profile\/[A-Za-z0-9-]+$/;
+// AWS rejects a larger page with 400 ValidationException, in every region.
+const PROFILE_PAGE_SIZE = 10;
 // The AWS CLI profile client enumerates these two service regions independently of SSO.
 const PROFILE_REGIONS = ["us-east-1", "eu-central-1"] as const;
 class KiroIamRequestError extends Error {
@@ -55,7 +57,7 @@ async function listProfilesInRegion(reply: KiroIamReply, access: string, region:
   const tokens = new Set<string>();
   let nextToken: string | undefined;
   for (let page = 0; page < 8; page++) {
-    const data = await call(reply, access, region, "ListAvailableProfiles", { maxResults: 50, ...(nextToken ? { nextToken } : {}) });
+    const data = await call(reply, access, region, "ListAvailableProfiles", { maxResults: PROFILE_PAGE_SIZE, ...(nextToken ? { nextToken } : {}) });
     if (!Array.isArray(data.profiles)) throw new Error("Kiro IAM profiles unavailable");
     for (const item of data.profiles) {
       const profile = record(item);
