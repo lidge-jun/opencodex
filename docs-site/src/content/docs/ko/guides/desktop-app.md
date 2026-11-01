@@ -15,6 +15,17 @@ OpenCodex 데스크톱 앱은 네이티브 트레이와 웹 대시보드를 함�
 
 릴리스 버전의 `OpenCodex.app`은 Developer ID로 서명되고 Apple 공증을 받으므로, 첫 실행 시에는 대개 다운로드한 앱에 대한 일반 확인만 요청합니다. macOS가 계속 차단하면 **System Settings → Privacy & Security → Open Anyway**를 선택하세요.
 
+#### Homebrew (데스크톱 앱)
+
+Homebrew Cask를 통해 데스크톱 앱을 설치할 수도 있습니다:
+
+```bash
+brew install --cask opencodex
+```
+
+- **인앱 업데이트 (`auto_updates`)**: 데스크톱 앱에는 자체 업데이트 기능이 내장되어 있습니다. Cask에 `auto_updates true`가 설정되어 있어 인앱 업데이트와 `brew upgrade`가 충돌 없이 함께 동작합니다.
+- **CLI 및 백그라운드 서비스**: 해당 Cask는 `OpenCodex.app`만 설치합니다(앱 내에 자체 CLI 및 프록시 런타임이 번들되어 있습니다). 데스크톱 앱 대신 독립형 CLI나 헤드리스 데몬을 사용하려는 경우 별도로 `ocx`를 설치(npm 또는 릴리스 아카이브)한 후 `ocx service install`을 실행하여 서비스를 등록할 수 있으며, 두 환경은 `~/.opencodex` 설정을 공유합니다。
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi`를 다운로드해 설치 프로그램을 실행하세요. 설치 프로그램은 아직 코드 서명이 없어 Windows SmartScreen이 경고할 수 있습니다. 릴리스 페이지에서 다운로드한 파일인지 확인한 뒤 **More info → Run anyway**를 선택하세요.

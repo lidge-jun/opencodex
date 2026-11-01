@@ -15,6 +15,17 @@ OpenCodex 桌面應用程式結合原生系統匣與網頁儀表板。內附的 
 
 正式版 `OpenCodex.app` 使用 Developer ID 簽署並經 Apple 公證，因此第一次啟動時，macOS 通常只會要求確認開啟從網路下載的應用程式。如果 macOS 仍封鎖它，請使用 **System Settings → Privacy & Security → Open Anyway**。
 
+#### Homebrew（桌面應用程式）
+
+也可以透過 Homebrew Cask 安裝桌面應用程式：
+
+```bash
+brew install --cask opencodex
+```
+
+- **內建更新（`auto_updates`）**：桌面應用程式具備內建更新機制。Cask 設定了 `auto_updates true`，內建更新與 `brew upgrade` 可協同運作而不致衝突。
+- **CLI 與背景服務**：此 Cask 僅安裝 `OpenCodex.app`（其內部已隨附 CLI 與 proxy 執行環境）。若需獨立使用命令列或無前端的背景常駐服務，可額外安裝獨立的 `ocx`（透過 npm 或版本發布封包）並執行 `ocx service install` 註冊服務；兩者共用 `~/.opencodex` 的設定。
+
 ### Windows
 
 下載 `OpenCodex-<version>-windows-x64.msi` 並執行安裝程式。由於安裝程式尚未經過程式碼簽署，Windows SmartScreen 可能顯示警告；確認檔案來自版本發布頁面後，選擇 **More info → Run anyway**。
