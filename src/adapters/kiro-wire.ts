@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { normalizeKiroModelId } from "../providers/kiro-models";
 import type { OcxParsedRequest } from "../types";
-import { KIRO_COMPLETION_TOOL_NAME } from "./kiro-constants";
+import { KIRO_COMPLETION_TOOL_NAME, KIRO_STRUCTURED_OUTPUT_TOOL_NAME } from "./kiro-constants";
 
 let cachedFp: string | undefined;
 
@@ -77,15 +77,18 @@ export interface KiroToolNameRegistry {
   readonly nameMap: Map<string, string>;
 }
 
-/** One collision domain for advertised tools, replayed calls, and the private completion tool. */
+/** Proxy-owned terminal tools; neither may be claimed by a client tool or a replayed call. */
+const KIRO_RESERVED_TOOL_NAMES: readonly string[] = [KIRO_COMPLETION_TOOL_NAME, KIRO_STRUCTURED_OUTPUT_TOOL_NAME];
+
+/** One collision domain for advertised tools, replayed calls, and the private terminal tools. */
 export function createKiroToolNameRegistry(): KiroToolNameRegistry {
-  const used = new Set<string>([KIRO_COMPLETION_TOOL_NAME]);
+  const used = new Set<string>(KIRO_RESERVED_TOOL_NAMES);
   const wireToKiro = new Map<string, string>();
   const nameMap = new Map<string, string>();
   return {
     alias(wireName: string): string {
-      if (wireName === KIRO_COMPLETION_TOOL_NAME) {
-        throw new Error(`Kiro reserves the tool name ${JSON.stringify(KIRO_COMPLETION_TOOL_NAME)}`);
+      if (KIRO_RESERVED_TOOL_NAMES.includes(wireName)) {
+        throw new Error(`Kiro reserves the tool name ${JSON.stringify(wireName)}`);
       }
       const existing = wireToKiro.get(wireName);
       if (existing) return existing;

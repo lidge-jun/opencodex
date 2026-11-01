@@ -1467,11 +1467,6 @@ describe("kiro adapter — buildRequest", () => {
       } as OcxParsedRequest)).rejects.toThrow(/Kiro (supports only|does not support)/);
     }
 
-    await expect(createKiroAdapter(provider).buildRequest({
-      ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
-      _structuredOutput: true,
-    } as OcxParsedRequest)).rejects.toThrow("Kiro does not support Responses structured output");
-
     const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
     const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
     expect(current.userInputMessageContext?.tools).toBeUndefined();
@@ -1530,22 +1525,7 @@ describe("kiro adapter — buildRequest", () => {
     }
   });
 
-  test("still refuses genuine structured output", async () => {
-    for (const text of [
-      { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
-      { format: { type: "json_object" } },
-    ]) {
-      const parsed = parseRequest({
-        model: "kiro/claude-haiku-4.5",
-        input: "test",
-        stream: true,
-        text,
-      } as never);
-      expect(parsed._structuredOutput).toBe(true);
-      await expect(createKiroAdapter(provider).buildRequest(parsed))
-        .rejects.toThrow("Kiro does not support Responses structured output");
-    }
-  });
+  // Genuine structured output is emulated, not refused: kiro-structured-output.test.ts owns it.
 
   test("accepts Codex's permissive parallel-tool hint while keeping the Kiro wire serialized", async () => {
     const parsed = parseRequest({

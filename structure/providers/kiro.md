@@ -139,14 +139,47 @@ Kiro shares the Responses freeform restoration boundary in
 `src/responses/apply-patch-envelope.ts`: contractual `input` wrappers are unwrapped, while alternate
 field and outer-fence recovery is limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` bodies.
 
-Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`
-of type `json_schema` or `json_object` is a contract the CodeWhisperer wire cannot honour, so the
-adapter rejects it rather than returning prose to a caller expecting JSON. `text.verbosity` and
-`text.format: {"type":"text"}` are preferences, not contracts; they are accepted and dropped,
-because `buildKiroPayload` composes `conversationState` from parsed fields and never forwards the
-raw body.
+`text.verbosity` and `text.format: {"type":"text"}` are preferences, not contracts; they are
+accepted and dropped, because `buildKiroPayload` composes `conversationState` from parsed fields
+and never forwards the raw body.
 
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
+
+### Kiro structured output
+
+`text.format` of type `json_schema` or `json_object` (`options.textFormat`; on `/v1/messages` it
+comes from `output_config.format`) is a contract the CodeWhisperer wire has no response mode for.
+`src/adapters/kiro/structured-output.ts` emulates it with the private terminal tool
+`codex_kiro_structured_output`, reserved against client tools in `src/adapters/kiro-wire.ts`:
+
+- The tool's input schema is the caller's schema, sanitized like every Kiro tool schema. A root that
+  is not a plain `type: "object"` (array, scalar, root `anyOf`/`oneOf`/`allOf`/`$ref`) is wrapped
+  as `{value: <schema>}` with `$defs`/`definitions` hoisted, rather than flattened the way
+  `src/adapters/kiro-tools.ts` flattens ordinary argument schemas. `json_object` advertises
+  `{type: "object"}`.
+- It replaces `codex_kiro_final_answer` as the terminal channel and forces completion mode
+  `required` even on a tool-free turn. Client tools are still advertised ahead of it; a tool-free
+  turn carries no tool-catalog nudge. The prose contract restates the caller's unsanitized schema
+  when it fits the injected-instruction budget, and is otherwise sent without it.
+- The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
+  call. The direct form relays the model's bytes; the wrapped form relays `JSON.stringify(value)`.
+  Validation is light: the input parses, the root matches the schema's declared `type`, and the
+  root's `required` keys are present. Full JSON Schema validation is not attempted.
+- A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
+  JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
+  input that fails validation, takes the one bounded `text_fallback` retry with a structured-output
+  retry instruction. If the retry yields neither a valid call nor JSON text, the turn ends with a
+  non-retryable 502 `invalid_kiro_structured_output` error.
+- Held prose never reaches a structured-output caller: every drain of held events drops text and
+  releases only non-text events. Commentary that precedes a real client tool call is released with
+  that call, as on ordinary turns.
+- A call to whichever private tool the turn did not advertise is a protocol error, never a client
+  tool call.
+
+Coverage: `tests/providers/kiro/kiro-structured-output.test.ts` and
+`tests/server/server-kiro-structured-output-e2e.test.ts`.
+
+> Decision record: [ADR-8071](../decisions/ADR-8071-kiro-structured-output-emulation.md)
 
 ## Bounded fallback HTTP errors
 

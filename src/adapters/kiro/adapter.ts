@@ -22,6 +22,7 @@ import { fetchKiroWithRetry } from "../kiro-retry";
 import { fingerprint, invocationId, osTag } from "../kiro-wire";
 import { hasTrailingDeliveredFinalAnswer } from "./conversation";
 import { buildKiroPayload } from "./payload";
+import type { KiroStructuredOutputSpec } from "./structured-output";
 import {
   jsonStringSerializedUtf8Bytes,
   parseKiroStream,
@@ -60,6 +61,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let toolNameMap: Map<string, string> | undefined;
   let conversationId: string | undefined;
   let completionMode: KiroCompletionMode = "disabled";
+  let structuredOutput: KiroStructuredOutputSpec | undefined;
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
@@ -96,6 +98,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     nameMap: Map<string, string>;
     conversationId: string;
     completionMode: KiroCompletionMode;
+    structuredOutput?: KiroStructuredOutputSpec;
     inputTokens: number;
     contextInputEstimate: number;
   }> => {
@@ -154,6 +157,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         region,
         requestedModel: parsed.modelId,
         completionMode: built.completionMode,
+        structuredOutput: built.structuredOutput !== undefined,
         bodyBytes: new TextEncoder().encode(body).length,
         messageCount: kiroPayloadMessages(parsed).length,
         toolCount: parsed.context.tools?.length ?? 0,
@@ -173,6 +177,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       nameMap: built.nameMap,
       conversationId: built.conversationId,
       completionMode: built.completionMode,
+      ...(built.structuredOutput ? { structuredOutput: built.structuredOutput } : {}),
       inputTokens: estimateKiroInputTokens(parsed),
       contextInputEstimate,
     };
@@ -297,6 +302,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       toolNameMap = built.nameMap;
       conversationId = built.conversationId;
       completionMode = built.completionMode;
+      structuredOutput = built.structuredOutput;
       // Runtime callbacks belong to the original request, not the retry payload.
       requestSnapshot = structuredClone(Object.fromEntries(
         Object.entries(parsed).filter(([, value]) => typeof value !== "function"),
@@ -318,6 +324,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
         completionMode,
         completionMode === "required" ? fallbackFactory : undefined,
         contextInputEstimate,
+        structuredOutput,
       );
     },
 
@@ -362,6 +369,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
           completionMode,
           completionMode === "required" ? fallbackFactory : undefined,
           contextInputEstimate,
+          structuredOutput,
         )) {
           retainTranslatedEvent(e, budget, events.at(-1));
           events.push(e);
