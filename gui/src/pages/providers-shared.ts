@@ -24,6 +24,13 @@ export interface ProvidersConfig {
   }>;
 }
 
+/** A login on a provider that already has a settled model list has nothing to choose, so it needs no models notice. */
+export function providerModelsSettled(config: ProvidersConfig | null, provider: string): boolean {
+  const entry = config?.providers[provider];
+  const status = entry?.initialModelSelection?.status;
+  return !!entry?.models?.length && status !== "pending" && status !== "all-off";
+}
+
 export interface OAuthStatus {
   loggedIn: boolean;
   email?: string;
