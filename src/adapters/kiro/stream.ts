@@ -868,6 +868,17 @@ async function* parseKiroAttemptEvents(
       if (priorAttempt) {
         yield* priorAttempt.drainDeferred(completionAnswer !== undefined || (sawText && !sawRealTool));
       }
+      // A validated final answer and a real tool call keep their precedence; only a turn that would
+      // otherwise end on its text is read as refused. Filtered retry text is partial: released as the
+      // commentary it was staged as, never as an accepted final answer.
+      if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
+        yield* emitRetained(fallbackEvents);
+        return {
+          assistantText,
+          sawReasoning,
+          terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
+        };
+      }
       if (completionAnswer !== undefined) {
         yield* consumeSupersededByCompletion(fallbackEvents);
         yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
@@ -883,16 +894,6 @@ async function* parseKiroAttemptEvents(
           assistantText,
           sawReasoning,
           terminal: { type: "done", usage: finalUsage, endTurn: false, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
-        };
-      }
-      if (isKiroContentFilterStop(normalizedStopReason)) {
-        // Filtered retry text is partial: released as the commentary it was staged as, never as
-        // an accepted final answer.
-        yield* emitRetained(fallbackEvents);
-        return {
-          assistantText,
-          sawReasoning,
-          terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
         };
       }
       if (sawText) {
@@ -927,6 +928,17 @@ async function* parseKiroAttemptEvents(
       };
     }
 
+    // Ahead of the empty-stream fallback below: a tool-less (`disabled`) turn Kiro refuses carries
+    // no content at all, and reading it as a replay-safe empty stream made clients resend a refusal
+    // that repeats deterministically. Partial text before the filter is not a finished answer either.
+    // A validated final answer and a real tool call keep their precedence, as on the retry path.
+    if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
+      return {
+        assistantText,
+        sawReasoning,
+        terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
+      };
+    }
     if (completionAnswer !== undefined) {
       yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
       return {
@@ -940,16 +952,6 @@ async function* parseKiroAttemptEvents(
         assistantText,
         sawReasoning,
         terminal: { type: "done", usage: finalUsage, endTurn: false, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
-      };
-    }
-    // Ahead of the empty-stream fallback below: a tool-less (`disabled`) turn Kiro refuses carries
-    // no content at all, and reading it as a replay-safe empty stream made clients resend a refusal
-    // that repeats deterministically. Partial text before the filter is not a finished answer either.
-    if (isKiroContentFilterStop(normalizedStopReason)) {
-      return {
-        assistantText,
-        sawReasoning,
-        terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
       };
     }
     if (mode === "required" && nativeCompletionStop) {
