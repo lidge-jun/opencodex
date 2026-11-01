@@ -4,7 +4,7 @@ import { PROXY_MARKER } from "../../claude/auth-detect";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
 import { resolveApiSurfaceSettings } from "../../protocols/settings";
 import { absoluteClientPath, ClientPathError } from "../client-path";
-import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
+import type { ExportContext, ExportModel, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { OPENCODE_PROVIDER_ID } from "./constants";
 import { normalizeExportModels, singleFragment } from "./model-metadata";
 
@@ -45,16 +45,28 @@ export interface T3CodeEnvironmentVariable {
   sensitive: false;
 }
 
+/** T3 Code's `ModelCapabilities`: the options a thread or subagent may select for this model. */
+export interface T3CodeModelCapabilities {
+  optionDescriptors: {
+    id: "effort";
+    label: string;
+    type: "select";
+    options: { id: string; label: string; isDefault?: true }[];
+  }[];
+}
+
 /** One T3 Code `CustomModelEntry`: the slug is sent verbatim as the Claude model id. */
 export interface T3CodeCustomModel {
   slug: string;
   name: string;
+  capabilities?: T3CodeModelCapabilities;
 }
 
 /** The `providerInstances.opencodex` value opencodex owns in T3 Code's settings.json. */
 export interface T3CodeProviderInstance {
   driver: "claudeAgent";
   displayName: string;
+  accentColor: string;
   environment: T3CodeEnvironmentVariable[];
   config: { customModels: T3CodeCustomModel[] };
 }
@@ -92,6 +104,7 @@ function t3codeDocument(ctx: ExportContext): T3CodeGeneratedConfig {
       [OPENCODE_PROVIDER_ID]: {
         driver: "claudeAgent",
         displayName: "opencodex",
+        accentColor: T3CODE_ACCENT_COLOR,
         environment: [
           variable("ANTHROPIC_BASE_URL", origin),
           variable("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER),
@@ -99,14 +112,40 @@ function t3codeDocument(ctx: ExportContext): T3CodeGeneratedConfig {
           variable("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1"),
         ],
         config: {
-          customModels: models.map(model => ({
-            slug: model.namespaced,
-            name: model.displayName || model.namespaced,
-          })),
+          customModels: models.map(model => {
+            const capabilities = t3codeCapabilities(model);
+            return {
+              slug: model.namespaced,
+              name: model.displayName || model.namespaced,
+              ...(capabilities ? { capabilities } : {}),
+            };
+          }),
         },
       },
     },
   };
+}
+
+/** Tints the instance's badge. T3 Code picks the icon from the driver, so this is all that sets it apart from Claude. */
+const T3CODE_ACCENT_COLOR = "#a6a6a6";
+
+/** The efforts Claude Code's `--effort` accepts, labelled the way T3 Code labels its built-in models. */
+const T3CODE_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max",
+};
+
+/**
+ * T3 Code rejects any option a custom model does not declare, so a model exported without
+ * this cannot be started with an effort at all. A model with no usable effort declares nothing.
+ */
+function t3codeCapabilities(model: ExportModel): T3CodeModelCapabilities | undefined {
+  if (model.supportsReasoningEffort === false) return undefined;
+  const options = (model.reasoningEfforts ?? []).flatMap(id => {
+    const label = T3CODE_EFFORT_LABELS[id];
+    if (!label) return [];
+    return [{ id, label, ...(id === model.defaultReasoningEffort ? { isDefault: true as const } : {}) }];
+  });
+  return options.length ? { optionDescriptors: [{ id: "effort", label: "Reasoning", type: "select", options }] } : undefined;
 }
 
 /** Refuses any listener that needs an admission header: T3 Code would send only the marker. */
