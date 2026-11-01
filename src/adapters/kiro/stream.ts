@@ -222,6 +222,7 @@ function isKiroContentFilterStop(
   return stopReason === "CONTENT_FILTERED" || stopReason === "GUARDRAIL_INTERVENED";
 }
 
+/** The non-retryable `content_filter` incomplete for a filter stop, carrying Kiro's refusal category and explanation when present. */
 function kiroContentFilterIncomplete(
   stopReason: string,
   refusal: KiroRefusalDetails | undefined,
@@ -327,6 +328,11 @@ async function* parseKiroAttempt(
   }
 }
 
+/**
+ * Parse one Kiro attempt's event stream into adapter events and a terminal decision: text, reasoning,
+ * real tool calls, the private terminal tool, usage and the stop reason. In `required` mode it may
+ * return `needsFallback` instead of a terminal, which asks the caller for the one bounded retry.
+ */
 async function* parseKiroAttemptEvents(
   response: Response,
   budget: TranslatorBudget,

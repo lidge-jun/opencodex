@@ -77,6 +77,7 @@ function refusalDetails(obj: Record<string, unknown>): KiroRefusalDetails | unde
   if (!stopDetails || typeof stopDetails !== "object" || Array.isArray(stopDetails)) return undefined;
   const refusal = (stopDetails as Record<string, unknown>).refusal;
   if (!refusal || typeof refusal !== "object" || Array.isArray(refusal)) return undefined;
+  /** A non-empty trimmed string field of the refusal, cut to `max` characters, or undefined. */
   const field = (key: string, max: number): string | undefined => {
     const value = (refusal as Record<string, unknown>)[key];
     return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined;

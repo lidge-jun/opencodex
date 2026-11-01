@@ -48,9 +48,11 @@ const contextUsage = () => frame("contextUsageEvent", { contextUsagePercentage: 
 const text = (content: string) => frame("assistantResponseEvent", { content });
 const metadata = (payload: unknown) => frame("metadataEvent", payload);
 
+/** A Kiro event-stream response that yields the given frames in order. */
 function streamOf(...frames: Uint8Array[]): Response {
   let i = 0;
   return new Response(new ReadableStream<Uint8Array>({
+    /** Enqueue the next frame, or close the stream after the last one. */
     pull(c) {
       if (i < frames.length) c.enqueue(frames[i++]);
       else c.close();
@@ -58,6 +60,10 @@ function streamOf(...frames: Uint8Array[]): Response {
   }));
 }
 
+/**
+ * Stream one turn whose first attempt answers with `frames`, and count completion retries: any retry
+ * fetch is recorded and answered with text that a filtered turn must never show.
+ */
 async function run(tools: unknown[] | undefined, ...frames: Uint8Array[]): Promise<{ events: AdapterEvent[]; fetches: number }> {
   let fetches = 0;
   // A bounded completion retry must never run for a filtered turn; one that does sees an answer.
