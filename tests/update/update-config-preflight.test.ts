@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -58,5 +58,16 @@ describe("update config pre-flight", () => {
     const result = runConfigPreflight(cfg);
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("invalid_schema");
+  });
+
+  test("fails closed when config.json is an occupied entry that cannot be read (dangling symlink)", () => {
+    const dir = tempRoot("dangling-symlink");
+    const target = join(dir, "target-does-not-exist.json");
+    const cfg = join(dir, "config.json");
+    symlinkSync(target, cfg);
+
+    const result = runConfigPreflight(cfg);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("read_error");
   });
 });
