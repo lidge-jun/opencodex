@@ -7,6 +7,7 @@ import type {
 import type { KiroImage } from "../kiro-images";
 import type { KiroHistoryEntry, KiroToolResult, KiroToolUse } from "./wire";
 
+/** Refuse request controls the Kiro wire cannot honour (forced tool choice, service tiers) before a request is built. */
 export function validateKiroCapabilities(parsed: OcxParsedRequest): void {
   const choice = parsed.options.toolChoice;
   if (choice !== undefined && choice !== "auto" && choice !== "none") {

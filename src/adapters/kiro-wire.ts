@@ -86,6 +86,7 @@ export function createKiroToolNameRegistry(): KiroToolNameRegistry {
   const wireToKiro = new Map<string, string>();
   const nameMap = new Map<string, string>();
   return {
+    /** Return the Kiro-safe alias for a wire tool name, registering it on first use; reserved names are refused. */
     alias(wireName: string): string {
       if (KIRO_RESERVED_TOOL_NAMES.includes(wireName)) {
         throw new Error(`Kiro reserves the tool name ${JSON.stringify(wireName)}`);

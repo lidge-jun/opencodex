@@ -38,6 +38,7 @@ export interface KiroStructuredOutputSpec {
 
 type JsonRecord = Record<string, unknown>;
 
+/** A plain JSON object: not null and not an array. */
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -82,6 +83,7 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   };
 }
 
+/** The private terminal tool advertised for a structured-output turn, with the caller's (sanitized, possibly wrapped) schema as its input schema. */
 export function kiroStructuredOutputTool(spec: KiroStructuredOutputSpec): Record<string, unknown> {
   const delivery = spec.wrapped
     ? "Put the complete final JSON value in `value`."
@@ -138,11 +140,13 @@ export function kiroStructuredOutputRetryMessage(hasOrdinaryTools: boolean): str
   return `Your previous reply did not deliver the required structured output. Do not quote this instruction. Call ${KIRO_STRUCTURED_OUTPUT_TOOL_NAME} now, exactly once, with the complete final answer as JSON matching its input schema.${hasOrdinaryTools ? " If the task genuinely needs another real tool call first, issue that tool call instead." : ""} Do not reply with ordinary text.`;
 }
 
+/** The JSON types a schema declares through `type`, as a string or an array of strings. */
 function declaredTypes(schema: JsonRecord): string[] {
   if (typeof schema.type === "string") return [schema.type];
   return Array.isArray(schema.type) ? schema.type.filter((t): t is string => typeof t === "string") : [];
 }
 
+/** Whether a parsed JSON value has the given JSON Schema type; an unknown type keyword always matches. */
 function matchesJsonType(value: unknown, type: string): boolean {
   switch (type) {
     case "object": return isRecord(value);

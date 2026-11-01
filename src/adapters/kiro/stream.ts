@@ -241,6 +241,10 @@ export function isRetryableKiroStreamCatchError(err: unknown, emittedOutput: boo
 /** Native clean-stop reason eligible for bounded private-completion validation. */
 const KIRO_END_TURN_STOP_REASON = "END_TURN";
 
+/**
+ * Run one attempt through `parseKiroAttemptEvents` while holding commentary until completion is
+ * validated, and hand the held events back to the caller so a bounded retry can release or drop them.
+ */
 async function* parseKiroAttempt(
   response: Response,
   budget: TranslatorBudget,
@@ -318,6 +322,11 @@ async function* parseKiroAttempt(
   }
 }
 
+/**
+ * Parse one Kiro attempt's event stream into adapter events and a terminal decision: text, reasoning,
+ * real tool calls, the private terminal tool, usage and the stop reason. In `required` mode it may
+ * return `needsFallback` instead of a terminal, which asks the caller for the one bounded retry.
+ */
 async function* parseKiroAttemptEvents(
   response: Response,
   budget: TranslatorBudget,
@@ -436,6 +445,7 @@ async function* parseKiroAttemptEvents(
     };
   };
 
+  /** The terminal for a classified upstream error frame; retryable only while nothing has been emitted. */
   const classifiedTerminal = (failure: KiroErrorClassification): AdapterEvent => {
     // Upstream exception/error frames can arrive after commentary was already staged (and will be
     // flushed before this terminal is yielded). Replaying after that content would duplicate it.
@@ -461,6 +471,11 @@ async function* parseKiroAttemptEvents(
     };
   };
 
+  /**
+   * The terminal for a protocol violation. A malformed private-tool answer on the bounded retry is
+   * a retryable incomplete for ordinary turns and a non-retryable failure for structured output;
+   * everything else is a non-retryable 502.
+   */
   const protocolTerminal = (message: string, malformedCompletion = false): AdapterEvent => {
     if (mode === "text_fallback" && malformedCompletion) {
       // The bounded retry was the structured contract's second ask; a malformed answer on it ends
@@ -494,6 +509,10 @@ async function* parseKiroAttemptEvents(
     console.warn("[kiro] dropped the private final-answer call; the turn also carried a real tool call");
   };
 
+  /**
+   * Mark a tool call as the turn's private terminal tool or an ordinary client tool, and return a
+   * terminal when the call names a reserved tool this turn did not advertise or completion is disabled.
+   */
   const classifyTool = (
     tool: { id: string; name: string; chunks: string[]; completion: boolean },
   ): AdapterEvent | undefined => {
@@ -538,6 +557,11 @@ async function* parseKiroAttemptEvents(
     return [{ type: "heartbeat" }];
   };
 
+  /**
+   * Account for one content event and route it by completion mode: emitted directly when completion
+   * is disabled, held until validation in `required` mode, and retained for the bounded retry's
+   * decision in `text_fallback` mode.
+   */
   const stage = (event: AdapterEvent): AdapterEvent[] => {
     if (event.type === "text_delta") {
       const nextAssistantTextBytes = appendedUtf8Bytes(assistantText, assistantTextBytes, event.text);
@@ -584,6 +608,7 @@ async function* parseKiroAttemptEvents(
     return mode === "required" ? defer(event) : [event];
   };
 
+  /** Parse the private terminal tool's input into the answer text: the validated JSON for structured output, otherwise the completion tool's `answer`. */
   const parseCompletion = (chunks: string[]): string | Error => {
     if (structuredOutput) {
       const parsed = parseKiroStructuredToolInput(structuredOutput, chunks.join(""));
@@ -606,6 +631,10 @@ async function* parseKiroAttemptEvents(
     return answer;
   };
 
+  /**
+   * Close the open tool call: record a private terminal answer (or schedule its bounded retry), or
+   * emit a real client tool call. Returns a terminal when the call cannot be accepted.
+   */
   const flushOpen = (): { events: AdapterEvent[]; terminal?: AdapterEvent } => {
     if (!open) return { events: [] };
     const tool = open;
@@ -1154,6 +1183,10 @@ async function* parseKiroAttemptEvents(
   }
 }
 
+/**
+ * Parse a Kiro response into adapter events, running at most one bounded retry through
+ * `fallbackFactory` when the first attempt ends without a validated answer.
+ */
 export async function* parseKiroStream(
   response: Response,
   budget: TranslatorBudget,

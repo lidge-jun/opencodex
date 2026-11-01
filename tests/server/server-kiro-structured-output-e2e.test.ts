@@ -55,17 +55,20 @@ function structuredFrames(input: Record<string, unknown>, id = "structured-1"): 
   ];
 }
 
+/** A local Kiro runtime stand-in that records each request and answers it with the next scripted attempt. */
 function scriptedKiroUpstream(attempts: Uint8Array[][]) {
   const requests: Array<Record<string, any>> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
+    /** Record the request and stream the next attempt's frames, or fail on an unexpected extra attempt. */
     async fetch(req) {
       requests.push(await req.json() as Record<string, any>);
       const frames = attempts.shift();
       if (!frames) return new Response("unexpected extra Kiro attempt", { status: 500 });
       let index = 0;
       return new Response(new ReadableStream<Uint8Array>({
+        /** Enqueue the next frame, or close the stream after the last one. */
         pull(controller) {
           if (index < frames.length) controller.enqueue(frames[index++]);
           else controller.close();
@@ -143,6 +146,7 @@ const post = (url: URL, path: string, body: unknown) => originalFetch(new URL(pa
   body: JSON.stringify(body),
 });
 
+/** The tool names a captured Kiro request advertises in its current user message. */
 function advertisedTools(request: Record<string, any>): string[] {
   return (request.conversationState.currentMessage.userInputMessage.userInputMessageContext?.tools ?? [])
     .map((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name);

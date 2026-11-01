@@ -27,6 +27,7 @@ const titleSchema = {
 };
 const bash = { type: "function", name: "bash", description: "Run a command", parameters: { type: "object" } };
 
+/** A parsed Responses request asking for structured output in `format` (the T3 Code title schema by default). */
 function structuredRequest(format: Record<string, unknown> = { type: "json_schema", name: "response", schema: titleSchema }, tools?: unknown[]): OcxParsedRequest {
   return parseRequest({
     model: "kiro/claude-opus-5.5",
@@ -38,6 +39,7 @@ function structuredRequest(format: Record<string, unknown> = { type: "json_schem
 }
 
 interface KiroTool { toolSpecification: { name: string; description: string; inputSchema: { json: Record<string, any> } } }
+/** Build the Kiro request for `parsed` and return its current user message and advertised tools. */
 async function payloadOf(parsed: OcxParsedRequest) {
   const body = JSON.parse((await createKiroAdapter(provider).buildRequest(parsed)).body);
   const current = body.conversationState.currentMessage.userInputMessage;
@@ -51,6 +53,7 @@ const frame = (type: string, payload: object) => encodeMessage(
 );
 const text = (content: string) => frame("assistantResponseEvent", { content });
 const stop = (stopReason: string) => frame("metadataEvent", { stopReason });
+/** The frames of one complete Kiro tool call: its input, then its stop frame. */
 function tool(name: string, input: unknown, id = "call-1"): Uint8Array[] {
   return [
     frame("toolUseEvent", { name, toolUseId: id, input: typeof input === "string" ? input : JSON.stringify(input) }),
@@ -58,8 +61,10 @@ function tool(name: string, input: unknown, id = "call-1"): Uint8Array[] {
   ];
 }
 const structured = (input: unknown) => tool(KIRO_STRUCTURED_OUTPUT_TOOL_NAME, input);
+/** A Kiro event-stream response that replays the given frames in order. */
 function response(frames: Uint8Array[]): Response {
   return new Response(new ReadableStream<Uint8Array>({
+    /** Enqueue every frame, then close the stream. */
     start(controller) {
       for (const value of frames) controller.enqueue(value);
       controller.close();
@@ -68,10 +73,15 @@ function response(frames: Uint8Array[]): Response {
 }
 afterEach(resetKiroThrottleStateForTests);
 
+/** Run a streaming turn whose upstream attempts answer with `attempts` in order. */
 async function run(input: OcxParsedRequest, ...attempts: Uint8Array[][]) {
   return runWith(input, false, ...attempts);
 }
 
+/**
+ * Run one turn through the adapter, streaming or buffered, with each upstream attempt answering from
+ * `attempts`. Returns the client events, every request body, the text deltas and the terminal event.
+ */
 async function runWith(input: OcxParsedRequest, buffered: boolean, ...attempts: Uint8Array[][]) {
   const adapter = createKiroAdapter(provider);
   const budget = createTranslatorBudget();
@@ -80,6 +90,7 @@ async function runWith(input: OcxParsedRequest, buffered: boolean, ...attempts: 
   try {
     const request = await adapter.buildRequest(input);
     const upstream = await adapter.fetchResponse!(request, {
+      /** Record each request body and answer it with the next scripted attempt. */
       executor: (async (_url, init) => {
         bodies.push(String(init?.body));
         const frames = attempts[bodies.length - 1];
