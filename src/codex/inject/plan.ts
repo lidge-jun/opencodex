@@ -9,6 +9,7 @@
  * post-transition bytes is what keeps the committed file from re-enabling the
  * flag the reconcile just turned off.
  */
+import { existsSync, readFileSync } from "node:fs";
 import { websocketsEnabled } from "../../config";
 import {
   HISTORY_RELABEL_STANDS_DOWN,
@@ -22,7 +23,7 @@ import {
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
-import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
@@ -35,6 +36,7 @@ import {
   ensureFastModeFeature,
   ensureRootWebSearchDisabled,
   normalizeServiceTier,
+  preserveUnmanagedProfileKeys,
   removeProfileSection,
   setRootModelCatalogPath,
   setRootModelProvider,
@@ -323,12 +325,15 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
-  const profileContent = buildProfileFileForTarget(
-    routingTarget,
-    catalogPath,
-    websocketsForRoutingTarget(config, routingTarget),
-    config?.fastMode,
-    config?.codexProviderDisplayName,
+  const profileContent = preserveUnmanagedProfileKeys(
+    existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null,
+    buildProfileFileForTarget(
+      routingTarget,
+      catalogPath,
+      websocketsForRoutingTarget(config, routingTarget),
+      config?.fastMode,
+      config?.codexProviderDisplayName,
+    ),
   );
   content = applyEol(content, eol);
 
