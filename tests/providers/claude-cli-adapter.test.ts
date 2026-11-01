@@ -1390,7 +1390,7 @@ describe("Issue #6469 — offline fixtures", () => {
       description: "Only metadata, no constraints",
     };
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: titleOnly } } });
-    const unconstrained = JSON.stringify({ anything: "goes", nested: { deep: 123 } });
+    const unconstrained = JSON.stringify("goes");
     const stdout = [
       systemInit,
       enc.encode(textDelta(unconstrained)),
@@ -1413,12 +1413,12 @@ describe("Issue #6469 — offline fixtures", () => {
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: weirdSchema } } });
     const stdout = [
       systemInit,
-      enc.encode(textDelta('{"answer":"42"}')),
+      enc.encode(textDelta('{"answer":"a"}')),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
     const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
-    expect(text).toBe('{"answer":"42"}');
+    expect(text).toBe('{"answer":"a"}');
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
@@ -1432,12 +1432,12 @@ describe("Issue #6469 — offline fixtures", () => {
     const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: uncertifiable, strict: true } } });
     const stdout = [
       systemInit,
-      enc.encode(textDelta('{"answer":"42"}')),
+      enc.encode(textDelta('{"answer":"42","extra":"ignored"}')),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
     ];
     const events = await run(adapterWith(stdout), schemaRequest);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
-    expect(text).toBe('{"answer":"42"}');
+    expect(text).toBe('{"answer":"42","extra":"ignored"}');
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
@@ -1490,13 +1490,14 @@ describe("Issue #6469 — offline fixtures", () => {
     const stdout = [
       systemInit,
       enc.encode(textDelta("partial")),
-      enc.encode('{"type":"result","subtype":"success","is_error":true,"message":"model refused","usage":{"input_tokens":4,"output_tokens":1}}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":true,"result":"model refused","usage":{"input_tokens":4,"output_tokens":1}}\n'),
     ];
     const events = await run(adapterWith(stdout), parsed());
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(text).toBe("partial");
     const err = events.find(e => e.type === "error");
     expect(err).toBeDefined();
+    expect(err).toMatchObject({ message: "model refused" });
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
@@ -1523,12 +1524,12 @@ describe("Issue #6469 — offline fixtures", () => {
   test("20. refusal case — refusal surfaces as error with no fabricated output", async () => {
     const stdout = [
       systemInit,
-      enc.encode('{"type":"result","subtype":"success","is_error":true,"message":"I cannot help with that","usage":{"input_tokens":2,"output_tokens":0}}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":true,"result":"I cannot help with that","usage":{"input_tokens":2,"output_tokens":0}}\n'),
     ];
     const events = await run(adapterWith(stdout), parsed());
     const err = events.find(e => e.type === "error");
     expect(err).toBeDefined();
-    expect(err).toMatchObject({ type: "error" });
+    expect(err).toMatchObject({ type: "error", message: "I cannot help with that" });
     expect(events.filter(e => e.type === "text_delta")).toEqual([]);
     expect(events.some(e => e.type === "done")).toBe(false);
   });
