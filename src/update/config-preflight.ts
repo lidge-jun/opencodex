@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { validateConfigCandidate } from "../config";
 
 export interface ConfigPreflightResult {
@@ -8,8 +8,17 @@ export interface ConfigPreflightResult {
 }
 
 export function runConfigPreflight(configPath: string): ConfigPreflightResult {
-  if (!existsSync(configPath)) {
-    return { ok: true };
+  try {
+    lstatSync(configPath);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      reason: "read_error",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
   let text = "";
   try {
