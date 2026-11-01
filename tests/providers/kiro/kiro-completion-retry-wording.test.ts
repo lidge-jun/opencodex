@@ -93,8 +93,11 @@ describe("Kiro completion retry after a plain-text answer (claude-sonnet-5)", ()
     // The phrase the model answered with "no active task ... to continue".
     expect(KIRO_COMPLETION_RETRY_MESSAGE).not.toContain("Continue the existing task");
     expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("no final answer has reached the user yet");
+    // A direct completion route for a retry with no previous reply (reasoning only), and the
+    // resubmit clause for a held plain-text answer.
     expect(KIRO_COMPLETION_RETRY_MESSAGE)
-      .toContain(`If your previous reply already was the complete final answer, call ${KIRO_COMPLETION_TOOL_NAME} now with that same answer, unchanged.`);
+      .toContain(`If the task is complete, call ${KIRO_COMPLETION_TOOL_NAME} now with the complete final answer;`);
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("if your previous reply already was that answer, submit it unchanged.");
     // The progress-prose path the retry exists for (#531) keeps its instruction.
     expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("next real tool call now");
   });

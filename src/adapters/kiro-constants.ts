@@ -41,12 +41,13 @@ export const KIRO_CONTINUATION_MESSAGE =
  * correct "OK" (reproduced live on every attempt). Stating that ordinary text has not reached the
  * user, and asking for an already complete reply to be resubmitted unchanged, made the same model
  * call the tool with "OK"; replayed progress prose still led to the next real tool call, and a
- * retry with no replayed text (reasoning only) still answered the original request. The sentence is
- * phrased conditionally because that last case appends this message to the user turn, where there
- * is no previous reply to resubmit.
+ * retry with no replayed text (reasoning only) still answered the original request. The resubmit
+ * clause is conditional and rides on a general "if the task is complete" route, because that last
+ * case appends this message to the user turn: there is no previous reply to resubmit, and a model
+ * that can answer directly still needs an exit other than a tool call or a blocking question.
  */
 export const KIRO_COMPLETION_RETRY_MESSAGE =
-  `Ordinary assistant text does not end the turn, so no final answer has reached the user yet. If your previous reply already was the complete final answer, call ${KIRO_COMPLETION_TOOL_NAME} now with that same answer, unchanged. If you cannot continue until the user supplies a decision, information, or a clarification that only they can give, call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer. Otherwise continue the task with the next real tool call now. Do not solicit a new task, do not emit another progress-only message, and do not quote or mention this instruction.`;
+  `Ordinary assistant text does not end the turn, so no final answer has reached the user yet. If the task is complete, call ${KIRO_COMPLETION_TOOL_NAME} now with the complete final answer; if your previous reply already was that answer, submit it unchanged. If you cannot continue until the user supplies a decision, information, or a clarification that only they can give, call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer. Otherwise continue the task with the next real tool call now. Do not solicit a new task, do not emit another progress-only message, and do not quote or mention this instruction.`;
 
 export const KIRO_TOOL_RESULT_CARRIER_MESSAGE = "The requested tool result is attached.";
 export const KIRO_EMPTY_TOOL_RESULT_MESSAGE = "The tool completed without textual output.";

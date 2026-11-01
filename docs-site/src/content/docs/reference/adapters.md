@@ -603,6 +603,8 @@ real client tool call keeps the turn open. A completion-tool answer is always em
 `final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
 important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
 
+The continuation's instruction tells the model that its ordinary text has not reached the user, and asks it to call `codex_kiro_final_answer` with the complete final answer if the task is complete, submitting its previous reply unchanged when that reply already was the answer. A model that answered a trivial request in plain text therefore keeps its answer, instead of being told to continue a task it had already finished.
+
 ### Reasoning effort
 
 The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
