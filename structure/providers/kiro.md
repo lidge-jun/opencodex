@@ -167,7 +167,7 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   root's `required` keys are present. Full JSON Schema validation is not attempted.
 - A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
   JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
-  input that fails validation, takes the one bounded `text_fallback` retry with a structured-output
+  input that fails validation (including truncated JSON), takes the one bounded `text_fallback` retry with a structured-output
   retry instruction, but only after a clean stop: under `MAX_TOKENS`, a content filter or an exhausted context window the stop's own terminal applies, because a retry would hit the same limit or verdict. The retry accepts JSON text only after a clean stop too. If the retry yields neither a valid call nor JSON text, including an empty or reasoning-only retry, the turn ends with a
   non-retryable 502 `invalid_kiro_structured_output` error.
 - Held prose never reaches a structured-output caller: every drain of held events drops text and

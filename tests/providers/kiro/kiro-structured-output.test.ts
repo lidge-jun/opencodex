@@ -339,6 +339,24 @@ describe("Kiro structured-output stop reasons", () => {
     });
   });
 
+  test("a truncated structured tool input on the first attempt earns the bounded retry", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), [...structured('{"title":'), stop("END_TURN")], structured({ title: "Fix Kiro" }),
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([{ type: "text_delta", text: '{"title":"Fix Kiro"}', phase: "final_answer" }]);
+    expect(terminal).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("a truncated structured tool input under MAX_TOKENS is not retried", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), [...structured('{"title":'), stop("MAX_TOKENS")],
+    );
+    expect(bodies).toHaveLength(1);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "incomplete", reason: "max_output_tokens" });
+  });
+
   test("a malformed structured tool input on the retry is non-retryable", async () => {
     const { bodies, texts, terminal } = await run(
       structuredRequest(), structured({ name: "wrong key" }), structured('{"title":'),

@@ -613,6 +613,14 @@ async function* parseKiroAttemptEvents(
     closeOpenCall();
     const input = tool.chunks.join("");
     if (!isCompleteKiroToolInput(input)) {
+      // A truncated structured answer is the same correctable fault as one that fails to parse: it
+      // earns the bounded retry, decided with the stop reason at the end of the attempt. The retry
+      // itself (text_fallback) ends non-retryably through protocolTerminal.
+      if (structuredOutput && mode === "required" && tool.completion) {
+        completionCalls++;
+        structuredRetry = true;
+        return { events: [] };
+      }
       return { events: [], terminal: protocolTerminal(kiroTruncationErrorMessage("incomplete tool input JSON"), tool.completion) };
     }
     if (tool.completion) {
