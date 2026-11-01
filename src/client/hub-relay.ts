@@ -167,9 +167,9 @@ export function filterRelayHeaders(
 /**
  * Put the stored hub session on an outbound relayed management request.
  *
- * Callers that already carry a management credential keep it: the browser GUI sends its own
- * session, and `ocx connect --admin-token-stdin` callers may present an admin token. Only a
- * credential-free loopback caller (the CLI, the AImorph helper, the reporter) is filled in.
+ * A caller credential is kept only when it is itself a hub session — the browser GUI sends one.
+ * Everything else is replaced: a credential-free CLI, and equally a CLI's own admin token, which
+ * belongs to this machine's proxy and is unknown at the hub.
  * Returns false when nothing was stamped, which is what makes the 401 report legible.
  */
 export function stampStoredSession(headers: Headers, state: HubCredentialState): boolean {
@@ -273,9 +273,8 @@ export async function relayHubManagementRequest(
   const stripped = stripMachineAuthHeaders(req.headers);
   const headers = filterRelayHeaders(stripped, REQUEST_HEADERS, requestHeaderValidation.connectionNamed);
   const stored = (deps.readSession ?? readHubCredential)();
-  // A CLI caller on this machine has no credential of its own. The hub session this client
-  // stored at connect is the one management credential it owns, so stamp it. A browser GUI
-  // already sends its own session (or an operator's admin token); leave either untouched.
+  // Stamp the credential this client stored at connect. A browser GUI that sends a hub session of
+  // its own keeps it; everything else is replaced (see stampStoredSession).
   const stamped = stampStoredSession(headers, stored);
   if (!headersWithinLimit(headers)) return relayError(431, "hub relay request headers too large");
   // A command-line caller has no browser and sends no Origin. A gui-session names the only origin
