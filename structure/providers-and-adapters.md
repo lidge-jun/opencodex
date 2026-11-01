@@ -87,11 +87,11 @@ joins only when a newline or EOF completes the frame. This preserves split UTF-8
 blank-line, line-limit, and total-limit behavior without re-encoding the growing partial frame on
 every child stdout chunk. See [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md).
 
-Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
-`src/providers/registry/model-seeds.ts`, including native `k3-256k` and thinking-only 1M `k3.1-pro[-highspeed]`. The Responses preset
-shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
-enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from
-the registry; sharing authentication does not implicitly share a usage-price namespace. The separate `moonshot` API preset defaults to `kimi-k3.1-pro`; `src/providers/model-rename-migration.ts` moves discontinued K2.5 selections on official destinations to it, drops stale no-reasoning classification, and refreshes exact old 256K/empty reasoning seeds to 1M and `low`/`high`/`max` with the API `none` omission map. Explicit successor metadata and Custom destinations keep precedence. Roster repair accepts the literal pre-K3.1 seed and its post-rename form, with metadata additions measured against the original seed. K2.6 and K2.7 Code/highspeed stay seeded for existing API users.
+Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in `src/providers/registry/model-seeds.ts`, including native `k3-256k` and thinking-only 1M `k3.1-pro[-highspeed]`.
+The Responses preset shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from the registry; sharing authentication does not implicitly share a usage-price namespace.
+The separate `moonshot` API preset defaults to `kimi-k3.1-pro`; `src/providers/model-rename-migration.ts` moves discontinued K2.5 selections on official destinations to it, drops stale no-reasoning classification, and refreshes exact old 256K/empty reasoning seeds to 1M and `low`/`high`/`max` with the API `none` omission map. Explicit successor metadata and Custom destinations keep precedence. Roster repair accepts the literal pre-K3.1 seed and its post-rename form, with metadata additions measured against the original seed. K2.6 and K2.7 Code/highspeed stay seeded for existing API users.
+
+Kimi quota in `src/providers/quota/vendor-probes-key.ts` also reads monthly `usages` at the root, under `data`, or under `quota` (including `data.quota`): `limit_month_total` / `monthTotal` precedes the `limit_month_code` / `monthCode` fallback. Rows prefer limit/used or remaining arithmetic, then fractional `used_ratio` / `usedRatio`, then direct percentages; reset times remain optional. Missing monthly data stays absent, and legacy 5-hour, weekly and total subscription-credit windows stay separate. The parser is shared by account-login and API-key probes; credential and destination guards are unchanged.
 
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow

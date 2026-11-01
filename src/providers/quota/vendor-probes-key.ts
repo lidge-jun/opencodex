@@ -1134,8 +1134,8 @@ function unwrapKimiQuotaPayload(value: unknown): Record<string, unknown> | null 
   // A null/non-usable outer field is a placeholder, not data — an envelope like
   // { usage: null, data: { usage: {...} } } must still unwrap to the nested payload.
   const usable = (field: unknown): boolean => field !== undefined && field !== null;
-  const outerHasUsage = usable(body.usage) || usable(body.limits) || usable(body.totalQuota);
-  const nestedHasUsage = usable(nested.usage) || usable(nested.limits) || usable(nested.totalQuota);
+  const outerHasUsage = usable(body.usage) || usable(body.usages) || usable(body.limits) || usable(body.totalQuota);
+  const nestedHasUsage = usable(nested.usage) || usable(nested.usages) || usable(nested.limits) || usable(nested.totalQuota);
   return !outerHasUsage && nestedHasUsage ? nested : body;
 }
 
@@ -1162,6 +1162,12 @@ function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknow
       if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
     }
   }
+  // Newer Kimi responses expose utilization as a fraction in [0, 1].
+  const ratio = toFiniteNumber(row.used_ratio ?? row.usedRatio);
+  if (ratio !== undefined) {
+    const percent = normalizePercent(ratio * 100);
+    if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+  }
   // Some payloads expose utilisation directly when limit/used arithmetic is absent.
   const direct = normalizePercent(row.utilization ?? row.percent ?? row.usedPercent ?? row.used_percent);
   return direct === undefined ? null : { percent: direct, ...(resetAt !== undefined ? { resetAt } : {}) };
@@ -1186,6 +1192,11 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
   if (!body) return null;
   let weekly = parseKimiQuotaRow(body.usage);
   const total = parseKimiQuotaRow(body.totalQuota);
+  const nested = asRecord(body.data);
+  const quotaBody = asRecord(body.quota) ?? asRecord(nested?.quota);
+  const usages = asRecord(body.usages) ?? asRecord(nested?.usages) ?? asRecord(quotaBody?.usages);
+  const monthly = parseKimiQuotaRow(usages?.limit_month_total ?? usages?.monthTotal)
+    ?? parseKimiQuotaRow(usages?.limit_month_code ?? usages?.monthCode);
   let fiveHour: { percent: number; resetAt?: number } | null = null;
   if (Array.isArray(body.limits)) {
     for (const rawItem of body.limits) {
@@ -1210,6 +1221,10 @@ function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
     ...(weekly ? {
       weeklyPercent: weekly.percent,
       ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(monthly ? {
+      monthlyPercent: monthly.percent,
+      ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
     } : {}),
     ...(total ? { customWindows: [{ label: "Total subscription credits", percent: total.percent, ...(total.resetAt !== undefined ? { resetAt: total.resetAt } : {}) }] } : {}),
     updatedAt: Date.now(),
