@@ -1838,8 +1838,10 @@ or Abliteration custom provider.
 `https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
 `usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
 `limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
-The `used_ratio` / `usedRatio` fraction is converted to a consumed percentage; any
-reported reset time is retained. Existing 5-hour, weekly, and total subscription-credit
+The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed
+percentage; invalid ratios are ignored. Empty or unusable `usages` containers do not hide
+usable monthly data in another supported envelope. Any reported reset time is retained.
+Existing 5-hour, weekly, and total subscription-credit
 windows remain separate, and an absent monthly window is not shown as 0%.
 
 **Abliteration credits.** A provider of any name whose `baseUrl` is

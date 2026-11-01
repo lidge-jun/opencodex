@@ -93,6 +93,39 @@ describe("Kimi monthly quota", () => {
     expect(reports[0]?.quota.monthlyResetAt).toBe(Date.parse(resetAt));
   });
 
+  test.each([
+    { name: "empty root usages", payload: { usages: {}, data: { usages: { limit_month_total: monthlyRow } } } },
+    { name: "unparseable root usages", payload: { usages: { limit_month_total: { used_ratio: "invalid" } }, data: { usages: { limit_month_total: monthlyRow } } } },
+    { name: "root quota after empty root usages", payload: { usages: {}, quota: { usages: { limit_month_total: monthlyRow } } } },
+    { name: "root quota after empty data usages", payload: { data: { usages: {} }, quota: { usages: { limit_month_total: monthlyRow } } } },
+    { name: "data quota after empty root quota", payload: { quota: {}, data: { quota: { usages: { limit_month_total: monthlyRow } } } } },
+    { name: "data quota after unparseable root quota", payload: { quota: { usages: { limit_month_code: { used_ratio: "invalid" } } }, data: { quota: { usages: { limit_month_total: monthlyRow } } } } },
+    { name: "data quota after empty data usages", payload: { data: { usages: {}, quota: { usages: { limit_month_total: monthlyRow } } } } },
+  ])("finds monthly usage with $name", async ({ payload }) => {
+    mockUsage(payload);
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(37.5);
+    expect(reports[0]?.quota.monthlyResetAt).toBe(Date.parse(resetAt));
+  });
+
+  test("retains root quota when legacy windows unwrap the data envelope", async () => {
+    mockUsage({
+      data: { usage: { percent: 25 } },
+      quota: { usages: { limit_month_total: monthlyRow } },
+    });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota).toMatchObject({ weeklyPercent: 25, monthlyPercent: 37.5 });
+  });
+
+  test.each([0, 0.25])("keeps the first usable container, including ratio %s", async ratio => {
+    mockUsage({
+      usages: { limit_month_code: { used_ratio: ratio } },
+      data: { usages: { limit_month_total: monthlyRow } },
+    });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(ratio * 100);
+  });
+
   test.each(["limit_month_total", "monthTotal", "limit_month_code", "monthCode"])(
     "recognizes %s and camel-case ratio/reset fields", async field => {
       mockUsage({ usages: { [field]: { usedRatio: "0.625", resetAt } } });
@@ -118,6 +151,25 @@ describe("Kimi monthly quota", () => {
     } });
     const { reports } = await fetchProviderQuotaReports(config(), true);
     expect(reports[0]?.quota.monthlyPercent).toBe(37.5);
+  });
+
+  test.each([-0.1, 1.5, "-0.1", "1.5"])("ignores out-of-range ratios and preserves coding fallback: %s", async ratio => {
+    mockUsage({ usages: { limit_month_total: { used_ratio: ratio } } });
+    expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
+    clearProviderQuotaCache();
+    mockUsage({ usages: {
+      limit_month_total: { used_ratio: ratio },
+      limit_month_code: { used_ratio: 0.2, reset_at: resetAt },
+    } });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(20);
+    expect(reports[0]?.quota.monthlyResetAt).toBe(Date.parse(resetAt));
+  });
+
+  test.each(["used_ratio", "usedRatio"])("retains direct-percent fallback after invalid %s", async field => {
+    mockUsage({ usages: { limit_month_total: { [field]: 1.5, percent: 45 } } });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(45);
   });
 
   test("keeps legacy windows and subscription credits alongside monthly usage", async () => {

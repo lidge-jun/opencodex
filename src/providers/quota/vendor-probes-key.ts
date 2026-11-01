@@ -1146,6 +1146,7 @@ function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, un
     .toLowerCase();
 }
 
+/** Parse consumed usage, preferring counters, then a valid [0, 1] ratio, then direct percentages. */
 function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknown>): { percent: number; resetAt?: number } | null {
   const row = asRecord(value);
   if (!row) return null;
@@ -1164,7 +1165,7 @@ function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknow
   }
   // Newer Kimi responses expose utilization as a fraction in [0, 1].
   const ratio = toFiniteNumber(row.used_ratio ?? row.usedRatio);
-  if (ratio !== undefined) {
+  if (ratio !== undefined && ratio >= 0 && ratio <= 1) {
     const percent = normalizePercent(ratio * 100);
     if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
   }
@@ -1187,16 +1188,22 @@ function isKimiWeeklyLimit(item: Record<string, unknown>, detail: Record<string,
   return /weekly|7\s*(?:d|day)/.test(kimiLimitLabel(item, detail));
 }
 
+/** Keep legacy windows separate and use the first parseable monthly row across supported envelopes. */
 function parseKimiQuotaPayload(value: unknown): ProviderQuota | null {
+  const root = asRecord(value);
   const body = unwrapKimiQuotaPayload(value);
-  if (!body) return null;
+  if (!root || !body) return null;
   let weekly = parseKimiQuotaRow(body.usage);
   const total = parseKimiQuotaRow(body.totalQuota);
-  const nested = asRecord(body.data);
-  const quotaBody = asRecord(body.quota) ?? asRecord(nested?.quota);
-  const usages = asRecord(body.usages) ?? asRecord(nested?.usages) ?? asRecord(quotaBody?.usages);
-  const monthly = parseKimiQuotaRow(usages?.limit_month_total ?? usages?.monthTotal)
-    ?? parseKimiQuotaRow(usages?.limit_month_code ?? usages?.monthCode);
+  const nested = asRecord(root.data);
+  let monthly: { percent: number; resetAt?: number } | null = null;
+  for (const container of [root, nested, asRecord(root.quota), asRecord(nested?.quota)]) {
+    const usages = asRecord(container?.usages);
+    if (!usages) continue;
+    monthly = parseKimiQuotaRow(usages.limit_month_total ?? usages.monthTotal)
+      ?? parseKimiQuotaRow(usages.limit_month_code ?? usages.monthCode);
+    if (monthly) break;
+  }
   let fiveHour: { percent: number; resetAt?: number } | null = null;
   if (Array.isArray(body.limits)) {
     for (const rawItem of body.limits) {
