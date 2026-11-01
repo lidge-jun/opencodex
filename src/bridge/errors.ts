@@ -34,6 +34,12 @@ export function upstreamCodeForComboFailure(response: Response, bodyCode: string
     : bodyCode;
 }
 
+/** Preserve formatted quota-code provenance when lifecycle helpers rebuild a response. */
+export function carryFormattedQuotaSource(source: Response, target: Response): Response {
+  if (formattedQuotaSources.has(source)) formattedQuotaSources.set(target, formattedQuotaSources.get(source)!);
+  return target;
+}
+
 export function formatErrorResponse(
   status: number,
   type: string,
