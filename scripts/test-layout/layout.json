@@ -131,6 +131,7 @@
     "worker-embed-coverage.test.ts": "lib",
     "jev-stats.test.ts": "usage",
     "responses-devin-401-replay.test.ts": "responses",
+    "responses-direct-chat-tool-choice.test.ts": "responses",
     "responses-oauth-refresh-capacity.test.ts": "responses",
     "responses-grok-devin-preflight.test.ts": "responses",
     "deepseek-quota-currency.test.ts": "providers",

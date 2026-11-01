@@ -68,6 +68,7 @@ import {
   previousResponseProviderState,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
+import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
@@ -1438,6 +1439,11 @@ export async function prepareResponsesRequest(
     claudeGoAffinity: options.claudeGoAffinity,
     droidDefaultEffort: options.droidDefaultEffort,
   });
+  if (route.provider.adapter === "openai-chat"
+    && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId)) {
+    return formatErrorResponse(400, "invalid_request_error",
+      "This mandatory tool_choice cannot be preserved for a translated Chat destination.");
+  }
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
   } catch (error) {
