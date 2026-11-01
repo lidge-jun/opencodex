@@ -10,7 +10,8 @@ import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { getConfigDir, loadConfig } from "../config";
+import { getConfigDir, getConfigPath, loadConfig } from "../config";
+import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import type { ServiceOwnership } from "../service/state";
@@ -561,6 +562,14 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   const { inspectUpdateServiceHome } = await import("./service-home-authority");
   const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
   if (!homePolicy.authorizeMutation("package")) return 1;
+  const configPreflight = runConfigPreflight(getConfigPath());
+  if (!configPreflight.ok) {
+    console.error(`⚠️  Configuration preflight failed for ${getConfigPath()}; aborting update before stopping services.`);
+    if (configPreflight.error) console.error(`    ${configPreflight.error}`);
+    console.error("    Run 'ocx config validate' to inspect and repair configuration issues.");
+    return 1;
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
