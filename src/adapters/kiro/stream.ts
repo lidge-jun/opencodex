@@ -865,19 +865,21 @@ async function* parseKiroAttemptEvents(
     }
 
     if (mode === "text_fallback") {
-      if (priorAttempt) {
-        yield* priorAttempt.drainDeferred(completionAnswer !== undefined || (sawText && !sawRealTool));
-      }
       // A validated final answer and a real tool call keep their precedence; only a turn that would
-      // otherwise end on its text is read as refused. Filtered retry text is partial: released as the
-      // commentary it was staged as, never as an accepted final answer.
+      // otherwise end on its text is read as refused. Neither attempt produced an accepted answer, so
+      // the first attempt's held progress is released rather than superseded (retry text normally
+      // replaces it), and the filtered retry text follows as the commentary it was staged as.
       if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
+        if (priorAttempt) yield* priorAttempt.drainDeferred(false);
         yield* emitRetained(fallbackEvents);
         return {
           assistantText,
           sawReasoning,
           terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
         };
+      }
+      if (priorAttempt) {
+        yield* priorAttempt.drainDeferred(completionAnswer !== undefined || (sawText && !sawRealTool));
       }
       if (completionAnswer !== undefined) {
         yield* consumeSupersededByCompletion(fallbackEvents);

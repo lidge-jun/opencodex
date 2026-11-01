@@ -143,6 +143,23 @@ describe("Kiro CONTENT_FILTERED stop", () => {
     expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "content_filter", retryable: false });
   });
 
+  test("a retry filtered after partial text keeps the first attempt's progress", async () => {
+    // Retry text normally supersedes the first attempt's held progress. A filtered retry produced no
+    // accepted answer, so both attempts' text reaches the client as commentary before the refusal.
+    globalThis.fetch = (async () => streamOf(initial(), text("Partial retry"), metadata(capturedRefusal), contextUsage())) as unknown as typeof fetch;
+    const adapter = withTestTranslatorBudget(createKiroAdapterProduction(provider));
+    await adapter.buildRequest({
+      modelId: "claude-sonnet-4.5", stream: true, options: {},
+      context: { messages: [{ role: "user", content: "hello" }], tools: [bashTool] },
+    } as unknown as OcxParsedRequest);
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(streamOf(text("Checking.")))) events.push(event);
+    const texts = events.filter(event => event.type === "text_delta").map(event => (event as { text: string }).text);
+    expect(texts).toEqual(["Checking.", "Partial retry"]);
+    expect(events.filter(event => event.type === "text_delta").every(event => (event as { phase?: string }).phase === "commentary")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "incomplete", reason: "content_filter", retryable: false });
+  });
+
   test("the empty-completion guard passes the refusal through instead of retrying it", async () => {
     const { events } = await run(undefined, initial(), metadata(capturedRefusal), contextUsage());
     let continuations = 0;
