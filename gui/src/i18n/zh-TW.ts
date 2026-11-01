@@ -5,6 +5,9 @@ import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
 import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
@@ -131,6 +134,9 @@ export const zhTW: Record<TKey, string> = {
   ...subagentsV2Copy("zh-TW"),
   ...usageV2Copy("zh-TW"),
   ...logsV2Copy("zh-TW"),
+  ...connectV2Copy("zh-TW"),
+  ...startupV2Copy("zh-TW"),
+  ...proxyV2Copy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",
   "claude.tierDefaults.title": "CLI 層級預設模型",

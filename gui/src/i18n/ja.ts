@@ -5,6 +5,9 @@ import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
 import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -133,6 +136,9 @@ export const ja: Record<TKey, string> = {
   ...subagentsV2Copy("ja"),
   ...usageV2Copy("ja"),
   ...logsV2Copy("ja"),
+  ...connectV2Copy("ja"),
+  ...startupV2Copy("ja"),
+  ...proxyV2Copy("ja"),
   "claude.tierDefaults.unset": "未指定（既存のClaude設定を維持）",
   "claude.tierDefaults.recovery": "適用が停止し、自動復元に失敗しました。再試行する前に以下のバックアップを確認してください。",
   "claude.tierDefaults.title": "CLIのティア既定モデル",

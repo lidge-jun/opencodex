@@ -5,6 +5,9 @@ import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
 import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 import type { TKey } from "./en";
 
 /**
@@ -133,6 +136,9 @@ export const fr: Record<TKey, string> = {
   ...subagentsV2Copy("fr"),
   ...usageV2Copy("fr"),
   ...logsV2Copy("fr"),
+  ...connectV2Copy("fr"),
+  ...startupV2Copy("fr"),
+  ...proxyV2Copy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",
   "claude.tierDefaults.title": "Modèles par défaut du CLI",

@@ -5,6 +5,9 @@ import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
 import { logsV2Copy } from "./v2-pages/logs-copy";
+import { connectV2Copy } from "./v2-pages/connect-copy";
+import { startupV2Copy } from "./v2-pages/startup-copy";
+import { proxyV2Copy } from "./v2-pages/proxy-copy";
 // Brazilian Portuguese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -135,6 +138,9 @@ export const pt: Record<TKey, string> = {
   ...subagentsV2Copy("pt"),
   ...usageV2Copy("pt"),
   ...logsV2Copy("pt"),
+  ...connectV2Copy("pt"),
+  ...startupV2Copy("pt"),
+  ...proxyV2Copy("pt"),
   "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
   "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",
   "claude.tierDefaults.title": "Modelos padrão da CLI",
