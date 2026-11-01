@@ -62,9 +62,17 @@ multi-call pairing, overlap and lifecycle release.
 - Fetch-based web-search turns: full manual support. `createAdvisorSidecarStep` shares the same
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
-  exposing the synthetic call to the client. Mixed real client calls still end interception. Search
-  and Advisor iterations have independent allowances within one hard loop cap; consultation waits
-  emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
+  exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
+  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
+  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
+  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
+  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  their start, and the terminal refusal retains worker usage. Synthetic permission is also
+  iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
+  turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
+  Mixed real client calls still end
+  interception. Search and Advisor iterations have independent allowances within one hard loop cap;
+  consultation waits emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
   covers search-enabled, mixed-call, real-client-call and repeated-consultation paths. The limit
   reports accumulated worker usage once, without attaching it again to the terminal error;
   `tests/advisor/advisor-web-search.test.ts` covers the accounting and independent allowances.
