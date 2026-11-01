@@ -1257,6 +1257,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // An overwrite must not spend a second subscription account's quota as a side effect.
     const existingFailover = config.providers[name]?.oauthAccountFailover;
     if (existingFailover && !prov.oauthAccountFailover) prov.oauthAccountFailover = existingFailover;
+
+    if (!Object.hasOwn(body.provider, "cacheAffinity") && config.providers[name]?.cacheAffinity !== undefined) {
+      prov.cacheAffinity = config.providers[name]!.cacheAffinity;
+    }
     // ...and to hand-edited context windows. `ProviderPayload` (gui/src/provider-payload.ts)
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes

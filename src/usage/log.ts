@@ -18,7 +18,7 @@ import {
   type RequestCloseReason,
   type RequestTerminalStatus,
 } from "./request-outcome";
-import type { AttemptTierOutcome, OcxUsage } from "../types";
+import type { AttemptTierOutcome, CacheAffinityLogReason, CacheAffinityOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -383,6 +383,9 @@ export interface PersistedUsageEntry {
    */
   affinity?: CodexAffinityMove;
   affinityReason?: CodexAffinityReason;
+  /** Provider cache-affinity outcome for key-pool routes; additive, older rows omit it. */
+  cacheAffinity?: CacheAffinityOutcome;
+  cacheAffinityReason?: CacheAffinityLogReason;
   /**
    * Set when this request dropped account-bound continuation after a Codex pool
    * account change. Never an account identifier.
@@ -524,6 +527,21 @@ export function isKnownAffinityMove(value: unknown): value is NonNullable<Persis
 
 export function isKnownAffinityReason(value: unknown): value is NonNullable<PersistedUsageEntry["affinityReason"]> {
   return typeof value === "string" && KNOWN_AFFINITY_REASONS.has(value as NonNullable<PersistedUsageEntry["affinityReason"]>);
+}
+
+const KNOWN_CACHE_AFFINITY = new Set<NonNullable<PersistedUsageEntry["cacheAffinity"]>>([
+  "kept", "bound", "released",
+]);
+const KNOWN_CACHE_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["cacheAffinityReason"]>>([
+  "cache", "session", "turn", "continuation", "new", "quota", "auth",
+]);
+
+export function isKnownCacheAffinity(value: unknown): value is NonNullable<PersistedUsageEntry["cacheAffinity"]> {
+  return typeof value === "string" && KNOWN_CACHE_AFFINITY.has(value as NonNullable<PersistedUsageEntry["cacheAffinity"]>);
+}
+
+export function isKnownCacheAffinityReason(value: unknown): value is NonNullable<PersistedUsageEntry["cacheAffinityReason"]> {
+  return typeof value === "string" && KNOWN_CACHE_AFFINITY_REASONS.has(value as NonNullable<PersistedUsageEntry["cacheAffinityReason"]>);
 }
 
 export function usageLogPath(configDir?: string): string {
@@ -990,6 +1008,10 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const affinityReason = affinity !== undefined && isKnownAffinityReason(entry.affinityReason)
     ? entry.affinityReason
     : undefined;
+  const cacheAffinity = isKnownCacheAffinity(entry.cacheAffinity) ? entry.cacheAffinity : undefined;
+  const cacheAffinityReason = cacheAffinity !== undefined && isKnownCacheAffinityReason(entry.cacheAffinityReason)
+    ? entry.cacheAffinityReason
+    : undefined;
   const conversationStateScrub = typeof entry.conversationStateScrub === "string"
     && KNOWN_CONVERSATION_STATE_SCRUBS.has(entry.conversationStateScrub)
     ? entry.conversationStateScrub
@@ -1085,6 +1107,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(terminalSource ? { terminalSource } : {}),
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
+    ...(cacheAffinity ? { cacheAffinity } : {}),
+    ...(cacheAffinityReason ? { cacheAffinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     // Validated rather than copied on truthiness, like the inbound protocol and transport phase

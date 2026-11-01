@@ -23,6 +23,10 @@ their existing budgets. Local skips preserve the last upstream failure and its l
 route identity, usage, active attempt and spend tracker; preparation-only fields are discarded.
 Completed physical attempt rows remain intact, and final logging settles the last actual send's usage.
 The initial decision remains the selection evidence while physical attempts record execution.
+Candidate hops clear the previous candidate's cache-affinity outcome, kept entry, serving
+credential, model, and applicability before dispatch. A single-key or opted-out destination
+cannot inherit a prior candidate's `kept` outcome. Local skips restore the failed owner's
+context under the same rollback rule.
 
 Cancellation, non-replayable responses and committed output keep the
 [shared replay boundaries](responses-failover.md). A local policy refusal is identified by its

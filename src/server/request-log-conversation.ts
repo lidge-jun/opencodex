@@ -128,6 +128,26 @@ export function sessionLaneIdFromRequest(headers: Headers): string | undefined {
   return specific ?? parent;
 }
 
+/**
+ * The affinity lane a request binds under, derived once so every entry path agrees.
+ *
+ * `sessionLaneIdFromRequest` first (explicit thread/session/parent identity), then the
+ * explicit `x-opencode-session` header the Claude-Go handoff and
+ * `getOrAllocateRequestSessionLane` already treat as lane identity, then the log
+ * conversation id — except the Hermes digest, which is log correlation only and must
+ * never affect lanes or routing (#330). This expression used to be inlined at four
+ * entry paths and drifted: three of the four missed the `x-opencode-session` fallback
+ * until PR #7738 aligned them.
+ */
+export function affinityLaneFromRequest(
+  headers: Headers,
+  slot: LogConversationSlot,
+): string | undefined {
+  return sessionLaneIdFromRequest(headers)
+    ?? normalizeLogConversationId(headers.get("x-opencode-session"))
+    ?? (slot.conversationIdIsHermesFallback ? undefined : normalizeLogConversationId(slot.conversationId));
+}
+
 function firstSanitizedConversationId(
   ...values: Array<string | null | undefined>
 ): string | undefined {

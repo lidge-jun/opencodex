@@ -582,6 +582,7 @@ export async function prepareAdapterExchange(
     // blaming the provider makes the caller send the whole turn again -- the amplification this
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
       return unboundPoolSpendRefusalResponse(logCtx)
         ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message);
     }
@@ -872,6 +873,7 @@ export async function prepareAdapterExchange(
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
+          logCtx.terminalSource = "synthetic";
           return { failed: unboundPoolSpendRefusalResponse(logCtx)
             ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message) };
         }

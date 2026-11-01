@@ -14,14 +14,18 @@ export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" |
 
 /** Key identity comes from the captured selection, before env/keychain resolution. */
 export function stampApiKeyAccountLabel(
-  logCtx: { accountLogLabel?: string },
+  logCtx: { accountLogLabel?: string; affinityKeyEntryId?: string; affinityProviderName?: string },
   providerName: string,
   provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">,
 ): void {
   if (usesApiKeyAccount(provider)) {
     logCtx.accountLogLabel = apiKeyAccountLogLabel(providerName, provider._apiKeyAttempt);
-  } else if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) {
-    delete logCtx.accountLogLabel;
+    logCtx.affinityKeyEntryId = provider._apiKeyAttempt?.entryId;
+    logCtx.affinityProviderName = providerName;
+  } else {
+    if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) delete logCtx.accountLogLabel;
+    delete logCtx.affinityKeyEntryId;
+    delete logCtx.affinityProviderName;
   }
 }
 

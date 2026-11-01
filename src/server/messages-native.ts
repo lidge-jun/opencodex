@@ -76,6 +76,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
+import { affinityLaneFromRequest } from "./request-log-conversation";
 import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
@@ -448,11 +449,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
     try {
-      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+      const affinityLane = affinityLaneFromRequest(req.headers, logCtx);
+      if (affinityLane) logCtx.affinityLane = affinityLane;
+      const lastMessage = Array.isArray(body.messages) ? body.messages.at(-1) : undefined;
+      const continuation = Array.isArray(lastMessage?.content)
+        && lastMessage.content.some((block: unknown) => !!block && typeof block === "object" && (block as { type?: unknown }).type === "tool_result");
+      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation });
       if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
     } catch (error) {
       cleanupAbort(); upstream.abort();
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+      logCtx.terminalSource = "synthetic";
       const refusal = fail(429, error.message, "rate_limit_error");
       refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
       return refusal;
@@ -834,11 +841,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = fail(429, sendError.message, "rate_limit_error");
       refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
       return refusal;
     }
-    if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
+      return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
+    }
     if (sendError instanceof NativeMessagesSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
       finishLog(429);
