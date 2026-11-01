@@ -369,6 +369,18 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 ## Durable spill admission
 
+`src/responses/state/spill-codec.ts` encodes compressible 128 KiB–16 MiB spill payloads
+in self-contained version-2 JSON envelopes containing zstd/base64. The full envelope
+must save at least 12.5% over the original JSON; other payloads retain version 1.
+References, digests, prospective reservations and disk totals measure the physical
+envelope. The reader accepts both formats and enforces the decoded-record ceiling
+before bounded decompression, then validates the original response ID and payload.
+The resident-memory cap remains based on decoded content. Records have no parent-file
+dependencies, and existing files are not rewritten. Rolling back the writer must keep
+the version-2 reader until these records expire; older readers reject them as corrupt.
+`tests/responses/responses-spill-compression.test.ts` covers size savings, bounded
+decoding, legacy records, snapshot reload and thread-isolated replay.
+
 `enforceSpilledResponseBudget` in `src/responses/state.ts` owns the durable spill ceiling
 described in [Codex home](../codex-home.md). A queued publication, and the shutdown fallback, call it
 with the headroom their write needs on top of what is already accounted; called with no argument it

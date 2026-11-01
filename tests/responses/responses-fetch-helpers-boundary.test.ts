@@ -202,6 +202,10 @@ describe("Responses fetch-helper import boundary", () => {
       "../../plugins/upstream-hooks",
       "../../providers/request-pacing",
       // Opt-in request-body codec at the final send (#7247); runtime imports are node: built-ins only.
+      // Opt-in incremental Codex WS upload gate; the flag itself lives in src/config.
+      "./codex-ws-incremental",
+      // Opt-in outbound Codex history slimming at the final send.
+      "./history-slim",
       "./request-compression",
       "./ws-upstream",
     ]);

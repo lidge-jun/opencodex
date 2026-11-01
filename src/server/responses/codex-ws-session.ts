@@ -1,3 +1,4 @@
+import { codexWsIncrementalUploadEnabled, forgetIncrementalSession } from "./codex-ws-incremental";
 import { readCodexWsUpgradeHeaders } from "./codex-ws-metadata";
 
 export const MAX_CODEX_WS_SESSION_EXCHANGES = 32;
@@ -47,6 +48,7 @@ export class CodexWsSession {
   busy = false;
   private owner?: (reason: Error) => void;
   private readonly completedIds = new Set<string>();
+  private idlePing?: ReturnType<typeof setInterval>;
   private pendingUpgradeHeaders?: Headers;
   private connectionHeaders?: Headers;
 
@@ -66,6 +68,7 @@ export class CodexWsSession {
 
   reserve(): boolean {
     if (this.closed || this.busy || (this.opened && this.socket.readyState !== undefined && this.socket.readyState !== 1)) return false;
+    clearInterval(this.idlePing); this.idlePing = undefined;
     this.busy = true;
     const socket = this.socket as WebSocket & { ref?: () => void };
     try { socket.ref?.(); } catch { /* optional keepalive hint */ }
@@ -87,11 +90,20 @@ export class CodexWsSession {
       return;
     }
     this.completedIds.add(completedId);
-    if (this.completedIds.size >= MAX_CODEX_WS_SESSION_EXCHANGES) {
+    if (this.completedIds.size >= (codexWsIncrementalUploadEnabled() ? 256 : MAX_CODEX_WS_SESSION_EXCHANGES)) {
       this.dispose();
       return;
     }
     this.busy = false;
+    if (codexWsIncrementalUploadEnabled()) {
+      clearInterval(this.idlePing);
+      this.idlePing = setInterval(() => {
+        if (!codexWsIncrementalUploadEnabled()) { clearInterval(this.idlePing); this.idlePing = undefined; return; }
+        if (this.busy || this.closed) return;
+        try { (this.socket as WebSocket & { ping?: () => void }).ping?.(); } catch { this.dispose(); }
+      }, 15_000);
+      this.idlePing.unref?.();
+    }
     const socket = this.socket as WebSocket & { unref?: () => void };
     try { socket.unref?.(); } catch { /* optional hint; shutdown/expiry still owns cleanup */ }
     this.changed();
@@ -136,6 +148,8 @@ export class CodexWsSession {
     // The active exchange's close listener retains pre-send fallback semantics.
   };
   private detach(): void {
+    clearInterval(this.idlePing); this.idlePing = undefined;
+    forgetIncrementalSession(this);
     this.pendingUpgradeHeaders = undefined;
     this.connectionHeaders = undefined;
     this.socket.removeEventListener("handshake", this.onHandshake);

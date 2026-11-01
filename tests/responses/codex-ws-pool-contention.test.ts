@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { setCodexWsReuseAcrossTurns } from "../../src/config/codex-ws-reuse-setting";
-import { CODEX_RESPONSES_HTTP_URL } from "../../src/server/responses/codex-ws-request";
+import { CODEX_RESPONSES_HTTP_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
+import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsPool, codexWsReuseIdentity } from "../../src/server/responses/codex-ws-pool";
 import { planCodexWsDial } from "../../src/server/responses/ws-upstream";
+import { setCodexWsIncrementalUpload, prepareIncrementalFrame, completeIncrementalFrame } from "../../src/server/responses/codex-ws-incremental";
 
 class Socket extends EventTarget {
   static all: Socket[] = [];
@@ -43,19 +45,125 @@ function frame(turn: string, model = "fixture-model"): string {
   });
 }
 
-function identity(turn: string, model = "fixture-model", authorization = headers.authorization) {
-  return codexWsReuseIdentity(CODEX_RESPONSES_HTTP_URL, { ...headers, authorization }, frame(turn, model));
+function identity(turn: string, model = "fixture-model", authorization = headers.authorization, caller?: string) {
+  return codexWsReuseIdentity(CODEX_RESPONSES_HTTP_URL, { ...headers, authorization }, frame(turn, model), undefined, undefined, caller);
 }
 
 const pools: CodexWsPool[] = [];
 
 afterEach(() => {
+  setCodexWsIncrementalUpload(false);
   setCodexWsReuseAcrossTurns(false);
   for (const pool of pools) pool.dispose();
   pools.length = 0;
   for (const socket of Socket.all) socket.close();
   Socket.all = [];
   globalThis.WebSocket = realWebSocket;
+});
+
+for (const scenario of [{ name: "four idle minutes", releaseAt: 0, nextAt: 240_000 },
+  { name: "twenty-one minutes of socket age", releaseAt: 1_140_000, nextAt: 1_260_000 }]) {
+  test(`completed input remains incremental after ${scenario.name}`, async () => {
+    setCodexWsIncrementalUpload(true);
+    setCodexWsReuseAcrossTurns(true);
+    globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+    let now = 0;
+    const retained = new CodexWsPool({ now: () => now });
+    pools.push(retained);
+    const key = identity("turn-a", "fixture-model", headers.authorization, "fixture-caller")!;
+    const first = retained.acquire(key, CODEX_RESPONSES_HTTP_URL, headers)!;
+    await opened();
+    const input = [{ role: "user", content: "context ".repeat(32_768) }];
+    const body = { type: "response.create", model: "fixture-model", input, store: false };
+    const plan = prepareIncrementalFrame(first, JSON.stringify(body), "fixture-caller")!;
+    const output = [{ type: "message", role: "assistant", content: "acknowledged" }];
+    completeIncrementalFrame(plan, { id: "resp-retained", status: "completed", output });
+    now = scenario.releaseAt;
+    first.release("resp-retained");
+    now = scenario.nextAt;
+    const next = retained.acquire(key, CODEX_RESPONSES_HTTP_URL, headers)!;
+    expect(next).toBe(first);
+    const full = JSON.stringify({ ...body, input: [...input, ...output, { role: "user", content: "next" }] });
+    const delta = prepareIncrementalFrame(next, full, "fixture-caller")!;
+    expect(delta.delta).toBe(true);
+    expect(delta.sentBytes).toBeLessThan(delta.fullBytes / 100);
+    expect(JSON.parse(delta.frameText).input).toEqual([{ role: "user", content: "next" }]);
+  });
+}
+
+test("incremental sockets still expire after ten idle minutes or fifty minutes of age", async () => {
+  setCodexWsIncrementalUpload(true);
+  setCodexWsReuseAcrossTurns(true);
+  globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+  for (const timing of [{ releaseAt: 0, nextAt: 600_001 }, { releaseAt: 2_940_000, nextAt: 3_000_001 }]) {
+    let now = 0;
+    const retained = new CodexWsPool({ now: () => now });
+    pools.push(retained);
+    const key = identity("turn-a", "fixture-model", headers.authorization, "fixture-caller")!;
+    const first = retained.acquire(key, CODEX_RESPONSES_HTTP_URL, headers)!;
+    await opened();
+    now = timing.releaseAt;
+    first.release("resp-expiring");
+    now = timing.nextAt;
+    expect(retained.acquire(key, CODEX_RESPONSES_HTTP_URL, headers)).not.toBe(first);
+    expect(first.closed).toBe(true);
+  }
+});
+
+test("real loopback exchanges send fewer bytes after an idle gap without extra creates", async () => {
+  setCodexWsIncrementalUpload(true);
+  setCodexWsReuseAcrossTurns(true);
+  globalThis.WebSocket = realWebSocket;
+  async function run(oldDeadlines: boolean) {
+    let now = 0;
+    let connections = 0;
+    const bytes: number[] = [];
+    const creates: Record<string, unknown>[] = [];
+    const output = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch(req, server) { return server.upgrade(req) ? undefined : new Response(null, { status: 400 }); },
+      websocket: {
+        open() { connections++; },
+        message(ws, raw) {
+          bytes.push(Buffer.byteLength(String(raw)));
+          creates.push(JSON.parse(String(raw)));
+          const id = `resp-loopback-${creates.length}`;
+          ws.send(JSON.stringify({ type: "response.created", response: { id, status: "in_progress", output: [] } }));
+          ws.send(JSON.stringify({ type: "response.completed", response: { id, status: "completed", output,
+            usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 } } }));
+        },
+      },
+    });
+    const retained = new CodexWsPool({ now: () => now,
+      ...(oldDeadlines ? { idleMs: 180_000, maxAgeMs: 1_200_000 } : {}) });
+    const input: unknown[] = [{ role: "user", content: "retained context ".repeat(16_384) }];
+    const key = identity("turn-a", "fixture-model", headers.authorization, "fixture-caller")!;
+    try {
+      for (let turn = 0; turn < 2; turn++) {
+        if (turn) { now = 240_000; input.push(...output, { role: "user", content: "next" }); }
+        const init: RequestInit = { method: "POST", signal: AbortSignal.timeout(3000), headers,
+          body: JSON.stringify({ model: "fixture-model", stream: true, input, store: false }) };
+        const prepared = prepareCodexWsRequest(CODEX_RESPONSES_HTTP_URL, init)!;
+        const session = retained.acquire(key, `ws://127.0.0.1:${server.port}`, prepared.headers)!;
+        const plan = prepareIncrementalFrame(session, prepared.frameText, "fixture-caller")!;
+        const response = await codexWsExchange({ session, url: CODEX_RESPONSES_HTTP_URL, init,
+          prepared: { ...prepared, frameText: plan.frameText }, incrementalPlan: plan,
+          sseFallback: (() => { throw new Error("unexpected HTTP fallback"); }) as typeof fetch,
+          bunVersion: Bun.version });
+        const body = await response.text();
+        expect(body.includes("response.completed")).toBe(true);
+      }
+      expect(creates.length).toBe(2);
+      return { bytes, connections, lastInputCount: (creates[1]!.input as unknown[]).length };
+    } finally { retained.dispose(); server.stop(true); }
+  }
+  const before = await run(true);
+  const after = await run(false);
+  expect(before.connections).toBe(2);
+  expect(after.connections).toBe(1);
+  expect(after.lastInputCount).toBe(1);
+  expect(after.bytes[1]!).toBeLessThan(before.bytes[1]! / 100);
+  console.log(JSON.stringify({ uploadRetentionLoopback: { before, after } }));
 });
 
 function pool(): CodexWsPool {
@@ -139,6 +247,33 @@ test("the wait queue is FIFO, depth limited, and abortable", async () => {
   first!.release("response-1");
   expect(await queued[0]).toBe(first);
   expect(Socket.all).toHaveLength(1);
+});
+
+test("the admitted caller scopes pooled sockets, including queued acquisition", async () => {
+  setCodexWsReuseAcrossTurns(true);
+  const retained = pool();
+  const alice = identity("turn-a", "fixture-model", headers.authorization, "principal:alice")!;
+  const bob = identity("turn-b", "fixture-model", headers.authorization, "principal:bob")!;
+  const unidentified = identity("turn-c")!;
+  expect(identity("turn-z", "fixture-model", headers.authorization, "principal:alice")!.key).toBe(alice.key);
+  expect(new Set([alice.scope, bob.scope, unidentified.scope]).size).toBe(3);
+  expect(new Set([alice.key, bob.key, unidentified.key]).size).toBe(3);
+  const held = retained.acquire(alice, CODEX_RESPONSES_HTTP_URL, headers);
+  await opened();
+  // Another caller on the same credential, account and thread never queues for, or receives,
+  // the first caller's socket; it gets its own connection at once.
+  const other = await retained.acquireWaiting(bob, CODEX_RESPONSES_HTTP_URL, headers, undefined);
+  expect(other).not.toBeNull();
+  expect(other).not.toBe(held);
+  const anonymous = await retained.acquireWaiting(unidentified, CODEX_RESPONSES_HTTP_URL, headers, undefined);
+  expect(anonymous).not.toBeNull();
+  expect(anonymous).not.toBe(held);
+  expect(anonymous).not.toBe(other);
+  const same = retained.acquireWaiting(alice, CODEX_RESPONSES_HTTP_URL, headers, undefined);
+  held!.release("response-1");
+  expect(await same).toBe(held);
+  expect(Socket.all).toHaveLength(3);
+  expect(retained.snapshot().size).toBe(3);
 });
 
 test("reuse drops turn headers from the handshake", () => {

@@ -7,6 +7,7 @@ import { requestPacingOverloadResponse } from "./pacing-overload";
 import { recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
 import { createSteeringSettingsNormalizer } from "./native-steering-policy";
 import { nativeResponseControlEligible } from "./native-response-control";
+import { resolveContextPrincipal } from "../auth-cors";
 import { NativeInjectionReplay } from "./native-injection-replay";
 import { NativeSteeringReplay } from "./native-steering-replay";
 import type {
@@ -93,7 +94,7 @@ import {
   safeOriginLabel,
   fetchWithHeaderTimeout,
   providerFetch,
-  safeHostLabel,
+  safeHostLabel, codexWsAdmittedCaller,
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
@@ -113,6 +114,7 @@ import {
   recordCodexModelDenialEvidence,
 } from "../../codex/model-entitlements";
 import { codexWsSocketDeathStage, isCodexWsUpstreamResponse } from "./codex-ws-wire";
+import { codexWsReceiptMode, capturePhysicalSendRecovery } from "./codex-ws-send-accounting";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
@@ -252,6 +254,7 @@ export async function preparePassthroughExchange(
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
+  const codexWsCaller = codexWsAdmittedCaller(options, () => resolveContextPrincipal(req, config, options.admission));
   const {
     route,
     toolBridgeMaps,
@@ -986,11 +989,7 @@ export async function preparePassthroughExchange(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
-    // A combo-owned first send is settled by the physical-dispatch receipt unless spend
-    // enforcement is on, where the shared reporter already owns the permit lifecycle.
-    // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
-    // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
-    const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
+    const receiptMode = codexWsReceiptMode(sendBudgetState.adapterSendBudget, Boolean(options.comboInitialSend));
     // #6969: Pool sends hold empty lifecycle frames so a pre-output refusal reaches the ladder below.
     const preOutputRefusals = new PoolPreOutputRefusals();
     const preOutputRefusalHold = () => poolPreOutputRefusalHold(admissionState.authCtx, route.provider, connectMs, options.comboAttempt);
@@ -1013,7 +1012,7 @@ export async function preparePassthroughExchange(
             body: request.body,
           }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              httpOnly: canonicalBufferedJson,
+              httpOnly: canonicalBufferedJson, codexWsCaller, codexWsRecovery: capturePhysicalSendRecovery(),
               nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                 ? options.nativeControl : undefined,
@@ -1154,7 +1153,7 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, innerRecovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                httpOnly: canonicalBufferedJson,
+                httpOnly: canonicalBufferedJson, codexWsCaller, codexWsRecovery: capturePhysicalSendRecovery(),
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
@@ -1272,7 +1271,7 @@ export async function preparePassthroughExchange(
           ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined;
         let replayNotified = false;
         const oauthReplayExecutor = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            httpOnly: canonicalBufferedJson,
+            httpOnly: canonicalBufferedJson, codexWsCaller, codexWsRecovery: capturePhysicalSendRecovery(),
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0
               ? options.nativeControl : undefined,
@@ -1421,7 +1420,7 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                httpOnly: canonicalBufferedJson,
+                httpOnly: canonicalBufferedJson, codexWsCaller, codexWsRecovery: capturePhysicalSendRecovery(),
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
@@ -1568,7 +1567,7 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                httpOnly: canonicalBufferedJson,
+                httpOnly: canonicalBufferedJson, codexWsCaller, codexWsRecovery: capturePhysicalSendRecovery(),
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,

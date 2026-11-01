@@ -518,6 +518,8 @@ export interface ResetRetryOptions {
   label?: string;
   /** Total upstream sends allowed, including the first one. Not a per-layer retry count. */
   attempts?: number;
+  /** Live shared allowance, also forwarded to nested reset retries. */
+  remainingSends?: () => number;
   /**
    * Reports how many upstream sends this call actually consumed, so a caller that spans
    * several legs of one request (initial send, then a 429/account-recovery refetch) can
@@ -529,6 +531,7 @@ export interface ResetRetryOptions {
    * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
    */
   onSendsConsumed?: ((sends: number) => void) & {
+    remaining?: () => number;
     beforeSend?: () => boolean;
     close?: () => void;
     execute?: <T>(run: () => Promise<T>) => Promise<T>;
@@ -649,6 +652,7 @@ export async function fetchWithResetRetry(
   firstRecovery?: UpstreamSendRecovery,
 ): Promise<Response> {
   const attempts = normalizeSendAttempts(opts.attempts, RESET_RETRY_MAX_ATTEMPTS);
+  const remainingSends = opts.remainingSends ?? opts.onSendsConsumed?.remaining;
   // Zero is zero. The old Math.max(1, ...) floor meant an exhausted budget still bought one
   // more send on every recovery leg, which is most of what made a bounded per-layer retry
   // compose into an unbounded per-request count.
@@ -662,6 +666,7 @@ export async function fetchWithResetRetry(
   let spentOperatorReplacement = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    if (remainingSends && remainingSends() <= 0) throw new SendBudgetExhaustedError(opts.label);
     // Reported before the await, one physical send at a time: a send that rejects has still
     // been made, and this helper leaves through four exits (return, reset give-up, non-reset
     // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
@@ -689,14 +694,14 @@ export async function fetchWithResetRetry(
       if (opts.replaySafe === true) {
         // Repeating this operation cannot duplicate anything, so an exhausted budget rethrows
         // and the caller's own error path takes over.
-        if (attempt === attempts - 1) throw err;
+        if (attempt === attempts - 1 || (remainingSends && remainingSends() <= 0)) throw err;
       } else {
         // The stage table refuses an ambiguous pre-header reset. The only thing that overrides
         // it is an operator allowance, and claiming it here is what keeps the grant single --
         // the post-header protocol gate spends the same counter for the same logical request.
         // Return evidence rather than throwing a generic transport error: outer catches
         // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
-        if (attempt + 1 >= attempts || opts.claimAmbiguousResend?.() !== true) {
+        if (attempt + 1 >= attempts || (remainingSends && remainingSends() <= 0) || opts.claimAmbiguousResend?.() !== true) {
           return replayRefusalResponse();
         }
         spentOperatorReplacement = true;
@@ -747,7 +752,7 @@ export async function fetchWithTransientRetry(
   const countedFetch: ReplayableFetch = (recovery) => {
     // Incremented BEFORE the await so a rejected send still consumes budget; counting only
     // successes would let a reset storm loop without bound.
-    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.label);
+    if (remaining() <= 0 || (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend())) throw new SendBudgetExhaustedError(opts.label);
     sent += 1;
     const run = () => doFetch(recovery);
     return opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run();
@@ -755,7 +760,8 @@ export async function fetchWithTransientRetry(
   // No floor. A spent budget hands the inner helper 0, which refuses rather than buying one
   // more send -- the loop condition alone was never enough, because every later recovery leg
   // called this helper again and the floor funded each of them.
-  const remaining = () => Math.max(0, budget - sent);
+  const remaining = () => Math.max(0, Math.min(budget - sent,
+    opts.remainingSends?.() ?? Infinity, opts.onSendsConsumed?.remaining?.() ?? Infinity));
   // The inner reset layer now has its own `onSendsConsumed`, and these are the same physical
   // sends `countedFetch` already counts. Forwarding the reporter down the `remaining()` path
   // would report each of them twice, which is how a four-send cap becomes a two-send cap. One
@@ -763,6 +769,7 @@ export async function fetchWithTransientRetry(
   const innerResetOptions = (): ResetRetryOptions => ({
     ...opts,
     attempts: remaining(),
+    remainingSends: remaining,
     onSendsConsumed: undefined,
   });
   // Reported in `finally` rather than at each exit: this function returns from five places
@@ -772,7 +779,7 @@ export async function fetchWithTransientRetry(
   if (budget === 0) throw new SendBudgetExhaustedError(opts.label);
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
-  for (let attempt = 0; sent < budget; attempt++) {
+  for (let attempt = 0; remaining() > 0; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
     // An upstream that answers with the exact `x-should-retry: false` verdict has said the same

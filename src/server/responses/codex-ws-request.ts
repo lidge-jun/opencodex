@@ -1,3 +1,4 @@
+import { codexWsIncrementalUploadEnabled } from "./codex-ws-incremental";
 import {
   applyCodexRoutingHint,
   CODEX_RESPONSES_LITE_HEADER,
@@ -41,6 +42,10 @@ function applyLiteMetadata(body: Record<string, unknown>, headers: Headers): boo
     if (value !== null && !Object.hasOwn(current ?? {}, name)) {
       body.client_metadata = { ...current, [name]: value };
     }
+  }
+  const requestId = headers.get("x-client-request-id");
+  if (codexWsIncrementalUploadEnabled() && requestId !== null) {
+    body.client_metadata = { ...(body.client_metadata as Record<string, string> | undefined), "x-client-request-id": requestId };
   }
   return true;
 }

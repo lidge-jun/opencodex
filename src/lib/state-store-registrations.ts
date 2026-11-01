@@ -1,3 +1,5 @@
+import { bindCodexWsIncrementalConfig } from "../config/codex-ws-incremental-setting";
+import { bindUpstreamHistorySlimConfig } from "../server/responses/history-slim";
 import {
   getConfigDir,
   reconcileConfigWarningMemos,
@@ -83,12 +85,15 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);
+  bindUpstreamHistorySlimConfig(config);
+  bindCodexWsIncrementalConfig(config);
   bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
 }
 
 export function reconcileLiveStateStores() {
   if (!liveServerConfig) return { storesVisited: 0, rowsRemoved: 0 };
+  bindCodexWsIncrementalConfig(liveServerConfig);
   notifyLiveConfigObservers(liveServerConfig);
   // Only adopted live providers own canonical pools; detached disk snapshots may
   // contain providers the routing instance deliberately has not activated yet.
