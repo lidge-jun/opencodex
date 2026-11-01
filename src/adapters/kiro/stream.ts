@@ -463,6 +463,9 @@ async function* parseKiroAttemptEvents(
 
   const protocolTerminal = (message: string, malformedCompletion = false): AdapterEvent => {
     if (mode === "text_fallback" && malformedCompletion) {
+      // The bounded retry was the structured contract's second ask; a malformed answer on it ends
+      // the turn with the non-retryable structured failure, never a replayable incomplete.
+      if (structuredOutput) return kiroStructuredOutputFailure(message, usage());
       return retryableKiroIncomplete(
         "malformed_kiro_completion",
         message,

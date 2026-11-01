@@ -339,6 +339,15 @@ describe("Kiro structured-output stop reasons", () => {
     });
   });
 
+  test("a malformed structured tool input on the retry is non-retryable", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), structured({ name: "wrong key" }), structured('{"title":'),
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "error", code: "invalid_kiro_structured_output", retryable: false });
+  });
+
   test("an empty retry ends the structured contract with a non-retryable failure", async () => {
     const { bodies, texts, terminal } = await run(
       structuredRequest(), structured({ name: "wrong key" }), [stop("END_TURN")],
