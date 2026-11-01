@@ -15,6 +15,7 @@ import { executeComboResponses } from "./core-combo";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { rewriteMuseQuotaExhaustedResponse } from "../../responses/muse-quota-refusal";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -34,7 +35,7 @@ export async function handleResponses(
   function cancel() { accountLoad.cancelled = true; release(); }
   abortSignal.addEventListener("abort", cancel, { once: true });
   try {
-    const response = await runWithCompactionRecovery(req, config, logCtx, {
+    const response = await rewriteMuseQuotaExhaustedResponse(await runWithCompactionRecovery(req, config, logCtx, {
       ...options, abortSignal,
       advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
@@ -50,7 +51,7 @@ export async function handleResponses(
       accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
-    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers));
+    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers)), logCtx.provider);
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);

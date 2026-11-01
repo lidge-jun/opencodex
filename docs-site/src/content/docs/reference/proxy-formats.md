@@ -122,6 +122,22 @@ without a stable thread, isolated helpers, tool-result resumes, partial output, 
 and quota errors do not use this recovery. Continued eligible overflows keep the existing
 allowance active even after it is exhausted; they do not replenish it. This does not infer whether a task is making progress.
 
+## Muse quota window refusals
+
+A Muse Code subscription answers a consumed five-hour window with HTTP 429,
+`code: "rate_limit_exceeded"`, the sentence `Subscription quota exhausted. Your
+usage window resets at <ISO instant>.`, and a `retry-after` covering the rest of
+that window (measured 1,915-3,059 seconds). Codex App honours the header, so it
+schedules the next sampling attempt at the reset instant and the turn looks hung
+even though the proxy answered at once.
+
+On the `meta-muse` route, OpenCodex keeps the 429, the sentence and `resets_at`
+but drops a `retry-after` longer than 60 seconds and adds
+`x-opencodex-quota-window-exhausted: 1`. The client then applies its own short
+backoff and shows the quota message. Short throttles, other providers' 429s and
+responses without an `application/json` content type stay untouched. A
+pay-as-you-go `meta-model` key is unaffected.
+
 ## Live sideband connection failures
 
 The proxy completes the upstream live sideband handshake before accepting the client

@@ -777,6 +777,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     adapter: "openai-responses",
     baseUrl: "https://api.meta.ai/v1",
     authKind: "key",
+    // Live probe 2026-10-31: api.meta.ai answers 400 "`custom` tools are not supported on this
+    // endpoint" for a native custom declaration, so Codex's freeform apply_patch must be lowered
+    // to a function shape (and, for a subscription credential, aliased past the builtin-name gate).
+    supportsResponsesCustomTools: false,
     dashboardUrl: "https://dev.meta.ai/docs/authentication",
     defaultModel: "muse-spark-1.3",
     models: META_MODEL_API_MODELS,
@@ -827,6 +831,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       "x-api-version": "1.0.0",
     },
     authKind: "oauth",
+    // Same 400 as meta-model: the Muse Responses endpoint has no native custom-tool lane.
+    supportsResponsesCustomTools: false,
     oauthId: "meta-muse",
     dashboardUrl: "https://dev.meta.ai",
     defaultModel: "muse-spark-1.3",

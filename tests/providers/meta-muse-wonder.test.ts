@@ -94,5 +94,14 @@ describe("Muse Wonder on the direct Meta providers", () => {
     expect(derived?.cost4).toEqual(direct?.cost4);
     expect(derived?.status).toBe("verified-derived");
   });
+
+  test("both direct Meta providers lower native custom tools", () => {
+    // Live probe 2026-10-31: api.meta.ai answers 400 "`custom` tools are not supported on this
+    // endpoint" for a native custom declaration on every Muse model, so Codex's freeform
+    // apply_patch must be projected as a function before it reaches the wire.
+    for (const id of ["meta-model", "meta-muse"] as const) {
+      expect(entry(id).supportsResponsesCustomTools).toBe(false);
+    }
+  });
 });
 
