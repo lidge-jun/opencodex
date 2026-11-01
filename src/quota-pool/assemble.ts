@@ -42,7 +42,7 @@ import {
 } from "../providers/quota/account-cache";
 import { parseQuotaFailureCode } from "../providers/quota-types";
 import { getAccountSet } from "../oauth/store";
-import { peekClaudeUsageObservation } from "../adapters/claude-cli/usage-admission";
+import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../providers/claude-cli-usage-state";
 import {
   QUOTA_POOL_SCHEMA,
   type QuotaPool,
@@ -272,8 +272,14 @@ function oauthAccounts(identity: QuotaPoolIdentity, provider: string, now: numbe
   });
 }
 
+/**
+ * The signed-in Claude account's row, by the identity the last sign-in read recorded. The pool is a
+ * passive read and may not read the Keychain itself; the Home's dashboard and turns keep it current.
+ */
 function claudeCliAccounts(identity: QuotaPoolIdentity, provider: string, deps: QuotaPoolDeps, now: number): TrackedAccount[] {
-  const observation = peekClaudeUsageObservation(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {});
+  const signedIn = claudeSignedInIdentity();
+  if (!signedIn) return [];
+  const observation = peekClaudeUsageObservation({ ...(deps.claudeUsageStatePath ? { statePath: deps.claudeUsageStatePath } : {}), identity: signedIn });
   if (!observation) return [];
   const windows = observation.quota ? providerQuotaWindows(observation.quota, "measured", now) : [];
   if (finite(observation.refusalUntil) && observation.refusalUntil > now) {
