@@ -188,7 +188,7 @@
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
-      "scope": "Loaded-session Unix messaging and separate opt-in stored-queue MCP tools, receipts and owned helper bounds.",
+      "scope": "Loaded-session Unix messaging and opt-in stored-queue MCP tools, explicit final-turn reads, receipts and owned helper bounds.",
       "documents": [
         "src/messaging/",
         "src/cli/"

@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parseQueueMcpArgs } from "../../src/cli/message-mcp-command";
-import { QUEUE_MCP_TARGET, queueMcpFixture } from "../helpers/messaging-mcp-queue";
+import { QUEUE_MCP_TARGET, REPLY_MCP_CLIENT, queueMcpFixture } from "../helpers/messaging-mcp-queue";
 import { repoPath } from "../helpers/repo-root";
 
 test("message mcp requires exactly one explicit absolute CLI and home", () => {
   expect(parseQueueMcpArgs(["--codex", "/fixture/codex", "--codex-home", "/fixture/home"]))
     .toEqual({ codex: "/fixture/codex", codexHome: "/fixture/home" });
+  expect(parseQueueMcpArgs(["--codex", "/fixture/codex", "--allow-reply-read", "--codex-home", "/fixture/home"]))
+    .toEqual({ codex: "/fixture/codex", codexHome: "/fixture/home", allowReplyRead: true });
+  expect(parseQueueMcpArgs(["--allow-reply-read", "--allow-reply-read", "--codex", "/a", "--codex-home", "/b"])).toBeNull();
   for (const args of [[], ["--codex", "relative", "--codex-home", "/home"], ["--codex", "/bin/codex"],
     ["--codex", "/a", "--codex", "/b"], ["--codex", "/a", "--codex-home", "/b", "--json"],
     ["--remote", "/a", "--codex-home", "/b"], ["--codex", "/a\0b", "--codex-home", "/b"]]) {
@@ -40,6 +43,22 @@ describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
       expect(receipt.status).toBe("queued"); expect(receipt.processed).toBe(false);
       expect(JSON.stringify(sent)).not.toContain("PRIVATE_MCP_BODY");
     } finally { await client.close(); await f.close(); }
+  }, 15000);
+
+  test("explicit opt-in exposes the read tool, remains inert until invoked and projects only final text", async () => {
+    const f = queueMcpFixture("reply-success");
+    const client = new Client({ name: "fixture", version: "1" });
+    const transport = new StdioClientTransport({ command: process.execPath,
+      args: [repoPath("src/cli/index.ts"), "message", "mcp", "--codex", f.options.codex, "--codex-home", f.options.codexHome, "--allow-reply-read"], stderr: "pipe" });
+    try {
+      await client.connect(transport);
+      expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(["codex_queue_message","codex_read_reply","codex_threads"]);
+      expect(f.calls()).toHaveLength(0);
+      const read = await client.callTool({name:"codex_read_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}});
+      const result = JSON.parse((read.content as {text:string}[])[0]!.text);
+      expect(result).toMatchObject({available:true,status:"observed",association:"same_turn_not_exclusive",replies:[{text:"fixture answer"}]});
+      expect(JSON.stringify(read)).not.toContain("PRIVATE_");
+    } finally {await client.close();await f.close();}
   }, 15000);
 
   test("four-helper bound and MCP disconnect cancel and reap pending work", async () => {

@@ -637,6 +637,7 @@
   "messaging-local-cli.test.ts": "codex-integration",
   "messaging-local-envelope.test.ts": "codex-integration",
   "messaging-mcp-queue.test.ts": "codex-integration",
+  "messaging-mcp-replies.test.ts": "codex-integration",
   "cli-message-mcp.test.ts": "cli",
   "messaging-local-send.test.ts": "codex-integration",
   "messaging-local-lifecycle.test.ts": "codex-integration",

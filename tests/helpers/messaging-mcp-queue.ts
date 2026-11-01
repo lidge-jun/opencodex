@@ -5,6 +5,8 @@ import { writeTestTempOwner } from "../../scripts/test-temp";
 import { removeTreeWithRetry } from "./remove-tree";
 
 export const QUEUE_MCP_TARGET = "00000000-0000-4000-8000-000000000002";
+export const REPLY_MCP_CLIENT = "00000000-0000-4000-8000-000000000003";
+export const REPLY_MCP_TURN = "00000000-0000-4000-8000-000000000004";
 export interface QueueMcpCall { frame: { method: string; params?: Record<string, unknown> }; argv: string[]; sender?: string; home: string; pid: number }
 
 /** Offline native CLI with one fixed failure mode, private capture and no user credentials. */
@@ -33,6 +35,46 @@ rl.on("line", line => {
   if(mode === "missing-error-message") return emit({id:2,error:{code:-32602}});
   if(mode === "mixed-error-result") return emit({id:2,error:{code:-32602,message:"private"},result:{}});
   if(mode === "reject") return emit({id:2,error:{code:-32602,message:"PRIVATE_NATIVE_ERROR"}});
+  if(mode.startsWith("reply-") && ["thread/items/list","thread/items/read","thread/turns/list"].includes(f.method)) {
+    const turnId = ${JSON.stringify(REPLY_MCP_TURN)};
+    const user = {turnId,item:{type:"userMessage",id:"user-1",clientId:${JSON.stringify(REPLY_MCP_CLIENT)},content:[{type:"text",text:"PRIVATE_USER"}]}};
+    const final = {turnId,item:{type:"agentMessage",id:"answer-1",phase:"final_answer",text:mode === "reply-long" ? "가".repeat(6000) : "fixture answer",memoryCitation:"PRIVATE_CITATION"}};
+    const later = {turnId,item:{type:"userMessage",id:"other-user",clientId:null,content:[{type:"text",text:"PRIVATE_OTHER_USER"}]}};
+    const commentary = {turnId,item:{type:"agentMessage",id:"commentary",phase:"commentary",text:"PRIVATE_COMMENTARY"}};
+    const tool = {turnId,item:{type:"commandExecution",id:"tool-1",aggregatedOutput:"PRIVATE_TOOL"}};
+    if(f.method === "thread/items/read") {
+      if(mode === "reply-stale") user.item.clientId="another-client";
+      return emit({id:2,result:{data:[user]}});
+    }
+    if(f.method === "thread/turns/list") return emit({id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : mode === "reply-interrupted" ? "interrupted" : "completed",items:[]}],nextCursor:null}});
+    if(mode === "reply-reject") return emit({id:2,error:{code:-32601,message:"PRIVATE_SERVER"}});
+    const searching = !f.params.turnId;
+    let data = searching ? [final,user] : [user,commentary,tool,later,final], nextCursor=null;
+    if(searching && mode === "reply-none") data=[];
+    if(searching && mode === "reply-null") user.item.clientId=null;
+    if(searching && mode === "reply-missing-client") delete user.item.clientId;
+    if(mode === "reply-unrelated-missing-client") {delete later.item.clientId;if(searching) data.unshift(later);}
+    if(mode === "reply-invalid-client") {later.item.clientId=42;if(searching) data.unshift(later);}
+    if(searching && mode === "reply-ambiguous") data=[user,{...user,item:{...user.item,id:"user-2"}}];
+    if(searching && mode === "reply-search-pages" && !f.params.cursor) {data=[later];nextCursor="search-next";}
+    if(searching && mode === "reply-cycle") {data=[];nextCursor="cycle";}
+    if(searching && mode === "reply-too-many") data=Array.from({length:51},(_,i)=>({...user,item:{...user.item,id:"user-"+i}}));
+    if(!searching && mode === "reply-wrong-turn") final.turnId="00000000-0000-4000-8000-000000000099";
+    if(!searching && mode === "reply-paged" && !f.params.cursor) {data=[user,tool];nextCursor="reply-next";}
+    if(!searching && mode === "reply-paged" && f.params.cursor) data=[final];
+    if(!searching && mode === "reply-stale") {data=[user];nextCursor="reply-next";}
+    if(!searching && mode === "reply-running") data=[user,commentary];
+    if(!searching && mode === "reply-unknown-phase") final.item.phase=null;
+    if(!searching && mode === "reply-long") data.push({...final,item:{...final.item,id:"answer-2",text:"second"}});
+    if(!searching && mode === "reply-earlier-final") data.unshift({...final,item:{...final.item,id:"earlier-answer",text:"earlier fixture answer"}});
+    if(!searching && mode === "reply-refresh") {
+      const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
+      const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
+      if(reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
+    }
+    const frame={id:2,result:{data,nextCursor}};
+    return mode === "reply-delay" ? setTimeout(()=>emit(frame),200) : emit(frame);
+  }
   if(f.method === "thread/list") {
     const result = {data:[{id:${JSON.stringify(QUEUE_MCP_TARGET)},name:"fixture",preview:"PRIVATE_PREVIEW",cwd:"PRIVATE_CWD",turns:["PRIVATE_TURN"]}],nextCursor:"next-page"};
     if(mode === "bad-list") result.data[0].id="not-a-uuid";

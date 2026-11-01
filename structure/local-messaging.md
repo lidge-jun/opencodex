@@ -161,8 +161,8 @@ proxy ensure or fallback into the existing sessions/send command occurs. Windows
 is refused. `src/messaging/mcp-queue-server.ts` is activated only by this command,
 exposes stdio tools, and allocates no helper at import or initialization time.
 
-`src/messaging/mcp-queue-tools.ts` exposes only `codex_threads` and
-`codex_queue_message`. The first returns one bounded page of stored metadata and
+`src/messaging/mcp-queue-tools.ts` exposes `codex_threads` and
+`codex_queue_message` by default. The first returns one bounded page of stored metadata and
 a cursor, excluding preview, history and cwd. It explicitly reports that live
 state is unverified. The second validates an exact UUID and at most 16 KiB of
 text including a fixed peer-context label; NUL/empty text is refused. Sender
@@ -173,7 +173,8 @@ These tools do not share the loaded-only admission contract above.
 existing `src/codex/exec-boundary.ts` validates actual execution, including
 macOS bundle trust. Helpers use only app-server stdio and an explicit existing
 Codex home; inherited CODEX_THREAD_ID is removed. After initialize/initialized,
-the only allowed method is thread/list or thread/queue/add. No lifecycle or
+the default methods are thread/list and thread/queue/add.
+Explicit reply-read activation additionally admits the three read methods below. No lifecycle or
 login RPC is issued. The queue request carries a generated clientUserMessageId;
 only a matching correlated receipt becomes queued. Rejection before/at a valid
 error is not_sent. Uncertain outcomes after write are unknown without replay.
@@ -194,3 +195,51 @@ exercises the actual CLI/MCP handshake, inert initialization, the four-helper
 bound and disconnect cleanup. The fixtures use disposable native helpers, not
 real accounts. They prove queue contracts rather than app consumption, goal
 behavior, model obedience or cross-platform native interoperability.
+
+
+## Explicit stored reply reads
+
+`src/cli/message-mcp-command.ts` accepts a single optional --allow-reply-read flag.
+The existing four path arguments preserve the default two-tool surface. The host
+registers codex_read_reply only with this explicit content-read opt-in; the tool
+and RPC owner also refuse read calls without it. This broadens disclosure to stored
+agent text within the selected local-user home, not per-thread authorization.
+Client IDs and cursors are not credentials or delegated permission.
+
+`src/messaging/mcp-reply-tools.ts` searches one descending page of 50 persisted
+items for the exact clientMessageId. Omitted or null user client IDs are unrelated
+messages; malformed non-null IDs still fail validation. Absence is not_observed with a position-scoped
+reachedHistoryEnd flag, never proof of non-delivery. Multiple matches in that page
+are ambiguous and expose no text. A match identifies a turn; one ascending page
+of its final_answer agent messages is projected with IDs and turn association.
+All final texts in the turn are eligible, including text preceding a later input;
+the association is always same_turn_not_exclusive. User bodies, reasoning, command
+outputs, citations and extra native fields are excluded. A shared 16 KiB UTF-8 text
+budget marks truncation per item; item cursors do not recover omitted text bytes.
+
+`src/messaging/mcp-reply-cursor.ts` bounds and canonically decodes caller-owned
+positions bound to thread and client IDs. A search cursor continues item search;
+a reply cursor identifies a turn/user item and native continuation. Cursors are
+forgeable position data, never authority: every reply continuation re-reads that
+user item through thread/items/read and checks item ID, turn and client correlation.
+Other reads use thread/items/list and thread/turns/list. All methods are explicitly
+allowed by the RPC owner; no lifecycle or queue mutation is added by reading.
+
+The latest 50 notLoaded turn summaries provide turnStatus when found, otherwise
+unverified. This is a stored observation, not global recipient liveness or goal
+completion. A refresh cursor rescans the matched turn so an item finalized later
+can be observed. The caller revisits pages and updates/deduplicates stable item IDs;
+OpenCodex adds no persistent read state, subscriptions or background timers.
+
+Each complete read shares one 20-second MessageBudget across at most three
+sequential invocation-owned helpers, each retaining 12-second RPC and 1 MiB output
+bounds. Native read rejection/unsupported methods, malformed data, invalid positions
+and cancellation are unavailable, not empty success. No raw native error reaches
+MCP output. Legacy stores have no unbounded includeTurns fallback.
+
+`tests/codex-integration/messaging-mcp-replies.test.ts` covers correlation, projection,
+position scoping/revalidation, late finalization, missing/ambiguous inputs, page and
+UTF-8 limits, inherited budget/cancellation and failure privacy. The actual CLI
+opt-in handshake is exercised by `tests/cli/cli-message-mcp.test.ts`; existing inert
+activation and default-tool tests remain in force. Offline helpers prove protocol
+contracts, not native app processing, goal behavior or cross-client registration.

@@ -182,9 +182,9 @@ Drives no management route.
 
 ### `ocx message mcp`
 
-Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home>`
+Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read]`
 
-Serve opt-in MCP tools for stored Codex metadata and queued text delivery over stdio.
+Serve MCP tools for stored Codex metadata, queued text and explicitly enabled stored-turn reply reads.
 
 State-changing: yes. JSON mode: `none`.
 
@@ -194,9 +194,10 @@ Drives no management route.
 |---|---|---|
 | `--codex` | string | Explicit local Codex CLI executable. |
 | `--codex-home` | string | Explicit existing Codex home; no creation or login. |
+| `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply; disabled by default. |
 
 - macOS/Linux only. No proxy/control socket required. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
-- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. No daemon start, thread resume, steer, automatic replies or registration.
+- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, thread resume, steer, automatic replies or registration.
 
 ### `ocx advisor`
 
