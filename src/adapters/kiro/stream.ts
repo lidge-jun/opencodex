@@ -27,8 +27,11 @@ import { isValidKiroConversationId } from "../kiro-wire";
 import { readDisplaySafeErrorPayloadText } from "../upstream-http-error";
 import { tagKiroReasoningBlob } from "./reasoning";
 import {
+  isKiroStructuredCleanStop,
+  KIRO_STRUCTURED_EMPTY_FAILURE,
   KIRO_STRUCTURED_TEXT_FAILURE,
   kiroStructuredOutputFailure,
+  kiroStructuredStopFailure,
   parseKiroStructuredText,
   parseKiroStructuredToolInput,
   type KiroStructuredOutputSpec,
@@ -899,10 +902,16 @@ async function* parseKiroAttemptEvents(
         };
       }
       if (sawText && structuredOutput) {
-        const json = parseKiroStructuredText(structuredOutput, assistantText);
+        // Same clean-stop rule as the first attempt: text a MAX_TOKENS cut ended is not an answer,
+        // even when its prefix parses.
+        const cleanStop = isKiroStructuredCleanStop(normalizedStopReason);
+        const json = cleanStop ? parseKiroStructuredText(structuredOutput, assistantText) : undefined;
         yield* consumeSupersededByCompletion(fallbackEvents);
         if (json === undefined) {
-          return { assistantText, sawReasoning, terminal: kiroStructuredOutputFailure(KIRO_STRUCTURED_TEXT_FAILURE, finalUsage) };
+          const message = !cleanStop && normalizedStopReason
+            ? kiroStructuredStopFailure(normalizedStopReason)
+            : KIRO_STRUCTURED_TEXT_FAILURE;
+          return { assistantText, sawReasoning, terminal: kiroStructuredOutputFailure(message, finalUsage) };
         }
         yield { type: "text_delta", text: json, phase: "final_answer" };
         return {
@@ -925,6 +934,13 @@ async function* parseKiroAttemptEvents(
           sawReasoning,
           terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
         };
+      }
+      if (structuredOutput) {
+        // The model was already asked twice inside this turn; an empty or reasoning-only retry ends
+        // the structured contract with its non-retryable failure, never a retryable empty fallback
+        // that would let the proxy replay the whole turn.
+        yield* consumeSupersededByCompletion(fallbackEvents);
+        return { assistantText, sawReasoning, terminal: kiroStructuredOutputFailure(KIRO_STRUCTURED_EMPTY_FAILURE, finalUsage) };
       }
       yield* emitRetained(fallbackEvents);
       return {
@@ -959,15 +975,15 @@ async function* parseKiroAttemptEvents(
       };
     }
     if (mode === "required" && structuredOutput) {
-      if (structuredRetry) {
+      // Any stop reason other than a clean one falls through to its own handling below: a failed
+      // structured answer under MAX_TOKENS, a content filter or an exhausted context window earns no
+      // retry, and a MAX_TOKENS cut is never mistaken for an answer even when its prefix parses.
+      const cleanStop = isKiroStructuredCleanStop(normalizedStopReason);
+      if (structuredRetry && cleanStop) {
         return { assistantText, sawReasoning, needsFallback: true, usage: finalUsage, providerState: finalProviderState };
       }
       // A model that wrote the requested JSON as text, and stopped cleanly, has answered: accept it
-      // without a second paid request. Any other stop reason falls through to its own handling, so
-      // a MAX_TOKENS cut is never mistaken for an answer even when its prefix happens to parse.
-      const cleanStop = normalizedStopReason === undefined
-        || normalizedStopReason === KIRO_END_TURN_STOP_REASON
-        || normalizedStopReason === "STOP_SEQUENCE";
+      // without a second paid request.
       const json = sawText && cleanStop && completionCalls === 0
         ? parseKiroStructuredText(structuredOutput, assistantText)
         : undefined;

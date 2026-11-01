@@ -163,12 +163,12 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   when it fits the injected-instruction budget, and is otherwise sent without it.
 - The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
   call. The direct form relays the model's bytes; the wrapped form relays `JSON.stringify(value)`.
-  Validation is light: the input parses, the root matches the schema's declared `type`, and the
+  Validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
   root's `required` keys are present. Full JSON Schema validation is not attempted.
 - A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
   JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
   input that fails validation, takes the one bounded `text_fallback` retry with a structured-output
-  retry instruction. If the retry yields neither a valid call nor JSON text, the turn ends with a
+  retry instruction, but only after a clean stop: under `MAX_TOKENS`, a content filter or an exhausted context window the stop's own terminal applies, because a retry would hit the same limit or verdict. The retry accepts JSON text only after a clean stop too. If the retry yields neither a valid call nor JSON text, including an empty or reasoning-only retry, the turn ends with a
   non-retryable 502 `invalid_kiro_structured_output` error.
 - Held prose never reaches a structured-output caller: every drain of held events drops text and
   releases only non-text events. Commentary that precedes a real client tool call is released with

@@ -750,6 +750,7 @@
       "title": "Kiro Provider",
       "scope": "Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip.",
       "documents": [
+        "src/adapters/kiro/",
         "src/responses/"
       ]
     },

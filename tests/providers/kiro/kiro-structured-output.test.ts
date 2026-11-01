@@ -310,3 +310,46 @@ describe("Kiro structured-output composed roots", () => {
     expect(parseKiroStructuredToolInput(spec, '{"value":"anything"}')).toEqual({ json: '"anything"' });
   });
 });
+
+describe("Kiro structured-output stop reasons", () => {
+  // A failed structured answer under a stop that already ended the inference upstream would only
+  // hit the same limit or verdict again, so it earns no retry and keeps that stop's own terminal.
+  test("an invalid tool input under MAX_TOKENS is not retried", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), [...structured({ name: "wrong key" }), stop("MAX_TOKENS")],
+    );
+    expect(bodies).toHaveLength(1);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "incomplete", reason: "max_output_tokens" });
+  });
+
+  test("a retry whose JSON text was cut by MAX_TOKENS fails instead of being accepted", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(),
+      [text("Sure! A good title would be: Fix Kiro."), stop("END_TURN")],
+      [text('{"title":"Fix Kiro"}'), stop("MAX_TOKENS")],
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({
+      type: "error",
+      code: "invalid_kiro_structured_output",
+      retryable: false,
+      message: expect.stringContaining("stopped with MAX_TOKENS"),
+    });
+  });
+
+  test("an empty retry ends the structured contract with a non-retryable failure", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), structured({ name: "wrong key" }), [stop("END_TURN")],
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({
+      type: "error",
+      code: "invalid_kiro_structured_output",
+      retryable: false,
+      message: expect.stringContaining("produced no answer"),
+    });
+  });
+});

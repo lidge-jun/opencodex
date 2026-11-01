@@ -245,8 +245,30 @@ export function parseKiroStructuredText(spec: KiroStructuredOutputSpec, text: st
   return structuredValueProblem(spec, value) === undefined ? candidate : undefined;
 }
 
+/**
+ * Whether Kiro stopped the way a finished answer stops: no stop reason, END_TURN or STOP_SEQUENCE.
+ *
+ * Every other stop reason (MAX_TOKENS, a content filter, an exhausted context window) has already
+ * ended the inference upstream. Text cut by one of them is never accepted as the requested JSON,
+ * even when its prefix parses, and a failed structured answer under one of them earns no retry:
+ * the retry would hit the same limit or verdict, so the stop's own terminal handling runs instead.
+ */
+export function isKiroStructuredCleanStop(normalizedStopReason: string | undefined): boolean {
+  return normalizedStopReason === undefined
+    || normalizedStopReason === "END_TURN"
+    || normalizedStopReason === "STOP_SEQUENCE";
+}
+
 /** Message for a bounded retry that answered in text that is not the requested JSON. */
 export const KIRO_STRUCTURED_TEXT_FAILURE = `${FAILURE_PREFIX}: the model answered with text that is not the requested JSON`;
+
+/** Message for a bounded retry that ended without text, a tool call, or a structured answer. */
+export const KIRO_STRUCTURED_EMPTY_FAILURE = `${FAILURE_PREFIX}: the bounded retry produced no answer`;
+
+/** Message for a bounded retry whose text was cut by a stop that does not end a finished answer. */
+export function kiroStructuredStopFailure(normalizedStopReason: string): string {
+  return `${FAILURE_PREFIX}: the bounded retry stopped with ${normalizedStopReason} before a complete answer`;
+}
 
 /**
  * Terminal for a turn that, after its one bounded retry, still produced no valid structured output.
