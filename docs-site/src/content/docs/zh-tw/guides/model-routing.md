@@ -32,8 +32,8 @@ OpenAI 的 bare `gpt-*` 使用單一 `openai` provider。`codexAccountMode` 在 
    | `gpt-`、`o1-`、`o3-`、`o4-` | bare id 使用已設定的 `openai` 帳號模式；API key 顯式使用 `openai-apikey/` |
    | `llama-`、`mixtral-`、`gemma-` | `groq` |
 
-   該匹配器只檢查名稱。與 `defaultModel` / `models[]` 掃描不同，目前即使匹配供應商的 `disabled`
-   為 true，它也不會跳過該供應商。
+   該匹配器只檢查名稱。與 `defaultModel` / `models[]` 掃描相同，如果匹配供應商的 `disabled`
+   為 true，它會跳過該供應商。
 
 4. **某個供應商的 `models[]`** —— 如果字首規則沒有命中，而某個啟用的供應商在 `models[]` 中列出
    該 id，則使用該供應商。這個順序很重要：只要設定了 OpenAI 名稱的供應商，裸 `gpt-*` id 就會在

@@ -67,9 +67,9 @@ devre dışı bırakılmışsa bu açık form yönlendirmek yerine hata fırlat�
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-Bu eşleştirici ada dayalıdır ve `defaultModel` / `models[]` taramalarından
-farklı olarak şu anda `disabled` bayrağı true olan eşleşen bir sağlayıcıyı
-filtrelemez.
+Bu eşleştirici ada dayalıdır ve `defaultModel` / `models[]` taramalarında
+olduğu gibi `disabled` bayrağı true olan eşleşen bir sağlayıcıyı
+atlar.
 
 7. **Bir sağlayıcının `models[]`'i** — hiçbir önek kuralı kazanmadıysa ve aktif
    bir sağlayıcı kimliği kendi `models[]` içinde listeliyorsa, o sağlayıcı

@@ -51,8 +51,8 @@ transport；这些凭证路径互不 fallback。
    | `claude-`、`claude-sonnet-`、`claude-opus-`、`claude-haiku-` | `anthropic` |
    | `llama-`、`mixtral-`、`gemma-` | `groq` |
 
-   该匹配器只检查名称。与 `defaultModel` / `models[]` 扫描不同，目前即使匹配提供商的 `disabled`
-   为 true，它也不会跳过该提供商。
+   该匹配器只检查名称。与 `defaultModel` / `models[]` 扫描相同，如果匹配提供商的 `disabled`
+   为 true，它会跳过该提供商。
 
 7. **某个提供商的 `models[]`** —— 如果前缀规则没有命中，而某个启用的提供商在 `models[]` 中列出
    该 id，则使用该提供商。规则 4 已经会在其他 provider 的 `models[]` 声明匹配前，把 bare `gpt-*`

@@ -57,8 +57,8 @@ through to one another.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   This matcher is name-based and, unlike the `defaultModel` / `models[]` scans, currently does not
-   filter a matching provider whose `disabled` flag is true.
+   This matcher is name-based and, like the `defaultModel` / `models[]` scans, skips a matching
+   provider whose `disabled` flag is true.
 
 7. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
    `models[]`, that provider is used. Rule 4 already sends a bare `gpt-*` id to the canonical enabled
