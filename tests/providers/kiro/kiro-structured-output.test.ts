@@ -357,6 +357,34 @@ describe("Kiro structured-output stop reasons", () => {
     expect(terminal).toMatchObject({ type: "incomplete", reason: "max_output_tokens" });
   });
 
+  // The same truncation when the stream ends with the private call still open (no tool-stop frame).
+  test("a structured call left open at end of stream earns the bounded retry", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), [structured('{"title":')[0]!, stop("END_TURN")], structured({ title: "Fix Kiro" }),
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([{ type: "text_delta", text: '{"title":"Fix Kiro"}', phase: "final_answer" }]);
+    expect(terminal).toMatchObject({ type: "done", endTurn: true });
+  });
+
+  test("a structured call left open under MAX_TOKENS is not retried", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), [structured('{"title":')[0]!, stop("MAX_TOKENS")],
+    );
+    expect(bodies).toHaveLength(1);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "incomplete", reason: "max_output_tokens" });
+  });
+
+  test("a structured call left open on the retry is non-retryable", async () => {
+    const { bodies, texts, terminal } = await run(
+      structuredRequest(), structured({ name: "wrong key" }), [structured('{"title":')[0]!, stop("END_TURN")],
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "error", code: "invalid_kiro_structured_output", retryable: false });
+  });
+
   test("a malformed structured tool input on the retry is non-retryable", async () => {
     const { bodies, texts, terminal } = await run(
       structuredRequest(), structured({ name: "wrong key" }), structured('{"title":'),

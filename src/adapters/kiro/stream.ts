@@ -812,7 +812,11 @@ async function* parseKiroAttemptEvents(
     }
     if (open) {
       const input = open.chunks.join("");
-      if (!isCompleteKiroToolInput(input)) {
+      // A truncated structured answer still open at end of stream goes through flushOpen like one
+      // closed by a tool-stop frame: the bounded retry, decided with the stop reason below. Every
+      // other open call keeps this guard's terminal.
+      const structuredTruncation = structuredOutput !== undefined && mode === "required" && open.completion;
+      if (!structuredTruncation && !isCompleteKiroToolInput(input)) {
         const privateTool = open.completion;
         open = null;
         return {
