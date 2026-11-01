@@ -32,15 +32,20 @@ apply the same identity to HTTP headers and a cloned client-metadata map. The se
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Native compact in `src/server/responses/compact.ts` projects the body per physical send, so a quota
 failover uses the newly selected account ID. Alternate construction reports identity failures as
-503 instead of treating them as absence of an eligible account. `src/server/context-history.ts` applies the same clone
+503 instead of treating them as absence of an eligible account, while recording the first
+account's completed rejection and quota headers without attributing a send to the alternate.
+`src/server/context-history.ts` applies the same clone
 and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
 retain the selected context and project cloned client metadata immediately before each physical
 JSON send, including live's converted multipart session. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
 Vision, audio and sidecar credential selection share materialization.
+The optional availability probe in `src/server/claude-messages.ts` treats an installation-identity
+failure as helper unavailability, allowing an independent native Messages route to continue.
 `src/codex/affinity-debug.ts` reports only process-local keyed equality tags, never raw identities.
 The regression contracts are in `tests/codex-integration/codex-installation-id.test.ts`,
 `tests/codex-integration/codex-installation-wire.test.ts`,
 `tests/codex-integration/codex-installation-acl.test.ts` and
 `tests/responses/codex-installation-failover.test.ts`; auxiliary wire coverage is in
-`tests/codex-integration/codex-installation-sidecars.test.ts`.
+`tests/codex-integration/codex-installation-sidecars.test.ts`. Native Messages fallback is covered by
+`tests/claude-integration/claude-installation-helper.test.ts`.

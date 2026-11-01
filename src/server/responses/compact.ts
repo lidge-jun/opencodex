@@ -1063,6 +1063,14 @@ export async function handleResponsesCompact(
       compactHostAdmissionLease = null;
     };
     const connectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(compactUrl) });
+    const applyCompactPoolQuotaHeaders = async (ctx: CodexAuthContext, response: Response) => {
+      if (ctx.kind !== "pool" && ctx.kind !== "main-pool") return;
+      const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/quota");
+      applyAccountQuotaFromUpstreamHeaders(ctx.accountId, response.headers, ctx.writerGeneration,
+        ctx.kind === "main-pool" ? ctx.mainQuotaWriter : undefined,
+        { modelId: route.modelId, poolWriter: ctx.kind === "pool" ? ctx.poolQuotaWriter : undefined,
+          poolResponse: ctx.kind === "pool" });
+    };
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -1478,6 +1486,8 @@ export async function handleResponsesCompact(
           turnAdmissionLease,
         });
       if (alternate && "failure" in alternate) {
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
+        recordCompactPoolOutcome(authCtx, upstream.status, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
         await upstream.body?.cancel().catch(() => undefined);
         return alternate.failure;
       }
@@ -1522,17 +1532,7 @@ export async function handleResponsesCompact(
         // quota snapshot that produced it, so refresh A's cache before recording its
         // rejection. Skipping this leaves quota-strategy routing and the dashboard
         // reading numbers from before the account ran out.
-        if (authCtx.kind === "pool" || authCtx.kind === "main-pool") {
-          const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-          applyAccountQuotaFromUpstreamHeaders(
-            authCtx.accountId,
-            upstream.headers,
-            authCtx.writerGeneration,
-            authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
-            { modelId: route.modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
-              poolResponse: authCtx.kind === "pool" },
-          );
-        }
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
         recordCompactPoolOutcome(authCtx, upstream.status, {
           retryAfter: firstRetryAfter,
           resetAt: firstResetAt,
@@ -1582,6 +1582,8 @@ export async function handleResponsesCompact(
         turnAdmissionLease,
       });
       if (alternate && "failure" in alternate) {
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
+        recordCompactPoolOutcome(authCtx, firstStatus, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
         await upstream.body?.cancel().catch(() => undefined);
         return alternate.failure;
       }

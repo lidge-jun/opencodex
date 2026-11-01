@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAccountNeedsReauth } from "../../src/codex/auth-api";
-import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
-import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { clearAccountQuota, getAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { clearPoolRecoveryState } from "../../src/routing/probe-lease";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
@@ -124,16 +124,27 @@ test("optional Responses helper disables itself on installation-secret refusal",
   expect(result.openAiSidecar).toBeUndefined();
 });
 
-test("compact secret failure during A->B returns identity-unavailable 503", async () => {
+for (const status of [429, 503]) test(`compact ${status} before B identity failure records only rejected A and returns 503`, async () => {
   let sends = 0;
   globalThis.fetch = (async input => {
     if (!String(input).endsWith("/responses/compact")) return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
     sends++;
     writeFileSync(join(home, "codex-installation-secret"), "corrupt", { mode: 0o600 });
-    return Response.json({ error: { message: "You have hit your usage limit." } }, { status: 429, headers: { "retry-after": "600" } });
+    // A long upstream Retry-After ends the same-account ladder without a timer.
+    return Response.json({ error: { message: status === 429 ? "You have hit your usage limit." : "upstream unavailable" } }, {
+      status, headers: { "retry-after": "600", "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "10080" },
+    });
   }) as typeof fetch;
   expect((await send(true)).status).toBe(503);
   expect(sends).toBe(1);
+  expect(getCodexUpstreamHealth("work")).toMatchObject({ lastFailureStatus: status, consecutiveFailures: status === 429 ? 0 : 1 });
+  if (status === 429) {
+    expect(getCodexUpstreamHealth("work")?.cooldownSource).toBe("retry-after");
+    expect(getCodexUpstreamHealth("work")?.cooldownUntil).toBeGreaterThan(Date.now());
+  }
+  expect(getAccountQuota("work")?.weeklyPercent).toBe(99);
+  expect(getAccountQuota("other")?.weeklyPercent).toBe(10);
+  expect(getCodexUpstreamHealth("other")).toBeNull();
 });
 
 test("physical WS A->B upgrades and response.create frames use each selected identity", async () => {
