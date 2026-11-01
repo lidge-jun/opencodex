@@ -189,15 +189,19 @@ describe("client machine listener", () => {
     expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
     expect((await fetch(new URL("/readyz", server.url))).status).toBe(200);
     expect((await fetch(new URL("/opencodex-session", server.url))).headers.get("content-type")).toContain("text/html");
+    // Data plane, GUI routes and unknown machine paths stay local 404s.
     for (const path of [
-      "/v1/responses", "/v1/models", "/v1/catalog", "/api/config", "/api/usage",
-      "/api/oauth/providers", "/lab", "/oauth/callback", "/api/machine/unknown",
+      "/v1/responses", "/v1/models", "/v1/catalog", "/lab", "/oauth/callback", "/api/machine/unknown",
     ]) {
       const response = await fetch(new URL(path, server.url), { method: path === "/v1/responses" ? "POST" : "GET" });
       expect(response.status).toBe(404);
       expect((await response.json()).error).toBe("not_found");
     }
-    expect((await fetch(new URL("/api/machine/hub-relay/api/config", server.url))).status).toBe(404);
+    // Management paths are the hub's, so they relay rather than 404. No hub answers in this
+    // fixture, which is the 502 path.
+    for (const path of ["/api/config", "/api/usage", "/api/oauth/providers", "/api/machine/hub-relay/api/config"]) {
+      expect({ path, status: (await fetch(new URL(path, server.url))).status }).toEqual({ path, status: path.startsWith("/api/machine/") ? 404 : 502 });
+    }
     // A known machine endpoint with an unsupported method now reaches the
     // authenticated method restriction instead of collapsing to a bare 404.
     expect((await fetch(new URL("/api/machine/status", server.url), { method: "POST" })).status).toBe(401);
@@ -564,6 +568,31 @@ describe("client machine listener in link mode", () => {
   test("a hub-transport client has no link status route", async () => {
     const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });
     servers.push(server);
-    expect((await fetch(new URL("/api/link/status", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
+    // `/api/link/status` is unknown to this listener, so it relays to the hub like other
+    // management paths instead of 404ing locally. The fixture hub does not answer: 502.
+    expect((await fetch(new URL("/api/link/status", server.url), { headers: await guiHeaders(server) })).status).toBe(502);
+  });
+
+  test("relays a bare management path to the hub and answers machine routes locally", async () => {
+    // A CLI caller: no browser session and no credential of its own. It asks the standalone path.
+    const sent: Array<{ url: string; apiKey: string | null }> = [];
+    const server = startMachineListener(0, {
+      state: connection(),
+      managementAuthState: authState(),
+      fetchImpl: (async (input, init) => {
+        sent.push({ url: String(input), apiKey: new Headers(init?.headers).get("x-opencodex-api-key") });
+        return Response.json({ accounts: [{ id: "chatgpt-1" }] });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const relayed = await fetch(new URL("/api/codex-auth/accounts", server.url));
+    expect(relayed.status).toBe(200);
+    expect(await relayed.json()).toEqual({ accounts: [{ id: "chatgpt-1" }] });
+    expect(sent).toEqual([{ url: "https://hub.example.test/api/codex-auth/accounts", apiKey: null }]);
+
+    // The machine's own plane stays local.
+    sent.length = 0;
+    expect((await fetch(new URL("/api/machine/status", server.url), { headers: await guiHeaders(server) })).status).toBe(200);
+    expect(sent).toHaveLength(0);
   });
 });

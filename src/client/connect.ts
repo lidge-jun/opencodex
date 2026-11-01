@@ -44,6 +44,7 @@ import {
   writeServiceApiTokenFile,
 } from "../lib/service-secrets";
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
+import { removeHubCredential, writeHubCredential, type HubManagementCredential } from "./hub-session";
 import type {
   OcxClientConnectionConfig,
   OcxConfig,
@@ -229,6 +230,30 @@ function localGuiOrigin(): string {
   return `http://localhost:${Number.isInteger(port) && port > 0 ? port : 10100}`;
 }
 
+/**
+ * Store the credential this process obtained so the loopback listener keeps working after it exits.
+ *
+ * Called only for a hub client. A link Child reads its Home over the link and has no use for one.
+ * Failure is not fatal to the connection itself, so it is reported rather than thrown: the machine
+ * still routes inference, but its account reads would 401 until the next `ocx connect`.
+ */
+type ConnectCredential = { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession };
+
+function persistHubCredential(credential: ConnectCredential): boolean {
+  try {
+    if (credential.kind === "admin") {
+      writeHubCredential({ kind: "admin", token: new TextDecoder().decode(credential.value).trim() });
+    } else {
+      writeHubCredential({ kind: "session", token: credential.value.token,
+        csrfToken: credential.value.csrfToken, browserOrigin: credential.value.browserOrigin });
+    }
+    return true;
+  } catch (error) {
+    console.warn(`Warning: the hub management credential was not stored (${error instanceof Error ? error.message : String(error)}); account reads on this machine will fail until the next connect.`);
+    return false;
+  }
+}
+
 function clientKeyName(): string {
   const raw = `ocx connect ${hostname() || "client"}`;
   return raw.slice(0, 80);
@@ -255,6 +280,22 @@ async function rotationAuthority(
     { fetchImpl: deps.fetchImpl },
   );
   return { kind: "gui-session", value: session };
+}
+
+/** Stock the relay credential from a rotation's re-exchanged authority (never fatal to rotation). */
+function persistRotationAuthority(
+  authority: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession },
+): void {
+  try {
+    if (authority.kind === "gui-session") {
+      writeHubCredential({ kind: "session", token: authority.value.token, csrfToken: authority.value.csrfToken,
+        browserOrigin: authority.value.browserOrigin });
+      return;
+    }
+    writeHubCredential({ kind: "admin", token: new TextDecoder().decode(authority.value).trim() });
+  } catch (error) {
+    console.warn(`Warning: the hub management credential was not refreshed (${error instanceof Error ? error.message : String(error)}).`);
+  }
 }
 
 export type ClientRotationResult = OcxClientConnectionConfig & {
@@ -413,6 +454,10 @@ export async function recoverPendingClientRotation(
       if (state.kind !== "connected" || !state.value.pendingOperation) throw new Error("no pending client key rotation to recover");
       if (isLinkConnection(state.value)) throw new Error("connect rotate is unavailable in link mode");
       const authority = await rotationAuthority(state.value, options, deps);
+    // Rotation re-exchanges the pairing grant, which mints a fresh session and consumes the old
+    // one's usefulness for our own callers. Store the new authority before the key is replaced, so
+    // the listener never holds one that describes the previous connect.
+    persistRotationAuthority(authority);
       assertClientConnectionUnchanged(state.value);
       return recoverRotationWithAuthority(held, state.value, authority, deps);
     }, deps.lifecycleLockDeps);
@@ -601,6 +646,7 @@ async function connectClientUnlocked(
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
   let committed = false;
+  let hubCredentialWritten = false;
   // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
   // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
@@ -679,6 +725,11 @@ async function connectClientUnlocked(
     }
     if (!linkMode) {
       issued = await issueClientKey(managementUrl, cleanupCredential!, clientKeyName(), { fetchImpl });
+      // Keep the management credential this connect already earned, so the loopback listener can
+      // relay the hub's management plane for the CLI, AImorph and the usage reporter. Written
+      // before the connection is committed: a listener that starts with no credential would answer
+      // 401 to every account read and look like a hub outage.
+      hubCredentialWritten = persistHubCredential(cleanupCredential!);
     }
 
     const initialFiles = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -808,6 +859,11 @@ async function connectClientUnlocked(
           if (removed === "changed") rollbackFailures.push("service token changed during rollback");
           // Final commit may fail after this attempt already cleared its marker under the same lock.
           else if (pendingClientConnectMayOwnToken(pendingConnectFingerprint)) clearClientConnectPending(pendingConnectFingerprint);
+        }
+        // The stored hub credential belongs to this connection; without the connection it would
+        // leave the next listener stamping a session that no longer describes it.
+        if (hubCredentialWritten) {
+          try { removeHubCredential(); } catch { rollbackFailures.push("hub management credential could not be removed"); }
         }
       }), deps.lifecycleLockDeps);
     } catch { rollbackFailures.push("client cleanup ownership unavailable"); }
@@ -1172,6 +1228,9 @@ export async function disconnectClient(
     if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
     if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
     if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    // Derived from the connection, so it goes with it. Left behind, the next listener would stamp
+    // a session that belongs to a hub this machine is no longer connected to.
+    removeHubCredential();
     if (connection?.transport === "link" && connection.link) {
       // A corrupt sidecar is left in place: the connection is already cleared, the client runtime
       // will not start a tunnel for a disconnected client, and the next join overwrites the file.

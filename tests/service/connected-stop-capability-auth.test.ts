@@ -238,7 +238,9 @@ describe("production connected-stop listeners", () => {
     writeRuntimePort({ ...target, attestationSecret: SECRET });
     await assertConnectedClientStopSupported(target);
     const unsupported = await directLocalHttpFetch(`http://127.0.0.1:${target.port}/api/stop`);
-    expect(unsupported.status).toBe(404);
+    // `/api/stop` is a management path, so a plain caller is relayed to the hub. This fixture has
+    // no hub behind it, which is the 502 path; the attested preflight above is what must work.
+    expect(unsupported.status).toBe(502);
     await unsupported.arrayBuffer();
   });
 });
