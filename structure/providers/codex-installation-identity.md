@@ -28,6 +28,9 @@ Pool turn metadata is bounded to 32 KiB of UTF-8. Larger values refuse the send 
 sanitized identity error instead of passing unprojected bytes through; main and main-pool
 retain their original values. Routed compact handoffs preserve present empty installation and
 turn-metadata headers, so the final selected account applies the same rule as a direct send.
+Credential admission excludes blank canonical account IDs. Each shared Pool header, turn and
+client-metadata projection also refuses a blank identity before any early return, including
+metadata-free frames; main and main-pool remain outside this validation.
 
 `src/adapters/openai-responses/transport.ts` and `src/adapters/openai-responses/passthrough.ts`
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
@@ -41,7 +44,8 @@ account's completed rejection and quota headers without attributing a send to th
 `src/server/context-history.ts` applies the same clone
 and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
 retain the selected context and project cloned client metadata immediately before each physical
-JSON send, including live's converted multipart session. Their selected headers authoritatively
+JSON send, including live's converted multipart session. Live inspects JSON content independently
+of Content-Type; non-JSON SDP retains its original bytes. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
 Vision, audio and sidecar credential selection share materialization.
 `src/server/audio-live.ts` projects the authenticated call's cloned session before JSON or

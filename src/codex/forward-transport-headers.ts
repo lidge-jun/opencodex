@@ -27,7 +27,7 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
 }
 
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
-  if (!chatgptAccountId.trim()) return rawMetadata;
+  if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
   // A size bound must refuse the Pool send, never bypass identity projection.
   if (Buffer.byteLength(rawMetadata, "utf8") > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
   let parsed: unknown;
@@ -41,6 +41,7 @@ export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAc
 }
 
 export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountId: string): void {
+  if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
   headers.delete(CODEX_ATTESTATION_HEADER);
   const installId = headers.get(CODEX_INSTALLATION_ID_HEADER);
   if (installId !== null) {
@@ -53,7 +54,9 @@ export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountI
 }
 
 export function isolateCodexPoolClientMetadata(body: unknown, chatgptAccountId: string | undefined): unknown {
-  if (chatgptAccountId === undefined || !body || typeof body !== "object" || Array.isArray(body)) return body;
+  if (chatgptAccountId === undefined) return body;
+  if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const record = body as Record<string, unknown>;
   const cm = record.client_metadata;
   if (!cm || typeof cm !== "object" || Array.isArray(cm)) return body;

@@ -1,4 +1,6 @@
 {
+  "codex-installation-live-content.test.ts": "codex-integration",
+  "codex-installation-invalid-account.test.ts": "codex-integration",
   "codex-installation-live-http.test.ts": "codex-integration",
   "codex-installation-live-ws.test.ts": "codex-integration",
   "codex-installation-compact-empty.test.ts": "responses",

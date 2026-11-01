@@ -863,7 +863,7 @@ export async function handleLive(
   const linkedSignal = signalWithTimeout(LIVE_UPSTREAM_TIMEOUT_MS, req.signal);
   const sidecarExit = sidecarEnter("live");
   try {
-    if (relay.authContext?.kind === "pool" && outboundContentType.toLowerCase().includes("application/json")) {
+    if (relay.authContext?.kind === "pool") {
       let parsed: unknown;
       try { parsed = JSON.parse(new TextDecoder().decode(outboundBody)); } catch { /* Upstream owns invalid JSON. */ }
       const accountId = relay.authContext.chatgptAccountId;
