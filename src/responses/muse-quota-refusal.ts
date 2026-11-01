@@ -22,11 +22,16 @@ export const MUSE_QUOTA_EXHAUSTED_MESSAGE = "Subscription quota exhausted";
 /** Marker for operators reading the wire; the client ignores it. */
 export const MUSE_QUOTA_WINDOW_EXHAUSTED_HEADER = "x-opencodex-quota-window-exhausted";
 
+/** The only route that answers with a Muse Code subscription refusal. */
+export const MUSE_SUBSCRIPTION_PROVIDER = "meta-muse";
+
 /**
  * Drop a window-length `retry-after` from a Muse quota refusal, leaving the 429 and
- * its message untouched. Returns the input response for every other shape.
+ * its message untouched. Returns the input response for every other route or shape,
+ * so a foreign provider that happens to use the same words keeps its own delay.
  */
-export async function rewriteMuseQuotaExhaustedResponse(response: Response): Promise<Response> {
+export async function rewriteMuseQuotaExhaustedResponse(response: Response, provider: string): Promise<Response> {
+  if (provider !== MUSE_SUBSCRIPTION_PROVIDER) return response;
   if (response.status !== 429) return response;
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("application/json")) return response;

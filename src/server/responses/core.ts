@@ -51,7 +51,7 @@ export async function handleResponses(
       accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
-    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers)));
+    }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers)), logCtx.provider);
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);
