@@ -135,8 +135,8 @@ On the `meta-muse` route, OpenCodex keeps the 429, the sentence and `resets_at`
 but drops a `retry-after` longer than 60 seconds and adds
 `x-opencodex-quota-window-exhausted: 1`. The client then applies its own short
 backoff and shows the quota message. Short throttles, other providers' 429s and
-refusals whose body is not JSON stay untouched. A pay-as-you-go `meta-model` key
-is unaffected.
+responses without an `application/json` content type stay untouched. A
+pay-as-you-go `meta-model` key is unaffected.
 
 ## Live sideband connection failures
 
