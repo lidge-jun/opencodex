@@ -1,4 +1,4 @@
-import { codexInstallationIdForAccount } from "./installation-id";
+import { CodexInstallationIdUnavailableError, codexInstallationIdForAccount } from "./installation-id";
 
 /** Native request metadata shared by the HTTP adapter and WS preparation. */
 export const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -27,7 +27,9 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
 }
 
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
-  if (!chatgptAccountId.trim() || Buffer.byteLength(rawMetadata, "utf8") > MAX_TURN_METADATA_BYTES) return rawMetadata;
+  if (!chatgptAccountId.trim()) return rawMetadata;
+  // A size bound must refuse the Pool send, never bypass identity projection.
+  if (Buffer.byteLength(rawMetadata, "utf8") > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
   let parsed: unknown;
   try { parsed = JSON.parse(rawMetadata); } catch { return rawMetadata; }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return rawMetadata;

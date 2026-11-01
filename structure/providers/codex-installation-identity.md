@@ -24,6 +24,10 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
+Pool turn metadata is bounded to 32 KiB of UTF-8. Larger values refuse the send with the same
+sanitized identity error instead of passing unprojected bytes through; main and main-pool
+retain their original values. Routed compact handoffs preserve present empty installation and
+turn-metadata headers, so the final selected account applies the same rule as a direct send.
 
 `src/adapters/openai-responses/transport.ts` and `src/adapters/openai-responses/passthrough.ts`
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
@@ -40,6 +44,14 @@ retain the selected context and project cloned client metadata immediately befor
 JSON send, including live's converted multipart session. Their selected headers authoritatively
 replace or remove mixed-case provider identity defaults; main and main-pool preserve caller values.
 Vision, audio and sidecar credential selection share materialization.
+`src/server/audio-live.ts` projects the authenticated call's cloned session before JSON or
+multipart serialization and returns a sanitized 503 without sending on identity failure.
+Its socket resolver and `src/server/audio-dictation.ts` carry the selected auth context through
+`src/server/index/serve-options.ts` into the socket data. Native sideband upgrades retain the
+same context. `src/server/index/websocket-handler.ts` and `src/server/index/live-sideband.ts`
+apply Pool projection at every immediate or queued upstream frame send, including JSON carried
+in binary frames. Unchanged frames retain their original bytes and encoding; derivation failure
+closes the relay with a sanitized reason without forwarding the failed frame or the queue tail.
 The optional availability probe in `src/server/claude-messages.ts` treats an installation-identity
 failure as helper unavailability, allowing an independent native Messages route to continue.
 `src/codex/affinity-debug.ts` reports only process-local keyed equality tags, never raw identities.
@@ -49,3 +61,8 @@ The regression contracts are in `tests/codex-integration/codex-installation-id.t
 `tests/responses/codex-installation-failover.test.ts`; auxiliary wire coverage is in
 `tests/codex-integration/codex-installation-sidecars.test.ts`. Native Messages fallback is covered by
 `tests/claude-integration/claude-installation-helper.test.ts`.
+Authenticated live and frame contracts are covered by
+`tests/codex-integration/codex-installation-live-http.test.ts` and
+`tests/codex-integration/codex-installation-live-ws.test.ts`; compact empty-header and turn-size
+contracts are covered by `tests/responses/codex-installation-compact-empty.test.ts` and
+`tests/responses/codex-installation-turn-limit.test.ts`.

@@ -32,6 +32,9 @@ Token refresh keeps the identifier; switching accounts changes it. Direct mode a
 account keep your original values. Missing installation metadata stays absent. OpenCodex does not
 change Codex's own `installation_id` file when switching native profiles. If the local installation
 secret cannot be read safely, the request returns a retryable 503 before reaching ChatGPT.
+The same isolation covers authenticated live call sessions and subsequent realtime/sideband
+WebSocket frames. Pool turn metadata above 32 KiB is refused before sending (503 for HTTP,
+connection closure for WebSocket frames); Direct and native main values remain unchanged.
 
 Within Pool mode, a request carrying a validated native Codex login can use that login when the
 selected stored account is cooling down and no eligible stored alternative or recovery probe is

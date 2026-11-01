@@ -1,4 +1,8 @@
 {
+  "codex-installation-live-http.test.ts": "codex-integration",
+  "codex-installation-live-ws.test.ts": "codex-integration",
+  "codex-installation-compact-empty.test.ts": "responses",
+  "codex-installation-turn-limit.test.ts": "responses",
   "codex-installation-sidecars.test.ts": "codex-integration",
   "claude-installation-helper.test.ts": "claude-integration",
   "codex-role-configured-credentials.test.ts": "server",

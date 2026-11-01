@@ -949,7 +949,7 @@ export async function resolveLiveSidebandUpgrade(
   target: LiveSidebandTarget,
   turnAdmissionLease?: AdmissionLease,
   admission?: DataPlaneAdmission,
-): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
+): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; authContext?: CodexAuthContext; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
   const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
     admission,
     model: liveSidebandModel(target),
@@ -957,6 +957,7 @@ export async function resolveLiveSidebandUpgrade(
   });
   if (relay instanceof Response) return relay;
   return {
+    authContext: relay.authContext,
     headers: relay.headers,
     upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(target, config.experimentalRealtimeWsBaseUrl),
     recordOutcome: relay.recordOutcome,

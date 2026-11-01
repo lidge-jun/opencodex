@@ -1746,7 +1746,7 @@ export async function handleResponsesCompact(
     const internalHeaders = new Headers({ "content-type": "application/json" });
     for (const name of FORWARD_HEADERS) {
       const value = req.headers.get(name);
-      if (value) internalHeaders.set(name, value);
+      if (value || (value !== null && (name === "x-codex-installation-id" || name === "x-codex-turn-metadata"))) internalHeaders.set(name, value);
     }
     copyResponsesClientMetadata(internalHeaders, req.headers, route.provider);
     const internalReq = new Request("http://localhost/v1/responses", {
