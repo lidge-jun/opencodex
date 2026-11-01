@@ -412,6 +412,11 @@ reference/fallback config. On loopback it contains the root keys you can merge m
 injection was removed; on non-loopback it contains the dedicated provider form. External-provider
 mode leaves this profile untouched.
 
+Rebuilding that file keeps root keys OpenCodex does not manage, so a setting you add such as
+`stream_idle_timeout_ms` or `stream_max_retries` survives the next injection. Keys inside tables are
+not preserved, and root keys this build owns (`model_provider`, `model_catalog_json`,
+`openai_base_url`) are always rewritten to match the routing mode in use.
+
 :::caution
 Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` **must** sit before the
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate

@@ -672,6 +672,72 @@ export function buildProfileFileForTarget(
   return lines.join("\n");
 }
 
+/**
+ * Root keys this build owns in either profile shape. They are never carried
+ * forward: leaving provider-table mode drops `model_provider` from the template,
+ * and a caller that passes no catalog path drops `model_catalog_json`, so a
+ * carried copy would point the profile at routing this build no longer writes.
+ */
+const MANAGED_PROFILE_ROOT_KEYS = new Set([
+  "model_provider",
+  "model_catalog_json",
+  "openai_base_url",
+]);
+
+/**
+ * Root keys the previous profile carried that this build does not write.
+ *
+ * Operators add Codex settings such as `stream_idle_timeout_ms` and
+ * `stream_max_retries` to `opencodex.config.toml`. Rebuilding the file from the
+ * template dropped them without a word (#8066), so any root key this build does
+ * not own is carried over, ahead of the first table. Values that span several
+ * lines are copied whole, because one line of a multi-line value would not
+ * parse.
+ */
+export function preserveUnmanagedProfileKeys(existing: string | null, generated: string): string {
+  if (!existing) return generated;
+  const generatedKeys = rootKeysOf(generated);
+  if (generatedKeys.size === 0) return generated;
+
+  const existingSource = rootSourceLines(existing);
+  const carried: string[] = [];
+  const carriedKeys = new Set<string>();
+  for (let index = 0; index < existingSource.rootEnd; index += 1) {
+    if (!existingSource.lines[index]?.structural) continue;
+    const span = sourceAssignmentSpan(existingSource.lines, index, existingSource.rootEnd);
+    if (!span) continue;
+    index = span.end - 1;
+    if (generatedKeys.has(span.key) || MANAGED_PROFILE_ROOT_KEYS.has(span.key)) continue;
+    if (carriedKeys.has(span.key)) continue;
+    carriedKeys.add(span.key);
+    carried.push(span.text.replace(/\s+$/, ""));
+  }
+  if (carried.length === 0) return generated;
+
+  const lines = generated.split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  lines.splice(firstTable === -1 ? lines.length : firstTable, 0, [
+    "# Root keys OpenCodex does not manage, kept from the previous profile:",
+    ...carried,
+    "",
+  ].join("\n"));
+  return lines.join("\n");
+}
+
+/** Names of the root assignments in a TOML document, before its first table. */
+function rootKeysOf(content: string): Set<string> {
+  const keys = new Set<string>();
+  const source = rootSourceLines(content);
+  for (let index = 0; index < source.rootEnd; index += 1) {
+    if (!source.lines[index]?.structural) continue;
+    const span = sourceAssignmentSpan(source.lines, index, source.rootEnd);
+    if (!span) continue;
+    keys.add(span.key);
+    index = span.end - 1;
+  }
+  return keys;
+}
+
 export function chooseCatalogPathForInjection(
   content: string,
   requested?: string | null,
