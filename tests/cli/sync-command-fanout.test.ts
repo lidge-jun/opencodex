@@ -96,6 +96,10 @@ test("local-only JSON does not invoke ssh", async () => {
     const document = parseOneDocument(result) as { schema: unknown; home: { exit: unknown }; fanout: unknown; children: unknown };
     expect(document.schema).toBe("ocx.sync.fanout/1");
     expect(document.home.exit).toBe(result.code);
+    // The Home step ran to the outcome this fixture is built for (Codex on, no Codex home yet), so
+    // the document is not the residue of an earlier, unexpected failure.
+    expect(document.home).toEqual({ state: "failed", exit: 1 });
+    expect(result.stderr).toContain("does not exist yet, so there is no config.toml to route");
     expect(document.fanout).toEqual({ state: "disabled", reason: null });
     expect(document.children).toEqual([]);
     expect(existsSync(env.OCX_TEST_SSH_SENTINEL!)).toBe(false);

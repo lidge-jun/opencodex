@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
+import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
 import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
@@ -247,6 +247,16 @@ for (const [name, build] of [
     expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
   }, SPAWN_BUDGET_MS);
 }
+
+// The guard covers the inflation alone: an error the inflated script raises itself keeps its own
+// failure and is never reported as a containment refusal.
+test.skipIf(process.platform !== "win32")("an inflated script's own error is not relabelled as a containment refusal", async () => {
+  const child = Bun.spawn(packedPowerShellArgv("throw 'ocx-post-inflate-error'\n"), { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, , stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).not.toBe(WINDOWS_CONTAINMENT_EXIT);
+  expect(code).toBe(1);
+  expect(stderr).toContain("ocx-post-inflate-error");
+}, SPAWN_BUDGET_MS);
 
 // Required native release gate: set OCX_WINDOWS_OPENSSH_FIXTURE to a key-authenticated SSH alias of a
 // disposable Windows x64 OpenSSH host (cmd.exe or PowerShell default shell). Never a real user host.

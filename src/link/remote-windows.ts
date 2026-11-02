@@ -24,7 +24,7 @@ const SCRIPT_PACKED_PREFIX = "$ocxPacked='";
  * types) must still exit 126, so only the inflate is guarded: Invoke-Expression stays outside the
  * try, and the inflated script's own errors and exit status are never relabelled as containment.
  */
-function packedPowerShellArgv(script: string): string[] {
+export function packedPowerShellArgv(script: string): string[] {
   const bytes = deflateRawSync(Buffer.from(script, "utf8"), { level: 9 });
   const packed = Array.from(bytes, byte => String.fromCharCode(byte + 256)).join("");
   return powershellArgv(`${SCRIPT_PACKED_PREFIX}${packed}'\n` + String.raw`$ErrorActionPreference='Stop';try{$b=[byte[]]@($ocxPacked.ToCharArray()|%{[int]$_-256});$r=[IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new($b),[IO.Compression.CompressionMode]::Decompress));$s=$r.ReadToEnd()}catch{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit ${WINDOWS_CONTAINMENT_EXIT}};Invoke-Expression $s`);
