@@ -950,7 +950,8 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,
       encoding: installStdio === "pipe" ? "utf8" : undefined,
-      timeout: 180000,
+      // The parent watchdog reports overrun without killing an active transaction.
+      timeout: child ? undefined : 180000,
       windowsHide: true,
       ...target.options,
       env: mutation.unprivilegedEnvironment(),

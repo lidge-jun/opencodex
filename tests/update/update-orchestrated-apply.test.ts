@@ -83,6 +83,13 @@ test("a signal is forwarded and completion waits for close or the bounded timer"
   expect(signals.listenerCount("SIGINT")).toBe(0);
 });
 
+test("a signal-killed worker cannot prove its installer stopped", () => {
+  for (const outcome of [{ phase: "refused" as const, error: "plan-changed" }, { phase: "failed" as const }]) {
+    expect(classifyOrchestratedOutcome({ ...base, childExitCode: null, outcome }))
+      .toMatchObject({ exitCode: 12, result: { error: "outcome-unverified" } });
+  }
+});
+
 test("exit classification requires confirmed termination and independently verified active state", () => {
   expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "refused", error: "plan-changed" } })).toMatchObject({ exitCode: 10, result: { applied: false, error: "plan-changed", rolledBack: false } });
   expect(classifyOrchestratedOutcome(base)).toMatchObject({ exitCode: 11, result: { applied: false, rolledBack: false } });
