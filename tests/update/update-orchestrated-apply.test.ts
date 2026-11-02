@@ -90,6 +90,11 @@ test("a signal-killed worker cannot prove its installer stopped", () => {
   }
 });
 
+test("an unconfirmed installer termination is never classified as a safe rollback", () => {
+  expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "failed", error: "installer-termination-unconfirmed" } }))
+    .toMatchObject({ exitCode: 12, result: { error: "installer-termination-unconfirmed", applied: false } });
+});
+
 test("exit classification requires confirmed termination and independently verified active state", () => {
   expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "refused", error: "plan-changed" } })).toMatchObject({ exitCode: 10, result: { applied: false, error: "plan-changed", rolledBack: false } });
   expect(classifyOrchestratedOutcome(base)).toMatchObject({ exitCode: 11, result: { applied: false, rolledBack: false } });

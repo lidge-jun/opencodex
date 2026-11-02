@@ -18,6 +18,7 @@ export function classifyOrchestratedOutcome(input) {
   const done = (exitCode, error) => ({ exitCode, result: error ? { ...result, error } : result });
   if (!input.childExited || input.childExitCode === null || !validOutcome(input.outcome) || input.outcome.phase === "overrun") return done(12, "outcome-unverified");
   if (input.outcome.phase === "refused" && input.childExitCode !== 0) return done(10, input.outcome.error || "runtime-ownership-refused");
+  if (input.outcome.phase === "failed" && input.outcome.error === "installer-termination-unconfirmed") return done(12, input.outcome.error);
   if (input.outcome.phase === "installed") {
     result.applied = input.targetVerified;
     result.restarted = input.restarted;

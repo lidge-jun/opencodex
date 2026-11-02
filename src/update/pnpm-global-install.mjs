@@ -514,6 +514,8 @@ export function runPnpmGlobalUpdate({
   } catch {
     install = { status: 1 };
   }
+  if (install?.processTreeExited === false) return { ok: false, phase: "install", processTreeExited: false,
+    error: "installer-termination-unconfirmed" };
 
   // The package path may switch to a different group link, so only constrain
   // the group/bin pair after the command; the active package path is intentionally open.
@@ -563,6 +565,8 @@ export function runPnpmGlobalUpdate({
   } catch {
     rollback = { status: 1 };
   }
+  if (rollback?.processTreeExited === false) return { ok: false, phase: "rollback", processTreeExited: false,
+    error: "installer-termination-unconfirmed" };
   const restored = readPnpmGlobalPackage(
     packageName,
     runPnpm,

@@ -449,7 +449,7 @@ function* npmUpdateTransaction({
     const detail = install.error
       ? [install.error.code, install.error.message].filter(Boolean).join(": ")
       : install.signal ?? install.status ?? "?";
-    return { ok: false, phase: "stage", error: "npm staging install failed (" + detail + ")" };
+    return { ok: false, phase: "stage", ...(install.processTreeExited === false ? { processTreeExited: false } : {}), error: "npm staging install failed (" + detail + ")" };
   }
   const stagedPackage = stagedCandidatesIn(stageRoot).find(dir => existsSync(join(dir, "package.json")));
   if (!stagedPackage) {

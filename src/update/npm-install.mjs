@@ -16,6 +16,11 @@ export async function runNpmInstall(invocation, { env = process.env, timeoutMs =
   env = materializeMutationData(env);
   if (!invocation) return { status: 1, processTreeExited: true, error: { code: "ENOENT", message: "npm invocation unavailable" } };
   if (process.platform === "win32") {
+    // The PowerShell helper assigns npm to a kill-on-close Job Object before it
+    // resumes the suspended process, then terminates the job on timeout and
+    // waits for the job to become empty. An unconfirmed join retains the stage.
+    // Windows acceptance still needs an orchestrated-worker test proving marker
+    // visibility across supervisor failure, plus the equivalent pnpm job path.
     // Resolve from the same absolute system directory as the hardened cmd hop.
     // Never search PATH for PowerShell, and never interpolate the JSON as code.
     const roots = new Set(Object.entries(env).filter(([key, value]) => key.toLowerCase() === "systemroot" && value !== undefined).map(([, value]) => value));

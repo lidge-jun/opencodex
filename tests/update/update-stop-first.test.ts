@@ -828,7 +828,7 @@ esac
     expect(stopEnvAt).toBeLessThan(replacementAt);
     expect(launcherSource.slice(lockedPlanAt, stopAt)).toContain("!runtimePlan.mayStopRuntime");
     const packageReplacement = launcherSource.slice(stopAt, launcherSource.indexOf("const postInstallPlan", stopAt));
-    expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(3); // Windows npm, POSIX npm, pnpm.
+    expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(5); // Windows npm, both POSIX npm paths, both pnpm paths.
   });
 
   test("replacement refusal reaches owner-aware recovery before releasing authority", () => {

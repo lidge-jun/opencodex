@@ -418,6 +418,7 @@ stop, package replacement and recovery work. The parent never puts its token in 
 environment. Fixed stop/service/direct-recovery children can join it; package-manager and
 ancillary children receive environments without the capability. Refusals return through the
 lease boundary before exiting, and thrown failures release it after owner-aware recovery.
+For orchestrated POSIX npm/pnpm installs, `src/update/posix-install-supervisor.mjs` starts a gated process-group leader, publishes its PID and group ID before allowing the installer to run, and terminates the group on the 180-second deadline. The transaction proceeds only after group exit is confirmed; an unconfirmed termination leaves the recorded IDs in the failed marker and refuses rollback. The in-flight probe treats a live or uninspectable recorded installer as active even after the worker finishes. Windows npm uses the existing Job Object supervisor in `src/update/npm-install.mjs`.
 Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
 Malformed or unreadable records remain unknown. Recovery requires the same complete owner
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.

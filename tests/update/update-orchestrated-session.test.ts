@@ -16,6 +16,21 @@ function fixture() {
 }
 function read(path: string) { return JSON.parse(readFileSync(path, "utf8")); }
 
+test.skipIf(process.platform === "win32")("POSIX installer timeout terminates its descendant group before returning", () => {
+  const f = fixture(), marker = join(f.home, "update-orchestrated.json"), descendant = join(f.home, "descendant");
+  writeFileSync(marker, JSON.stringify({ pid: process.pid, phase: "mutating", startedAt: Date.now() }));
+  const installer = join(f.home, "installer.cjs");
+  writeFileSync(installer, `const {spawn}=require('node:child_process'),fs=require('node:fs'); const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(process.argv[2],String(c.pid));setInterval(()=>{},1000);`);
+  const node = Bun.which("node"); if (!node) throw new Error("node unavailable");
+  const entry = pathToFileURL(repoPath("src/update/posix-install-supervisor.mjs")).href;
+  const script = `import {runPosixInstallerSync} from ${JSON.stringify(entry)}; const result=runPosixInstallerSync({file:${JSON.stringify(node)},args:[${JSON.stringify(installer)},${JSON.stringify(descendant)}],markerPath:${JSON.stringify(marker)},timeoutMs:1000,env:process.env});console.log(JSON.stringify(result));`;
+  const result = spawnSync(node, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000 });
+  expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+  expect(JSON.parse(result.stdout)).toMatchObject({ processTreeExited: true, status: null });
+  const pid = Number(readFileSync(descendant, "utf8"));
+  expect(() => process.kill(pid, 0)).toThrow();
+}, 20000);
+
 test("preflight owns the update mutex and remains visible until finalized", () => {
   const f = fixture(); const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
   expect(session.start()).toEqual({ ok: true });
@@ -24,6 +39,16 @@ test("preflight owns the update mutex and remains visible until finalized", () =
   session.finishPreflight();
   expect(isUpdateInFlight(f.home)).toBe(false);
   expect(read(f.resultPath)).toEqual({ phase: "preflight" });
+});
+
+test("finalizing a failed transaction retains the recorded installer identity", async () => {
+  const f = fixture(), session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  session.start(); await session.enterMutation();
+  const path = join(f.home, "update-orchestrated.json"), marker = read(path);
+  writeFileSync(path, JSON.stringify({ ...marker, installerPid: process.pid }));
+  session.finish({ phase: "failed", error: "installer-termination-unconfirmed" });
+  expect(read(path)).toMatchObject({ phase: "failed", installerPid: process.pid });
+  expect(isUpdateInFlight(f.home)).toBe(true);
 });
 
 test("preflight must be writable before proceeding", () => {
@@ -80,11 +105,11 @@ test.each([false, "throw"] as const)("identity %s refuses after publishing in-fl
 test("finish writes final outcome before releasing mutex; failed marker write keeps mutex", async () => {
   const f = fixture(); const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
   session.start(); expect(await session.enterMutation()).toEqual({ ok: true });
-  const marker = join(f.home, "update-orchestrated.json"); rmSync(marker); mkdirSync(marker);
+  const marker = join(f.home, "update-orchestrated.json"), original = read(marker); rmSync(marker); mkdirSync(marker);
   expect(() => session.finish({ phase: "installed", activeRoot: "/active" })).toThrow();
   expect(read(f.resultPath)).toEqual({ phase: "installed", activeRoot: "/active" });
   expect(isUpdateInFlight(f.home)).toBe(true);
-  rmSync(marker, { recursive: true }); session.finish({ phase: "installed", activeRoot: "/active" });
+  rmSync(marker, { recursive: true }); writeFileSync(marker, JSON.stringify(original)); session.finish({ phase: "installed", activeRoot: "/active" });
   expect(isUpdateInFlight(f.home)).toBe(false); expect(read(marker).phase).toBe("installed");
 });
 

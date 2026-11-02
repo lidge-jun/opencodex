@@ -45,7 +45,10 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     else clear(handle);
   };
 }`);
-    writeFileSync(launcher, timedLauncher);
+    const supervisedLauncher = timedLauncher.replace('markerPath: join(configDir(), "update-orchestrated.json"), authorizeMutation:',
+      'markerPath: join(configDir(), "update-orchestrated.json"), timeoutMs: process.env.OCX_FIXTURE_TIMEOUT ? 1000 : 180000, authorizeMutation:');
+    if (supervisedLauncher === timedLauncher) throw new Error("installer timeout injection point missing");
+    writeFileSync(launcher, supervisedLauncher);
     const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
@@ -55,6 +58,10 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
     writeFileSync(join(path, "npm"), `#!${node}\nconst fs=require('node:fs'), p=require('node:path'), a=process.argv.slice(2);\nfs.appendFileSync(process.env.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(process.env.OCX_FIXTURE_RESULT))})+'\\n');\nif(a[0]==='config') console.log(process.env.OCX_FIXTURE_CACHE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':(process.env.OCX_FIXTURE_MOVED==='1' && a.some(x=>x.endsWith('@2.1.0'))?'2.2.0':'2.1.0'));\nelse if(a[0]==='install'){const s=a[a.indexOf('--prefix')+1],d=p.join(s,'lib/node_modules/@bitkyc08/opencodex');fs.cpSync(process.env.OCX_FIXTURE_PKG,d,{recursive:true});const m=JSON.parse(fs.readFileSync(p.join(d,'package.json')));m.version='2.1.0';fs.writeFileSync(p.join(d,'package.json'),JSON.stringify(m));if(process.env.OCX_FIXTURE_ROLLBACK==='1'){const l=p.join(d,'bin/ocx.mjs'),t=p.join(s,'temporary-launcher');fs.copyFileSync(l,t);fs.unlinkSync(l);fs.symlinkSync(p.relative(p.dirname(l),t),l);}}\nelse process.exit(90);\n`);
     chmodSync(join(path, "npm"), 0o755);
+    const npmScript = join(path, "npm"), npmSource = readFileSync(npmScript, "utf8");
+    const npmTimed = npmSource.replace("const s=a[a.indexOf('--prefix')+1]", "if(process.env.OCX_FIXTURE_TIMEOUT==='1'){const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(process.env.OCX_FIXTURE_DESCENDANT,String(c.pid));setInterval(()=>{},1000);return;}const s=a[a.indexOf('--prefix')+1]");
+    if (npmTimed === npmSource) throw new Error("installer fixture injection point missing");
+    writeFileSync(npmScript, npmTimed);
     const token = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", cliRoot: pkg, servingRoot: null, runtimeOwner: "none", runtime: null });
     const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1",
@@ -77,6 +84,15 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
       return spawnSync(node, args, { cwd: root, env: { ...env, OCX_FIXTURE_ROLLBACK: rollback ? "1" : "0" }, encoding: "utf8", timeout: 30000 });
     };
     const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
+    const descendant = join(root, "installer-descendant");
+    const timeout = spawnSync(node, [launcher, "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
+      cwd: root, env: { ...env, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
+    });
+    expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
+    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed" });
+    expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
+    expect(isUpdateInFlight(home)).toBe(false);
+    rmSync(result); rmSync(log);
     const unauthorized = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
       cwd: root, env: { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" }, encoding: "utf8", timeout: 30000,
     });
@@ -346,6 +362,21 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect({ code: failedCode, stderr: failedErr }).toMatchObject({ code: 12 });
     expect(JSON.parse(failedOut)).toMatchObject({ applied: true, healthy: false, error: "runtime-unhealthy" });
     expect(JSON.parse(readFileSync(join(ocxHome, "update-orchestrated.json"), "utf8")).phase).toBe("installed");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
+    const childResult = join(root, "bun-worker-result.json"), cliRoot = realpathSync.native(pkg), childHome = ocxHome;
+    const planToken = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "bun", cliRoot,
+      servingRoot: null, runtimeOwner: "none", runtime: null });
+    const childExpect = encodeOrchestratedExpect({ home: childHome, cliRoot, servingRoot: null, runtimePid: null, planToken });
+    const worker = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--version", "2.1.0",
+      "--orchestrated-expect", childExpect, "--orchestrated-result", childResult], {
+      cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
+        CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
+        OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(),
+        OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
+    });
+    const [, workerError, workerCode] = await Promise.all([new Response(worker.stdout).text(), new Response(worker.stderr).text(), worker.exited]);
+    expect({ code: workerCode, stderr: workerError }).toMatchObject({ code: 1 });
+    expect(JSON.parse(readFileSync(childResult, "utf8"))).toMatchObject({ phase: "installed", activeRoot: cliRoot, recoveryFailed: true, error: "runtime-unhealthy" });
   } finally {
     if (proc.exitCode === null) {
       writeFileSync(join(pkg, "installer-release"), "release");
@@ -451,6 +482,12 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
     const missingApply = await launch(["--yes", "--json", "--version", "99.0.0"]);
     expect(missingApply.code).toBe(10);
     expect(JSON.parse(missingApply.stdout)).toMatchObject({ error: "plan-unavailable", applied: false });
+    const bunDir = join(pkg, "node_modules", "bun"), installed = join(root, "unexpected-bun-install");
+    mkdirSync(bunDir); writeFileSync(join(bunDir, "package.json"), JSON.stringify({ name: "bun", version: "1.4.4" }));
+    writeFileSync(join(bunDir, "install.js"), `require('node:fs').writeFileSync(${JSON.stringify(installed)},'unexpected')`);
+    const sync = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "sync", "--local-only"], { cwd: root, env: { ...env, OCX_NO_DESKTOP_HANDOFF: "1" }, encoding: "utf8", timeout: 30000 });
+    expect({ status: sync.status, stderr: sync.stderr }).toMatchObject({ status: 1, stderr: expect.stringContaining("Bun is unavailable") });
+    expect(existsSync(installed)).toBe(false);
     expect(readFileSync(join(backup, "keep"), "utf8")).toBe("backup");
     expect(missing.stderr).not.toContain("auto-restore");
   } finally { rmSync(root, { recursive: true, force: true }); }

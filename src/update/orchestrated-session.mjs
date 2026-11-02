@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { tryAcquireUpdateSyncMutex } from "./sync-update-mutex.mjs";
 import { assertNotRealHomeUnderTest } from "./test-home-guard.mjs";
@@ -51,7 +51,16 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
   assertNotRealHomeUnderTest(home);
   const markerPath = join(home, "update-orchestrated.json");
   let state = "new", mutex, startedAt;
-  const marker = phase => atomicJson(markerPath, { pid, phase, startedAt });
+  const marker = (phase, preserveInstaller = false) => {
+    let installer = {};
+    if (preserveInstaller) {
+      const current = JSON.parse(readFileSync(markerPath, "utf8"));
+      if (current.pid !== pid || current.startedAt !== startedAt) throw new Error("orchestrated marker changed");
+      if (current.installerPid !== undefined) installer.installerPid = current.installerPid;
+      if (current.installerPgid !== undefined) installer.installerPgid = current.installerPgid;
+    }
+    atomicJson(markerPath, { pid, phase, startedAt, ...installer });
+  };
   return {
     start() {
       if (state !== "new") throw new Error("orchestrated session already started");
@@ -98,7 +107,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
       atomicJson(resultPath, outcome);
-      marker(outcome.phase);
+      marker(outcome.phase, true);
       mutex.release(); mutex = undefined; state = "finished";
     },
   };

@@ -532,6 +532,15 @@ function fakeShims(state: FakePnpmState) {
 }
 
 describe("pnpm global update", () => {
+  test("unconfirmed installer exit stops before inspection or rollback", () => {
+    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const run = fakePnpm(state, owner);
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: (args, capture) => args[0] === "add" ? { status: null, processTreeExited: false } : run(args, capture),
+      verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, error: "installer-termination-unconfirmed", processTreeExited: false });
+    expect(state.calls.filter(call => call.args[0] === "list")).toHaveLength(1);
+  });
   test("updates through the selected pnpm owner and verifies the new active group", () => {
     const owner = ownerFor();
     const state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
