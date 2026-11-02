@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
+import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
 import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
@@ -226,6 +226,27 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
   expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
   expect(existsSync(marker)).toBe(false);
 }, SPAWN_BUDGET_MS);
+
+// Every packed command inflates itself before its containment helper exists; a session that cannot
+// inflate must still refuse with 126. The candidate homes and PATH hold no ocx.exe, so 126 can only
+// be that refusal: an unguarded inflate exits 1 and exhausted discovery exits 127.
+for (const [name, build] of [
+  ["discovery", () => windowsOcxArgv(["--version"])],
+  ["pinned sync", () => windowsPinnedSyncArgv("lnk_0123456789abcdef")],
+] as const) {
+  test.skipIf(process.platform !== "win32")(`a Windows ${name} command that cannot be contained is refused before any candidate is probed`, async () => {
+    const empty = mkdtempSync(join(tmpdir(), "ocx-windows-refuse-candidates-")); roots.push(empty);
+    const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+    const isolated = new Set(["path", "userprofile", "localappdata", "programfiles"]);
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !isolated.has(key.toLowerCase())) env[key] = value;
+    Object.assign(env, { PATH: system32, USERPROFILE: empty, LOCALAPPDATA: empty, ProgramFiles: empty });
+    const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(build().at(-1)!, "base64").toString("utf16le"));
+    const child = Bun.spawn([join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"), ...constrained.slice(1)], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
+  }, SPAWN_BUDGET_MS);
+}
 
 // Required native release gate: set OCX_WINDOWS_OPENSSH_FIXTURE to a key-authenticated SSH alias of a
 // disposable Windows x64 OpenSSH host (cmd.exe or PowerShell default shell). Never a real user host.
