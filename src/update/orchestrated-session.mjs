@@ -27,8 +27,10 @@ const CAPABILITY = /^[A-Za-z0-9_-]{43}$/;
 const MAX_RESULT_BYTES = 65536;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const capabilityDocument = token => JSON.stringify({ ocxUpdateResultCapability: token });
+// BigInt stats: NTFS/ReFS file ids can exceed Number.MAX_SAFE_INTEGER, and two ids must never round to equal.
+const EXACT = { bigint: true };
 const sameIdentity = (a, b) => a.dev === b.dev && a.ino === b.ino;
-const ownerOnly = stat => process.platform === "win32" || (stat.uid === process.getuid() && (stat.mode & 0o077) === 0);
+const ownerOnly = stat => process.platform === "win32" || (stat.uid === BigInt(process.getuid()) && (stat.mode & 0o077n) === 0n);
 const invalidDestination = () => new Error("invalid orchestrated result destination");
 function readAll(fd, size) {
   const bytes = Buffer.alloc(size);
@@ -44,7 +46,7 @@ export function issueOrchestratedResultCapability(path) {
   try {
     const document = Buffer.from(capabilityDocument(capability), "utf8");
     for (let written = 0; written < document.length;) written += writeSync(fd, document, written, document.length - written, written);
-    return { capability, identity: fstatSync(fd) };
+    return { capability, identity: fstatSync(fd, EXACT) };
   } finally { closeSync(fd); }
 }
 
@@ -52,7 +54,7 @@ export function issueOrchestratedResultCapability(path) {
 export function createOrchestratedResultChannel() {
   const directory = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-")));
   const resultPath = join(directory, "result.json");
-  const directoryStat = lstatSync(directory);
+  const directoryStat = lstatSync(directory, EXACT);
   const { capability, identity: fileStat } = issueOrchestratedResultCapability(resultPath);
   return {
     directory, resultPath, capability,
@@ -60,12 +62,12 @@ export function createOrchestratedResultChannel() {
     read() {
       let readFd;
       try {
-        const before = lstatSync(resultPath);
+        const before = lstatSync(resultPath, EXACT);
         if (!before.isFile() || before.isSymbolicLink() || !sameIdentity(before, fileStat)) return null;
         readFd = openSync(resultPath, constants.O_RDONLY | NOFOLLOW);
-        const opened = fstatSync(readFd);
-        if (!sameIdentity(opened, fileStat) || opened.size > MAX_RESULT_BYTES) return null;
-        const text = readAll(readFd, opened.size);
+        const opened = fstatSync(readFd, EXACT);
+        if (!sameIdentity(opened, fileStat) || opened.size > BigInt(MAX_RESULT_BYTES)) return null;
+        const text = readAll(readFd, Number(opened.size));
         if (text === capabilityDocument(capability)) return null;
         const value = JSON.parse(text);
         return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -74,9 +76,9 @@ export function createOrchestratedResultChannel() {
     },
     /** Remove only the recorded file and then the recorded directory if it is empty; anything else stays. */
     dispose() {
-      try { const current = lstatSync(resultPath); if (current.isFile() && sameIdentity(current, fileStat)) unlinkSync(resultPath); }
+      try { const current = lstatSync(resultPath, EXACT); if (current.isFile() && sameIdentity(current, fileStat)) unlinkSync(resultPath); }
       catch { /* leave whatever is there */ }
-      try { const current = lstatSync(directory); if (current.isDirectory() && sameIdentity(current, directoryStat)) rmdirSync(directory); }
+      try { const current = lstatSync(directory, EXACT); if (current.isDirectory() && sameIdentity(current, directoryStat)) rmdirSync(directory); }
       catch { /* a non-empty or replaced directory is left in place */ }
     },
   };
@@ -90,16 +92,16 @@ function openResultDestination(resultPath, capability) {
   try {
     const canonical = realpathSync.native(resultPath);
     if (process.platform === "win32" ? canonical.toLowerCase() !== resultPath.toLowerCase() : canonical !== resultPath) throw invalidDestination();
-    const directory = lstatSync(dirname(resultPath));
+    const directory = lstatSync(dirname(resultPath), EXACT);
     if (!directory.isDirectory() || directory.isSymbolicLink() || !ownerOnly(directory)) throw invalidDestination();
-    const file = lstatSync(resultPath);
-    if (!file.isFile() || file.isSymbolicLink() || file.nlink !== 1 || !ownerOnly(file)) throw invalidDestination();
+    const file = lstatSync(resultPath, EXACT);
+    if (!file.isFile() || file.isSymbolicLink() || file.nlink !== 1n || !ownerOnly(file)) throw invalidDestination();
     fd = openSync(resultPath, constants.O_RDWR | NOFOLLOW);
-    const opened = fstatSync(fd);
+    const opened = fstatSync(fd, EXACT);
     const expected = capabilityDocument(capability);
     // Size first: nothing is read from a file that cannot be the capability document.
-    if (!sameIdentity(opened, file) || opened.size !== file.size || opened.nlink !== 1 || opened.size !== Buffer.byteLength(expected)) throw invalidDestination();
-    if (readAll(fd, opened.size) !== expected) throw invalidDestination();
+    if (!sameIdentity(opened, file) || opened.size !== file.size || opened.nlink !== 1n || opened.size !== BigInt(Buffer.byteLength(expected))) throw invalidDestination();
+    if (readAll(fd, Number(opened.size)) !== expected) throw invalidDestination();
     return fd;
   } catch {
     if (fd !== undefined) closeSync(fd);

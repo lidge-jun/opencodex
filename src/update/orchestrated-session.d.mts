@@ -15,7 +15,7 @@ export interface OrchestratedResultChannel {
   dispose(): void;
 }
 export declare function createOrchestratedResultChannel(): OrchestratedResultChannel;
-export declare function issueOrchestratedResultCapability(path: string): { capability: string; identity: import("node:fs").Stats };
+export declare function issueOrchestratedResultCapability(path: string): { capability: string; identity: import("node:fs").BigIntStats };
 export declare function createOrchestratedChildSession(options: {
   home: string;
   resultPath: string;
