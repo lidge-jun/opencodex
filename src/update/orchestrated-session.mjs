@@ -52,7 +52,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
   const markerPath = join(home, "update-orchestrated.json");
   const result = value => { if (resultPath !== undefined) atomicJson(resultPath, value); };
   let state = "new", mutex, startedAt, untrackedPending = false;
-  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false) => {
+  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false) => {
     let installer = {};
     if (preserveInstaller) {
       const current = JSON.parse(readFileSync(markerPath, "utf8"));
@@ -60,7 +60,9 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (current.installerPid !== undefined) installer.installerPid = current.installerPid;
       if (current.installerPgid !== undefined) installer.installerPgid = current.installerPgid;
     }
-    atomicJson(markerPath, { pid, phase, startedAt, ...installer, ...(terminationUnconfirmed ? { terminationUnconfirmed: true } : {}) });
+    atomicJson(markerPath, { pid, phase, startedAt, ...installer,
+      ...((phase === "mutating" || retainFence) ? { fenceUntil: startedAt + 900000 } : {}),
+      ...(terminationUnconfirmed ? { terminationUnconfirmed: true } : {}) });
   };
   return {
     start() {
@@ -122,7 +124,8 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
       if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed" };
       result(outcome);
-      marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed");
+      marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed",
+        outcome.error === "installer-termination-unconfirmed" || outcome.error === "installer-timeout");
       mutex.release(); mutex = undefined; state = "finished";
     },
   };

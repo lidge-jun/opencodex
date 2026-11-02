@@ -527,7 +527,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   }
 
   const { serviceStatePaths } = await import("../service");
-  let mutationStarted = false, completed = false, installedRoot: string | undefined;
+  let mutationStarted = false, completed = false, installerUncertain = false, installedRoot: string | undefined;
   let updateExitCode: number | undefined;
   try {
   updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
@@ -953,6 +953,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     }
   } else {
     if (!homePolicy.authorizeMutation("package")) return 1;
+    installerUncertain = true;
     r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,
       encoding: installStdio === "pipe" ? "utf8" : undefined,
@@ -962,6 +963,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
       ...target.options,
       env: mutation.unprivilegedEnvironment(),
     });
+    installerUncertain = r.status === null;
   }
   if (r && installStdio === "pipe") logSpawnOutput("", r);
   }
@@ -1246,7 +1248,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   } finally {
     if (session && mutationStarted) session.finish(installedRoot
       ? { phase: "installed", activeRoot: installedRoot, ...(!completed || updateExitCode ? { recoveryFailed: true, error: "runtime-unhealthy" } : {}) }
-      : { phase: "failed", error: "update-failed" });
+      : { phase: "failed", error: installerUncertain ? "installer-timeout" : "update-failed" });
   }
   if (updateExitCode) {
     if (child) process.exitCode = updateExitCode;

@@ -83,7 +83,7 @@ function inspectOwnershipLease(home) {
   } catch { return "unknown"; }
 }
 
-export function inspectUpdateMarker(home) {
+export function inspectUpdateMarker(home, { now = Date.now } = {}) {
   const path = join(home, "update-orchestrated.json");
   let found = false;
   let fd;
@@ -108,6 +108,8 @@ export function inspectUpdateMarker(home) {
     const terminal = ["installed", "failed", "refused"].includes(marker.phase);
     if (!terminal && !["preflight", "mutating", "overrun"].includes(marker.phase)) return "unknown";
     if (marker.terminationUnconfirmed !== undefined && marker.terminationUnconfirmed !== true) return "unknown";
+    if (marker.fenceUntil !== undefined && (!Number.isSafeInteger(marker.fenceUntil) || marker.fenceUntil < marker.startedAt)) return "unknown";
+    if (marker.fenceUntil !== undefined && now() < marker.fenceUntil) return "active";
     const ids = [];
     if (!terminal) ids.push(marker.pid);
     for (const key of ["installerPid", "installerPgid"]) {

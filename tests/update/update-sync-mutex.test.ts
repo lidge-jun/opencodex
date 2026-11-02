@@ -189,3 +189,27 @@ test("unconfirmed installer termination without a recorded pid remains uncertain
   expect(inspectUpdateMarker(root)).toBe("unknown");
   expect(isUpdateInFlight(root)).toBe(true);
 });
+
+test.each([undefined, 2147483646])("dead worker with installer pid %s remains fenced until deadline", installerPid => {
+  const root = home(), path = join(root, "update-orchestrated.json"), now = { value: 199 };
+  writeFileSync(path, JSON.stringify({ pid: 2147483647, phase: "mutating", startedAt: 100, fenceUntil: 200,
+    ...(installerPid === undefined ? {} : { installerPid }) }));
+  expect(inspectUpdateMarker(root, { now: () => now.value })).toBe("active");
+  now.value = 200;
+  expect(inspectUpdateMarker(root, { now: () => now.value })).toBe("free");
+});
+
+test("a timed-out final marker remains fenced only until the bound when recorded processes are gone", () => {
+  const root = home(), path = join(root, "update-orchestrated.json");
+  writeFileSync(path, JSON.stringify({ pid: 2147483647, phase: "failed", startedAt: 100, fenceUntil: 200 }));
+  expect(inspectUpdateMarker(root, { now: () => 199 })).toBe("active");
+  expect(inspectUpdateMarker(root, { now: () => 200 })).toBe("free");
+});
+
+test("sync refuses a fenced dead worker before the deadline", async () => {
+  const root = home(), previous = process.env.OPENCODEX_HOME; process.env.OPENCODEX_HOME = root;
+  writeFileSync(join(root, "update-orchestrated.json"), JSON.stringify({ pid: 2147483647, phase: "mutating", startedAt: Date.now(), fenceUntil: Date.now() + 900000 }));
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try { expect(await withSyncUpdateGuard(async () => { throw Error("sync reached"); })).toBe(7); }
+  finally { err.mockRestore(); if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; }
+});

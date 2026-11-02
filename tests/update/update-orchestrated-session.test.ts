@@ -71,12 +71,22 @@ test("an untracked installer is fenced before it can start", async () => {
   expect(isUpdateInFlight(f.home)).toBe(true);
 });
 
+test("mutation marker publishes the time fence before launching an installer and retains it on timeout", async () => {
+  const f = fixture(), marker = join(f.home, "update-orchestrated.json");
+  const session = createOrchestratedChildSession({ ...f, now: () => 1000, verifyIdentity: () => true });
+  session.start(); await session.enterMutation();
+  expect(read(marker)).toMatchObject({ phase: "mutating", fenceUntil: 901000 });
+  session.finish({ phase: "failed", error: "installer-termination-unconfirmed" });
+  expect(read(marker)).toMatchObject({ phase: "failed", fenceUntil: 901000 });
+});
+
 test("a confirmed untracked installer releases its fence only after finalization", async () => {
   const f = fixture(), session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
   session.start(); await session.enterMutation(); session.noteUntrackedInstaller();
   session.confirmInstallerExit();
   expect(isUpdateInFlight(f.home)).toBe(true);
   session.finish({ phase: "installed", activeRoot: f.home });
+  expect(read(join(f.home, "update-orchestrated.json")).fenceUntil).toBeUndefined();
   expect(isUpdateInFlight(f.home)).toBe(false);
 });
 

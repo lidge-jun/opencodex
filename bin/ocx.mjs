@@ -993,7 +993,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
     try {
       if (manager === "npm") {
         const packageDir = resolve(here, "..");
-        const transactionalNpmUpdate = process.platform === "win32" || child ? transactionalNpmUpdateAsync : transactionalNpmUpdateSync;
+        const transactionalNpmUpdate = session ? transactionalNpmUpdateAsync : transactionalNpmUpdateSync;
         if (!homePolicy.authorizeMutation("package")) throw new Error("Automatic package update refused.");
         const tx = await transactionalNpmUpdate({
           packageDir,
@@ -1012,15 +1012,15 @@ async function runPackageManagerSelfUpdate(manager, child) {
             const invocation = npmInvocation(args);
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
             if (process.platform === "win32") {
-              if (child) session.noteUntrackedInstaller();
+              if (session) session.noteUntrackedInstaller();
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
-              }).then(result => { if (child && result.processTreeExited === true) session.confirmInstallerExit(); return result; });
+              }).then(result => { if (session && result.processTreeExited === true) session.confirmInstallerExit(); return result; });
             }
             if (!invocation) return { status: 1 };
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
-            if (child) return runPosixInstallerSync({ file: invocation.file, args: invocation.args,
+            if (session) return runPosixInstallerSync({ file: invocation.file, args: invocation.args,
               markerPath: join(configDir(), "update-orchestrated.json"), authorizeMutation: homePolicy.authorizeMutation,
               env: unprivilegedOwnershipMutationEnvironment(invocation.options?.env ?? process.env) });
             return guardedSpawnSync(homePolicy.authorizeMutation, "package", invocation.file, invocation.args, {
@@ -1033,7 +1033,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
           },
           log: (line) => console.log(line),
         });
-        if (child) childOutcome = tx.ok ? { phase: "installed", activeRoot: packageDir }
+        if (session) childOutcome = tx.ok ? { phase: "installed", activeRoot: packageDir }
           : { phase: "failed", rollbackPerformed: tx.rolledBack === true,
             ...(tx.processTreeExited === false ? { error: "installer-termination-unconfirmed" } : {}) };
         postUpdateLauncherUsable = launcherUsableAfterNpmUpdate(tx);
@@ -1060,7 +1060,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
           runPnpm: (args, capture = false) => {
             const invocation = pnpmOwnerInvocation(owner, args);
             if (!invocation) return { status: 1 };
-            if (child && !capture) return withPnpmCommandCwd(args, cwd => {
+            if (session && !capture) return withPnpmCommandCwd(args, cwd => {
               const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
@@ -1085,7 +1085,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
           },
           log: line => console.log(line),
         });
-        if (child) childOutcome = update.ok ? { phase: "installed", activeRoot: update.path }
+        if (session) childOutcome = update.ok ? { phase: "installed", activeRoot: update.path }
           : { phase: "failed", rollbackPerformed: update.rollbackPerformed === true,
             ...(update.processTreeExited === false ? { error: "installer-termination-unconfirmed" } : {}) };
         if (update.ok) {
