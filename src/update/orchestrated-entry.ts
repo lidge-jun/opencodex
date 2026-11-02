@@ -25,6 +25,7 @@ import { decideOrchestratedApply } from "./orchestrated-admission.mjs";
 import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { proxyIdentityAt } from "../server/proxy-liveness";
+import { probeSpawnSync } from "./mutation-guard.mjs";
 
 type Request = Extract<OrchestratedUpdateArgs, { ok: true }>;
 type DetectedInstaller = PlanInputs["installer"] | "standalone";
@@ -71,7 +72,18 @@ const defaultDeps: OrchestratedPlanDeps = {
     }
     return classifyPlanRuntimeOwner(identity, owner, supervision, serviceInstalled);
   },
-  target: (selector, installer) => ["npm", "pnpm", "bun"].includes(installer) ? latestVersion(selector, installer as "npm" | "pnpm" | "bun") : null,
+  target: (selector, installer) => {
+    if (!["npm", "pnpm", "bun"].includes(installer)) return null;
+    const cache = mkdtempSync(join(tmpdir(), "ocx-registry-probe-"));
+    const overrides = { npm_config_cache: cache, npm_config_logs_dir: join(cache, "logs"), npm_config_logs_max: "0",
+      npm_config_update_notifier: "false", pnpm_config_cache_dir: join(cache, "pnpm-cache"),
+      pnpm_config_store_dir: join(cache, "pnpm-store"), pnpm_config_state_dir: join(cache, "pnpm-state"),
+      BUN_INSTALL_CACHE_DIR: join(cache, "bun-cache"), XDG_CACHE_HOME: join(cache, "xdg-cache"), XDG_STATE_HOME: join(cache, "xdg-state") };
+    const keys = new Set(Object.keys(overrides).map(key => key.toLowerCase()));
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !keys.has(key.toLowerCase()))), ...overrides };
+    try { return latestVersion(selector, installer as "npm" | "pnpm" | "bun", undefined, probeSpawnSync, env); }
+    finally { rmSync(cache, { recursive: true, force: true }); }
+  },
   inFlight: () => isUpdateInFlight(getConfigDir()),
 };
 

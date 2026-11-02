@@ -346,6 +346,7 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
   const pkg = join(root, "lib", "node_modules", "@bitkyc08", "opencodex");
   const backup = join(root, "lib", "node_modules", "@bitkyc08", ".ocx-backup-123", "opencodex");
   const npmLog = join(root, "npm-log");
+  const envLog = join(root, "npm-env");
   mkdirSync(pkg, { recursive: true }); mkdirSync(ocxHome, { recursive: true }); mkdirSync(path); mkdirSync(backup, { recursive: true });
   mkdirSync(join(home, ".opencodex-desktop"), { recursive: true });
   writeFileSync(join(home, ".opencodex-desktop", "cli.json"), JSON.stringify({ version: 1, enabled: true, bundle: { platform: process.platform, kind: process.platform === "darwin" ? "macos-app" : "linux-deb", cliExecutable: join(root, "no-desktop") } }));
@@ -360,18 +361,23 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
     if (name !== "bun") symlinkSync(repoPath("node_modules", name), join(pkg, "node_modules", name));
   }
   symlinkSync(repoPath("node_modules", "bun"), join(pkg, "node_modules", "bun"));
-  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\n[ "$1" = view ] || exit 1\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\nprintf '%s|%s|%s|%s|%s|%s\\n' "$npm_config_cache" "$npm_config_logs_dir" "$npm_config_logs_max" "$npm_config_update_notifier" "$pnpm_config_cache_dir" "$BUN_INSTALL_CACHE_DIR" >> '${envLog}'\n[ "$1" = view ] || exit 1\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
   const nodeCommand = Bun.which("node"); if (!nodeCommand) throw Error("Node required");
   const node = spawnSync(nodeCommand, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
   if (!node) throw Error("Node executable could not be resolved");
   const env = { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome, CODEX_HOME: join(home, ".codex"),
-    CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: path, OPENCODEX_BUN_PATH: "", OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" };
+    CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: path, npm_config_cache: join(home, "user-cache"), OPENCODEX_BUN_PATH: "", OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" };
   const launch = async (args = ["--plan", "--json", "--version", "99.0.0"]) => {
     const child = Bun.spawn([node, join(pkg, "bin", "ocx.mjs"), "update", ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     return { stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text(), code: await child.exited };
   };
   try {
     const first = await launch();
+    const [cache, logs, logsMax, notifier, pnpmCache, bunCache] = readFileSync(envLog, "utf8").trim().split("|");
+    expect(cache).toBeTruthy(); expect(cache!.startsWith(home)).toBe(false);
+    expect(logs!.startsWith(cache!)).toBe(true); expect(logsMax).toBe("0"); expect(notifier).toBe("false");
+    expect(pnpmCache!.startsWith(cache!)).toBe(true); expect(bunCache!.startsWith(cache!)).toBe(true);
+    expect(existsSync(cache!)).toBe(false); expect(existsSync(join(home, "user-cache"))).toBe(false);
     expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
     expect({ stderr: first.stderr, npmLog: existsSync(npmLog) ? readFileSync(npmLog, "utf8") : "missing" }).toMatchObject({ npmLog: expect.stringContaining("@bitkyc08/opencodex@99.0.0") });
     expect(first.stderr).not.toContain("auto-restore");

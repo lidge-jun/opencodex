@@ -112,6 +112,7 @@ function runPnpmCandidate(
   args: readonly string[],
   capture = false,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv: NodeJS.ProcessEnv = process.env,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
   const invocation = pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
@@ -121,7 +122,7 @@ function runPnpmCandidate(
     timeout: 20_000,
     windowsHide: true,
     cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
     ...invocation.options,
   });
 }
@@ -129,7 +130,7 @@ function runPnpmCandidate(
 /** Resolve the exact pnpm executable/group/bin that own this package. */
 export function resolveCurrentPnpmGlobalOwner(
   invoked = process.argv[1],
-  deps: { commandPaths?: readonly string[]; spawn?: typeof probeSpawnSync } = {},
+  deps: { commandPaths?: readonly string[]; spawn?: typeof probeSpawnSync; env?: NodeJS.ProcessEnv } = {},
 ): PnpmGlobalOwnerResult {
   const probeSpawn = deps.spawn ?? probeSpawnSync;
   return resolvePnpmGlobalOwner({
@@ -137,7 +138,7 @@ export function resolveCurrentPnpmGlobalOwner(
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn),
+    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
   });
 }
 
@@ -224,9 +225,9 @@ function npmSpawnTarget(args: readonly string[]): SpawnTarget | null {
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
 
-function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner): SpawnTarget | null {
+function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner, env?: NodeJS.ProcessEnv): SpawnTarget | null {
   if (owner) {
-    const invocation = pnpmOwnerInvocation(owner, args);
+    const invocation = pnpmOwnerInvocation(owner, args, process.platform, env);
     if (!invocation) return null;
     return {
       bin: invocation.file,
@@ -244,19 +245,20 @@ export function registrySpawnTarget(
   installer: Installer,
   args: readonly string[],
   owner?: PnpmGlobalOwner,
+  env?: NodeJS.ProcessEnv,
 ): SpawnTarget | null {
   if (installer === "standalone") return null;
   // A pnpm command without an owner would silently fall back to the first PATH
   // candidate. That is unsafe when multiple PNPM_HOME installations expose the
   // same version, so registry queries use the same hard binding as mutation.
   return installer === "pnpm"
-    ? owner ? pnpmSpawnTarget(args, owner) : null
+    ? owner ? pnpmSpawnTarget(args, owner, env) : null
     : npmSpawnTarget(args);
 }
 
-function selectedPnpmOwner(owner?: PnpmGlobalOwner): PnpmGlobalOwner | undefined {
+function selectedPnpmOwner(owner?: PnpmGlobalOwner, probeSpawn?: typeof probeSpawnSync, env?: NodeJS.ProcessEnv): PnpmGlobalOwner | undefined {
   if (owner) return owner;
-  const result = resolveCurrentPnpmGlobalOwner();
+  const result = resolveCurrentPnpmGlobalOwner(undefined, { spawn: probeSpawn, env });
   return result.ok ? result.owner : undefined;
 }
 
@@ -302,10 +304,11 @@ export function latestVersion(
   installer: Installer = detectInstall(),
   owner?: PnpmGlobalOwner,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
+  probeEnv?: NodeJS.ProcessEnv,
 ): string | null {
-  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner) : undefined;
+  const resolvedOwner = installer === "pnpm" ? selectedPnpmOwner(owner, probeSpawn, probeEnv) : undefined;
   if (installer === "pnpm" && !resolvedOwner) return null;
-  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner);
+  const manager = registrySpawnTarget(installer, ["view", `${PKG}@${tag}`, "version"], resolvedOwner, probeEnv);
   if (!manager) return null;
   const r = probeSpawn(manager.bin, manager.args, {
     encoding: "utf8",
@@ -313,8 +316,8 @@ export function latestVersion(
     windowsHide: true,
     cwd: installer === "pnpm" ? PNPM_READ_CWD : undefined,
     env: installer === "pnpm"
-      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env))
-      : unprivilegedOwnershipMutationEnvironment(manager.env ?? process.env),
+      ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env))
+      : unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env),
     ...manager.options,
   });
   return r.status === 0 && typeof r.stdout === "string" ? (r.stdout.trim() || null) : null;
