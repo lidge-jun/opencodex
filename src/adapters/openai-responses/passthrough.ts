@@ -482,10 +482,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = { ...finalBody, stream: true };
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
-        const overrideAccountId = (provider as { _codexAccountOverride?: { chatgptAccountId?: string } })._codexAccountOverride?.chatgptAccountId
-          ?? headers["chatgpt-account-id"];
-        if ((provider as { _codexAccountOverride?: unknown })._codexAccountOverride && overrideAccountId) {
-          finalBody = isolateCodexPoolClientMetadata(finalBody, overrideAccountId);
+        const override = (provider as { _codexAccountOverride?: { chatgptAccountId: string; kind?: string } })._codexAccountOverride;
+        if (override && override.kind !== "main-pool") {
+          finalBody = isolateCodexPoolClientMetadata(finalBody, override.chatgptAccountId);
         }
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);

@@ -97,8 +97,8 @@ OrcaRouter key exchange uses the shared raw-byte reader before returning a durab
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
-Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
-only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
+Anthropic model-scoped quota labels in `src/providers/claude-cli-usage.ts` publish only canonical Fable, Opus, or Sonnet labels; unknown upstream display names are omitted.
+Display and advisory quota share [active usage-window selection](providers/anthropic-account-pool.md#pool-bound-quota-and-reset-grants), including authoritative `limits` precedence and inactive-window suppression.
 Anthropic usage flights replace older joinable transports when recovery requires a fresh read. `src/providers/quota/anthropic-cooldown-recovery.ts` fences successful, empty, and rejected results by credential and cooldown generation before cache publication. Live account quota entries retain that currentness predicate; routing and account-list readers reject a superseded entry before its TTL expires. Header-only family observations carry a private credential-generation fence and their own thirty-minute clock. Active non-enumerating probes retain absent families; authoritative limits enumeration retires them. Persisted observations carry no live probe predicate of their own.
 Per-account quota flights also retain their starting cooldown generation through token resolution. A stale token failure returns unavailable to its caller without replacing the cache row or its timestamp; a joined flight rechecks ownership before returning.
 Antigravity's [producer-bound JEV family evidence](providers/jev-decision.md#loaded-advisory-quota) stays separate from display quota and hard routing eligibility.

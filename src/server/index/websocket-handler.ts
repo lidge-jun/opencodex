@@ -179,7 +179,7 @@ export function createWebsocketHandler(
             return;
           }
           try {
-            sendUpstreamFrame(upstream, raw);
+            sendUpstreamFrame(upstream, raw, ws.data.authContext);
             if (ws.data.liveMaxSessionMs !== undefined && upstream.bufferedAmount > MAX_WS_FRAME_BYTES) {
               closeLiveSideband(ws, 1013, "audio upstream backpressure");
             }

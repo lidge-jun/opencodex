@@ -52,7 +52,7 @@ const errors = {
 };
 mock.module("../../src/codex/auth-context",()=>({
   ...errors,
-  resolveCodexAuthContext:async(headers: Headers, _config: OcxConfig, mode: string, options: Selection["options"])=>{selection={headers,mode,options};duringSelection?.();if(directError)throw new errors.CodexDirectAuthenticationError();return {kind:"pool",accountId:"test-account",...(probe?{probeLeaseId:"test-probe"}:{})};},
+  resolveCodexAuthContext:async(headers: Headers, _config: OcxConfig, mode: string, options: Selection["options"])=>{selection={headers,mode,options};duringSelection?.();if(directError)throw new errors.CodexDirectAuthenticationError();return {kind:"pool",accountId:"test-account",chatgptAccountId:outgoingAccount,accessToken:outgoingBearer,generation:1,writerGeneration:0,...(probe?{probeLeaseId:"test-probe"}:{})};},
   isCodexAuthContextUsable:()=>true,
   releaseCodexAuthContextProbeLease:()=>{released++;},
   materializeCodexUpstreamAuth: (_headers: Headers, _auth: unknown, options: { config: OcxConfig; modelId: string; admission?: DataPlaneAdmission; substituteMainCredential?: boolean }) => {
@@ -419,4 +419,29 @@ test("a context root conflicting with protocol headers is rejected without selec
     authorization: "Bearer test", "session-id": "another-root",
   }), config, logContext(), "alpha/notes/v2/read_file", undefined, keyAdmission);
   expect(response.status).toBe(409); expect(selection).toBeUndefined();
+});
+
+
+test("history isolates existing Pool client metadata without changing encrypted arguments", async () => {
+  const key = "x-codex-installation-id";
+  const { codexInstallationIdForAccount } = await import("../../src/codex/installation-id");
+  const body = { context: { session_id: "root-test" }, encrypted_arguments: "unchanged+==", client_metadata: { [key]: "caller-id", keep: "same" } };
+  let sent: Record<string, any> | undefined;
+  setFetch(async (_url, init) => { sent = JSON.parse(String(init?.body)); return Response.json({ ok: true }); });
+  const req = new Request("http://localhost/v1/alpha/notes/v2/read_file", { method: "POST", headers: { authorization: "Bearer incoming", "content-type": "application/json" }, body: JSON.stringify(body) });
+  expect((await handleContextHistory(req, config, logContext(), "alpha/notes/v2/read_file", undefined, keyAdmission)).status).toBe(200);
+  expect(sent?.client_metadata[key]).toBe(codexInstallationIdForAccount(outgoingAccount));
+  expect(sent?.client_metadata.keep).toBe("same");
+  expect(sent?.encrypted_arguments).toBe(body.encrypted_arguments);
+  expect(body.client_metadata[key]).toBe("caller-id");
+});
+
+test("history maps installation-secret refusal before fetch", async () => {
+  const { CodexInstallationIdUnavailableError } = await import("../../src/codex/installation-id");
+  materializationError = new CodexInstallationIdUnavailableError();
+  let sends = 0;
+  setFetch(async () => { sends++; return Response.json({}); });
+  const req = new Request("http://localhost/v1/alpha/notes/v2/read_file", { method: "POST", headers: { authorization: "Bearer incoming", "content-type": "application/json" }, body: JSON.stringify({ context: { session_id: "root-test" } }) });
+  expect((await handleContextHistory(req, config, logContext(), "alpha/notes/v2/read_file", undefined, keyAdmission)).status).toBe(503);
+  expect(sends).toBe(0);
 });

@@ -1,3 +1,5 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
+import { isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
@@ -393,7 +395,7 @@ async function refreshNativeMainCompactContext(args: {
     });
     for (const name of FORWARD_HEADERS) {
       const value = selected.get(name);
-      if (value) headers.set(name, value);
+      if (value !== null) headers.set(name, value);
     }
     const override = (refreshedProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
     if (override) {
@@ -488,7 +490,7 @@ async function refreshPoolCompactContext(args: {
     });
     for (const name of FORWARD_HEADERS) {
       const value = selected.get(name);
-      if (value) headers.set(name, value);
+      if (value !== null) headers.set(name, value);
     }
     const override = (refreshedProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
     if (override) {
@@ -541,11 +543,12 @@ async function resolveAlternateCompactContext(args: {
   excludeAccountId: string | null;
   turnAdmissionLease?: AdmissionLease;
   admission?: DataPlaneAdmission;
-}): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
+}): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | { failure: Response } | null> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
+  let authCtx: CodexAuthContext | undefined;
   try {
-    const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+    authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       admission: args.admission,
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
@@ -561,7 +564,7 @@ async function resolveAlternateCompactContext(args: {
     const selected = headersForCodexAuthContext(req.headers, authCtx, config, selectedModelId, args.admission);
     for (const name of FORWARD_HEADERS) {
       const value = selected.get(name);
-      if (value) headers.set(name, value);
+      if (value !== null) headers.set(name, value);
     }
     const override = (provider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
     if (override) {
@@ -571,6 +574,8 @@ async function resolveAlternateCompactContext(args: {
     if (provider.apiKey) headers.set("authorization", `Bearer ${resolveProviderApiKey(provider.apiKey)}`);
     return { authCtx, provider, headers };
   } catch (err) {
+    releaseCodexAuthContextProbeLease(authCtx);
+    if (err instanceof CodexInstallationIdUnavailableError) return { failure: formatErrorResponse(503, "server_busy", err.message) };
     if (err instanceof CodexMainProfileDrainingError) {
       // The native-main fence can start after account A has already rejected the
       // request. Treat the now-fenced main profile as no alternate and preserve A's
@@ -603,7 +608,7 @@ function compactResponseHeaders(upstream: Response): Headers {
   const headers = new Headers({ "Content-Type": upstream.headers.get("content-type") ?? "application/json" });
   for (const name of COMPACT_PASSTHROUGH_HEADERS) {
     const value = upstream.headers.get(name);
-    if (value) headers.set(name, value);
+    if (value !== null) headers.set(name, value);
   }
   return headers;
 }
@@ -907,7 +912,7 @@ export async function handleResponsesCompact(
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
           const value = selected.get(name);
-          if (value) headers.set(name, value);
+          if (value !== null) headers.set(name, value);
         }
         const override = (compactProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
         if (override) {
@@ -1058,6 +1063,14 @@ export async function handleResponsesCompact(
       compactHostAdmissionLease = null;
     };
     const connectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(compactUrl) });
+    const applyCompactPoolQuotaHeaders = async (ctx: CodexAuthContext, response: Response) => {
+      if (ctx.kind !== "pool" && ctx.kind !== "main-pool") return;
+      const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/quota");
+      applyAccountQuotaFromUpstreamHeaders(ctx.accountId, response.headers, ctx.writerGeneration,
+        ctx.kind === "main-pool" ? ctx.mainQuotaWriter : undefined,
+        { modelId: route.modelId, poolWriter: ctx.kind === "pool" ? ctx.poolQuotaWriter : undefined,
+          poolResponse: ctx.kind === "pool" });
+    };
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -1165,6 +1178,9 @@ export async function handleResponsesCompact(
         }
         if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.preserveResponsesMessageMetadata !== true) {
           replayBody = stripInternalChatMessageMetadataPassthrough(replayBody) as typeof replayBody;
+        }
+        if (sendAuthCtx.kind === "pool" && isCanonicalOpenAiForwardProvider(sendProvider)) {
+          replayBody = isolateCodexPoolClientMetadata(replayBody, sendAuthCtx.chatgptAccountId) as typeof replayBody;
         }
         // A queued key selection can refresh the destination; project only for this send.
         return isOpenAiOperatedResponsesDestination(sendProvider)
@@ -1469,6 +1485,12 @@ export async function handleResponsesCompact(
           excludeAccountId: authCtx.accountId,
           turnAdmissionLease,
         });
+      if (alternate && "failure" in alternate) {
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
+        recordCompactPoolOutcome(authCtx, upstream.status, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
+        await upstream.body?.cancel().catch(() => undefined);
+        return alternate.failure;
+      }
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
       // cancelling its body, and sending B are all observable side effects, and B's
@@ -1510,17 +1532,7 @@ export async function handleResponsesCompact(
         // quota snapshot that produced it, so refresh A's cache before recording its
         // rejection. Skipping this leaves quota-strategy routing and the dashboard
         // reading numbers from before the account ran out.
-        if (authCtx.kind === "pool" || authCtx.kind === "main-pool") {
-          const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-          applyAccountQuotaFromUpstreamHeaders(
-            authCtx.accountId,
-            upstream.headers,
-            authCtx.writerGeneration,
-            authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
-            { modelId: route.modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
-              poolResponse: authCtx.kind === "pool" },
-          );
-        }
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
         recordCompactPoolOutcome(authCtx, upstream.status, {
           retryAfter: firstRetryAfter,
           resetAt: firstResetAt,
@@ -1569,6 +1581,12 @@ export async function handleResponsesCompact(
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
       });
+      if (alternate && "failure" in alternate) {
+        await applyCompactPoolQuotaHeaders(authCtx, upstream);
+        recordCompactPoolOutcome(authCtx, firstStatus, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
+        await upstream.body?.cancel().catch(() => undefined);
+        return alternate.failure;
+      }
       if (alternate && req.signal.aborted) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
         recordCompactPoolOutcome(outcomeCtx, 499);
@@ -1728,7 +1746,7 @@ export async function handleResponsesCompact(
     const internalHeaders = new Headers({ "content-type": "application/json" });
     for (const name of FORWARD_HEADERS) {
       const value = req.headers.get(name);
-      if (value) internalHeaders.set(name, value);
+      if (value || (value !== null && (name === "x-codex-installation-id" || name === "x-codex-turn-metadata"))) internalHeaders.set(name, value);
     }
     copyResponsesClientMetadata(internalHeaders, req.headers, route.provider);
     const internalReq = new Request("http://localhost/v1/responses", {

@@ -1,4 +1,6 @@
 # Responses Transport
+
+Canonical HTTP and WebSocket sends share the [account installation identity contract](../providers/codex-installation-identity.md). The adapter serializes the isolated metadata before WS preparation; Direct and native main retain caller values.
 WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
@@ -422,6 +424,7 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
+| `passthrough-build-error.ts` | Shared adapter-build refusal mapping, including installation-identity unavailability as a sanitized 503. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, Chat raw-reasoning preference forwarded to both loop bridges under [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary), per-build adapter prompt estimates for usage logging, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
