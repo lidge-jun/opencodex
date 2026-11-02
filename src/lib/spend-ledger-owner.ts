@@ -47,6 +47,26 @@ let boundLedgerHome: string | null = null;
  */
 let ownerGeneration = 0;
 const releaseHooks: Array<() => void> = [];
+const acquiredHooks: Array<(home: string) => void> = [];
+
+/** Run once after each new ownership generation is acquired. */
+export function onSpendLedgerOwnerAcquired(hook: (home: string) => void): void {
+  acquiredHooks.push(hook);
+}
+const releasingHooks: Array<() => void> = [];
+let releasing = false;
+
+/** Run before the final lease is released, while existing storage tokens remain valid. */
+export function onSpendLedgerOwnerReleasing(hook: () => void): void {
+  releasingHooks.push(hook);
+}
+
+function assertNotReleasing(): void {
+  if (releasing) throw new SpendLedgerOwnerError(
+    "SPEND_LEDGER_OWNER_NOT_HELD",
+    "Spend-ledger ownership is required before the shared ledger can be used.",
+  );
+}
 
 /**
  * Run when the last lease on a state directory goes away.
@@ -142,6 +162,7 @@ export function spendLedgerRestartEnvironment(
  * can evict a live owner or mistake a reused process identity for this lease.
  */
 export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedgerOwnerLease {
+  assertNotReleasing();
   const requestedHome = stateDirectoryIdentity(configDir);
   const busyTimeout = restartHandoffWaitMs();
   if (boundLedgerHome !== null && boundLedgerHome !== requestedHome) {
@@ -194,7 +215,11 @@ export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedger
 
   activeOwner = { home: prepared.home, database, references: 1 };
   ownerGeneration += 1;
-  return leaseFor(activeOwner);
+  const owner = activeOwner;
+  for (const hook of acquiredHooks) {
+    try { hook(owner.home); } catch { /* one hook must not prevent acquisition */ }
+  }
+  return leaseFor(owner);
 }
 
 function leaseFor(owner: ActiveOwner): SpendLedgerOwnerLease {
@@ -204,6 +229,16 @@ function leaseFor(owner: ActiveOwner): SpendLedgerOwnerLease {
       if (released) return;
       released = true;
       if (activeOwner !== owner || owner.references < 1) return;
+      if (owner.references === 1) {
+        releasing = true;
+        try {
+          for (const hook of releasingHooks) {
+            try { hook(); } catch { /* a flush hook must not prevent release */ }
+          }
+        } finally {
+          releasing = false;
+        }
+      }
       owner.references -= 1;
       if (owner.references > 0) return;
       activeOwner = null;
@@ -265,6 +300,7 @@ function trustedStorage(storage: SpendLedgerStorage): { readonly path: string; r
  * choose the destination, which is the thing ownership is supposed to decide.
  */
 export function mintSpendLedgerStorage(fileName: string): SpendLedgerStorage {
+  assertNotReleasing();
   if (fileName.includes("/") || fileName.includes("\\") || fileName === "." || fileName === "..") {
     throw new SpendLedgerOwnerError(
       "SPEND_LEDGER_OWNER_UNAVAILABLE",

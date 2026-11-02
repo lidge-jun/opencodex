@@ -698,6 +698,17 @@
       ]
     },
     {
+      "path": "providers/codex-pool-affinity.md",
+      "tier": 4,
+      "title": "Durable Codex Pool Affinity",
+      "scope": "Restart persistence of Codex pool pins and conversation-state issuers: store, fences, single-writer lease, fail-closed recovery.",
+      "documents": [
+        "src/codex/routing/thread-affinity-store.ts",
+        "src/codex/routing/thread-affinity.ts",
+        "src/lib/config-ownership.ts"
+      ]
+    },
+    {
       "path": "providers/pool-credit-renewal.md",
       "tier": 4,
       "title": "Pool credit renewal",
