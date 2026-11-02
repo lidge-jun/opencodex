@@ -18,4 +18,3 @@ Source: Terra research task, 2026-11-02, read-only, at 6f1d3e65c.
   unions; GUI does not render these values.
 - Options weighed: opt-in process-local namespace (chosen); always serve main (contradicts #5019);
   raise sticky limit (shared counter, not affinity); omit label only (honest but uninformative).
-

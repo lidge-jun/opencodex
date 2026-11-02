@@ -305,6 +305,7 @@ test("regular Responses scrubs retained issuer on a manual main pin and on retur
   const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
   const { forgetRuntimeActiveCodexAccount, resetCodexRoutingForManualSelection } = await import("../../src/codex/routing/active-account");
   const { handleResponses } = await import("../../src/server/responses");
+  const { rememberResponseState, clearResponseStateForTests } = await import("../../src/responses/state");
   const bearer = fakeChatGptJwt("fixture-pin-caller", { exp: 4_000_000_000 });
   const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "session", "thread-id": "thread" });
   config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
@@ -320,7 +321,6 @@ test("regular Responses scrubs retained issuer on a manual main pin and on retur
     config.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID; config.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID; config.pausedCodexAccountIds = [];
     const sent: Record<string, unknown>[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>); return completedInference(); }) as typeof fetch;
-    const { rememberResponseState, clearResponseStateForTests } = await import("../../src/responses/state");
     clearResponseStateForTests();
     rememberResponseState({ model: "gpt-5.5", input: [{ role: "user", content: "earlier" }] }, { id: "opaque", status: "completed", output: [] }, undefined, { force: true });
     const request = (input: unknown = [{ role: "user", content: "hello" }]) => new Request("http://localhost/v1/responses", { method: "POST", headers,
@@ -335,5 +335,5 @@ test("regular Responses scrubs retained issuer on a manual main pin and on retur
     config.activeCodexAccountId = POOL_ID; config.activeCodexAccountPinned = undefined; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
     const back = await handleResponses(request(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
     expect(back.status).toBe(200); await back.text(); expect(sent[1]?.previous_response_id).toBeUndefined();
-  } finally { turn?.release(); }
+  } finally { clearResponseStateForTests(); turn?.release(); }
 });

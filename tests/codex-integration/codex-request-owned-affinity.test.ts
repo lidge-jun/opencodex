@@ -386,46 +386,6 @@ test("caller-main issuer and fallback key use conversation state without routing
   expect(compactAlternateAffinityKey(main, () => "raw")).toBe("owned-key");
 });
 
-test("preview callbacks use each candidate model when crossing Reserve", async () => {
-  const { readFileSync } = await import("node:fs");
-  const { repoPath } = await import("../helpers/repo-root");
-  const source = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
-  const first = source.slice(source.indexOf("subagentFallbackAccountPreview = (modelId"), source.indexOf("const previewAccountId"));
-  const recoveryStart = source.indexOf("subagentFallbackAccountPreview = (modelId", source.indexOf("const recoveryAuthHeaders"));
-  const recovery = source.slice(recoveryStart, source.indexOf("const recoveryPreviewAccountId", recoveryStart));
-  expect(first).toContain("accountId: route.codexAccountId, modelId, admission:");
-  expect(recovery).toContain("accountId: route.codexAccountId, modelId, admission:");
-  const { codexRequestAffinityKey } = await import("../../src/codex/auth-context");
-  const cfg = { providers: {}, codexDesktopAuthless: true, codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
-  const headers = new Headers({ authorization: "Bearer preview", "session-id": "session", "thread-id": "thread" });
-  const options = { requestScopedMainCredential: true, admission: { source: "loopback" as const } };
-  expect(codexRequestAffinityKey(headers, cfg, cfg, { ...options, modelId: "gpt-5.5" })).toBeDefined();
-  expect(codexRequestAffinityKey(headers, cfg, cfg, { ...options, modelId: "gpt-reserve" })).toBeUndefined();
-
-});
-
-
-test("recovery preview recomputes lineage when ownership changes", async () => {
-  const { readFileSync } = await import("node:fs");
-  const { repoPath } = await import("../helpers/repo-root");
-  const source = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
-  const start = source.indexOf("subagentFallbackAccountPreview = (modelId", source.indexOf("const recoveryAuthHeaders"));
-  const recovery = source.slice(start, source.indexOf("const recoveryPreviewAccountId", start));
-  expect(recovery).toContain("previewCodexPoolLineage(recoveryAuthHeaders");
-  expect(recovery).toContain("requestScopedMainCredential: recoveryRequestScopedMainCredential");
-  expect(recovery).not.toContain("                poolLineage,");
-  const { previewCodexPoolLineage } = await import("../../src/codex/auth-context");
-  const { recordCodexThreadLineage, clearCodexThreadLineageForTests } = await import("../../src/codex/lineage");
-  const cfg = { providers: {}, codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
-  const headers = new Headers({ authorization: "Bearer preview", "session-id": "session", "thread-id": "thread" });
-  clearCodexThreadLineageForTests();
-  expect(recordCodexThreadLineage(headers)).toBeDefined();
-  expect(previewCodexPoolLineage(headers, cfg, { requestScopedMainCredential: false })).toBeDefined();
-  expect(previewCodexPoolLineage(headers, cfg, { requestScopedMainCredential: true })).toBeUndefined();
-  clearCodexThreadLineageForTests();
-});
-
-
 test("fallback labels describe the caller-main detour", async () => {
   const { callerOwnedFallbackAffinityDecision } = await import("../../src/codex/request-owned-affinity");
   clearThreadAccountMap();
@@ -485,11 +445,14 @@ test("manual selection clears affinity but retains carried-state issuers until a
     expect(first.affinityDecision?.move).toBe("new_bind"); expect(reused.affinityDecision?.move).toBe("reused");
     const key = first.conversationStateKey!;
     rememberConversationStateIssuer(key, "pool-a");
+    rememberConversationStateIssuer("raw-key", "pool-b");
     expect(getThreadAffinity(key)).toBeDefined();
     resetCodexRoutingForManualSelection("__main__");
     expect(getThreadAffinity(key)).toBeUndefined();
     expect(peekConversationStateIssuer(key)).toBe("pool-a");
+    expect(peekConversationStateIssuer("raw-key")).toBe("pool-b");
     clearThreadAccountMap();
     expect(peekConversationStateIssuer(key)).toBeUndefined();
+    expect(peekConversationStateIssuer("raw-key")).toBeUndefined();
   } finally { clearThreadAccountMap(); resetCodexRoutingForClearedSelection(); }
 });

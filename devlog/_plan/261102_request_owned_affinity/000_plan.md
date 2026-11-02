@@ -318,4 +318,3 @@ Added acceptance:
   two optional fields on the main context type) and the logic lives in the new modules. If the result
   still reaches 2000 lines, extract a further byte-for-byte block with its dependencies (same rules).
   The file-size ratchet test and `wc -l` are C-phase gates.
-

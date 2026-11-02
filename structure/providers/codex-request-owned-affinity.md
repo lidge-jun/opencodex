@@ -53,12 +53,10 @@ when the issuer differs. This also applies with affinity off: those requests now
 issuer instead of leaving main untracked or using the stored-credential raw conversation key. Fixed
 account selectors and Reserve do not receive a request-owned issuer key. Manual account selection
 clears routing bindings while retaining issuer records, so the selected account can detect carried
-state from the previous account. General affinity-map resets still clear issuer records.
-
-Known limit, shared with stored-credential traffic: an operator's manual account selection runs
-`resetCodexRoutingForManualSelection`, whose `clearThreadAccountMap()` also clears every issuer record, so
-the first turn after that reset cannot detect the account change. Preserving issuers across that reset
-belongs to the affinity storage owner, not to this namespace.
+state from the previous account: `clearThreadAccountMap({ preserveConversationStateIssuers: true })`
+in `src/codex/routing/active-account.ts` retains issuers; a full reset clears both. Fixed-account and
+other stored-credential traffic keeps the shared stored-credential issuer namespace; its `app:` key
+is not caller-scoped by design and is unchanged by this feature.
 
 ## Persistence contract
 
