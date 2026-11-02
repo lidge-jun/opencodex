@@ -59,13 +59,13 @@ x-opencodex-api-key: your-secret-token
 
 |エンドポイント | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` |受け入れられません | **必須** |受け入れられません |
-| `/v1/chat/completions` |受け入れられません | **必須** |受け入れられません |
+| `/v1/responses` | 受け入れられる | 受け入れられる | 受け入れられません |
+| `/v1/chat/completions` | 受け入れられる | 受け入れられる | 受け入れられません |
 | `/v1/messages` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/messages/count_tokens` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/models` |受け入れられました |受け入れられました |受け入れられました |
 
-応答とチャット完了では、Codex Direct パススルーの可能性のために `Authorization` を予約しているため、そこでは専用のアドミッション ヘッダーのみが受け入れられます。ダッシュボードで生成された `apiKeys` は、起動後に環境トークンを置き換える可能性があります。候補値は定数時間で比較されます。
+Responses と Chat Completions は、認識されたデータプレーン認証情報を `x-opencodex-api-key`、またはその専用ヘッダーがない場合は `Authorization: Bearer` で受け付けます。専用ヘッダーがあれば無効でも優先され、有効な bearer でその拒否を回避できません。無関係な bearer はプロキシへのアクセスを許可せず、この経路は `x-api-key` を受け付けません。生成された `apiKeys` と共有データトークンは定数時間で比較されます。管理認証情報はモデルアクセスを許可しません。
 
 Messages と `count_tokens` はルーティングクライアントとの互換性のために 3 つの admission 形式を引き続き受け入れます。
 ただし非ループバック bind のネイティブ Anthropic パススルーでは、プロキシ admission は

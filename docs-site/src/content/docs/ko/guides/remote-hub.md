@@ -31,6 +31,7 @@ Codex와 Claude 요청은 클라이언트에서 허브의 데이터 리스너로
 임시 권한은 stdin으로만 전달하며 설정 파일이나 토큰 파일에 저장되지 않습니다.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -199,6 +200,7 @@ Serve가 허용하는 HTTPS 포트는 제한적입니다. 포트가 실제로 �
 그다음 두 Origin을 따로 지정해 연결합니다. 위치 인자 URL이 **데이터** Origin이고(`/readyz`와 `/v1/catalog`를 가져오는 곳), `--management-url`이 pairing과 키 발급에 쓰는 대시보드 Origin입니다. 두 Origin이 같은 포트일 필요는 없습니다.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 # `ocx hub invite`가 코드까지 채워서 출력해 주는 바로 그 줄입니다.
@@ -229,6 +231,7 @@ ocx hub invite
 일회용 단기 pairing 코드를 발급하고, 다른 컴퓨터에서 실행할 명령을 출력합니다.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash, on the other machine:
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
@@ -296,6 +299,7 @@ ocx config set oauthOpenBrowser false
 ## 키 교체와 연결 해제
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

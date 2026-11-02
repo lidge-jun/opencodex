@@ -52,6 +52,7 @@ Codex Remote Workspace は現行の App Server 権限プロファイルを使い
 手動での同等の手順は次のとおりです。
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -92,6 +93,7 @@ Remove-Variable pairingExitCode
 現在の OCX Bun 実行ファイルは、Linux サンドボックスに読み取り専用のファイル 1 件として自動追加されます。プロジェクトでシステムパス外のユーザーインストール済みツールチェーンが必要なら、ホームディレクトリ全体を公開せず、明示的にペアリングします。
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

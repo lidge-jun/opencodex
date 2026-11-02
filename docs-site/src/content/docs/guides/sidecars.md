@@ -24,7 +24,7 @@ On file load, a retired OpenCode Free model target in global or `claudeCode` ove
 its other settings. Select a supported target before re-enabling it. Healthy targets and the defaults
 for absent sidecar sections are unchanged.
 
-### Additional web-search backends (explicit-only)
+## Additional web-search backends (explicit-only)
 
 Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
 **explicit-only** — it never activates from credential presence — and **fails closed**:

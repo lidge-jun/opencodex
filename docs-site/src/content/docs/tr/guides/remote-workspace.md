@@ -75,6 +75,7 @@ ayarlamayın.
 Eşdeğer el ile akış:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -119,6 +120,7 @@ kurulmuş bir araç zinciri gerektiriyorsa ev dizininin geri kalanını açmadan
 onu açıkça eşleştirin:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

@@ -955,3 +955,132 @@ plus the unverified comment. Request one full CodeRabbit review without waiting
 for its result. Keep Draft for fresh review, maintainer-arranged independent
 Spanish/render acceptance, authorized current-head CI and maintainer approval.
 Do not merge, dispatch CI, alter permissions or change CodeRabbit configuration.
+
+
+## November 1: final-review corrections and current dev synchronization
+
+Ordinary merge bd7dba77ce06051bc75a7e0227d7d5607094c2f9 incorporates the two newer
+upstream commits through 1783523b4c999a7d3b3d82c6fb07a7895ff93446 (2.97.0),
+without rewriting published history. The layout conflict retains the upstream
+JSON plus layout-docs.json: all 21 explicit shards and upstream registrations.
+A fresh fetch before publication reports zero missing dev commits.
+
+The completed full review of dcd216c87e0da7f61f845adaa23b14d7f6a7a709 left
+eight inline findings, one outside-diff finding and one unverified comment.
+All are confirmed and corrected:
+
+| Review item | Disposition |
+| --- | --- |
+| Remote Link / fallback-off | Limit no-transmission assurances to failures before dispatch. After forwarding starts, Home may have received or processed the request; inspect the uncertain result before retrying. English/Spanish and the affected Turkish fallback copy agree. |
+| Native Messages | Rewrite the Spanish identity/beta contract. English/Spanish identify the required observed header bundle, operator precedence, first-party destination, compatibility fallback, allowlist and stripping rules; headers grant no authorization. |
+| Docker Hub | Create missing hub and remoteGui objects only for fresh volumes, with explicit replacement warnings and a separate existing-volume update recipe. Preserve siblings and existing CORS entries. Remove the incorrect assertion that the seed already contains a hub object. |
+| reasoning_effort | State the model-subset clamp, independent xhigh/max labels, explicit alias exception and noReasoningModels omission. |
+| Mistral | Specify both response paths, typed text/thinking arrays, byte/order preservation, parser reset, malformed-block errors and unchanged other hosts. |
+| tool_search | Explain collision-safe public declarations and request/JSON/SSE lifecycle mapping; canonical OpenAI keeps its native type. |
+| Bundled Bun | Distinguish current 1.4.4 from historical 1.3.14 and the stable >=1.4.0 upstream WS eligibility. Update all four architecture pages carrying the stale claim. |
+| Workspace pairing | Explicitly require a Bash session for read -p recipes. Align both Workspace examples and affected Hub recipes in all nine locales. |
+| Outside-diff admission headers | Correct both rows and precedence guidance in all nine server references against AUTH_MATRIX and resolveResponsesApiAuth: dedicated header wins, bearer is a fallback only when it is absent, x-api-key is rejected here. Management and native Messages contracts remain separate. |
+| Unverified sidecar hierarchy | Use level-two headings for the initial web-search backend section in canonical English and Spanish. |
+
+The adjacent Spanish audit additionally corrects external-task envelopes,
+checkpoint authority, unset-versus-disabled defaults, Google HTTP 400 versus
+message-terminal 403, agéntico video processing, retry semantics, key terminology,
+Azure delegation and the Docker readiness/host-mount guidance. Current-dev Pool
+installation identity isolation and the 32 KiB turn-metadata limit are synchronized
+in the Codex guide. Technical parity still covers all 79 canonical paths. This is
+not independent human linguistic acceptance of every sentence.
+
+New guards validate Docker commands in order against docker/config.json and the
+current configuration schema, compare all nine admission tables with the actual
+AUTH_MATRIX, require an explicit Bash session for Workspace recipes, and compare
+current bundle claims in all affected architecture pages with package.json.
+The four newly selected regression cases first produced 0 passes / 4 failures
+before the documentation correction; the final docs selection passes.
+
+Validation uses Bun 1.4.4, unchanged frozen root/docs lockfiles, the repository
+wrapper/preload, synthetic homes and a dedicated ignored TEMP/TMP root. No
+personal Desktop configuration, token, native home or provider account was used.
+No process was listening on the personal port 10100 when inspected.
+
+```powershell
+bun install --frozen-lockfile
+$env:OCX_TEST_RUNNER_BUN = (Get-Command bun).Source
+$docsTests = @(rg --files tests/ci-workflows -g 'docs-*.test.ts')
+$related = @(
+  'tests/test-layout.test.ts',
+  'tests/test-layout-tooling.test.ts',
+  'tests/clients/client-link-relay.test.ts',
+  'tests/clients/link-relay-bound-transport.test.ts',
+  'tests/server/server-auth.test.ts',
+  'tests/server/data-plane-admission-identity.test.ts',
+  'tests/cli/cli-config-command.test.ts',
+  'tests/codex-integration/codex-installation-id.test.ts',
+  'tests/codex-integration/codex-installation-wire.test.ts',
+  'tests/codex-integration/codex-installation-sidecars.test.ts',
+  'tests/codex-integration/codex-installation-live-ws.test.ts',
+  'tests/codex-integration/codex-installation-live-http.test.ts',
+  'tests/codex-integration/codex-installation-live-content.test.ts',
+  'tests/codex-integration/codex-installation-invalid-account.test.ts',
+  'tests/responses/codex-installation-turn-limit.test.ts'
+)
+bun scripts/test.ts --timeout 120000 @docsTests @related
+# Initial 29-file expansion: 821 pass, 1 fail; 8763 assertions.
+bun scripts/test.ts --timeout 120000 tests/server/server-auth.test.ts --test-name-pattern 'OpenAI option auth matrix keeps direct, pool, and API credentials independent'
+# Isolated original failing case: 1 pass, 0 fail; 99 assertions, 24.2 s test body.
+bun scripts/test.ts --timeout 120000 tests/server/server-auth.test.ts
+# Final complete isolated file: 117 pass, 0 fail; 776 assertions, 286.7 s.
+bun scripts/test.ts --timeout 120000 @docsTests
+# Final: 387 pass, 0 fail; 4920 assertions across 14 files, including 25 Spanish cases.
+bun run typecheck
+# Final: 2262 files, zero errors.
+bun run structure:check
+bun scripts/file-size-ratchet.ts
+bun run privacy:scan
+git diff --cached --check
+Push-Location docs-site
+bun install --frozen-lockfile
+$env:OPENCODEX_DOCS_OFFLINE = '1'
+bun run build
+Pop-Location
+# Complete final site: 712 pages, 106109 checked internal links; Pagefind/sitemap pass.
+```
+
+The initial expansion failed the existing OpenAI option auth matrix case at its
+unchanged explicit 30-second deadline. Teardown reported EBUSY on its isolated
+fixture during Windows ACL hardening, then the worker stopped making progress.
+Only the verified worker belonging to that test run was stopped; the wrapper
+reported the failure and worker interruption after 308.4 seconds. The test and
+ACL source match current dev. The original failing case passes alone without a
+source, assertion or budget change. The complete isolated 117-case file also passes without source or deadline changes. The initial expansion is not
+described as passing. This observation does not prove a general environment-only
+classification for every earlier full-suite failure.
+
+Twelve documented Docker config commands execute through the real CLI with
+synthetic separate OpenCodex/Codex homes, covering fresh initialization and
+existing-volume sibling preservation. No Docker daemon or proxy is started by
+that probe. Fifty-four Workspace Bash scenarios cover the 18 shipped examples:
+success, rejected pairing and failed reads, agent-start conditions and secret
+variable cleanup, using synthetic stdin and an in-process stub. These are CLI
+and shell probes, not a real Docker deployment or native-provider acceptance.
+
+Actual-browser inspection of the complete final build verifies the new Docker
+warning and code blocks at 1280/390/320 px, lang=es and no page-level horizontal
+overflow. Long commands scroll within their code block. The corrected admission
+rows render in Spanish at 320 px without page overflow. Viewport overrides were
+reset. New desktop/mobile captures are on pr-assets, separate from this branch:
+4a56832df793b75b7c5d7b3331da8c06bd11db33, directory spanish-docs-review-20261101. The October 31 landing,
+search and prior platform evidence remains valid for its unchanged UI.
+
+Full-suite resource exception: the entire root suite is not repeated on this
+shared Windows host. The focused expansion, isolated failure diagnostics,
+complete docs guards and complete build cover this docs-only follow-up; residual
+full-suite/platform coverage remains with authorized hosted CI. Earlier full-root
+runs and native/live-provider acceptance are not represented as passing.
+
+Publish one source batch, reply to and resolve the eight corrected inline
+threads, and record the outside-diff and unverified dispositions. Update the
+English description once with current-head evidence and the scoped exception.
+Request one full CodeRabbit review without waiting for its result. Keep Draft
+for fresh review, maintainer-arranged independent Spanish/render acceptance,
+authorized current-head CI and maintainer approval. No merge, CI dispatch/retry,
+permission change or CodeRabbit configuration change is authorized here.

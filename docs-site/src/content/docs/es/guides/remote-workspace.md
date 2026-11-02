@@ -82,6 +82,7 @@ Si no está disponible, comprueba que consultas el Hub previsto y que tiene acti
 El flujo manual equivalente es:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -122,6 +123,7 @@ Remove-Variable pairingExitCode
 El ejecutable actual de Bun que usa OCX se añade automáticamente al sandbox de Linux como un único archivo de solo lectura. Si el proyecto necesita herramientas instaladas por el usuario fuera de las rutas del sistema, incluye explícitamente esa cadena de herramientas en el emparejamiento, sin exponer el resto del directorio personal:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

@@ -76,6 +76,7 @@ ne configurez pas simultanément l'ancien bac à sable et un profil d'autorisati
 Le parcours manuel équivalent est :
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -120,6 +121,7 @@ hors des chemins système, associez-la explicitement sans exposer le reste du r�
 personnel :
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

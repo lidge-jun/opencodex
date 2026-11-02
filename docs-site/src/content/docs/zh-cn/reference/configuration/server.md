@@ -61,14 +61,13 @@ x-opencodex-api-key: your-secret-token
 
 | 端点 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | 不接受 | **必需** | 不接受 |
-| `/v1/chat/completions` | 不接受 | **必需** | 不接受 |
+| `/v1/responses` | 接受 | 接受 | 不接受 |
+| `/v1/chat/completions` | 接受 | 接受 | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
 | `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
-Responses 和 Chat Completions 会保留 `Authorization`，以便将来可能支持 Codex Direct 透传，因此这里只接受专用的准入头。仪表板生成的 `apiKeys` 可以在启动后替换
-环境令牌；候选项按常量时间比较。
+Responses 和 Chat Completions 接受 `x-opencodex-api-key` 中已识别的数据平面凭据；仅当该专用请求头缺失时，也接受 `Authorization: Bearer`。专用请求头一旦提供就具有优先权，即使其值无效，有效 bearer 也不能补救。无关 bearer 不授予代理访问权，这些路由不接受 `x-api-key`。生成的 `apiKeys` 和共享数据令牌以常量时间比较；管理凭据不授予模型访问权。
 
 Messages 和 `count_tokens` 为兼容路由客户端仍接受三种准入形式。但在非回环绑定上，原生 Anthropic 透传只通过
 `x-opencodex-api-key` 接受代理准入，并把 `Authorization` 和 `x-api-key` 保留给 Anthropic

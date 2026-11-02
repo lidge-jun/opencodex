@@ -12,6 +12,7 @@ Remote Hub はプロバイダー認証情報、カタログ、使用量を一台
 `standalone` は一台で完結し、`hub` はプロバイダー秘密情報と使用量を所有し、`client` は接続状態とクライアント専用データキーだけを保存します。
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -93,6 +94,7 @@ Serve が受け付ける HTTPS ポートは限られています。通ったと�
 接続時は二つの origin を別々に指定します。位置引数の URL が**データ** origin で、`/readyz` と `/v1/catalog` はここから取得されます。`--management-url` はペアリングとキー発行に使うダッシュボードの origin です。ポートが同じである必要はありません。
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the management admin token without echoing it.
 read -r -s -p 'Admin token: ' admin_token; printf '\n'
 printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -112,6 +114,7 @@ Serve が立ち上がったら、HTTPS のデータ origin に対して `/readyz
 ## OAuth、キー更新、切断
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

@@ -12,6 +12,7 @@ Un hub conserve les identifiants fournisseur, le catalogue et l’usage sur un h
 `standalone` réunit données et gestion. `hub` possède les secrets fournisseur et l’usage. `client` ne conserve que l’état de connexion et une clé de données dédiée.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -93,6 +94,7 @@ Serve n'accepte qu'un jeu limité de ports HTTPS; confirmez avec `tailscale serv
 Connectez-vous ensuite en énonçant les deux origines séparément. L'URL positionnelle est l'origine **de données** — c'est là que sont récupérés `/readyz` et `/v1/catalog` — et `--management-url` est l'origine du tableau de bord, utilisée pour l'association et l'émission de clé. Elles ne partagent pas nécessairement le même port :
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the management admin token without echoing it.
 read -r -s -p 'Admin token: ' admin_token; printf '\n'
 printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -112,6 +114,7 @@ Une fois Serve en place, rejouez les contrôles d'acceptation sur l'origine de d
 ## OAuth, rotation et déconnexion
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

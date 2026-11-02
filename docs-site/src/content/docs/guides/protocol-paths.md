@@ -147,6 +147,10 @@ These paths still use the internal Responses bridge or are not covered:
   through the IR with no feature claims.
 - Managed native Messages to first-party Anthropic preserve a coherent observed Claude Code CLI
   user agent, session UUID and allowlisted SDK headers across token refresh and account selection.
+  The required bundle includes a recognized `User-Agent`, `X-App: cli`, a UUID
+  `X-Claude-Code-Session-Id`, `X-Stainless-Lang: js`, and `X-Stainless-Runtime: node`.
+  Optional SDK fields are preserved only from the identity allowlist; operator-configured headers
+  retain precedence.
   Credential placement remains proxy-owned and beta allowlisting still applies. Missing or invalid
   identity uses the existing compatibility headers; compatible hosts and generated Responses retain
   their current behavior. Headers alone do not authorize requests or establish official support.

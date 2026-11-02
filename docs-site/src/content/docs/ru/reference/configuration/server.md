@@ -62,15 +62,13 @@ x-opencodex-api-key: your-secret-token
 
 | Эндпоинт | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | not accepted | **required** | not accepted |
-| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/responses` | принимается | принимается | не принимается |
+| `/v1/chat/completions` | принимается | принимается | не принимается |
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
-Responses и Chat Completions резервируют `Authorization` под возможный passthrough Codex Direct,
-поэтому там принимается только dedicated admission-header. Сгенерированные в дашборде `apiKeys`
-могут после старта заменить env-token; сравнение кандидатов выполняется constant-time.
+Responses и Chat Completions принимают распознанные учётные данные плоскости данных в `x-opencodex-api-key` либо, если этот заголовок отсутствует, в `Authorization: Bearer`. Переданный выделенный заголовок приоритетен даже с неверным значением; действующий bearer не отменяет отказ. Посторонний bearer не даёт доступа к прокси, а `x-api-key` на этих маршрутах не принимается. Сгенерированные `apiKeys` и общий токен данных сравниваются за постоянное время; административные данные не дают доступа к моделям.
 
 Messages и `count_tokens` ради совместимости routed-клиентов по-прежнему принимают все три формы admission. Но на
 non-loopback bind нативный passthrough Anthropic принимает proxy admission только через

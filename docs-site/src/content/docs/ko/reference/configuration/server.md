@@ -63,13 +63,13 @@ x-opencodex-api-key: your-secret-token
 
 | 엔드포인트 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | 허용되지 않음 | **필수** | 허용되지 않음 |
-| `/v1/chat/completions` | 허용되지 않음 | **필수** | 허용되지 않음 |
+| `/v1/responses` | 허용 | 허용 | 허용되지 않음 |
+| `/v1/chat/completions` | 허용 | 허용 | 허용되지 않음 |
 | `/v1/messages` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 
-Responses와 Chat Completions는 `Authorization`을 향후 Codex Direct 패스스루 용도로 예약해 두므로, 여기서는 전용 admission 헤더만 허용됩니다. 대시보드에서 생성한 `apiKeys`는 시작 후 환경 토큰을 대체할 수 있으며, 후보 값은 상수 시간으로 비교합니다.
+Responses와 Chat Completions는 인식된 데이터 플레인 자격 증명을 `x-opencodex-api-key`에서 받으며, 이 전용 헤더가 없을 때는 `Authorization: Bearer`에서도 받습니다. 전용 헤더가 있으면 잘못된 값이어도 우선하므로, 유효한 bearer로 그 거부를 우회할 수 없습니다. 무관한 bearer는 프록시 접근을 허용하지 않으며 이 경로는 `x-api-key`를 받지 않습니다. 생성된 `apiKeys`와 공유 데이터 토큰은 상수 시간으로 비교됩니다. 관리 자격 증명은 모델 접근 권한을 부여하지 않습니다.
 
 Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 admission 형식을 계속 허용합니다. 하지만 비루프백
 바인드의 네이티브 Anthropic 패스스루는 프록시 admission을 `x-opencodex-api-key`로만 받고,

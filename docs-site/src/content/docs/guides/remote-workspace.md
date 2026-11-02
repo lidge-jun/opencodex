@@ -113,6 +113,7 @@ trust changes. Those remain the separate dashboard/session workflows below.
 The equivalent manual flow is:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -155,6 +156,7 @@ the project needs a user-installed toolchain outside the system paths, pair it e
 exposing the rest of the home directory:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

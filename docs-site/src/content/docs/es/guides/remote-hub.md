@@ -35,6 +35,7 @@ Las configuraciones del cliente exportadas o aplicadas a través de ese panel de
 Conecta usando exactamente una fuente de autorización temporal. Se lee desde stdin y no se escribe en la configuración ni en el archivo de token. En el ejemplo, el origen de datos usa HTTPS en 8443 y el de administración usa HTTPS en 443:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -58,6 +59,7 @@ Si un cliente guardó una URL de concentrador remota `http://` antes de la regla
 Rotar un cliente conectado con una nueva autoridad transitoria:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
@@ -256,6 +258,7 @@ Dar al promotor la misma vida útil que el hub. Un trabajo de shell en segundo p
 Luego conéctese con los dos orígenes establecidos por separado. El URL posicional es el origen **datos** - es donde `/readyz` y `/v1/catalog` son buscados - y `--management-url` es el origen del tablero de instrumentos utilizado para el emparejamiento y la emisión de claves. No tienen que compartir un puerto:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -301,6 +304,7 @@ ocx hub invite
 Crea un código de emparejamiento de un solo uso y de corta duración e imprime el comando para ejecutarlo en la otra máquina. Para mantener el código fuera del historial del shell, léelo sin mostrarlo y pásalo por stdin:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash, on the other machine:
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
@@ -398,7 +402,7 @@ Cuando se ejecute sin Compose, proporcione explícitamente ambos montajes con no
 --mount type=volume,src=codex-state,dst=/home/bun/.codex
 ```
 
-El host necesita Git y Docker Compose para un clon local, o solo Docker Compose para un contexto Git remoto. Bun y no se requiere una etapa de preparación manual. La etapa de manifiesto de solo compilación deriva el inventario canónico de la instantánea Git seleccionada, escribe el `src/generated/compatibility-version.json` sin seguimiento y verifica cada SHA-256 registrado contra el contexto de compilación de solo lectura antes de que las instrucciones de origen `COPY` puedan desreferenciar un enlace simbólico. Los archivos de entorno de ejecución copiados se verifican nuevamente dentro de la imagen. Los metadatos de Git se admiten solo para ese montaje de enlace; no `COPY` coloca `.git` en una capa de imagen, y el ejecutable de Git permanece confinado a la etapa de manifiesto.
+El host necesita Git y Docker Compose para un clon local, o solo Docker Compose para un contexto Git remoto. No se necesita Bun en el host ni una etapa de preparación manual. La etapa de manifiesto de solo compilación deriva el inventario canónico de la instantánea Git seleccionada, escribe el `src/generated/compatibility-version.json` sin seguimiento y verifica cada SHA-256 registrado contra el contexto de compilación de solo lectura antes de que las instrucciones de origen `COPY` puedan desreferenciar un enlace simbólico. Los archivos de entorno de ejecución copiados se verifican nuevamente dentro de la imagen. Los metadatos de Git se admiten solo para ese montaje de enlace; no `COPY` coloca `.git` en una capa de imagen, y el ejecutable de Git permanece confinado a la etapa de manifiesto.
 
 "Git metadata" aquí significa dos archivos. El inventario canónico proviene de `git ls-files`, que lee el índice y nunca abre un objeto o una referencia, por lo que el contexto de compilación admite solo `.git/index` y `.git/HEAD`, aproximadamente 1 MB, en lugar del almacén de objetos completo del repositorio. La etapa de manifiesto los copia en un directorio Git de cero que posee y suministra los directorios vacíos `objects/` y `refs/` que requiere la verificación del repositorio de Git. Un contexto sin un manifiesto ni un índice Git falla la compilación con un mensaje que nombra ambas entradas compatibles; nunca vuelve a un marcador de posición.
 
@@ -440,7 +444,18 @@ OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
 
 Utilice un firewall y un frontend TLS /tailnet autenticado antes de exponer el puerto. La anulación de enlace cambia solo la publicación del host; el oyente del contenedor sigue siendo `0.0.0.0:10100`. Mantenga la misma anulación de enlace en invocaciones de composición posteriores que recrean el concentrador. Para actualizar una implementación existente, ejecute `docker compose build` y vuelva a crear el concentrador con `docker compose up -d`; no repita la inicialización de token de una sola vez.
 
-Configure los proveedores con el panel de control a través de un frontend de administración propiedad del operador o con comandos CLI de un solo disparo que comparten el volumen de estado. Los siguientes comandos muestran la configuración de Remote Hub existente; reemplace el origen y la identidad del ejemplo antes de habilitarlos:
+Configure los proveedores con el panel de control a través de un frontend de administración propiedad del operador o con comandos CLI de un solo disparo que comparten el volumen de estado. Los siguientes comandos distinguen la inicialización de una instalación nueva de las actualizaciones posteriores de campos. Sustituye los orígenes y la identidad del ejemplo antes de habilitarlos:
+
+**Solo para un volumen nuevo:** la configuración inicial declara runtimeRole=hub, pero no contiene los objetos `hub` ni `remoteGui`. El bootstrap del token tampoco los crea. Las escrituras completas siguientes **reemplazan** esos objetos: no las ejecutes en un volumen configurado, porque podrían borrar `hub.managementIngress` u otros ajustes guardados. Sustituye los dos orígenes y la identidad del ejemplo; el origen CORS usa el puerto del proxy local del equipo que se conectará.
+
+```bash
+docker compose run --rm hub bun run src/cli/index.ts config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","dataPublicOrigin":"https://hub-name.tailnet-name.ts.net:8443","managementIngress":{"enabled":true,"port":10101}}'
+docker compose run --rm hub bun run src/cli/index.ts config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+docker compose run --rm hub bun run src/cli/index.ts config set corsAllowOrigins '["http://localhost:10100"]'
+docker compose restart hub
+```
+
+En un volumen ya configurado, inspecciona primero los objetos guardados y actualiza únicamente los campos que quieras cambiar. Las escrituras anidadas conservan los campos hermanos; la lista de usuarios permitidos reemplaza esa lista, así que incluye todas las identidades que deban conservarse. Si falta un objeto, usa el inicializador solo para ese objeto ausente. Si ya existe una lista CORS, conserva sus entradas y añade el origen del equipo que se conectará como explica [Invitar a otra máquina](#inviting-another-machine).
 
 ```bash
 docker compose run --rm hub bun run src/cli/index.ts config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
@@ -449,13 +464,11 @@ docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowe
 docker compose restart hub
 ```
 
-Estos conjuntos anidados funcionan porque la imagen siembra una configuración `hub` de primera ejecución, por lo que el objeto ya existe. En una nueva instalación independiente no lo hace, y las mismas líneas fallan hasta que se crea - ver [Linux systemd o macOS launchd](#linux-systemd-or-macos-launchd) arriba.
+El oyente del contenedor se une a `0.0.0.0`, por lo que ya es accesible en la propia dirección de bucle del contenedor y la forma complementaria de `unauthenticatedLoopbackListener` no se aplica allí, se rechaza en un enlace comodín. El bootstrap del token descrito antes es el contenedor equivalente al propio paso de aprovisionamiento del servicio, y también se ejecuta una vez.
 
-El oyente del contenedor se une a `0.0.0.0`, por lo que ya es accesible en la propia dirección de bucle del contenedor y la forma complementaria de `unauthenticatedLoopbackListener` no se aplica allí, se rechaza en un enlace comodín. El token bootstrap a continuación es el contenedor equivalente al propio paso de aprovisionamiento del servicio, y también se ejecuta una vez.
+No incluyas tokens en `ARG`, `ENV`, `COPY`, el YAML de Compose, el historial de imágenes ni los argumentos de comandos. No montes el socket de Docker, los directorios personales del host o de Codex, el agente SSH ni los archivos de claves de proveedores. La entrada de administración vinculada a `127.0.0.1:10101` dentro del contenedor solo es accesible mediante un frontend TLS o de tailnet situado en el mismo espacio de nombres de red; nunca publiques `10101` como atajo de acceso.
 
-No ponga un token en `ARG`, `ENV`, `COPY`, Compose YAML, historial de imágenes o argumentos de comando. No monte el socket Docker, la casa del host o Codex casa, agente SSH o proveedores de archivos clave. Una entrada de administración vinculada a `127.0.0.1:10101` dentro del contenedor solo se puede alcanzar mediante un frontend TLS /tailnet en el mismo espacio de nombres de red; nunca publique `10101` como acceso directo.
-
-Después de que el recipiente esté sano, ejecute una prueba de promoción de preparación por separado:
+Cuando el contenedor esté sano, comprueba por separado si está listo para atender solicitudes:
 
 ```bash
 docker compose exec hub bun -e \
@@ -465,7 +478,7 @@ docker compose exec hub bun -e \
   "const t=(await Bun.file('/home/bun/.opencodex/service-api-token').text()).trim();const r=await fetch('http://127.0.0.1:10100/v1/catalog',{headers:{'x-opencodex-api-key':t}});console.log(r.status);if(!r.ok)process.exit(1)"
 ```
 
-A continuación, envíe una respuesta enrutada autenticada real con un modelo configurado. Si el secreto está ausente o es ilegible, no debe aceptarse como listo un concentrador de no retorno de bucle. Nunca trates a la vida sola como prueba.
+A continuación, realiza una solicitud enrutada autenticada real con un modelo configurado. Si falta el secreto o no puede leerse, un Hub que escucha fuera de loopback no debe considerarse listo. Que el proceso esté activo no basta para demostrar que puede atender solicitudes.
 
 `docker compose down` elimina el contenedor y la red, pero conserva ambos volúmenes con nombre. Tratar `docker compose down --volumes` como destructivo: elimina la configuración, OAuth credenciales, historial de uso, el token de plano de datos, y persistió Codex estado juntos.
 
@@ -496,7 +509,7 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 - **Desajuste de protocolo:** actualizar el lado más antiguo nombrado por el mensaje `hub-too-new` o `hub-too-old`. La negociación falla antes de que el token, el catálogo, el diario o el estado del cliente escriban.
 - **Código de emparejamiento perdido o quemado:** ejecutar `ocx hub invite` de nuevo. Las concesiones son de un solo uso y los fallos repetidos son de velocidad limitada sin revelar si existe un código.
 - **`ocx hub invite` dice `No loopback browser origin is admitted for pairing`:** el concentrador no admite el origen del navegador de bucle de retroceso, por lo que una concesión vinculada al origen nunca podría igualar. Nada fue acuñado. Ejecute la línea `ocx config set corsAllowOrigins` las impresiones de error, con el puerto proxy de la máquina de unión. Véase [Invitar a otra máquina](#inviting-another-machine).
-- **`ocx hub invite` dice que el origen de los datos anunciados sería el propio bucle de retorno de esta máquina:** el bind es solo loopback o un comodín y `hub.dataPublicOrigin` está desactivado, por lo que no hay dirección para anunciar y nada adivina una red Tailscale o LAN. Nada fue acuñado. Establecer `hub.dataPublicOrigin`, o pase `--data-url` para esta invitación solamente.
+- **`ocx hub invite` dice que el origen de los datos anunciados sería el propio bucle de retorno de esta máquina:** el bind es solo loopback o un comodín y `hub.dataPublicOrigin` no está definido, por lo que no hay dirección para anunciar y nada adivina una red Tailscale o LAN. Nada fue acuñado. Establecer `hub.dataPublicOrigin`, o pase `--data-url` para esta invitación solamente.
 - **El intercambio del equipo que se conecta se rechaza y consume el código:** la autorización estaba vinculada a otro origen. Revisa la línea `Bound browser origin:` de la invitación: indica el puerto que debe usar el otro equipo o propone admitir `http://localhost:10100` en el Hub.
 - **`ocx hub invite` rechaza un `--management-url`:** en un concentrador ese indicador confirma `hub.managementPublicOrigin` en lugar de anularlo, porque la concesión está vinculada al valor configurado. Cambie la configuración o suelte la bandera.
 - **`ocx claude` en el concentrador se inicia de forma nativa Codex / Claude, o el concentrador se niega a escribir sus propias configuraciones de cliente:** `unauthenticatedLoopbackListener` está desactivado. El mensaje de omisión nombra la puerta. Habilite el oyente y reinicie el proxy (`ocx service restart` en una instalación de servicio).

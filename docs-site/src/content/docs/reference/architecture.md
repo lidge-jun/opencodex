@@ -169,7 +169,7 @@ later quota updates are attributed to the serving account, not retroactively
 added to headers already sent. A failure after a WS request was sent does not
 trigger an automatic HTTP resend. These mappings do not enable the client-facing
 WebSocket setting or change other providers' transport selection.
-Bundled Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE. Successful
+The current package bundles Bun **1.4.4**. Older bundles such as Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE instead of that upstream WS optimization. Successful
 upstream WS responses keep the downstream SSE contract and bypass `tee()` through a bounded eager
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
 closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.

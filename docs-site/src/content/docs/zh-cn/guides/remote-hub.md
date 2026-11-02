@@ -12,6 +12,7 @@ Remote Hub 将提供商凭据、模型目录和使用记录保存在一台主机
 `standalone` 在一台机器上运行全部功能；`hub` 保存提供商密钥和使用记录；`client` 只保存连接状态和专属数据密钥。
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -92,6 +93,7 @@ Serve 只接受有限的几个 HTTPS 端口。请用 `tailscale serve status` �
 连接时把两个 origin 分开写。位置参数 URL 是**数据** origin，`/readyz` 和 `/v1/catalog` 都从这里获取；`--management-url` 是用于配对和密钥签发的控制台 origin。两者不必共用端口：
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the management admin token without echoing it.
 read -r -s -p 'Admin token: ' admin_token; printf '\n'
 printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -111,6 +113,7 @@ Serve 就绪后，请针对 HTTPS 数据 origin 重新执行验收检查：`/rea
 ## OAuth、密钥轮换与断开
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

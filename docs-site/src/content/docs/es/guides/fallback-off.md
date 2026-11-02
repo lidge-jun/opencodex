@@ -98,7 +98,7 @@ Un Remote Link Child y un cliente Hub nunca atienden solicitudes con sus proveed
 { "error": "link tunnel unavailable", "code": "home_unreachable", "message": "The Home is unreachable, and OpenCodex did not serve this request from this device's local providers. …" }
 ```
 
-No se envía nada a un proveedor local y la clave de enlace y el cuerpo de la solicitud nunca salen del dispositivo.
+No se envía nada a un proveedor local. Si el fallo ocurre antes de iniciar el reenvío, ni la clave de enlace ni el cuerpo de la solicitud salen del dispositivo. Si el reenvío ya comenzó, el Home puede haber recibido o procesado la solicitud: el resultado es incierto. Comprueba el estado en el Home antes de decidir si reintentas; OpenCodex no repite automáticamente una solicitud que ya empezó a enviar.
 
 <a id="per-device-settings"></a>
 

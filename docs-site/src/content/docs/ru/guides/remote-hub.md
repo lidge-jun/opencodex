@@ -12,6 +12,7 @@ Remote Hub хранит учётные данные провайдеров, ка
 `standalone` объединяет всё на одной машине; `hub` владеет секретами и статистикой; `client` хранит только состояние подключения и отдельный ключ данных.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -93,6 +94,7 @@ Serve принимает ограниченный набор HTTPS-портов;
 Затем подключайтесь, указывая оба origin по отдельности. Позиционный URL — это origin **данных**, именно оттуда берутся `/readyz` и `/v1/catalog`; `--management-url` — origin панели, который используется для pairing и выдачи ключа. Совпадение портов не требуется:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the management admin token without echoing it.
 read -r -s -p 'Admin token: ' admin_token; printf '\n'
 printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -112,6 +114,7 @@ unset admin_token
 ## OAuth, ротация и отключение
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

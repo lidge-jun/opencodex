@@ -52,6 +52,7 @@ Codex Remote Workspace 使用目前的 App Server 權限設定檔。若 Hub 選�
 等效的手動流程如下：
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -92,6 +93,7 @@ Remove-Variable pairingExitCode
 目前的 OCX Bun 可執行檔會自動以單一唯讀檔案加入 Linux sandbox。若專案需要位於系統路徑之外、由使用者安裝的工具鏈，可明確配對該路徑，而不用公開 home 目錄其餘部分：
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

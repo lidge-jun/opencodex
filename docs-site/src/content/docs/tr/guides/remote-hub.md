@@ -12,6 +12,7 @@ Remote Hub sağlayıcı kimlik bilgilerini, kataloğu ve kullanım kayıtların�
 `standalone` her şeyi tek makinede tutar; `hub` sağlayıcı sırları ve kullanımı yönetir; `client` yalnızca bağlantı durumunu ve istemciye özel veri anahtarını saklar.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the one-time code without echoing it or putting it in shell history.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -93,6 +94,7 @@ Serve sınırlı bir HTTPS portu kümesini kabul eder; portun izinli olduğunu v
 Ardından iki origin'i ayrı ayrı belirterek bağlanın. Konumsal URL **veri** origin'idir; `/readyz` ve `/v1/catalog` oradan alınır. `--management-url` ise eşleştirme ve anahtar verme için kullanılan pano origin'idir. Aynı portu paylaşmaları gerekmez:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: enter the management admin token without echoing it.
 read -r -s -p 'Admin token: ' admin_token; printf '\n'
 printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
@@ -112,6 +114,7 @@ Serve ayağa kalktıktan sonra kabul denetimlerini HTTPS veri origin'ine karşı
 ## OAuth, döndürme ve bağlantı kesme
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 # Bash: choose one authority source.
 read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin

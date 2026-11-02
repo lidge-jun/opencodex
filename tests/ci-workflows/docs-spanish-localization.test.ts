@@ -276,6 +276,9 @@ describe("Spanish documentation localization", () => {
         expect(block, path).toMatch(/read -r -s|Read-Host [^\n]+-AsSecureString/);
         expect(block, path).toContain("--pairing-code-stdin");
         expect(block, path).toMatch(/unset pairing_code|Remove-Variable pairingCode/);
+        if (block.includes("read -r -s -p")) {
+          expect(block, `${path} requires an actual Bash session`).toContain("# Bash only: if using zsh, run bash first in this terminal.");
+        }
       }
     }
   });
@@ -307,6 +310,24 @@ describe("Spanish documentation localization", () => {
       const server = source(join(root, locale, "reference/configuration/server.md"));
       for (const identifier of ["config.apiKeys", "OCX_API_TOKEN_FILE", "service-api-token", "OPENCODEX_ADMIN_AUTH_TOKEN"]) {
         expect(server, `${locale || "en"} remote-access credential planes`).toContain(identifier);
+      }
+    }
+  });
+
+  test("Responses admission tables match the implemented header matrix in every locale", async () => {
+    const { AUTH_MATRIX } = await import("../../src/server/auth-cors");
+    const accepted = new Set(["accepted", "aceptado", "accepté", "허용", "허용됨", "受け入れられる", "受け入れ", "принимается", "kabul edilir", "接受"]);
+    const rejected = new Set(["not accepted", "no aceptado", "non accepté", "허용되지 않음", "受け入れられません", "не принимается", "kabul edilmez", "不接受"]);
+    for (const locale of ["", ...localeFolders]) {
+      const text = source(join(root, locale, "reference/configuration/server.md"));
+      for (const endpoint of ["/v1/responses", "/v1/chat/completions"]) {
+        const row = text.split("\n").find(line => line.startsWith(`| \`${endpoint}\` |`));
+        expect(row, `${locale || "en"} ${endpoint}`).toBeDefined();
+        const cells = row!.split("|").slice(2, -1).map(cell => cell.replace(/\*/g, "").trim());
+        expect(cells.every(cell => accepted.has(cell) || rejected.has(cell)), `${locale || "en"} recognized admission labels`).toBe(true);
+        const actual = AUTH_MATRIX.find(item => item.endpoint === endpoint)!;
+        expect(cells.map(cell => accepted.has(cell)), `${locale || "en"} ${endpoint}`)
+          .toEqual([actual.bearer, actual.dedicated, actual.xApiKey].map(value => value === "accepted"));
       }
     }
   });

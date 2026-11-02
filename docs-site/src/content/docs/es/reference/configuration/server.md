@@ -228,13 +228,13 @@ x-opencodex-api-key: your-secret-token
 
 | Punto final | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | No aceptado | **requerido** | No aceptado |
-| `/v1/chat/completions` | No aceptado | **requerido** | No aceptado |
+| `/v1/responses` | aceptado | aceptado | no aceptado |
+| `/v1/chat/completions` | aceptado | aceptado | no aceptado |
 | `/v1/messages` | aceptado | aceptado | aceptado |
 | `/v1/messages/count_tokens` | aceptado | aceptado | aceptado |
 | `/v1/models` | aceptado | aceptado | aceptado |
 
-Responses y Chat Completions reservan `Authorization` para el posible paso Codex Direct, por lo que solo se acepta el encabezado de admisión dedicado allí. El `apiKeys` generado por el panel puede reemplazar el token de entorno después del inicio; los candidatos se comparan en tiempo constante.
+Responses y Chat Completions aceptan una credencial reconocida del plano de datos en `x-opencodex-api-key` o, si falta ese encabezado dedicado, en `Authorization: Bearer`. El encabezado dedicado tiene prioridad cuando se envía, aunque sea inválido: un bearer válido no corrige ese rechazo. Un bearer ajeno no concede admisión al proxy, y estas rutas no aceptan `x-api-key`. Las `apiKeys` generadas por el dashboard y el token compartido de datos se comparan en tiempo constante; las credenciales administrativas no conceden admisión a modelos.
 
 Messages y `count_tokens` siguen aceptando los tres formularios de admisión para la compatibilidad con el cliente encaminado. El passthrough nativo Anthropic es más estricto en un enlace no loopback: la admisión proxy debe usar `x-opencodex-api-key`, mientras que `Authorization` y `x-api-key` están reservados para las credenciales Anthropic. Cualquier secreto de admisión proxy colocado en esos encabezados de proveedor se elimina antes del reenvío.
 

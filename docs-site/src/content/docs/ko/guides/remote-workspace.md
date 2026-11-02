@@ -52,6 +52,7 @@ Codex 원격 작업 공간은 현재 App Server 권한 프로필을 사용합니
 같은 작업을 수동으로 하려면 다음을 실행하세요.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
@@ -92,6 +93,7 @@ Remove-Variable pairingExitCode
 현재 OCX Bun 실행 파일은 Linux 샌드박스에 읽기 전용 파일 하나로 자동 추가됩니다. 프로젝트에 시스템 경로 밖에 사용자 설치 도구 체인이 필요하다면 홈 디렉터리 전체를 노출하지 말고 명시적으로 페어링하세요.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 if read -r -s -p 'Pairing code: ' pairing_code; then
   printf '\n'
   pairing_status=0

@@ -19,7 +19,7 @@ no cambian.
 
 <a id="additional-web-search-backends-explicit-only"></a>
 
-### Backends de búsqueda web adicionales (solo explícitos)
+## Backends de búsqueda web adicionales (solo explícitos)
 
 Además de ChatGPT y Claude, hay tres backends de búsqueda adicionales. Todos requieren **selección explícita**: encontrar una credencial no los activa. Si falta la credencial necesaria, no se crea un plan de sidecar ni se sustituye por otro backend; la solicitud sigue la ruta normal.
 

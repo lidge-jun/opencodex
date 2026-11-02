@@ -323,15 +323,13 @@ x-opencodex-api-key: your-secret-token
 
 | Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | not accepted | **required** | not accepted |
-| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/responses` | accepted | accepted | not accepted |
+| `/v1/chat/completions` | accepted | accepted | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
-Responses and Chat Completions reserve `Authorization` for possible Codex Direct passthrough, so only
-the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
-environment token after startup; candidates are compared in constant time.
+Responses and Chat Completions accept a recognized data-plane credential in `x-opencodex-api-key` or, when that dedicated header is absent, in `Authorization: Bearer`. A supplied dedicated header takes precedence, even if invalid; a valid bearer does not rescue it. An unrelated bearer is not a proxy admission credential, and `x-api-key` is not accepted on these routes. Dashboard-generated `apiKeys` and the shared data token are compared in constant time; management credentials do not grant model admission.
 
 Messages and `count_tokens` keep accepting all three admission forms for routed-client compatibility. Native
 Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use

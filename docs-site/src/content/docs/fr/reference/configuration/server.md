@@ -63,15 +63,13 @@ indépendant décrit dans la [documentation de l’API de gestion](/fr/reference
 
 | Point de terminaison | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | non accepté | **obligatoire** | non accepté |
-| `/v1/chat/completions` | non accepté | **obligatoire** | non accepté |
+| `/v1/responses` | accepté | accepté | non accepté |
+| `/v1/chat/completions` | accepté | accepté | non accepté |
 | `/v1/messages` | accepté | accepté | accepté |
 | `/v1/messages/count_tokens` | accepté | accepté | accepté |
 | `/v1/models` | accepté | accepté | accepté |
 
-Responses et Chat Completions réservent `Authorization` à un éventuel transfert direct vers Codex ; seul
-l'en-tête d'admission dédié y est donc accepté. Les `apiKeys` générées depuis le tableau de bord peuvent remplacer le
-jeton d'environnement après le démarrage ; les valeurs candidates sont comparées en temps constant.
+Responses et Chat Completions acceptent un identifiant reconnu du plan de données dans `x-opencodex-api-key` ou, si cet en-tête dédié est absent, dans `Authorization: Bearer`. L’en-tête dédié est prioritaire même s’il est invalide ; un bearer valide ne corrige pas son refus. Un bearer sans rapport ne donne aucun accès au proxy et `x-api-key` n’est pas accepté sur ces routes. Les `apiKeys` générées par le tableau de bord et le token de données partagé sont comparés en temps constant ; les identifiants de gestion ne donnent pas accès aux modèles.
 
 Messages et `count_tokens` continuent d'accepter les trois formes d'admission pour assurer la compatibilité avec les clients routés. Le
 transfert natif vers Anthropic est plus strict sur une liaison hors bouclage : l'admission du proxy doit utiliser
