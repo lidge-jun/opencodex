@@ -519,6 +519,21 @@
       "documents": ["src/claude/", "src/server/responses/"]
     },
     {
+      "path": "data-planes/ollama-inbound.md",
+      "tier": 3,
+      "title": "Ollama-Compatible Inbound",
+      "scope": "Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership.",
+      "documents": [
+        "src/server/ollama-inbound.ts",
+        "src/server/ollama-native-paths.ts",
+        "src/server/ollama-route-policy.ts",
+        "src/server/native-final-log.ts",
+        "src/server/admitted-http-turn.ts",
+        "src/server/index/ollama-routes.ts",
+        "src/protocols/codecs/ollama.ts"
+      ]
+    },
+    {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
       "title": "Anthropic Thinking Signatures on the Chat Wire",

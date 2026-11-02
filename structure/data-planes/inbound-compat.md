@@ -579,3 +579,8 @@ it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and 
 `forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
 the caller's original one, and is dropped under a pool override. Coverage:
 `tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
+
+## Ollama-compatible inbound
+
+The `/api/version`, `/api/tags`, `/api/show`, `/api/chat` and `/api/generate` surface is owned by
+[Ollama-Compatible Inbound](ollama-inbound.md).

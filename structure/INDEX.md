@@ -67,6 +67,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/search.md`](data-planes/search.md) | Hosted search relay and exact account selectors. |
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
 | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites. |
+| [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) | Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership. |
 | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
@@ -344,6 +345,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
+| `src/protocols/codecs/ollama.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) |
 | `src/providers/account-quota-disk.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
@@ -378,6 +380,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/routing/` | [`catalog.md`](catalog.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/routing/history/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
 | `src/server/` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-model-visibility.md`](clients/claude-desktop-model-visibility.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/admitted-http-turn.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/advisor-admission-scope.ts` | [`advisor.md`](advisor.md) |
 | `src/server/audio-dictation.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/audio-live.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
@@ -390,6 +393,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/live-sideband.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/index/ollama-routes.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/index/serve-options.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index/websocket-handler.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
@@ -401,6 +405,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/native-final-log.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-inbound.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-native-paths.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
+| `src/server/ollama-route-policy.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
