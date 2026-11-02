@@ -1,10 +1,8 @@
 # Protocol Paths
-
 How a request on one public inference API reaches an upstream wire, in shared vocabulary. The
 transport behavior of each ingress stays owned by [Inbound Compatibility Surfaces](inbound-compat.md)
 and [Responses transport](../transports/responses.md); this doc owns the names, the declared
 feature dispositions and the baseline those docs are measured against.
-
 ## Vocabulary and leaf modules
 
 `src/protocols/contract.ts` defines the three public protocols (`responses`, `chat`,
@@ -598,3 +596,5 @@ implicitly. The three are declared as `api` capabilities in `src/cli/capabilitie
 routes carry no exemption in `src/server/management/route-registry.ts`; the capability mutation
 check reads the registry's `mutates`, so the read-only plan POST is not a write. `tests/cli/cli-api-protocols.test.ts` pins the requests, the usage errors and that every
 protocol route is verbed.
+
+Chat direct encoders and collectors share [the owned client-body contract](error-detail.md#client-error-bodies-chat). A response-scoped verdict sink crosses the lifetime wrapper explicitly, preserving collector decisions from the original failure.

@@ -1,3 +1,7 @@
+import { wasAccountAutoPaused } from "../lib/account-auto-pause-response";
+import { ownedChatErrorPayload } from "../lib/client-error-body";
+import { ownedChatErrorResponse } from "../chat/outbound";
+import type { FailureVerdictSink } from "../chat/failure-verdict";
 /**
  * OpenAI Chat Completions inbound (/v1/chat/completions) for GitHub Copilot App
  * and other OpenAI-compatible clients.
@@ -150,7 +154,7 @@ export async function handleChatCompletions(
     }
     if (isChatCompletionsStreamError(error)) {
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, error.status, { closeReason: "non_stream" });
-      return chatCompletionsErrorResponse(error.status, error.message, error.type, error.code);
+      return ownedChatErrorResponse(error.status, error.message, error.type, error.code);
     }
     throw error;
   }
@@ -698,14 +702,18 @@ async function handleChatCompletionsWithBudget(
         message,
         upstreamRetryAfter: upstream.headers.get("retry-after"),
       });
-    const rewritten = new Response(JSON.stringify({
+    const legacyEnvelope = JSON.stringify({
       error: {
         message: classified.message,
         type: classified.type,
         param: null,
         code: classified.code,
       },
-    }), {
+    });
+    const rewritten = new Response(JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
+      evidence: { status: upstream.status, type: upstreamType, code: upstreamCode ?? undefined, message },
+      localReason: logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : upstream.headers.get("x-opencodex-local-refusal") ?? undefined),
+    })), {
       status,
       headers: {
         "Content-Type": "application/json",
@@ -716,7 +724,7 @@ async function handleChatCompletionsWithBudget(
     if (replayRefusal) retainReplayRefusal(rewritten);
     return logIds
       // Deferred logging re-wraps this response and carries the verdict with it.
-      ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx)
+      ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx, undefined, legacyEnvelope)
       : rewritten;
   }
 
@@ -729,7 +737,8 @@ async function handleChatCompletionsWithBudget(
     : upstream;
 
   if (contentType.includes("text/event-stream") && response.body) {
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget });
+    const failureVerdictSink: FailureVerdictSink = {};
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].
@@ -743,16 +752,16 @@ async function handleChatCompletionsWithBudget(
       });
     }
     try {
-      const completion = await collectChatCompletion(chatSse, requestedModel, translatorBudget);
+      const completion = await collectChatCompletion(chatSse, requestedModel, translatorBudget, failureVerdictSink);
       return new Response(JSON.stringify(completion), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (err) {
       if (isChatCompletionsStreamError(err)) {
-        return chatCompletionsErrorResponse(err.status, err.message, err.type, err.code);
+        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract);
       }
-      return chatCompletionsErrorResponse(
+      return ownedChatErrorResponse(
         502,
         err instanceof Error ? err.message : String(err),
         "server_error",
@@ -769,7 +778,7 @@ async function handleChatCompletionsWithBudget(
   try {
     json = await response.json();
   } catch {
-    return finishJson(chatCompletionsErrorResponse(502, "internal replay returned a non-JSON response", "server_error"));
+    return finishJson(ownedChatErrorResponse(502, "internal replay returned a non-JSON response", "server_error"));
   }
   const status = (json as Rec)?.status;
   if (status === "failed") {
@@ -792,7 +801,7 @@ async function handleChatCompletionsWithBudget(
       classified.type = "invalid_request_error";
     }
     if (isReplayRefusalCode(classified.code)) {
-      const refusal = chatCompletionsErrorResponse(
+      const refusal = ownedChatErrorResponse(
         REPLAY_REFUSED_STATUS, message, classified.type, classified.code,
       );
       const headers = new Headers(refusal.headers);
@@ -801,7 +810,7 @@ async function handleChatCompletionsWithBudget(
         new Response(refusal.body, { status: refusal.status, headers }),
       ));
     }
-    return finishJson(chatCompletionsErrorResponse(
+    return finishJson(ownedChatErrorResponse(
       classified.code === "translation_buffer_limit"
         ? 502
         : isCyberPolicyCode(classified.code) ? 400 : 502,

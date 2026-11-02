@@ -596,3 +596,5 @@ it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and 
 `forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
 the caller's original one, and is dropped under a pool override. Coverage:
 `tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
+
+Chat upstream error responses use [the owned client-body contract](error-detail.md#client-error-bodies-chat). Native local refusal sites retain call-site provenance; translated failures always select fixed wording. Choice error normalization preserves all other ordinary relay fields.

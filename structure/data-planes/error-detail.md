@@ -149,3 +149,70 @@ usage-limit and combo-unavailable refusals, Codex account cooldowns and the Clau
 retry scheduling keep reading the parsed evidence through `resolveClientRetryAfter` and
 `src/combos/failover.ts`. `tests/server/client-retry-after-sites.test.ts` and
 `tests/lib/client-retry-after.test.ts` cover the sites and the format.
+
+## Client error bodies (Chat)
+
+`src/lib/client-error-body.ts` owns Chat error-response normalization. Native upstream failures,
+translated failures (including zero-send preflight failures), converters and direct encoders emit
+fresh envelopes with a fixed proxy message, a closed type and code, and `param: null`.
+The local `chatCompletionsErrorBody` API retains its message semantics for identified local callers.
+Messages and Responses formatting retain their existing contracts; the Anthropic tables and
+`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` are exported for reuse and are not connected to those surfaces.
+
+`ownedChatErrorPayload` reads evidence only through `classifyUpstreamCondition`; it never copies
+its text. Unknown types use the status type (authentication, permission, rate limit, server, or
+invalid request). Unknown codes use `invalid_api_key` for 401, `model_not_found` for 404,
+`rate_limit_exceeded` for 429, and null otherwise. Map lookups return proxy literal values and
+are prototype-safe. Model identifiers are never extracted from error text. A provider annotation
+accepts only the configured provider id with the shared 1–64 character id grammar.
+
+Fixed contracts cover context overflow, cyber policy, terminal refusals, replay refusal, translation
+buffer limits, inconsistent refusal representations, undeclared tools, unsatisfied required tools,
+transport failure and incomplete streams. Context overflow uses the fixed context-window sentence;
+cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+Local actionable guidance is selected only by a proxy-owned request-context reason, fixed local-refusal
+header or account-pause identity marker, never an upstream code: send budget, spend storage, key scope, usage limits and workflow ceilings.
+Native local validation and admission sites retain their own messages by call-site provenance.
+A translated failure with unknown provenance always receives fixed wording.
+
+`src/server/chat-native-sse.ts` builds top-level error frames as canonical data-only blocks.
+Choice-scoped errors also get fresh data-only framing: only `choices[i].error` changes, to
+`{message,type,code}`. All other fields match the ordinary relay, including unfinished sibling
+choices, usage, roles, refusal, reasoning and tool fields. Buffered native JSON replaces only those
+choice errors and preserves its envelope and message representation. Choice errors do not become
+terminal failures; the existing status, finish and `[DONE]` behavior remains authoritative.
+
+Internal side channels retain the evidence used before normalization:
+
+- `src/chat/failure-verdict.ts` defines an explicit response-scoped sink shared by each producer
+  and collector, including `foldChatCompletion` and the delivery lifetime wrapper. The verdict is
+  calculated with the legacy Chat payload's collector rules and retains the original message.
+  It is consumed only when a top-level error frame is parsed, never on EOF or a choice error;
+  an error frame that could not be emitted cannot turn EOF into a failure. Incomplete terminals
+  retain their original message for classification before the client text changes.
+- Native failure responses carry the legacy body in a Response-keyed WeakMap. Combo consumption
+  runs the same bounded reader on a new Response of that text: 65,536 bytes, signal, display safety,
+  truncation and server-error UTF-8 validity rules all match ordinary consumption. It cancels the
+  unused normalized body. Headers and identity markers remain on the original response, so quota
+  provenance, retry/cooldown, replay, non-replayability and verified plan refusal retain their inputs.
+- Translated HTTP errors pass their legacy envelope as the deferred inspection source in
+  `src/server/relay.ts` and `src/server/response-log-body.ts`. The complete existing JSON inspection
+  runs at EOF only, with its existing first-message guard and independent diagnostic capture.
+  Cancellation, read failure and inspection overflow do not inspect JSON. The size bound applies
+  to the legacy source, and preinspected responses still suppress inspection. The owned body is
+  never inspected in its place. Original evidence remains available to request-log projection.
+
+HTTP status, retry advice formatting, replay headers, terminal callbacks and internal adapter
+terminal objects retain their prior decisions. Tests cover these boundaries in
+`tests/lib/client-error-body.test.ts`, `tests/responses/chat-error-body-normalization.test.ts`,
+`tests/responses/chat-error-collector-verdicts.test.ts` and
+`tests/server/server-chat-error-body-evidence.test.ts`.
+
+### Closed Chat tables
+
+| Table | Proxy literal members |
+| --- | --- |
+| OpenAI types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `server_error`, `upstream_error`, `insufficient_quota`, `client_cancelled`, `cyber_policy`, `model_not_allowed_for_key`, `api_error`, `overloaded_error` |
+| OpenAI codes | `spend_ledger_storage_unavailable`, `previous_response_not_found`, `client_cancelled`, `client_closed_request`, `cyber_policy`, `input_admission_refused`, `inbound_body_too_large`, `context_length_exceeded`, `tool_catalog_too_large`, `rate_limit_exceeded`, `insufficient_quota`, `request_send_budget_exhausted`, `origin_rejected`, `upstream_server_error`, `invalid_api_key`, `permission_denied`, `location_not_supported`, `subscription_required`, `server_is_overloaded`, `invalid_request_error`, `usage_limit_reached`, `slow_down`, `misalignment_policy_violation`, `invalid_prompt`, `bio_policy`, `model_not_in_plan`, `upstream_reset_replay_refused`, `upstream_no_response`, `upstream_closed_before_response`, `claude_subscription_cooldown`, `model_not_found`, `model_not_allowed_for_key`, `undeclared_tool_call`, `required_tool_contract_unsatisfied`, `translation_buffer_limit`, `invalid_refusal`, `unsupported_feature`, `agent_assertion_unsupported`, `upstream_error`, `upstream_sse_unterminated`, `upstream_sse_invalid`, `upstream_stream_incomplete`, `upstream_stream_error`, `upstream_stall_timeout`, `upstream_incomplete`, `server_busy`, `outbound_body_too_large`, `codex_no_account`, `memory_model_target_unavailable`, `intercept_target_unavailable`, `observation_barrier_timeout`, `claude_thread_unsupported`, `claude_compatibility_configuration`, `claude_compatibility_unsupported`, `unsupported_credential_domain`, `unsupported_synthetic_selector`, `unsupported_shadow_rewrite`, `workflow_sends_exhausted`, `workflow_children_exhausted`, `workflow_concurrency_exhausted`, `workflow_spend_exhausted`, `workflow_tracking_exhausted`, `workflow_send_replayed`, `workflow_pool_history_unresolved`, `workflow_spend_undurable` |
+| Anthropic types | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`, `billing_error`, `timeout_error`, `conflict_error` |
+| Anthropic codes | The union of Anthropic types and OpenAI codes above. |

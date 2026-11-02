@@ -1,3 +1,5 @@
+import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, type ClientErrorContract } from "../lib/client-error-body";
+import { legacyFailureVerdict, legacyStreamErrorStatus as streamErrorStatus, type FailureVerdictSink } from "./failure-verdict";
 /**
  * Chat Completions outbound: internal /v1/responses output -> OpenAI Chat Completions shapes.
  *
@@ -126,16 +128,6 @@ export function isChatCompletionsStreamError(err: unknown): err is ChatCompletio
   return err instanceof ChatCompletionsStreamError;
 }
 
-function streamErrorStatus(message: string): number {
-  const lower = message.toLowerCase();
-  if (isCyberPolicyMessage(lower)) return 400;
-  if (lower.includes("truncated")) return 502;
-  if (lower.includes("rate") || lower.includes("429")) return 429;
-  if (lower.includes("unauthor") || lower.includes("401") || lower.includes("api key")) return 401;
-  if (lower.includes("not found") || lower.includes("404")) return 404;
-  if (lower.includes("invalid") || lower.includes("400")) return 400;
-  return 502;
-}
 
 export function dataFrame(payload: Rec | "[DONE]"): string {
   if (payload === "[DONE]") return "data: [DONE]\n\n";
@@ -169,6 +161,7 @@ export function appendedUtf8Bytes(previous: string, previousBytes: number, fragm
 
 /** Details a streamed Chat failure carries into its error frame. */
 export interface ChatCompletionsStreamFailure {
+  contract?: ClientErrorContract;
   code?: string | null;
   type?: string;
   status?: number;
@@ -179,7 +172,7 @@ export interface ChatCompletionsStreamFailure {
  * fixed, bounded failures that must be delivered even when the translation budget is exhausted.
  * Provider text is redacted; the two fixed failures carry no provider text at all.
  */
-export function chatCompletionsStreamErrorPayload(
+function legacyChatCompletionsStreamErrorPayload(
   message: string,
   details?: ChatCompletionsStreamFailure,
 ): { payload: Rec; bounded: boolean } {
@@ -224,6 +217,24 @@ export function chatCompletionsStreamErrorPayload(
   };
 }
 
+export function chatCompletionsStreamErrorPayload(message: string, details?: ChatCompletionsStreamFailure) {
+  const legacy = legacyChatCompletionsStreamErrorPayload(message, details);
+  const verdict = legacyFailureVerdict(legacy.payload);
+  const error = legacy.payload.error as { message: string; type: string; code: string | null };
+  return { bounded: legacy.bounded, verdict, payload: ownedChatErrorPayload({
+    status: verdict.status, type: error.type, code: error.code, contract: details?.contract,
+    evidence: { status: verdict.status, type: error.type, code: error.code ?? undefined, message },
+  }) };
+}
+
+export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract): Response {
+  const legacy = chatCompletionsErrorBody(status, message, type, code).error as { type: string; code: string | null };
+  const finalStatus = legacy.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
+  return new Response(JSON.stringify(ownedChatErrorPayload({ status: finalStatus, type: legacy.type, code: legacy.code, contract,
+    evidence: { status: finalStatus, type, code: code ?? undefined, message } })),
+    { status: finalStatus, headers: { "Content-Type": "application/json" } });
+}
+
 /** How a Responses `response.failed` error object becomes a streamed Chat failure. */
 export function chatCompletionsFailedResponse(error: Rec): { message: string; details: ChatCompletionsStreamFailure } {
   const message = typeof error.message === "string" ? error.message : "upstream request failed";
@@ -250,7 +261,7 @@ export function chatCompletionsFailedResponse(error: Rec): { message: string; de
 export function chatCompletionsIncompleteOutcome(
   reason: unknown,
   message: unknown,
-): { finishReason: "length" | "content_filter" } | { failMessage: string } {
+): { finishReason: "length" | "content_filter" } | { failMessage: string; originalFailMessage: string } {
   // Upstream Responses endpoints do not all use OpenAI's `max_output_tokens`: Volcengine Ark
   // (Coding Plan `/responses`) sends `incomplete_details.reason: "length"` for a hit output cap.
   // Read the reason through the shared truncation vocabulary so such a turn ends with
@@ -261,7 +272,8 @@ export function chatCompletionsIncompleteOutcome(
   if (truncation === "content_filter") return { finishReason: "content_filter" };
   const why = typeof reason === "string" ? reason : "unknown";
   return {
-    failMessage: typeof message === "string" && message.length > 0
+    failMessage: CLIENT_ERROR_CONTRACTS.stream_incomplete,
+    originalFailMessage: typeof message === "string" && message.length > 0
       ? message
       : `upstream stream ended early (${why})`,
   };
@@ -281,7 +293,7 @@ function refusalTranslationError(): ChatCompletionsStreamError {
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { translatorBudget: TranslatorBudget },
+  opts: { translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
@@ -610,7 +622,7 @@ export function responsesSseToChatCompletionsSse(
         terminated = true;
         releaseRefusals();
       };
-      const fail = (message: string, details?: { code?: string | null; type?: string; status?: number }) => {
+      const fail = (message: string, details?: ChatCompletionsStreamFailure) => {
         if (terminated) return;
         terminated = true;
         failed = true;
@@ -623,13 +635,14 @@ export function responsesSseToChatCompletionsSse(
         // Deliver the error frame then close the stream abnormally (no [DONE]).
         // Do not controller.error() — that can drop already-enqueued bytes from consumers
         // like response.text().
-        const { payload, bounded } = chatCompletionsStreamErrorPayload(message, details);
+        const { payload, bounded, verdict } = chatCompletionsStreamErrorPayload(message, details);
         try {
           const frame = encoder.encode(dataFrame(payload));
           // These fixed, bounded failures must survive even when decoder-owned input
           // still fills the budget. They contain no provider text or IDs.
           if (bounded) controller.enqueue(frame);
           else enqueueLiveFrame(frame);
+          if (opts.failureVerdictSink) { opts.failureVerdictSink.verdict = verdict; opts.failureVerdictSink.contract = details?.contract; }
           emittedFrames++;
         } catch {
           /* controller may already be closed */
@@ -789,7 +802,7 @@ export function responsesSseToChatCompletionsSse(
               // upstream_stall_timeout / adapter_eof / proxy-synthesized incompletes are
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
-              fail(outcome.failMessage);
+              fail(outcome.originalFailMessage, { contract: "stream_incomplete" });
             }
             break;
           }
@@ -1008,6 +1021,7 @@ export async function collectChatCompletion(
   stream: ReadableStream<Uint8Array>,
   model: string,
   translatorBudget: TranslatorBudget,
+  failureVerdictSink?: FailureVerdictSink,
 ): Promise<Rec> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -1059,6 +1073,10 @@ export async function collectChatCompletion(
         try { parsed = JSON.parse(data); } catch { continue; }
         if (!isRec(parsed)) continue;
         if (isRec(parsed.error)) {
+          if (failureVerdictSink?.verdict) {
+            const verdict = failureVerdictSink.verdict;
+            throw new ChatCompletionsStreamError(verdict.message, verdict);
+          }
           const message = typeof parsed.error.message === "string"
             ? parsed.error.message
             : "upstream request failed";

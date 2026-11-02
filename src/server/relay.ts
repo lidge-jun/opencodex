@@ -904,6 +904,7 @@ export function responseWithDeferredRequestLog(
   start: number,
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  inspectionSource?: string,
 ): Response {
   // A synthetic 429 is a transport verdict, not evidence that the provider declined the turn.
   if (isReplayRefusalResponse(response)) {
@@ -933,6 +934,7 @@ export function responseWithDeferredRequestLog(
         && preinspectedJsonResponses.has(response);
       const body = createBoundedResponseLogBody(response.body, {
         json: contentType.includes("application/json"),
+        ...(inspectionSource !== undefined ? { inspectionSource } : {}),
         ...(preinspectedJson ? { maxInspectionBytes: 0 } : {}),
         inspect: preinspectedJson ? () => undefined : text => inspectResponseLogJson(logCtx, text),
         finalize: reason => {
