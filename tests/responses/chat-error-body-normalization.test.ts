@@ -199,3 +199,34 @@ for (const kind of ["quota", "cyber"]) test(`native combo preserves ${kind} rout
     expect(JSON.stringify(body)).not.toContain(KEY);
   } finally { await upstream.stop(true); clearComboTargetCooldowns(); clearComboSelectionState(); }
 });
+
+for (const event of ["error", "message"]) for (const postOutput of [false, true]) test(`flat native error event=${event} after output=${postOutput}`, async () => {
+  const terminals: Array<{ status: number; message?: string }> = [];
+  const sink: import("../../src/chat/failure-verdict").FailureVerdictSink = {};
+  const input = (postOutput ? frame({ choices: [{ delta: { content: "hello" }, finish_reason: null }] }) : "")
+    + `id: ${KEY}\r\nevent: ${event}\r\nretry: ${KEY}\r\n: ${KEY}\r\ndata: ${JSON.stringify({ ...(event === "message" ? { type: "error" } : {}), message: KEY, code: KEY, param: KEY, metadata: { detail: KEY } })}\r\n\r\ndata: [DONE]\r\n\r\n`;
+  const text = await new Response(nativeChatSse(bytes(input), { requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(),
+    signal: new AbortController().signal, failureVerdictSink: sink, onUsage() {}, onTerminal(status, message) { terminals.push({ status, message }); } })).text();
+  const errors = text.split(/\r?\n/).filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).filter(value => value.error);
+  expect(errors).toHaveLength(1);
+  expect(errors[0].error).toEqual({ message: "The provider failed to complete the request.", type: "server_error", param: null, code: null });
+  expect(terminals).toEqual([{ status: 502, message: KEY }]);
+  expect(sink.verdict).toMatchObject({ status: 502, type: "server_error", code: KEY, message: KEY });
+  expect(text).not.toContain(KEY);
+  expect(text).not.toContain("data: [DONE]");
+});
+
+test("translated errors select condition wording despite an upstream local-refusal header", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ error: { message: KEY, type: "upstream_error", code: "workflow_sends_exhausted" } },
+    { status: 500, headers: { "x-opencodex-local-refusal": "credentials_paused" } }) });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY, transientRetryOn5xx: { attempts: 1 } } } };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "fixture/model", messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error).toBeDefined();
+    expect(body.error.type).toBe("server_error"); expect(body.error.code).toBe("upstream_server_error");
+    expect(body.error.message).toBe("The provider failed to complete the request.");
+    expect(JSON.stringify(body)).not.toContain(KEY);
+  } finally { await upstream.stop(true); }
+});

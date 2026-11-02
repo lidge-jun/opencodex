@@ -37,11 +37,94 @@ test("configured provider id grammar and Anthropic exports", () => {
     expect(ANTHROPIC_ERROR_CODES.get(token)).toBeUndefined();
   }
 });
-test("literal Chat writer codes are declared", () => {
-  for (const path of ["src/chat/outbound.ts", "src/server/chat-native.ts", "src/server/chat-native-sse.ts", "src/server/chat-completions.ts", "src/protocols/encoders/chat.ts"]) {
-    const source = readFileSync(repoPath(path), "utf8");
-    for (const match of source.matchAll(/(?:code\s*(?::|=)|classified\.code\s*=)\s*"([a-z_]+)"/g)) expect(OPENAI_ERROR_CODES.has(match[1]!)).toBe(true);
+type CodeToken = { text: string; literal?: string };
+function codeTokens(source: string): CodeToken[] {
+  const tokens: CodeToken[] = [];
+  const pattern = /\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\?\.|\?\?|===|!==|==|!=|=>|\|\||&&|[^\s]/g;
+  for (const match of source.matchAll(pattern)) {
+    const text = match[0];
+    if (text.startsWith("//") || text.startsWith("/*")) continue;
+    tokens.push(text.startsWith('"') || text.startsWith("'") ? { text, literal: text.slice(1, -1) } : { text });
   }
+  return tokens;
+}
+function expressionEnd(tokens: CodeToken[], start: number): number {
+  let depth = 0;
+  for (let i = start; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.literal !== undefined) continue;
+    if (["(", "[", "{"].includes(token.text)) depth++;
+    else if ([")", "]", "}"].includes(token.text)) { if (depth === 0) return i; depth--; }
+    else if (depth === 0 && [",", ";"].includes(token.text)) return i;
+  }
+  return tokens.length;
+}
+function resultCodes(tokens: CodeToken[], bindings: ReadonlyMap<string, string>): string[] {
+  if (tokens[0]?.text === "(" && expressionEnd(tokens, 1) === tokens.length - 1) return resultCodes(tokens.slice(1, -1), bindings);
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.literal !== undefined) continue;
+    if (["(", "[", "{"].includes(token.text)) depth++;
+    else if ([")", "]", "}"].includes(token.text)) depth--;
+    else if (depth === 0 && token.text === "?") {
+      let nested = 0; let branchDepth = 0;
+      for (let j = i + 1; j < tokens.length; j++) {
+        const next = tokens[j]!;
+        if (next.literal !== undefined) continue;
+        if (["(", "[", "{"].includes(next.text)) branchDepth++;
+        else if ([")", "]", "}"].includes(next.text)) branchDepth--;
+        else if (branchDepth === 0 && next.text === "?") nested++;
+        else if (branchDepth === 0 && next.text === ":") {
+          if (nested-- === 0) return [...resultCodes(tokens.slice(i + 1, j), bindings), ...resultCodes(tokens.slice(j + 1), bindings)];
+        }
+      }
+    } else if (depth === 0 && ["??", "||"].includes(token.text)) return [...resultCodes(tokens.slice(0, i), bindings), ...resultCodes(tokens.slice(i + 1), bindings)];
+  }
+  if (tokens.length !== 1) return [];
+  const token = tokens[0]!; const value = token.literal ?? bindings.get(token.text);
+  return value === undefined ? [] : [value];
+}
+function emittedChatCodes(source: string, nativeSse: boolean, bindings: ReadonlyMap<string, string> = new Map()): Set<string> {
+  const tokens = codeTokens(source); const codes = new Set<string>();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.text === "code" && [":", "="].includes(tokens[i + 1]?.text ?? "")) {
+      for (const code of resultCodes(tokens.slice(i + 2, expressionEnd(tokens, i + 2)), bindings)) codes.add(code);
+    }
+    const position = token.text === "fail" && nativeSse ? 2
+      : ["failLocal", "failUpstream", "chatCompletionsErrorBody", "chatCompletionsErrorResponse", "ownedChatErrorResponse"].includes(token.text) ? 3 : undefined;
+    if (position === undefined || tokens[i + 1]?.text !== "(") continue;
+    let start = i + 2;
+    for (let arg = 0; arg <= position; arg++) {
+      const end = expressionEnd(tokens, start);
+      if (arg === position) for (const code of resultCodes(tokens.slice(start, end), bindings)) codes.add(code);
+      if (tokens[end]?.text !== ",") break;
+      start = end + 1;
+    }
+  }
+  return codes;
+}
+test("Chat code oracle reads positional arguments and conditional result branches", () => {
+  const source = `fail(controller, "message", overflow ? "translation_buffer_limit" : stalled ? "upstream_stall_timeout" : "upstream_sse_error");
+    failUpstream(502, "message", "upstream_error", "upstream_sse_truncated");
+    new ChatCompletionsStreamError("message", { code: typeof value === "string" ? "invalid_refusal" : "upstream_incomplete" });
+    classified.code = flag ? "invalid_prompt" : "cyber_policy";`;
+  expect(emittedChatCodes(source, true)).toEqual(new Set(["translation_buffer_limit", "upstream_stall_timeout", "upstream_sse_error", "upstream_sse_truncated", "invalid_refusal", "upstream_incomplete", "invalid_prompt", "cyber_policy"]));
+});
+test("literal Chat writer codes are declared, including positional and conditional arguments", () => {
+  const paths = ["src/chat/outbound.ts", "src/server/chat-native.ts", "src/server/chat-native-sse.ts", "src/server/chat-completions.ts", "src/protocols/encoders/chat.ts"];
+  const sources = new Map([...paths, "src/lib/errors.ts", "src/lib/upstream-retry.ts"].map(path => [path, readFileSync(repoPath(path), "utf8")]));
+  const bindings = new Map<string, string>();
+  for (const source of sources.values()) {
+    const tokens = codeTokens(source);
+    for (let i = 0; i < tokens.length; i++) if (tokens[i]!.text === "const" && tokens[i + 2]?.text === "=" && tokens[i + 3]?.literal !== undefined) bindings.set(tokens[i + 1]!.text, tokens[i + 3]!.literal!);
+  }
+  const missing: string[] = [];
+  for (const path of paths) for (const code of emittedChatCodes(sources.get(path)!, path.endsWith("chat-native-sse.ts"), bindings)) {
+    if (!OPENAI_ERROR_CODES.has(code)) missing.push(`${path}: ${code}`);
+  }
+  expect(missing).toEqual([]);
 });
 
 test("local guidance requires a proxy-owned reason", () => {

@@ -78,3 +78,32 @@ for (const producer of ["native", "translated", "direct"]) test(`suppressed erro
     expect(sink.verdict).toBeUndefined();
   } finally { encoding.mockRestore(); }
 });
+
+for (const scenario of ["empty", "mid-tool", "read-error", "policy-read-error", "auth-read-error"]) test(`generated native failure retains the legacy envelope: ${scenario}`, async () => {
+  const message = scenario === "empty" ? "upstream SSE ended before a terminal event"
+    : scenario === "mid-tool" ? "upstream SSE ended mid tool call without a terminal signal — possible truncation"
+    : scenario === "policy-read-error" ? `flagged for possible cybersecurity risk ${KEY}`
+    : scenario === "auth-read-error" ? `invalid api key ${KEY}` : `fixture stream read failed ${KEY}`;
+  const code = scenario === "empty" || scenario === "mid-tool" ? "upstream_sse_truncated" : "upstream_sse_error";
+  const legacy = chatCompletionsErrorBody(502, message, "upstream_error", code);
+  const expected = await verdict(new Response(frame(legacy)).body!);
+  expect(expected.code).toBe(scenario === "policy-read-error" ? "cyber_policy" : code);
+  const terminals: Array<{ status: number; message?: string }> = [];
+  const sink: FailureVerdictSink = {};
+  const input = scenario === "empty" ? new Response("").body!
+    : scenario === "mid-tool" ? new Response(frame({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "fixture-call", type: "function", function: { name: "lookup", arguments: "{" } }] }, finish_reason: null }] })).body!
+    : new ReadableStream<Uint8Array>({ pull(controller) { controller.error(new Error(message)); } });
+  const stream = nativeChatSse(input, { requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(), signal: new AbortController().signal,
+    failureVerdictSink: sink, onUsage() {}, onTerminal(status, message) { terminals.push({ status, message }); } });
+  const [collected, wire] = stream.tee();
+  expect(await verdict(collected, sink)).toEqual(expected);
+  expect(sink.verdict).toEqual(expected);
+  expect(terminals).toEqual([{ status: 502, message }]);
+  const text = await new Response(wire).text();
+  const errorLine = text.split("\n").find(line => line.startsWith("data: {") && line.includes('"error"'));
+  expect(errorLine).toBeDefined();
+  const error = JSON.parse(errorLine!.slice(6)).error;
+  expect(error.type).toBe(expected.type); expect(error.code).toBe(expected.code);
+  if (scenario === "policy-read-error") expect(error.message).toBe("Request blocked by the upstream cybersecurity policy.");
+  expect(text).not.toContain(KEY);
+});

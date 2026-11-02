@@ -68,14 +68,15 @@ export function usageFromChat(value: unknown): OcxUsage | undefined {
   };
 }
 
-export function structuredError(value: unknown): {
+export function structuredError(value: unknown, eventName?: string): {
   message: string;
   type?: string;
   code?: string | null;
   status?: number;
 } | null {
-  if (!isRec(value) || value.error === undefined || value.error === null) return null;
-  const error = value.error;
+  if (!isRec(value)) return null;
+  const error = value.error ?? (value.type === "error" || eventName === "error" ? value : undefined);
+  if (error === undefined) return null;
   if (typeof error === "string") return { message: redactSecretString(error) };
   if (!isRec(error)) return { message: "upstream error" };
   const rawMessage = typeof error.message === "string" ? error.message : "upstream error";
@@ -308,7 +309,9 @@ export function nativeChatSse(
     releaseBuffer();
     try {
       const legacy = chatCompletionsErrorBody(status, safeMessage, type, code);
-      const frame = canonicalSseErrorBlock(ownedChatErrorPayload({ status, type, code, evidence: { status, type, code, message: safeMessage } }));
+      const error = legacy.error as { type: string; code: string | null };
+      const frame = canonicalSseErrorBlock(ownedChatErrorPayload({ status, type: error.type, code: error.code,
+        evidence: { status, type, code, message: safeMessage } }));
       if (code === "translation_buffer_limit") controller.enqueue(encoder.encode(frame));
       else enqueue(controller, frame);
       if (options.failureVerdictSink) options.failureVerdictSink.verdict = legacyFailureVerdict(legacy);
@@ -358,7 +361,12 @@ export function nativeChatSse(
       fail(controller, "upstream returned an invalid SSE event", "upstream_sse_invalid");
       return;
     }
-    const error = structuredError(parsed);
+    let eventName = "";
+    for (const line of block.split(/\r\n|\r|\n/)) {
+      if (line === "event") eventName = "";
+      else if (line.startsWith("event:")) eventName = line.slice(6).replace(/^ /, "");
+    }
+    const error = structuredError(parsed, eventName);
     if (error) {
       const status = error.status ?? 502;
       const classified = classifyError(status, error.type ?? "upstream_error", error.message);

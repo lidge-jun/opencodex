@@ -712,7 +712,7 @@ async function handleChatCompletionsWithBudget(
     });
     const rewritten = new Response(JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
       evidence: { status: upstream.status, type: upstreamType, code: upstreamCode ?? undefined, message },
-      localReason: logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : upstream.headers.get("x-opencodex-local-refusal") ?? undefined),
+      localReason: logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : undefined),
     })), {
       status,
       headers: {
