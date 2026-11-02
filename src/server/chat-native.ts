@@ -10,6 +10,7 @@ import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
   chatCompletionsErrorBody,
+  ChatCompletionsCollectorSource,
   chatCompletionsErrorResponse,
   collectChatCompletion,
   isChatCompletionsStreamError,
@@ -835,8 +836,10 @@ export async function runNativeChatAttempt(
       },
     );
     const failureVerdictSink: FailureVerdictSink = {};
+    const collectorSource = requestedStream ? undefined : new ChatCompletionsCollectorSource(translatorBudget);
     const stream = nativeChatSse(resilientBody, {
       failureVerdictSink,
+      collectorSource,
       requestedModel,
       translatorBudget,
       signal: upstream.signal,
@@ -888,7 +891,7 @@ export async function runNativeChatAttempt(
       });
     }
     try {
-      const completion = await collectChatCompletion(stream, requestedModel, translatorBudget, failureVerdictSink);
+      const completion = await collectChatCompletion(stream, requestedModel, translatorBudget, failureVerdictSink, collectorSource);
       cleanupAbort();
       // A cancelled native relay closes its downstream body. EOF alone must not
       // promote the buffered prefix to a successful Chat completion. A terminal

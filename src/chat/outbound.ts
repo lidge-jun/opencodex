@@ -1016,12 +1016,36 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   };
 }
 
+/** Original ordinary-chunk fields needed only by a buffered native collector. */
+export class ChatCompletionsCollectorSource {
+  private pending: Array<{ wire: string; original: string; bytes: number }> = [];
+  constructor(private readonly budget: TranslatorBudget) {}
+  retain(wire: string, chunk: Rec): void {
+    const original = JSON.stringify({ usage: chunk.usage, service_tier: chunk.service_tier, choices: chunk.choices });
+    const bytes = Buffer.byteLength(wire) + Buffer.byteLength(original) + 64;
+    this.budget.chargeRetained(bytes, { kind: "retained_collectors" });
+    this.pending.push({ wire, original, bytes });
+  }
+  take(wire: string): Rec | undefined {
+    const next = this.pending[0];
+    if (!next || next.wire !== wire) return undefined;
+    this.pending.shift();
+    this.budget.releaseRetained(next.bytes, { kind: "retained_collectors" });
+    return JSON.parse(next.original) as Rec;
+  }
+  clear(): void {
+    for (const entry of this.pending) this.budget.releaseRetained(entry.bytes, { kind: "retained_collectors" });
+    this.pending.length = 0;
+  }
+}
+
 /** Fold a Chat Completions SSE stream into a final completion JSON. */
 export async function collectChatCompletion(
   stream: ReadableStream<Uint8Array>,
   model: string,
   translatorBudget: TranslatorBudget,
   failureVerdictSink?: FailureVerdictSink,
+  collectorSource?: ChatCompletionsCollectorSource,
 ): Promise<Rec> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -1069,9 +1093,10 @@ export async function collectChatCompletion(
       for (let frame = buffer.next(); frame; frame = buffer.next()) {
         const data = sseDataPayload(frame.block)?.trim();
         if (!data || data === "[DONE]") continue;
-        let parsed: unknown;
-        try { parsed = JSON.parse(data); } catch { continue; }
-        if (!isRec(parsed)) continue;
+        let decoded: unknown;
+        try { decoded = JSON.parse(data); } catch { continue; }
+        if (!isRec(decoded)) continue;
+        const parsed = collectorSource?.take(data) ?? decoded;
         if (isRec(parsed.error)) {
           if (failureVerdictSink?.verdict) {
             const verdict = failureVerdictSink.verdict;
@@ -1175,6 +1200,7 @@ export async function collectChatCompletion(
     // Preserve the previous EOF contract: only delimiter-terminated events are collected.
     // A partial final frame is discarded, with its retained input ownership released.
     buffer.clear();
+    collectorSource?.clear();
     reader.releaseLock();
   }
 

@@ -179,8 +179,20 @@ when the proxy persists its pause decision, and wrappers carry that identity wit
 Native local validation and admission sites retain their own messages by call-site provenance.
 A translated failure with unknown provenance always receives fixed wording.
 
-`src/server/chat-native-sse.ts` builds nested errors, flat `type: "error"` payloads and `event: error`
-frames as canonical data-only blocks. Internal settlement and collector verdicts retain original evidence.
+`src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
+Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
+control flow. They do not settle the stream, populate a failure verdict, capture an upstream failure,
+cancel the reader or authorize combo fallback. Usage, progress and terminal inspection read the original
+chunk before normalization. Their client bytes are a fresh data-only block with a flat
+`{message,type,param,code}` object, `param: null`, and no other upstream fields. Buffered collection keeps
+the ordinary completion outcome; a following `[DONE]` retains its success meaning. For buffered native
+requests, `ChatCompletionsCollectorSource` in `src/chat/outbound.ts` retains the original choices, usage
+and service tier through the matching emitted flat frame. This bounded ordinary-chunk source is separate
+from the failure-verdict sink; collection consumes its entries and releases all retained bytes on exit.
+Data-only framing intentionally replaces any named SSE event with default message dispatch: a client
+that listened only for `event: error` now reads these normalized flat objects on its message handler.
+This client framing change does not introduce an internal terminal error. Existing nested terminal
+frames retain their original settlement, log evidence and collector verdict behavior.
 Generated errors select their client type/code from the computed legacy envelope, including message-derived
 cyber policy. Empty/mid-tool EOF and read failures retain `upstream_sse_truncated` and `upstream_sse_error`.
 Choice-scoped errors also get fresh data-only framing: only `choices[i].error` changes, to

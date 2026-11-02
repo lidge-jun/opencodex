@@ -200,21 +200,54 @@ for (const kind of ["quota", "cyber"]) test(`native combo preserves ${kind} rout
   } finally { await upstream.stop(true); clearComboTargetCooldowns(); clearComboSelectionState(); }
 });
 
-for (const event of ["error", "message"]) for (const postOutput of [false, true]) test(`flat native error event=${event} after output=${postOutput}`, async () => {
+type FlatEvent = "error" | "message";
+function flatFixture(event: FlatEvent, postOutput: boolean) {
+  const payload = { ...(event === "message" ? { type: "error" } : {}), message: KEY, code: KEY, param: KEY, metadata: { detail: KEY }, id: KEY, created: 1 };
+  const content = postOutput ? frame({ id: "fixture-content", created: 1, choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }] }) : "";
+  const input = content + `id: ${KEY}\r\nevent: ${event}\r\nretry: ${KEY}\r\n: ${KEY}\r\ndata: ${JSON.stringify(payload)}\r\n\r\ndata: [DONE]\r\n\r\n`;
+  // The legacy ordinary relay preserved this payload and added its completion envelope fields.
+  const legacy = content + `event: ${event}\n` + frame({ ...payload, object: "chat.completion.chunk", model: "fixture" }) + "data: [DONE]\n\n";
+  return { input, legacy };
+}
+function completionFacts(value: Record<string, unknown>) {
+  const { id, created, ...facts } = value;
+  return facts;
+}
+async function flatNativeObservation(event: FlatEvent, postOutput: boolean) {
+  const { collectChatCompletion, isChatCompletionsStreamError } = await import("../../src/chat/outbound");
   const terminals: Array<{ status: number; message?: string }> = [];
   const sink: import("../../src/chat/failure-verdict").FailureVerdictSink = {};
-  const input = (postOutput ? frame({ choices: [{ delta: { content: "hello" }, finish_reason: null }] }) : "")
-    + `id: ${KEY}\r\nevent: ${event}\r\nretry: ${KEY}\r\n: ${KEY}\r\ndata: ${JSON.stringify({ ...(event === "message" ? { type: "error" } : {}), message: KEY, code: KEY, param: KEY, metadata: { detail: KEY } })}\r\n\r\ndata: [DONE]\r\n\r\n`;
-  const text = await new Response(nativeChatSse(bytes(input), { requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(),
-    signal: new AbortController().signal, failureVerdictSink: sink, onUsage() {}, onTerminal(status, message) { terminals.push({ status, message }); } })).text();
-  const errors = text.split(/\r?\n/).filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).filter(value => value.error);
-  expect(errors).toHaveLength(1);
-  expect(errors[0].error).toEqual({ message: "The provider failed to complete the request.", type: "server_error", param: null, code: null });
-  expect(terminals).toEqual([{ status: 502, message: KEY }]);
-  expect(sink.verdict).toMatchObject({ status: 502, type: "server_error", code: KEY, message: KEY });
-  expect(text).not.toContain(KEY);
-  expect(text).not.toContain("data: [DONE]");
-});
+  const fixture = flatFixture(event, postOutput);
+  const legacy = await collectChatCompletion(bytes(fixture.legacy), "fixture", createTestTranslatorBudget());
+  const [wire, buffered] = nativeChatSse(bytes(fixture.input), { requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(),
+    signal: new AbortController().signal, failureVerdictSink: sink, onUsage() {}, onTerminal(status, message) { terminals.push({ status, ...(message === undefined ? {} : { message }) }); } }).tee();
+  const [text, outcome] = await Promise.all([new Response(wire).text(), (async () => {
+    try { return { status: 200, completion: completionFacts(await collectChatCompletion(buffered, "fixture", createTestTranslatorBudget(), sink)) }; }
+    catch (error) {
+      expect(isChatCompletionsStreamError(error)).toBe(true);
+      const failure = error as import("../../src/chat/outbound").ChatCompletionsStreamError;
+      return { status: failure.status, type: failure.type, code: failure.code };
+    }
+  })()]);
+  return { terminals, sink, text, outcome, legacy: { status: 200, completion: completionFacts(legacy) } };
+}
+for (const metric of ["terminal", "buffered", "collector", "bytes"]) for (const event of ["error", "message"] as const) for (const postOutput of [false, true]) {
+  test(`flat native ${metric} matches legacy relay event=${event} after output=${postOutput}`, async () => {
+    const result = await flatNativeObservation(event, postOutput);
+    if (metric === "terminal") expect(result.terminals).toEqual([{ status: 200 }]);
+    else if (metric === "buffered") expect(result.outcome).toEqual(result.legacy);
+    else if (metric === "collector") expect(result.sink.verdict).toBeUndefined();
+    else {
+      const payloads = result.text.split(/\r?\n/).filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      const flat = payloads.find(value => Object.hasOwn(value, "message"));
+      expect(flat).toBeDefined();
+      expect(flat).toEqual({ message: "The provider failed to complete the request.", type: "server_error", param: null, code: null });
+      expect(result.text).toContain("data: [DONE]");
+      expect(result.text).not.toContain(KEY);
+      expect(result.text).not.toContain("event:");
+    }
+  });
+}
 
 test("translated errors select condition wording despite an upstream local-refusal header", async () => {
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ error: { message: KEY, type: "upstream_error", code: "workflow_sends_exhausted" } },
@@ -229,4 +262,70 @@ test("translated errors select condition wording despite an upstream local-refus
     expect(body.error.message).toBe("The provider failed to complete the request.");
     expect(JSON.stringify(body)).not.toContain(KEY);
   } finally { await upstream.stop(true); }
+});
+
+async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false) {
+  const { clearComboTargetCooldowns, clearComboSelectionState } = await import("../../src/combos");
+  const { clearKeyCooldowns } = await import("../../src/providers/key-failover");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  clearComboTargetCooldowns(); clearComboSelectionState(); clearKeyCooldowns();
+  const sends: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    const body = await req.json() as { model: string }; sends.push(body.model);
+    if (body.model === "backup") return Response.json({ id: "fixture-backup", object: "chat.completion", created: 1, model: "backup", choices: [{ index: 0, message: { role: "assistant", content: "backup" }, finish_reason: "stop" }] });
+    return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning" }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } });
+  try {
+    const row = { adapter: "openai-chat", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key" as const, apiKey: KEY, transientRetryOn5xx: { attempts: 1 } };
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: row, backup: { ...row, apiKey: "fixture-backup" } },
+      combos: { fixture: { strategy: "failover", targets: [{ provider: "fixture", model: "first" }, { provider: "backup", model: "backup" }] } }, protocols: { rollout: { nativeChatCombos: true } } };
+    const ctx: import("../../src/server/request-log").RequestLogContext = { model: "", provider: "" };
+    const requestId = `flat-relay-${crypto.randomUUID()}`;
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: combo ? "combo/fixture" : "fixture/first", stream, messages: [{ role: "user", content: "hi" }] }) }), config, ctx, { requestId, start: Date.now() });
+    const text = await response.text();
+    const rows = getRequestLogEntries().filter(row => row.requestId === requestId);
+    expect(rows).toHaveLength(1);
+    const log = rows[0]!;
+    return { status: response.status, text, sends, facts: {
+      upstreamError: ctx.upstreamError, upstreamErrorType: ctx.upstreamErrorType, upstreamErrorCode: ctx.upstreamErrorCode,
+      status: log.status, errorCode: log.errorCode, upstreamCondition: log.upstreamCondition, terminalStatus: log.terminalStatus,
+      closeReason: log.closeReason, attempts: log.attempts?.map(attempt => ({ status: attempt.status, errorCode: attempt.errorCode, sendCount: attempt.sendCount })),
+    } };
+  } finally { await upstream.stop(true); clearComboTargetCooldowns(); clearComboSelectionState(); clearKeyCooldowns(); }
+}
+for (const stream of [false, true]) for (const metric of ["buffered endpoint", "log facts"]) test(`flat native ${metric} matches legacy relay stream=${stream}`, async () => {
+  const legacy = await flatEndpointExchange(false, stream, false);
+  const current = await flatEndpointExchange(false, stream, true);
+  expect(legacy.status).toBe(200); expect(legacy.facts.upstreamError).toBeUndefined();
+  if (metric === "log facts") expect(current.facts).toEqual(legacy.facts);
+  else {
+    expect(current.status).toBe(legacy.status);
+    if (!stream) {
+      const body = JSON.parse(current.text); expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+      expect(completionFacts(body)).toEqual(completionFacts(JSON.parse(legacy.text)));
+    } else { expect(current.text).toContain("data: [DONE]"); }
+    expect(current.text).not.toContain(KEY);
+  }
+});
+test("flat native combo send sequence matches legacy relay", async () => {
+  const legacy = await flatEndpointExchange(true, false, false);
+  const current = await flatEndpointExchange(true, false, true);
+  expect(legacy.status).toBe(200); expect(legacy.sends).toEqual(["first"]);
+  expect(current.status).toBe(legacy.status); expect(current.sends).toEqual(legacy.sends);
+  expect(current.facts).toEqual(legacy.facts);
+  const body = JSON.parse(current.text); expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  expect(completionFacts(body)).toEqual(completionFacts(JSON.parse(legacy.text)));
+  expect(current.text).not.toContain(KEY);
+});
+for (const combo of [false, true]) test(`flat native buffered data matches legacy relay combo=${combo}`, async () => {
+  const legacy = await flatEndpointExchange(combo, false, false, true);
+  const current = await flatEndpointExchange(combo, false, true, true);
+  expect(legacy.status).toBe(200);
+  const baselineBody = JSON.parse(legacy.text);
+  expect(baselineBody.choices[0].message.content).toBe("retained content"); expect(baselineBody.usage.total_tokens).toBe(5);
+  expect(current.status).toBe(legacy.status);
+  const body = JSON.parse(current.text); expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  expect(completionFacts(body)).toEqual(completionFacts(baselineBody));
+  expect(current.facts).toEqual(legacy.facts); expect(current.sends).toEqual(["first"]);
+  expect(current.text).not.toContain(KEY);
 });

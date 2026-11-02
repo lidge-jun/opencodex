@@ -1,6 +1,6 @@
 import { ownedChatErrorPayload, canonicalSseErrorBlock } from "../lib/client-error-body";
 import { legacyFailureVerdict, type FailureVerdictSink } from "../chat/failure-verdict";
-import { chatCompletionsErrorBody } from "../chat/outbound";
+import { chatCompletionsErrorBody, type ChatCompletionsCollectorSource } from "../chat/outbound";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import {
@@ -68,15 +68,14 @@ export function usageFromChat(value: unknown): OcxUsage | undefined {
   };
 }
 
-export function structuredError(value: unknown, eventName?: string): {
+export function structuredError(value: unknown): {
   message: string;
   type?: string;
   code?: string | null;
   status?: number;
 } | null {
-  if (!isRec(value)) return null;
-  const error = value.error ?? (value.type === "error" || eventName === "error" ? value : undefined);
-  if (error === undefined) return null;
+  if (!isRec(value) || value.error === undefined || value.error === null) return null;
+  const error = value.error;
   if (typeof error === "string") return { message: redactSecretString(error) };
   if (!isRec(error)) return { message: "upstream error" };
   const rawMessage = typeof error.message === "string" ? error.message : "upstream error";
@@ -176,6 +175,7 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
 interface NativeChatSseOptions {
   requestedModel: string;
   failureVerdictSink?: FailureVerdictSink;
+  collectorSource?: ChatCompletionsCollectorSource;
   translatorBudget: TranslatorBudget;
   signal: AbortSignal;
   stallTimeoutSec?: number;
@@ -366,7 +366,7 @@ export function nativeChatSse(
       if (line === "event") eventName = "";
       else if (line.startsWith("event:")) eventName = line.slice(6).replace(/^ /, "");
     }
-    const error = structuredError(parsed, eventName);
+    const error = structuredError(parsed);
     if (error) {
       const status = error.status ?? 502;
       const classified = classifyError(status, error.type ?? "upstream_error", error.message);
@@ -432,10 +432,20 @@ export function nativeChatSse(
       firstOutput = true;
       options.onFirstOutput?.();
     }
-    const normalized = normalizedChunk(parsed, options.requestedModel);
-    const choiceError = choices.some(choice => isRec(choice) && Object.hasOwn(choice, "error"));
-    relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
-      : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);
+    if (eventName === "error" || parsed.type === "error") {
+      // These frames keep the ordinary relay's control flow; only client bytes change.
+      const flat = structuredError({ error: parsed })!;
+      const status = flat.status ?? 502;
+      const payload = ownedChatErrorPayload({ status, type: flat.type, code: flat.code,
+        evidence: { ...flat, status, code: flat.code ?? undefined } }).error;
+      options.collectorSource?.retain(JSON.stringify(payload), parsed);
+      relay(controller, canonicalSseErrorBlock(payload));
+    } else {
+      const normalized = normalizedChunk(parsed, options.requestedModel);
+      const choiceError = choices.some(choice => isRec(choice) && Object.hasOwn(choice, "error"));
+      relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
+        : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);
+    }
   };
 
   function onAbort() {
