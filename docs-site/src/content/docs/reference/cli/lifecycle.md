@@ -540,6 +540,16 @@ upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
+Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
+the Home outcome and each Child's state; failed or timed-out Children produce exit 6. A skipped
+Child is identified by its reason. Exit 7 is reserved for an update in flight.
+
+Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or run
+`ocx sync --restart-codex` on that Child if a Codex restart is needed. The Child's pinned sync may
+still restart its own OpenCodex client runtime after applying changed Home settings. If the Home
+times out and stops its local SSH process, a remote sync already running may continue on the Child.
+
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
 On a Remote Link Child, `ocx sync` also applies the Home's Codex settings and, when the client runtime

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { runFanoutProcess, FanoutProcessError } from "../../src/cli/sync-fanout-process";
 
-describe("fanout process ownership", () => {
+describe.skipIf(process.platform === "win32")("fanout process ownership", () => {
   test("returns a child exit code", async () => {
     expect(await runFanoutProcess(["sh", "-c", "exit 255"], { timeoutMs: 1000 })).toEqual({ code: 255, stdout: "", stderr: "" });
   });
@@ -25,5 +25,10 @@ describe("fanout process ownership", () => {
   });
   test("rejects output above the cap", async () => {
     await expect(runFanoutProcess(["sh", "-c", "printf 123456789"], { timeoutMs: 1000, maxOutputBytes: 4 })).rejects.toMatchObject({ reason: "ssh-output" });
+  });
+  test("an elapsed deadline does not spawn a process", async () => {
+    let spawned = false;
+    await expect(runFanoutProcess(["sh", "-c", "exit 0"], { timeoutMs: 0, onSpawn: () => { spawned = true; } })).rejects.toMatchObject({ reason: "deadline-exceeded" });
+    expect(spawned).toBe(false);
   });
 });

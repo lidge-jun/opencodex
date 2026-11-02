@@ -18,3 +18,8 @@ test("classifies absent runtime, unauthorized and invalid bodies", async () => {
   }
   await expect(readHomeLinkStatus(100, { headers: () => new Headers(), baseUrl: async () => "http://localhost", fetchImpl: async () => new Response("{}") })).rejects.toMatchObject({ reason: "home-link-status-invalid" });
 });
+test("accepts the validated wire status", async () => {
+  const dto = { role: "home", listener: { state: "listening", port: 27000 }, child: null, links: [] };
+  const result = await readHomeLinkStatus(100, { headers: () => new Headers(), baseUrl: async () => "http://localhost", fetchImpl: async () => Response.json(dto) });
+  expect(result).toEqual(dto);
+});

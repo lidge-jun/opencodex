@@ -28,9 +28,12 @@ const mismatchReasons = new Set(["disconnected", "invalid_state", "disconnect_pe
 function validDocument(value: unknown): "synced" | "stale" | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
+  const keysAre = (object: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(object).length === keys.length && keys.every(key => Object.hasOwn(object, key));
+  if (!keysAre(v, ["schema", "home", "fanout", "children"])) return null;
   if (v.schema !== "ocx.sync.fanout/1" || !v.home || typeof v.home !== "object" || Array.isArray(v.home)
       || !v.fanout || typeof v.fanout !== "object" || Array.isArray(v.fanout) || !Array.isArray(v.children)) return null;
   const home = v.home as Record<string, unknown>, fanout = v.fanout as Record<string, unknown>;
+  if (!keysAre(home, ["state", "exit"]) || !keysAre(fanout, ["state", "reason"])) return null;
   if (home.exit !== 0 || (home.state !== "synced" && home.state !== "stale")) return null;
   if (fanout.state !== "not-applicable" || fanout.reason !== null || v.children.length !== 0) return null;
   return home.state;
@@ -83,7 +86,7 @@ export async function runHomeFanout(deps: {
   home: HomeResult; catalogCurrent: boolean; localOnly?: boolean; applicable?: boolean;
   readStore: () => LinkStore; readLinkStatus: () => Promise<LinkStatusDto>;
   runChild: (link: LinkRecord, deadline: number) => Promise<Omit<ChildResult, "linkId" | "alias">>;
-  now?: () => number; deadlineMs?: number; concurrency?: number;
+  now?: () => number; deadlineMs?: number; concurrency?: number; terminationGraceMs?: number;
 }): Promise<FanoutDocument> {
   const result: FanoutDocument = { schema: "ocx.sync.fanout/1", home: deps.home, fanout: { state: deps.localOnly ? "disabled" : "not-applicable", reason: null }, children: [] };
   if (deps.localOnly || deps.applicable === false) return result;
@@ -106,7 +109,7 @@ export async function runHomeFanout(deps: {
     return result;
   }
   let cursor = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(deps.concurrency ?? 3, store.links.length)) }, async () => {
+  const workers = Array.from({ length: Math.max(1, Math.min(Math.floor(deps.concurrency ?? 3), 3, store.links.length)) }, async () => {
     for (;;) {
       const index = cursor++;
       const link = store.links[index];
@@ -115,10 +118,18 @@ export async function runHomeFanout(deps: {
       const wire = status.links.find(row => row.id === link.id);
       if (!wire) { result.children[index] = classify(link, "skipped", "link-not-in-runtime"); continue; }
       if (wire.state !== "connected") { result.children[index] = classify(link, "skipped", `tunnel-${wire.state}`); continue; }
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const child = await deps.runChild(link, (deps.now ?? Date.now)() + (deps.deadlineMs ?? 180_000));
+        const budget = deps.deadlineMs ?? 180_000;
+        const child = await Promise.race([
+          deps.runChild(link, (deps.now ?? Date.now)() + budget),
+          new Promise<Omit<ChildResult, "linkId" | "alias">>(resolve => {
+            timer = setTimeout(() => resolve({ state: "timed-out", reason: "termination-unconfirmed", exit: null }), budget + (deps.terminationGraceMs ?? 3000));
+          }),
+        ]);
         result.children[index] = { linkId: link.id, alias: link.alias, ...child };
       } catch { result.children[index] = classify(link, "failed", "internal-error"); }
+      finally { if (timer !== undefined) clearTimeout(timer); }
     }
   });
   await Promise.all(workers);

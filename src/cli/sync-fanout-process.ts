@@ -41,6 +41,7 @@ async function readBounded(stream: ReadableStream<Uint8Array>, cap: number, exit
 export async function runFanoutProcess(argv: readonly string[], options: {
   timeoutMs: number; maxOutputBytes?: number; onSpawn?: (pid: number) => void;
 }): Promise<SshRunResult> {
+  if (options.timeoutMs <= 0) throw new FanoutProcessError("deadline-exceeded");
   const env = linkSshSpawnEnv();
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {

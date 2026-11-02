@@ -1,5 +1,7 @@
 # Remote Link
 
+`src/link/ssh-argv.ts` and `src/link/remote-windows.ts` build pinned Child sync commands that select and version-check the same executable before executing `sync --expect-link` without a restart flag. The Home's `src/cli/sync-command.ts` fans out only after its catalog is current; the Child may still restart its own OpenCodex client runtime after applying changed Home settings.
+
 `src/link/` owns the building blocks for linking OpenCodex machines over SSH. The pure modules start no process, open no socket and schedule no timer on import.
 
 `src/link/ssh-argv.ts` builds every OpenSSH argument vector. All commands run with BatchMode and trust only the link known_hosts file, keyed by `HostKeyAlias=<alias>`: the global file is disabled with `GlobalKnownHostsFile=none`, and `KnownHostsCommand=none`, `VerifyHostKeyDNS=no` and `CheckHostIP=no` shut out every other source of host-key trust. Command-line options take precedence over `~/.ssh/config`, so a user config cannot re-enable them. `HashKnownHosts=no` preserves alias-prefixed records in these private files without changing the user's normal known_hosts file. Tunnel and exec commands use `StrictHostKeyChecking=yes`; only the probe uses `accept-new`, against an empty temporary file, so an offered key can be shown before it is trusted. The known_hosts path must be absolute and free of ssh expansion syntax. Forwards bind 127.0.0.1 on both ends, and aliases that could be parsed as options are refused.
