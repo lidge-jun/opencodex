@@ -126,7 +126,7 @@ test.skipIf(process.platform === "win32")("Bun worker retains its mutex through 
   const childModule = pathToFileURL(repoPath("src/update/orchestrated-child.mjs")).href;
   const sessionModule = pathToFileURL(repoPath("src/update/orchestrated-session.mjs")).href;
   const ready = join(f.home, "ready"), release = join(f.home, "release");
-  const installer = `const fs=require('fs'); fs.writeFileSync(${JSON.stringify(ready)},'ready'); const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t)}},10);`;
+  const installer = `const fs=require('fs'); fs.writeFileSync(${JSON.stringify(ready)},'ready'); const end=Date.now()+10000; const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}) || Date.now()>end){clearInterval(t)}},10);`;
   const script = `import { protectOrchestratedWorkerSignals } from ${JSON.stringify(childModule)};
     import { createOrchestratedChildSession } from ${JSON.stringify(sessionModule)};
     import { spawnSync } from 'node:child_process';
