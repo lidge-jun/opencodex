@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
@@ -8,8 +8,15 @@ import { helperPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const names = ["codex-affinity.sqlite", "codex-affinity.sqlite-journal", "codex-affinity.sqlite-wal", "codex-affinity.sqlite-shm"];
+const memoryOnly = "Codex affinity persistence unavailable; continuing in memory.";
+// Windows creates a file THROUGH a link at its name; other platforms refuse. Workers that may create
+// the store run with that behaviour emulated, so a create-before-check mistake fails everywhere.
+const windowsCreate = process.platform === "win32" ? [] : ["--preload", helperPath("windows-link-create-preload.ts")];
+function spawnWorker(home: string, file: string, action: string, preload: string[] = []) {
+  return Bun.spawnSync([process.execPath, ...preload, helperPath(file), action], { env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+}
 function worker(home: string, file: string, action: string): any {
-  const result = Bun.spawnSync([process.execPath, helperPath(file), action], { env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const result = spawnWorker(home, file, action);
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.length ? JSON.parse(result.stdout.toString()) : undefined;
 }
@@ -44,16 +51,79 @@ test("fresh and existing owned homes list and remove all affinity paths", () => 
   for (const name of names) expect(existsSync(join(home, name))).toBe(false);
 }));
 
-for (const kind of ["symlink", "directory"] as const) {
+function probeMemoryOnly(home: string): void {
+  const result = spawnWorker(home, "codex-affinity-matrix-worker.ts", "probe", windowsCreate);
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  expect(result.stderr.toString()).toContain(memoryOnly);
+}
+
+for (const kind of ["symlink", "symlink-existing", "hardlink", "junction", "directory"] as const) {
   test(`${kind} at the database path disables the store`, () => inHome(home => {
     expect(initializeConfigOwnership(home)).toBe(true);
+    const file = join(home, names[0]!);
     const target = join(home, "outside-target");
-    if (kind === "symlink") symlinkSync(target, join(home, names[0]!));
-    else mkdirSync(join(home, names[0]!));
-    matrix(home, "probe");
-    expect(existsSync(target)).toBe(false);
+    if (kind === "symlink") symlinkSync(target, file);
+    else if (kind === "symlink-existing" || kind === "hardlink") {
+      writeFileSync(target, "outside");
+      if (kind === "hardlink") linkSync(target, file);
+      else symlinkSync(target, file);
+    } else if (kind === "junction") {
+      // A junction on Windows, a directory symlink elsewhere.
+      mkdirSync(target);
+      symlinkSync(target, file, "junction");
+    } else mkdirSync(file);
+    probeMemoryOnly(home);
+    if (kind === "symlink") expect(existsSync(target)).toBe(false);
+    else if (kind === "junction") expect(readdirSync(target)).toEqual([]);
+    else if (kind !== "directory") expect(readFileSync(target, "utf8")).toBe("outside");
   }));
 }
+
+for (const name of names.slice(1)) {
+  test(`a link at ${name} disables the store before anything is created`, () => inHome(home => {
+    expect(initializeConfigOwnership(home)).toBe(true);
+    const target = join(home, "outside-target");
+    symlinkSync(target, join(home, name));
+    probeMemoryOnly(home);
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(join(home, names[0]!))).toBe(false);
+  }));
+}
+
+test("a journal link planted while the store is open is refused before the next write", () => inHome(home => {
+  seed(home);
+  const file = join(home, names[0]!);
+  expect(matrix(home, "late-journal-link")).toEqual({ planted: true });
+  expect(existsSync(join(home, "outside-target"))).toBe(false);
+  // With the link gone, the database itself shows the release never committed clean, so the next
+  // owner discards the rows rather than restoring a pin the refused write could not record.
+  unlinkSync(`${file}-journal`);
+  const db = new Database(file, { readonly: true });
+  expect(db.query("SELECT value FROM meta WHERE name='clean'").get()).toEqual({ value: 0 });
+  db.close();
+  expect(matrix(home, "read").before).toBeUndefined();
+}));
+
+test("a hot rollback journal from an interrupted writer is recovered, not refused", () => inHome(home => {
+  seed(home);
+  const file = join(home, names[0]!);
+  // A one-page cache makes the open transaction spill into the database file, so the killed writer
+  // leaves a hot journal that SQLite must roll back on the next open.
+  const writer = Bun.spawnSync([process.execPath, "-e", [
+    "const { Database } = require('bun:sqlite');",
+    "const db = new Database(process.argv[1]);",
+    "db.exec('PRAGMA cache_size=1; BEGIN');",
+    "const insert = db.query(\"INSERT INTO issuers VALUES (?, 'b', 'fence', 0)\");",
+    "for (let i = 0; i < 4000; i++) insert.run('interrupted-' + i);",
+    "process.kill(process.pid, 'SIGKILL');",
+  ].join(" "), file], { stdout: "pipe", stderr: "pipe" });
+  expect(writer.exitCode).not.toBe(0);
+  expect(lstatSync(`${file}-journal`).isFile()).toBe(true);
+  expect(matrix(home, "read").before).toBe("a");
+  const db = new Database(file, { readonly: true });
+  expect(db.query("SELECT count(*) AS n FROM issuers WHERE row_key LIKE 'interrupted-%'").get()).toEqual({ n: 0 });
+  db.close();
+}));
 
 test("a home without an ownership manifest still persists affinity and gains no manifest", () => inHome(home => {
   writeFileSync(join(home, "unowned"), "keep");

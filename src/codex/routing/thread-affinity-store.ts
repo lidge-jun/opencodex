@@ -2,9 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync,
-  closeSync,
   lstatSync,
-  openSync,
   realpathSync,
   type Stats,
 } from "node:fs";
@@ -12,6 +10,7 @@ import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { initializeConfigOwnership, recordOwnedConfigPath } from "../../lib/config-ownership";
 import { isPassiveRead } from "../../lib/passive-read";
+import { assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "../../lib/private-sqlite-path";
 import {
   assertStorageOwned,
   currentSpendLedgerOwnerGeneration,
@@ -158,11 +157,9 @@ function open(s: Scope): void {
     for (const suffix of ["", "-journal", "-wal", "-shm"])
       if (!recordOwnedConfigPath(s.home, path + suffix) && initializeConfigOwnership(s.home))
         throw new Error("ownership");
-    try {
-      closeSync(openSync(path, "wx", 0o600));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
+    // Refuses a link or reparse point at the database or a sidecar before anything is created:
+    // Windows creates a new file through a link at its name.
+    preparePrivateSqliteDatabase(path);
     const before = checkFile(path);
     if (before.size > 8 * 1024 * 1024) throw new Error("oversized");
     if (process.platform !== "win32") chmodSync(path, 0o600);
@@ -171,6 +168,7 @@ function open(s: Scope): void {
     assertStorageOwned(s.token);
     // SQLite creates sidecars in the private, hardened config directory, as with
     // spend-ledger-owner.sqlite and config-mutation.sqlite.
+    assertPrivateSqliteSidecars(path);
     db = new Database(path);
     db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const version = (
@@ -473,6 +471,7 @@ function pruneOnly(s: Scope): boolean {
   if (!s.db || s.disabled) return false;
   try {
     assertStorageOwned(s.token);
+    assertPrivateSqliteSidecars(spendLedgerStoragePath(s.token));
     s.db.exec("BEGIN IMMEDIATE");
     // Pending touches first, so a pin used since its last persisted timestamp is not evicted as idle.
     if (!s.poisoned) applyTouches(s, s.db);
@@ -517,6 +516,9 @@ function flush(s: Scope, clean: boolean): boolean {
   const db = s.db;
   for (let attempt = 0; attempt < 2; attempt++) try {
     assertStorageOwned(s.token);
+    // The rollback journal is created per write transaction; a link planted there since the last
+    // one would be followed on Windows.
+    assertPrivateSqliteSidecars(spendLedgerStoragePath(s.token));
     db.exec("BEGIN IMMEDIATE");
     // Touches go before the log as well as after it, so the pruning between chunks sees the live
     // last-used times and cannot evict a pin that is in use but persisted with an old timestamp.

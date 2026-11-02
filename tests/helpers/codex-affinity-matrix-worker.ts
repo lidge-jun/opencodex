@@ -1,12 +1,12 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
 import { acquireSpendLedgerOwner, assertStorageOwned, mintSpendLedgerStorage } from "../../src/lib/spend-ledger-owner";
 import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import { recordCodexThreadLineage } from "../../src/codex/lineage";
 import { runPassiveRead } from "../../src/lib/passive-read";
-import { adoptStoredThreadRows } from "../../src/codex/routing/thread-affinity-store";
+import { adoptStoredThreadRows, flushCodexAffinityStoreForTests } from "../../src/codex/routing/thread-affinity-store";
 import { recordCodexUpstreamOutcome, resolveCodexAccountForThread, resolveCodexAccountForThreadDetailed } from "../../src/codex/routing";
 import { bindThreadAffinity, clearConversationStateIssuerMap, clearThreadAccountMap, clearThreadAccountMapForAccount, deleteThreadAffinity, deleteThreadAffinitiesForAccount, getThreadAffinity, handOffThreadAffinityGeneration, peekConversationStateIssuer, rememberConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import type { OcxConfig } from "../../src/types";
@@ -58,6 +58,17 @@ if (action === "open-count" || action === "hourly") {
 if (action === "probe") {
   getThreadAffinity(key);
   lease.release();
+  process.exit(0);
+}
+if (action === "late-journal-link") {
+  // The store is open (the lease opened it). A rollback journal exists only during a write, so a
+  // link planted now is met by the next transaction, which must refuse it rather than follow it.
+  const file = join(process.env.OPENCODEX_HOME!, "codex-affinity.sqlite");
+  symlinkSync(join(process.env.OPENCODEX_HOME!, "outside-target"), `${file}-journal`);
+  bindThreadAffinity(key, "b", Date.now());
+  flushCodexAffinityStoreForTests();
+  lease.release();
+  console.log(JSON.stringify({ planted: true }));
   process.exit(0);
 }
 if (action.startsWith("late-")) {
