@@ -2,9 +2,12 @@ import { spawn } from "node:child_process";
 import { guardedSpawnSync } from "./mutation-guard.mjs";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-const self = fileURLToPath(import.meta.url);
+// The supervisor runs through a dedicated entry file: this library is also bundled into the
+// compiled CLI, where every module shares one entry URL, so it must have no top-level effects.
+const entry = join(dirname(fileURLToPath(import.meta.url)), "posix-install-supervisor-entry.mjs");
 const failed = message => ({ status: null, groupExited: false, processTreeExited: false, error: { code: "EINSTALLJOIN", message } });
 
 // The synchronous transaction waits for this separate supervisor, which keeps a
@@ -12,7 +15,7 @@ const failed = message => ({ status: null, groupExited: false, processTreeExited
 export function runPosixInstallerSync({ file, args, markerPath, timeoutMs = 180000, env, cwd, authorizeMutation = () => true }) {
   if (!authorizeMutation("package")) return { status: 1, groupExited: true, groupKilled: false };
   const input = JSON.stringify({ file, args, markerPath, timeoutMs, cwd });
-  const result = guardedSpawnSync(authorizeMutation, "package", process.execPath, [self, "supervise"], { input, encoding: "utf8", env, cwd, stdio: ["pipe", "pipe", "inherit"] });
+  const result = guardedSpawnSync(authorizeMutation, "package", process.execPath, [entry, "supervise"], { input, encoding: "utf8", env, cwd, stdio: ["pipe", "pipe", "inherit"] });
   try {
     const value = JSON.parse(result.stdout);
     if (result.status !== 0 || typeof value.groupExited !== "boolean" || typeof value.groupKilled !== "boolean"
@@ -42,7 +45,7 @@ function alive(pgid) {
 }
 
 async function supervise(config) {
-  const group = spawn(process.execPath, [self, "install"], { detached: true, stdio: ["pipe", "ignore", "inherit"], cwd: config.cwd, env: process.env });
+  const group = spawn(process.execPath, [entry, "install"], { detached: true, stdio: ["pipe", "ignore", "inherit"], cwd: config.cwd, env: process.env });
   const spawned = await new Promise(resolve => { group.once("spawn", () => resolve(true)); group.once("error", () => resolve(false)); });
   if (!spawned || !group.pid) return { status: null, groupExited: true, processTreeExited: false, error: { code: "ESPAWN", message: "installer group could not start" } };
   const pid = group.pid;
@@ -72,7 +75,8 @@ async function supervise(config) {
   return failed("installer group termination was not confirmed");
 }
 
-async function main() {
+/** Entry-point body for posix-install-supervisor-entry.mjs. */
+export async function runPosixInstallerSupervisorMain() {
   const input = JSON.parse(readFileSync(0, "utf8"));
   if (process.argv[2] === "supervise") {
     console.log(JSON.stringify(await supervise(input)));
@@ -82,4 +86,3 @@ async function main() {
     child.on("close", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exitCode = code ?? 1; });
   }
 }
-if (process.argv[1] === self) main().catch(() => { process.exitCode = 1; });

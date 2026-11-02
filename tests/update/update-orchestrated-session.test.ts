@@ -287,3 +287,13 @@ test.skipIf(process.platform === "win32")("Bun worker retains its mutex through 
     expect(isUpdateInFlight(f.home)).toBe(false);
   } finally { writeFileSync(release, "release"); if (worker.exitCode === null) { worker.kill("SIGKILL"); await worker.exited; } }
 }, 20000);
+
+// The compiled CLI bundles this library and gives every module the same entry URL, so the
+// library itself must never act as an entry point (a top-level main once failed every packaged start).
+test("POSIX supervisor library has no entry-point side effects when it shares the entry URL", () => {
+  const node = Bun.which("node"); if (!node) throw new Error("node unavailable");
+  const library = repoPath("src/update/posix-install-supervisor.mjs");
+  const script = `process.argv[1] = ${JSON.stringify(library)}; await import(${JSON.stringify(pathToFileURL(library).href)}); console.log("loaded");`;
+  const result = spawnSync(node, ["--input-type=module", "-e", script], { encoding: "utf8", input: "", timeout: 10000 });
+  expect({ status: result.status, stdout: result.stdout.trim(), stderr: result.stderr }).toEqual({ status: 0, stdout: "loaded", stderr: "" });
+});

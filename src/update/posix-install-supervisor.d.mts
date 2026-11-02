@@ -7,3 +7,4 @@ export declare function runPosixInstallerSync(options: {
   cwd?: string;
   authorizeMutation?: (kind: "package") => boolean;
 }): { status: number | null; signal?: NodeJS.Signals | null; groupExited: boolean; groupKilled?: boolean; processTreeExited?: boolean };
+export declare function runPosixInstallerSupervisorMain(): Promise<void>;
