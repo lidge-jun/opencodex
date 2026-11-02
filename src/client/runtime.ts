@@ -95,7 +95,9 @@ export function clientRuntimeRecord(
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
 ): RuntimePortState {
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, command: currentServingCommand(), ...siblingRuntimeField() };
+  let command: string[] | undefined;
+  try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField() };
 }
 
 export function standaloneRecycleEnv(
