@@ -18,6 +18,9 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
 /** Identify command namespaces whose execution must not trigger automatic shim repair. */
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
+  // Contract discovery and orchestrated update must validate before any repair.
+  if (command === "capabilities") return true;
+  if (command === "update" && args.some(arg => ["--plan", "--yes", "--json", "--expect-plan"].includes(arg) || arg.startsWith("--expect-plan="))) return true;
   if (command === "status" || command === "doctor") return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
   if (command === "codex") return true;
