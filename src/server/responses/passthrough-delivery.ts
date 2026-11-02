@@ -1,3 +1,4 @@
+import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
@@ -658,13 +659,13 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
-      return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+      return carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
         // Provenance, not inference: `errorText` is empty when the bounded read finds nothing
         // display-safe, and an empty body is exactly what the retryable-429 default fires on.
         replayRefusal: isReplayRefusalResponse(upstreamResponse),
-      });
+      }));
     }
 
     if (options.nativeControl && isNativeControlResponse(upstreamResponse) && upstreamResponse.body) {
@@ -935,7 +936,8 @@ export async function deliverPassthroughResponse(
             providerExecutedCallTypes,
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
-            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive },
+            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive,
+              onRefusal: message => rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE }) },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -1438,9 +1440,9 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
-          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
+          return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
-          });
+          }));
         }
       }
       // Same split as the SSE rewrite: normalization applies whenever a declared name exists,

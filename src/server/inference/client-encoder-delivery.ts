@@ -226,7 +226,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     hooks,
   };
   const encoded = encoder.protocol === "chat"
-    ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink })
+    ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, get localUpstream() { return input.localUpstream; } })
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
       get localUpstream() { return input.localUpstream; },

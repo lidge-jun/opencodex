@@ -572,7 +572,7 @@ describe("advisor-inherited admission scope on native combos", () => {
     expect(b.bodies).toHaveLength(0);
     expect(response.status).toBe(403);
     // The combo surfaces the child's scope refusal as a Chat permission error.
-    expect(text).toContain("The provider denied access to this request.");
+    expect(text).toContain("not allowed for this API key");
   });
 
   test("a native-eligible failover target inside the inherited scope is still reached", async () => {

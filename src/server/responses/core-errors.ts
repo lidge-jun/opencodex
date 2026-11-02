@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
@@ -81,18 +82,18 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
 
 export function decodeRequestErrorResponse(err: unknown, label: string): Response {
   if (isTranslatorBudgetExceededError(err)) {
-    return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+    return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
       code: "translation_buffer_limit",
-    });
+    }));
   }
   if (err instanceof UnsupportedContentEncodingError) {
-    return formatErrorResponse(415, "invalid_request_error", err.message);
+    return markProxyError(formatErrorResponse(415, "invalid_request_error", err.message));
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err));
+    return markProxyError(formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err)));
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
-  return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
+  return markProxyError(formatErrorResponse(400, "invalid_request_error", "Invalid JSON body"));
 }
 
 
@@ -106,12 +107,12 @@ export function comboUnavailableResponse(
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
   const advice = formatClientRetryAfter(options?.retryAfter);
   if (advice !== undefined) headers.set("Retry-After", advice);
-  return new Response(
+  return markProxyError(new Response(
     JSON.stringify({
       error: { message, type: "server_error", code: "combo_unavailable" },
     }),
     { status: 503, headers },
-  );
+  ));
 }
 
 
@@ -129,7 +130,7 @@ export function comboUnavailable(comboId: string, now = Date.now(), reasons = ""
  * response completes (`client_cancelled`).
  */
 export function clientCancelledResponse(): Response {
-  return formatErrorResponse(499, "client_cancelled", "Client cancelled request");
+  return markProxyError(formatErrorResponse(499, "client_cancelled", "Client cancelled request"));
 }
 
 /**
@@ -154,10 +155,10 @@ export function anthropicPoolCooldownResponse(
 ): Response {
   if (refusal.usageLimit !== null && !options.comboAttempt) {
     if (options.logCtx) options.logCtx.errorCode = "usage_limit_reached";
-    return formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds);
+    return markProxyError(formatUsageLimitReachedResponse(refusal.message, refusal.usageLimit.resetsAt, refusal.retryAfterSeconds));
   }
-  return formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
-    refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+  return markProxyError(formatErrorResponse(429, "rate_limit_error", refusal.retryableMessage,
+    refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }));
 }
 
 
@@ -166,7 +167,7 @@ export const UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE =
 
 
 export function unreadableEncryptedAgentTaskResponse(reason?: AgentTaskRecoveryFailureReason): Response {
-  return new Response(
+  return markProxyError(new Response(
     JSON.stringify({
       error: {
         message: UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE,
@@ -176,7 +177,7 @@ export function unreadableEncryptedAgentTaskResponse(reason?: AgentTaskRecoveryF
       },
     }),
     { status: 400, headers: { "Content-Type": "application/json" } },
-  );
+  ));
 }
 
 
@@ -185,7 +186,7 @@ export const TARGET_INCOMPATIBLE_MESSAGE =
 
 
 export function targetIncompatibleResponse(): Response {
-  return new Response(
+  return markProxyError(new Response(
     JSON.stringify({
       error: {
         message: TARGET_INCOMPATIBLE_MESSAGE,
@@ -194,5 +195,5 @@ export function targetIncompatibleResponse(): Response {
       },
     }),
     { status: 400, headers: { "Content-Type": "application/json" } },
-  );
+  ));
 }

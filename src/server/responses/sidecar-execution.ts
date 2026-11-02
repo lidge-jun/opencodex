@@ -471,7 +471,7 @@ export async function executeResponsesSidecars(
     options.abortSignal ?? new AbortController().signal, { attempted: false },
     () => !sendBudgetState.sendBudgetExhausted()
       && !!sendBudgetState.adapterDispatchBudget
-      && sendBudgetState.adapterDispatchBudget.spendEnforced !== true);
+      && sendBudgetState.adapterDispatchBudget.spendEnforced !== true, logCtx);
   const thinkingReceipt = (request: AdapterRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) =>
     adapter.name !== "anthropic" ? {} : { onPhysicalDispatch: () => {
       if (recovery === "opaque-blob-rejection") {

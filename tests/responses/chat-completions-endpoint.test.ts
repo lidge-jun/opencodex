@@ -2626,7 +2626,7 @@ test("responsesSseToChatCompletionsSse emits error frame on truncated stream", a
   }), "mock/test-model");
 
   const text = await new Response(stream).text();
-  expect(text).toContain("The provider failed to complete the request.");
+  expect(text).toContain("truncated response");
   expect(text).not.toContain("data: [DONE]");
   await expect(collectChatCompletion(responsesSseToChatCompletionsSse(new ReadableStream({
     start(controller) {

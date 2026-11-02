@@ -153,14 +153,14 @@ retry scheduling keep reading the parsed evidence through `resolveClientRetryAft
 ## Client error bodies (Chat)
 
 `src/lib/client-error-body.ts` owns Chat error-response normalization. Native upstream failures,
-translated failures (including zero-send preflight failures), converters and direct encoders emit
+translated upstream-derived failures, converters and direct encoders emit
 fresh envelopes with a fixed proxy message, a closed type and code, and `param: null`.
 The local `chatCompletionsErrorBody` API retains its message semantics for identified local callers.
 Messages and Responses formatting retain their existing contracts; the Anthropic tables and
 `CLAUDE_CONTEXT_OVERFLOW_MESSAGE` are exported for reuse and are not connected to those surfaces.
 
-`ownedChatErrorPayload` reads evidence only through `classifyUpstreamCondition`; it never copies
-its text. Unknown types use the status type (authentication, permission, rate limit, server, or
+`ownedChatErrorPayload` selects literal messages through `classifyUpstreamCondition` and closed
+exact-message/token tables; it never copies the evidence text. Unknown types use the status type (authentication, permission, rate limit, server, or
 invalid request). Unknown codes use `invalid_api_key` for 401, `model_not_found` for 404,
 `rate_limit_exceeded` for 429, and null otherwise. Map lookups return proxy literal values and
 are prototype-safe. Model identifiers are never extracted from error text. A provider annotation
@@ -170,14 +170,44 @@ Fixed contracts cover context overflow, cyber policy, terminal refusals, replay 
 buffer limits, inconsistent refusal representations, undeclared tools, unsatisfied required tools,
 transport failure and incomplete streams. Context overflow uses the fixed context-window sentence;
 cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
-Local actionable guidance is selected only by a proxy-owned request-context reason or account-pause
-identity marker, never a response header or upstream code: send budget, spend storage, key scope,
-usage limits and workflow ceilings. Reachable request-context code writers make local admission,
-workflow/spend, protocol/target, usage-limit or replay decisions. Combo copies retain those child-context
-facts; upstream-derived attempt codes remain on the attempts. The account-pause WeakMap is marked only
-when the proxy persists its pause decision, and wrappers carry that identity without reading headers.
+Proxy-authored local errors retain their legacy Chat message, type and code. The preflight
+transport, sidecar-auth and send-budget phase results in `src/server/responses/core-pipeline.ts`
+carry a process-local object identity; `src/server/responses/core-lifetime.ts` and the deferred
+log wrapper carry that identity through their owned response wrappers. Passthrough error
+rewrapping and the non-replayable projection carry existing ownership without granting it
+to an upstream response. The request-preparation
+phase can also return a combo's upstream error and therefore does not confer local ownership.
+Its local fixed-message, Reserve, replay-state and input-admission constructors mark their own
+responses; generic route exception messages remain unowned because they can contain catalog text.
+OAuth constructors in adapter and passthrough dispatch mark responses built from the public OAuth
+remediation formatter. Typed Codex auth, pacing, key-scope, workflow-budget, spend-storage and local Anthropic pool-refusal constructors
+mark their locally selected responses too; their arguments come from local policy classes and counters.
+Request decoding, cancellation, encrypted-task/replay compatibility and unavailable-combo constructors
+retain ownership too. Combo exclusion descriptions use configured targets, coarse proxy labels and
+numeric cooldowns; no provider diagnostic is interpolated into those local messages. No serialized flag, code or header mints identity.
+The undeclared-tool guard records the message it constructs in a WeakMap keyed by the request's
+log context. The converter accepts that exact message only in the same request with its registered type/code
+(or the proxy classifier's corresponding field values); a copied message cannot authorize arbitrary
+error fields. The explicit
+collector sink carries its local ownership into buffered delivery. Recovery and continuation
+projection record the transformed legacy message only while holding a locally marked Response
+or a recognized local budget/admission error. The direct Chat encoder receives this same request
+context; copied adapter-event fields cannot supply ownership. Combo commitment shares the
+child context record, including guard decisions made after commitment; combo failure rebuilding
+carries local Response identity or verifies an exact message in that child record. An upstream error naming an
+undeclared tool does not enter that record. Buffered JSON guard refusals mark the constructed Response.
+
+Local send-budget, spend-storage, key-scope, usage-limit and workflow-ceiling context reasons also
+retain the legacy envelope. Reachable writers for these reasons make local admission or budget
+decisions; upstream attempt codes are separate. Account auto-pause identity selects fixed guidance
+for an upstream refusal after a persisted pause decision; it does not make that response's text local.
 Native local validation and admission sites retain their own messages by call-site provenance.
-A translated failure with unknown provenance always receives fixed wording.
+A closed exact-message map covers malformed/empty completion diagnostics, synthetic incomplete
+reasons, missing-terminal wording and the
+explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
+reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
+`MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token
+without copying surrounding text. Every failure with unknown provenance receives owned wording.
 
 `src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
@@ -217,7 +247,8 @@ terminal error. Existing nested terminal
 frames retain their original settlement, log evidence and collector verdict behavior.
 Generated errors select their client type/code from the computed legacy envelope, including message-derived
 cyber policy. Empty/mid-tool EOF and read failures retain `upstream_sse_truncated` and `upstream_sse_error`.
-Choice-scoped errors also get fresh data-only framing: only `choices[i].error` changes, to
+A choice error equal to null or undefined is absent: ordinary framing, buffered JSON, collection
+and terminal decisions remain unchanged. Other choice-scoped errors get fresh data-only framing: only `choices[i].error` changes, to
 `{message,type,code}`. All other fields match the ordinary relay, including unfinished sibling
 choices, usage, roles, refusal, reasoning and tool fields. Buffered native JSON replaces only those
 choice errors and preserves its envelope and message representation. Choice errors do not become

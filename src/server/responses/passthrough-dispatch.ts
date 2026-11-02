@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { passthroughBuildErrorResponse } from "./passthrough-build-error";
 import { recoverAutoPausedAccount, rotatePassthroughKeyOn429 } from "./passthrough-key-rotation";
@@ -911,7 +912,7 @@ export async function preparePassthroughExchange(
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
         return unboundPoolSpendRefusalResponse(logCtx)
-          ?? formatErrorResponse(429, "request_send_budget_exhausted", err.message);
+          ?? markProxyError(formatErrorResponse(429, "request_send_budget_exhausted", err.message));
       }
       const refusal = unwrapUpstreamRetryEvidenceError(err);
       if (refusal instanceof CopilotAutoAdapterHandoff) {
@@ -932,12 +933,12 @@ export async function preparePassthroughExchange(
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
         if (refusal instanceof OAuthLoginRequiredError) {
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
+          return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)));
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
           return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
         }
-        return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
+        return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)));
       }
       const localRefusal = spendLedgerStorageErrorResponse(err, logCtx) ?? mapCodexAuthContextErrorToResponse(refusal, {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -1348,13 +1349,13 @@ export async function preparePassthroughExchange(
         upstream.abort();
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
         if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
-        if (err instanceof OAuthTokenRefreshBusyError) return formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
-        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+        if (err instanceof OAuthTokenRefreshBusyError) return markProxyError(formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" }));
+        return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err)));
       }
       if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
         upstream.abort();
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+        return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required"))));
       }
       transportState.sentOAuthSnapshot = refreshed;
       transportState.replayOAuthCredentialSnapshot = {

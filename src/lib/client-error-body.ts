@@ -1,4 +1,4 @@
-import { CYBER_POLICY_FALLBACK_MESSAGE } from "./errors";
+import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError } from "./errors";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamConditionEvidence } from "./upstream-condition";
 
 const openaiTypes = ["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "server_error", "upstream_error", "insufficient_quota", "client_cancelled", "cyber_policy", "model_not_allowed_for_key", "api_error", "overloaded_error"] as const;
@@ -32,7 +32,7 @@ export const CLIENT_ERROR_CONTRACTS = {
   invalid_prompt: "The provider refused this request.",
   misalignment_policy_violation: "The provider refused this request under its policy.",
   bio_policy: "The provider refused this request under its policy.",
-  model_not_in_plan: "The requested model is not included in the provider account's plan.",
+  model_not_in_plan: "The selected model is not included in your provider plan (MODEL_NOT_IN_PLAN). Choose a model the plan includes or change the plan; retrying this request will not succeed.",
   replay_refused: "The provider connection closed after the request was sent. This proxy refused to replay the request automatically.",
   translation_buffer_limit: "upstream translation buffer exceeded the safe limit",
   invalid_refusal: "upstream refusal representations are inconsistent",
@@ -73,10 +73,42 @@ export function ownedChatErrorPayload(options: OwnedChatErrorOptions) {
   const { status, evidence } = options;
   const type = OPENAI_ERROR_TYPES.get(options.type ?? "") ?? (status === 401 ? "authentication_error" : status === 403 ? "permission_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "server_error" : "invalid_request_error");
   const code = OPENAI_ERROR_CODES.get(options.code ?? "") ?? (status === 401 ? "invalid_api_key" : status === 404 ? "model_not_found" : status === 429 ? "rate_limit_exceeded" : null);
-  const message = (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined)
+  const fixedMessage = (options.contract === undefined || options.contract === "stream_incomplete")
+    && code !== "cyber_policy" && code !== "context_length_exceeded" ? fixedProxyErrorMessage(evidence.message) : undefined;
+  const message = actionableRefusalMessage(evidence, code, options.contract) ?? fixedMessage
+    ?? (options.contract ? CLIENT_ERROR_CONTRACTS[options.contract] : undefined)
     ?? LOCAL_CHAT_ERROR_MESSAGES.get(options.localReason ?? "") ?? CODE_MESSAGES.get(code ?? "")
     ?? upstreamConditionMessage(classifyUpstreamCondition(evidence) ?? "upstream_failed", options.providerId);
   return { error: { message, type, param: null, code } };
+}
+/**
+ * Provider refusals the user acts on by changing the request (model or plan). The key is the exact
+ * token; the value is the proxy's own message, which carries the proxy's copy of that token.
+ */
+const ACTIONABLE_REFUSALS: ReadonlyMap<string, string> = new Map([
+  ["MODEL_NOT_IN_PLAN", CLIENT_ERROR_CONTRACTS.model_not_in_plan],
+]);
+/** Codes a plan refusal travels under: the buffered code, and the stream code that ends the turn. */
+const REFUSAL_CARRIER_CODES: ReadonlySet<string> = new Set(["model_not_in_plan", "invalid_prompt"]);
+const REFUSAL_TOKEN_SCAN = 4096;
+/**
+ * The fixed message for a known actionable refusal, or undefined. A structured code matches when it
+ * equals a listed token after case and hyphen folding. The message is read only for a refusal-carrying
+ * code, and only for a listed token standing as a whole word; nothing from it is returned.
+ */
+export function actionableRefusalMessage(
+  evidence: UpstreamConditionEvidence, code: string | null, contract?: ClientErrorContract,
+): string | undefined {
+  if (contract !== undefined && !REFUSAL_CARRIER_CODES.has(contract)) return undefined;
+  const structured = typeof evidence.code === "string" && evidence.code.length <= 64
+    ? evidence.code.trim().toUpperCase().replaceAll("-", "_") : undefined;
+  if (structured !== undefined && ACTIONABLE_REFUSALS.has(structured)) return ACTIONABLE_REFUSALS.get(structured);
+  if (code === null || !REFUSAL_CARRIER_CODES.has(code) || typeof evidence.message !== "string") return undefined;
+  const scanned = evidence.message.slice(0, REFUSAL_TOKEN_SCAN);
+  for (const [token, message] of ACTIONABLE_REFUSALS) {
+    if (new RegExp(`(^|[^A-Za-z0-9_])${token}(?![A-Za-z0-9_])`).test(scanned)) return message;
+  }
+  return undefined;
 }
 export function canonicalSseErrorBlock(payload: unknown): string { return `data: ${JSON.stringify(payload)}\n\n`; }
 const comboEvidence = new WeakMap<Response, string>();
@@ -84,3 +116,53 @@ export function attachComboFailureEvidence(response: Response, legacyBodyText: s
   comboEvidence.set(response, legacyBodyText); return response;
 }
 export function comboFailureEvidence(response: Response): string | undefined { return comboEvidence.get(response); }
+
+/** Identity belongs to the locally constructed object, never to serialized fields. */
+const proxyErrors = new WeakSet<object>();
+export function markProxyError<T extends object>(value: T): T { proxyErrors.add(value); return value; }
+export function isProxyError(value: object): boolean { return proxyErrors.has(value); }
+export function carryProxyError<T extends object>(source: object, target: T): T {
+  return isProxyError(source) ? markProxyError(target) : target;
+}
+/** The tool guard records only messages it constructs for this response's request context. */
+export interface ProxyErrorMessageFields { type?: string; code?: string | null }
+const proxyMessages = new WeakMap<object, Map<string, Set<string>>>();
+const errorFields = (fields: ProxyErrorMessageFields) => JSON.stringify([fields.type ?? null, fields.code ?? null]);
+export function rememberProxyErrorMessage(context: object, message: string, fields: ProxyErrorMessageFields & { status: number }): void {
+  let messages = proxyMessages.get(context);
+  if (!messages) { messages = new Map(); proxyMessages.set(context, messages); }
+  let allowed = messages.get(message);
+  if (!allowed) { allowed = new Set(); messages.set(message, allowed); }
+  const classified = classifyError(fields.status, fields.type ?? "upstream_error", message);
+  // The bridge may classify a field while preserving the other field's explicit local verdict.
+  for (const type of [fields.type, classified.type]) for (const code of [fields.code, classified.code]) allowed.add(errorFields({ type, code }));
+}
+export function carryProxyErrorContext(source: object, target: object): void {
+  let messages = proxyMessages.get(source);
+  if (!messages) { messages = new Map(); proxyMessages.set(source, messages); }
+  proxyMessages.set(target, messages);
+}
+export function hasProxyErrorMessage(context: object | undefined, message: string, fields: ProxyErrorMessageFields): boolean {
+  return context !== undefined && proxyMessages.get(context)?.get(message)?.has(errorFields(fields)) === true;
+}
+// These complete sentences contain only proxy literals, including each recognized reason.
+const PROXY_FIXED_MESSAGES: ReadonlyMap<string, string> = literalMap([
+  "internal replay returned a non-JSON response",
+  "upstream returned malformed Chat Completions JSON",
+  "upstream response contained no choices",
+  "upstream response ended without a supported completion boundary",
+  "upstream returned malformed SSE JSON",
+  "upstream returned an invalid SSE event",
+  "upstream SSE ended with an unterminated event",
+  "upstream SSE ended mid tool call without a terminal signal — possible truncation",
+  "upstream SSE ended before a terminal event",
+  "upstream stream stalled without meaningful progress",
+  "routed provider emitted a client tool call outside the current request's explicit tool catalog",
+  "upstream stream ended before a terminal frame (truncated response)",
+  "upstream stream ended early (upstream_stall_timeout)",
+  "upstream stream ended early (adapter_eof)",
+  "upstream stream ended early (missing_terminal_event)",
+] as const);
+export function fixedProxyErrorMessage(message: unknown): string | undefined {
+  return typeof message === "string" ? PROXY_FIXED_MESSAGES.get(message) : undefined;
+}

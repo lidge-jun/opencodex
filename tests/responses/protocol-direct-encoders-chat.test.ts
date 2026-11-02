@@ -491,7 +491,7 @@ describe("direct Chat encoder stream lifecycle", () => {
     const directFrames = normalizeFrames(await directText);
 
     expect(directFrames).toEqual(legacyFrames);
-    expect(JSON.stringify(directFrames.at(-1))).toContain("The provider stream ended before the request completed.");
+    expect(JSON.stringify(directFrames.at(-1))).toContain("upstream_stall_timeout");
   });
 
   test("wire-silence heartbeats reach the client as the converter's SSE comments", async () => {

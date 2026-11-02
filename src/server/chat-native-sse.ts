@@ -95,7 +95,7 @@ export function structuredError(value: unknown): {
 export function normalizeChatChoiceErrors(value: Rec): Rec {
   if (!Array.isArray(value.choices)) return value;
   return { ...value, choices: value.choices.map(choice => {
-    if (!isRec(choice) || !Object.hasOwn(choice, "error")) return choice;
+    if (!isRec(choice) || choice.error === undefined || choice.error === null) return choice;
     const original = structuredError({ error: choice.error }) ?? { message: "upstream error" };
     const status = original.status ?? 502;
     const { message, type, code } = ownedChatErrorPayload({ status, type: original.type, code: original.code,
@@ -446,7 +446,7 @@ export function nativeChatSse(
       relay(controller, (eventName === "error" ? "event: error\n" : "") + canonicalSseErrorBlock(payload));
     } else {
       const normalized = normalizedChunk(parsed, options.requestedModel);
-      const choiceError = choices.some(choice => isRec(choice) && Object.hasOwn(choice, "error"));
+      const choiceError = choices.some(choice => isRec(choice) && choice.error !== undefined && choice.error !== null);
       relay(controller, choiceError ? canonicalSseErrorBlock(normalizeChatChoiceErrors(normalized))
         : replaceSseDataPayload(block, JSON.stringify(normalized)) + delimiter);
     }

@@ -1,5 +1,5 @@
 import { wasAccountAutoPaused } from "../lib/account-auto-pause-response";
-import { ownedChatErrorPayload } from "../lib/client-error-body";
+import { ownedChatErrorPayload, isProxyError, LOCAL_CHAT_ERROR_MESSAGES } from "../lib/client-error-body";
 import { ownedChatErrorResponse } from "../chat/outbound";
 import type { FailureVerdictSink } from "../chat/failure-verdict";
 /**
@@ -710,9 +710,11 @@ async function handleChatCompletionsWithBudget(
         code: classified.code,
       },
     });
-    const rewritten = new Response(JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
+    const localReason = logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : undefined);
+    const proxyAuthored = isProxyError(upstream) || LOCAL_CHAT_ERROR_MESSAGES.has(logCtx.errorCode ?? "");
+    const rewritten = new Response(proxyAuthored ? legacyEnvelope : JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
       evidence: { status: upstream.status, type: upstreamType, code: upstreamCode ?? undefined, message },
-      localReason: logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : undefined),
+      localReason,
     })), {
       status,
       headers: {
@@ -738,7 +740,7 @@ async function handleChatCompletionsWithBudget(
 
   if (contentType.includes("text/event-stream") && response.body) {
     const failureVerdictSink: FailureVerdictSink = {};
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink });
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].
@@ -759,7 +761,7 @@ async function handleChatCompletionsWithBudget(
       });
     } catch (err) {
       if (isChatCompletionsStreamError(err)) {
-        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract);
+        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored);
       }
       return ownedChatErrorResponse(
         502,

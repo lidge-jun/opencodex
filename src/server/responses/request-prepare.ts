@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
@@ -388,7 +389,7 @@ export async function prepareResponsesRequest(
   // A decision model may be a plain model or a non-JEV combo. A JEV combo here would recurse
   // into another decision, so the call is refused and the parent decision fails open.
   if (options.internalDecisionCall && comboId && config.combos?.[comboId]?.strategy === "jev") {
-    return formatErrorResponse(400, "invalid_request_error", "A JEV decision model cannot be a JEV combo");
+    return markProxyError(formatErrorResponse(400, "invalid_request_error", "A JEV decision model cannot be a JEV combo"));
   }
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
@@ -429,11 +430,11 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
-      return formatErrorResponse(
+      return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-      );
+      ));
     }
   }
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
@@ -570,9 +571,9 @@ export async function prepareResponsesRequest(
     }
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
-      return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
+      return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
         code: "translation_buffer_limit",
-      });
+      }));
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
@@ -664,7 +665,7 @@ export async function prepareResponsesRequest(
   // Combo parents have already dispatched above; concrete children retain their own target.
   if (explicitlyRequestsSecondary && (!secondaryProvider || secondaryProvider.disabled === true
     || secondaryProvider.authMode === "oauth" && configuredAnthropicInstance(config, "anthropic2") !== "anthropic2")) {
-    return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
+    return markProxyError(formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider"));
   }
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
   const advisorAdmissionPolicy = options.advisorAdmissionPolicy;
@@ -841,7 +842,7 @@ export async function prepareResponsesRequest(
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {
     if (err instanceof AnthropicSecondaryInstanceUnavailableError) {
-      return formatErrorResponse(401, "authentication_error", err.message);
+      return markProxyError(formatErrorResponse(401, "authentication_error", err.message));
     }
     const policyRefusal = policyCandidateRefusalResponse(err);
     if (policyRefusal) return policyRefusal;
@@ -1387,11 +1388,11 @@ export async function prepareResponsesRequest(
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
-    return formatErrorResponse(
+    return markProxyError(formatErrorResponse(
       400,
       "previous_response_not_found",
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-    );
+    ));
   }
 
   if (hasUnexpandedPreviousResponse) {
@@ -1413,11 +1414,11 @@ export async function prepareResponsesRequest(
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
-      return formatErrorResponse(
+      return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-      );
+      ));
     }
   }
 
@@ -1469,7 +1470,7 @@ export async function prepareResponsesRequest(
   if (isCanonicalOpenAiForwardProvider(route.provider)
     && isCodexReserveHelperUnsupported(options.codexAuthPolicy ?? config, route.modelId,
       options.admission, options.visionDescribeTerminal === true)) {
-    return formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE);
+    return markProxyError(formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE));
   }
   // #4940: the opt-in is off, so every Reserve affordance in this process is inert -- no catalog
   // row, no main-credential substitution, no authorization handshake, and no `luna-reserve` header
@@ -1490,7 +1491,7 @@ export async function prepareResponsesRequest(
     && options.visionDescribeTerminal !== true
     && isCanonicalOpenAiForwardProvider(route.provider)
     && isCodexReserveOptInMissing(options.codexAuthPolicy ?? config, route.modelId, options.admission)) {
-    return formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE);
+    return markProxyError(formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE));
   }
   // Refuse an input that cannot plausibly fit the model context window before spending auth,
   // circuit budget, or upstream bandwidth on a turn the provider will reject anyway (#1412).
@@ -1517,7 +1518,7 @@ export async function prepareResponsesRequest(
           translatorBudget,
         );
       }
-      return formatErrorResponse(
+      return markProxyError(formatErrorResponse(
         413,
         "input_admission_refused",
         inputAdmission.requiredOutputHeadroom !== undefined
@@ -1527,7 +1528,7 @@ export async function prepareResponsesRequest(
           : `Estimated input (~${inputAdmission.estimatedTokens} tokens) is far past the context window `
             + `of ${parsed.modelId} (${inputAdmission.ceiling} tokens). Start a new session or choose a `
             + `model with a larger context window.`,
-      );
+      ));
     }
   }
   const preAuthHostKey = preAuthUpstreamHostCircuitKey(route, config);

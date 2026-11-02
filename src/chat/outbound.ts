@@ -1,6 +1,6 @@
 import { boundedServiceTier } from "../lib/response-service-tier";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
-import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, type ClientErrorContract } from "../lib/client-error-body";
+import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, hasProxyErrorMessage, fixedProxyErrorMessage, type ClientErrorContract } from "../lib/client-error-body";
 import { legacyFailureVerdict, legacyStreamErrorStatus as streamErrorStatus, type FailureVerdictSink } from "./failure-verdict";
 /**
  * Chat Completions outbound: internal /v1/responses output -> OpenAI Chat Completions shapes.
@@ -164,6 +164,7 @@ export function appendedUtf8Bytes(previous: string, previousBytes: number, fragm
 /** Details a streamed Chat failure carries into its error frame. */
 export interface ChatCompletionsStreamFailure {
   contract?: ClientErrorContract;
+  proxyAuthored?: boolean;
   code?: string | null;
   type?: string;
   status?: number;
@@ -223,16 +224,17 @@ export function chatCompletionsStreamErrorPayload(message: string, details?: Cha
   const legacy = legacyChatCompletionsStreamErrorPayload(message, details);
   const verdict = legacyFailureVerdict(legacy.payload);
   const error = legacy.payload.error as { message: string; type: string; code: string | null };
-  return { bounded: legacy.bounded, verdict, payload: ownedChatErrorPayload({
+  return { bounded: legacy.bounded, verdict, payload: details?.proxyAuthored ? legacy.payload : ownedChatErrorPayload({
     status: verdict.status, type: error.type, code: error.code, contract: details?.contract,
     evidence: { status: verdict.status, type: error.type, code: error.code ?? undefined, message },
   }) };
 }
 
-export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract): Response {
-  const legacy = chatCompletionsErrorBody(status, message, type, code).error as { type: string; code: string | null };
+export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract, proxyAuthored = false): Response {
+  const legacyBody = chatCompletionsErrorBody(status, message, type, code);
+  const legacy = legacyBody.error as { type: string; code: string | null };
   const finalStatus = legacy.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
-  return new Response(JSON.stringify(ownedChatErrorPayload({ status: finalStatus, type: legacy.type, code: legacy.code, contract,
+  return new Response(JSON.stringify(proxyAuthored ? legacyBody : ownedChatErrorPayload({ status: finalStatus, type: legacy.type, code: legacy.code, contract,
     evidence: { status: finalStatus, type, code: code ?? undefined, message } })),
     { status: finalStatus, headers: { "Content-Type": "application/json" } });
 }
@@ -295,7 +297,7 @@ function refusalTranslationError(): ChatCompletionsStreamError {
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink },
+  opts: { translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink; proxyErrorContext?: object },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
@@ -644,7 +646,7 @@ export function responsesSseToChatCompletionsSse(
           // still fills the budget. They contain no provider text or IDs.
           if (bounded) controller.enqueue(frame);
           else enqueueLiveFrame(frame);
-          if (opts.failureVerdictSink) { opts.failureVerdictSink.verdict = verdict; opts.failureVerdictSink.contract = details?.contract; }
+          if (opts.failureVerdictSink) { opts.failureVerdictSink.verdict = verdict; opts.failureVerdictSink.contract = details?.contract; opts.failureVerdictSink.proxyAuthored = details?.proxyAuthored; }
           emittedFrames++;
         } catch {
           /* controller may already be closed */
@@ -804,14 +806,15 @@ export function responsesSseToChatCompletionsSse(
               // upstream_stall_timeout / adapter_eof / proxy-synthesized incompletes are
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
-              fail(outcome.originalFailMessage, { contract: "stream_incomplete" });
+              fail(outcome.originalFailMessage, { contract: "stream_incomplete",
+                proxyAuthored: fixedProxyErrorMessage(outcome.originalFailMessage) !== undefined });
             }
             break;
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
             const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {});
-            fail(failure.message, failure.details);
+            fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) });
             break;
           }
           default:

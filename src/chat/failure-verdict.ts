@@ -2,7 +2,7 @@ import type { ClientErrorContract } from "../lib/client-error-body";
 import { isCyberPolicyMessage, isTerminalRefusalCode } from "../lib/errors";
 export interface FailureVerdict { status: number; type: string; code: string | null; message: string }
 /** Passed explicitly through producer, lifetime wrappers and collector for one response. */
-export interface FailureVerdictSink { verdict?: FailureVerdict; contract?: ClientErrorContract }
+export interface FailureVerdictSink { verdict?: FailureVerdict; contract?: ClientErrorContract; proxyAuthored?: boolean }
 export function legacyStreamErrorStatus(message: string): number {
   const lower = message.toLowerCase();
   if (isCyberPolicyMessage(lower)) return 400;

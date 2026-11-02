@@ -734,7 +734,7 @@ export function createUndeclaredToolCallGuardBlockRewrite(
   providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
   declaredBare?: ReadonlySet<string>,
   declaredCustom?: ReadonlySet<string>,
-  options?: { refuseUndeclared?: boolean },
+  options?: { refuseUndeclared?: boolean; onRefusal?: (message: string) => void },
 ): SseBlockRewrite {
   // Deferred-catalog wires (Chat/Anthropic) keep the default-namespace normalization — the
   // client can only resolve the bare name it declared — while the refusal itself stays off.
@@ -754,6 +754,7 @@ export function createUndeclaredToolCallGuardBlockRewrite(
       const name = undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare, declaredCustom);
       if (name !== undefined) {
         tripped = true;
+        options?.onRefusal?.(undeclaredToolCallMessage(name));
         return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");
       }
     }

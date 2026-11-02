@@ -1,3 +1,4 @@
+import { markProxyError, carryProxyError } from "../../lib/client-error-body";
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -397,7 +398,7 @@ export async function prepareAdapterExchange(
     const headers = new Headers(original.headers);
     headers.delete("content-length");
     headers.delete("content-encoding");
-    upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
+    upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
     return upstreamResponse;
   };
   const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
@@ -569,10 +570,10 @@ export async function prepareAdapterExchange(
     }
     // A pause committed during pacing is local admission policy, not a failed upstream.
     if (refusal instanceof OAuthAccountPausedError) {
-      return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
+      return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)));
     }
     if (refusal instanceof OAuthLoginRequiredError) {
-      return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
+      return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)));
     }
     if (refusal instanceof AnthropicAccountCooldownError) {
       return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
@@ -583,7 +584,7 @@ export async function prepareAdapterExchange(
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
       return unboundPoolSpendRefusalResponse(logCtx)
-        ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message);
+        ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message));
     }
     const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
@@ -610,7 +611,7 @@ export async function prepareAdapterExchange(
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     const thinkingSignatureRecovery = createAnthropicThinkingRecovery(
-      parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(),
+      parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(), logCtx,
     );
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
@@ -861,10 +862,10 @@ export async function prepareAdapterExchange(
         }
         const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
         if (refusal instanceof OAuthAccountPausedError) {
-          return { failed: formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+          return { failed: markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal))) };
         }
         if (refusal instanceof OAuthLoginRequiredError) {
-          return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+          return { failed: markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal))) };
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
           return { failed: anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx }) };
@@ -873,7 +874,7 @@ export async function prepareAdapterExchange(
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
           return { failed: unboundPoolSpendRefusalResponse(logCtx)
-            ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message) };
+            ?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message)) };
         }
         const msg = describeUpstreamConnectFailure(err, connectMs);
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
@@ -975,7 +976,7 @@ export async function prepareAdapterExchange(
             try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
             releaseCodexAuthContextProbeLease(admissionState.authCtx);
             return cancelled ? clientCancelledResponse()
-              : formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
+              : markProxyError(formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" }));
           }
           const failed = transportState.sentOAuthSnapshot;
           if (route.providerName === "google-antigravity" && !antigravityAuthRotationAttempted
@@ -1027,13 +1028,13 @@ export async function prepareAdapterExchange(
           }
           cleanupUpstreamAbort();
           if (err instanceof OAuthAccountPausedError) {
-            return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
+            return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)));
           }
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+          return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err)));
         }
         if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
           cleanupUpstreamAbort();
-          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+          return markProxyError(formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required"))));
         }
         transportState.sentOAuthSnapshot = refreshed;
         transportState.replayOAuthCredentialSnapshot = {

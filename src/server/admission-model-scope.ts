@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { isApiAuthRequired } from "./auth-cors";
 import type { OcxApiKeyEntry, OcxConfig } from "../types";
@@ -195,7 +196,7 @@ export function admissionModelDeniedResponse(error: AdmissionModelDeniedError): 
     headers: { "Content-Type": "application/json" },
   });
   markResponseNonReplayable(response);
-  return response;
+  return markProxyError(response);
 }
 
 /**

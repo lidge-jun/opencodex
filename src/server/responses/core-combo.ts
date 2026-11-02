@@ -1,3 +1,4 @@
+import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
@@ -509,6 +510,7 @@ export async function executeComboResponses(
         attempt: childLog.activeAttempt,
       });
     }
+    carryProxyErrorContext(childLog, logCtx);
     Object.assign(logCtx, childLog, {
       requestedModel,
       model: requestedModel,
@@ -1287,6 +1289,7 @@ export async function executeComboResponses(
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
       settleComboReprobeSuccess(pick);
+      carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
         requestedModel,
         model: requestedModel,
@@ -1315,6 +1318,7 @@ export async function executeComboResponses(
     try {
       failure = consumedChildFailure
         ?? await consumeComboFailure(response, options.abortSignal);
+      if (hasProxyErrorMessage(childLog, failure.upstreamMessage ?? "", { type: failure.upstreamType, code: failure.upstreamCode })) markProxyError(failure.response);
       if (preflightModelRefusal !== undefined) failure = { ...failure, codexModelRefusal: preflightModelRefusal };
     } catch (error) {
       if (options.abortSignal?.aborted) {

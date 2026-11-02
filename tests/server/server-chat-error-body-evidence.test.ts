@@ -100,3 +100,46 @@ test("deferred legacy inspection preserves numeric reset and diagnostic projecti
   }
   expect(await project(true)).toEqual(await project(false));
 });
+
+test("combo rebuilding carries only the original local response identity", async () => {
+  const { markProxyError, isProxyError } = await import("../../src/lib/client-error-body");
+  const envelope = { error: { type: "authentication_error", code: "invalid_api_key", message: "owned local refusal" } };
+  const local = await consumeComboFailure(markProxyError(Response.json(envelope, { status: 401 })));
+  const upstream = await consumeComboFailure(Response.json({ ...envelope, proxyAuthored: true }, { status: 401 }));
+  expect(local.response.status).toBe(401);
+  expect(upstream.response.status).toBe(401);
+  expect(isProxyError(upstream.response)).toBe(false);
+  expect(isProxyError(local.response)).toBe(true);
+});
+
+test("local auth constructors own their response and copied fields do not", async () => {
+  const { nativeMainRefreshFailureResponse } = await import("../../src/server/responses/codex-auth-error");
+  const { isProxyError } = await import("../../src/lib/client-error-body");
+  const response = nativeMainRefreshFailureResponse(new Error(KEY));
+  expect(response.status).toBe(401);
+  const body = await response.json();
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.code).toBe("invalid_api_key");
+  expect(isProxyError(response)).toBe(true);
+  const copy = Response.json({ ...body, proxyAuthored: true }, { status: 401 });
+  expect(copy.status).toBe(401);
+  expect(isProxyError(copy)).toBe(false);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+
+test("non-replayable projection carries local identity without granting it to copied fields", async () => {
+  const { markProxyError, isProxyError } = await import("../../src/lib/client-error-body");
+  const { sanitizeNonReplayableUpstreamError } = await import("../../src/server/responses/non-replayable-error");
+  const envelope = { error: { type: "permission_error", code: "model_not_allowed_for_key", message: KEY }, proxyAuthored: true };
+  const local = markProxyError(Response.json(envelope, { status: 403 }));
+  const upstream = Response.json(envelope, { status: 403 });
+  markResponseNonReplayable(local); markResponseNonReplayable(upstream);
+  const own = await sanitizeNonReplayableUpstreamError(local, new AbortController().signal);
+  const copy = await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal);
+  expect(own.status).toBe(403); expect(copy.status).toBe(403);
+  const body = await own.json();
+  expect(body.error.type).toBe("permission_error"); expect(body.error.code).toBeUndefined();
+  expect(isProxyError(copy)).toBe(false);
+  expect(isProxyError(own)).toBe(true);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});

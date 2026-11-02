@@ -575,3 +575,163 @@ for (const form of ["absent", "empty", "done"] as const) test(`ordinary early bl
   expect(result.status).toBe(200); expect(result.terminals).toEqual([{ status: 200 }]); expect(result.verdict).toBeUndefined();
   expect(result.text).toContain(`id: ${KEY}`); expect(result.text).toContain(`retry: ${KEY}`); expect(result.text).toContain(`: ${KEY}`);
 });
+
+for (const error of [null, undefined]) test(`empty choice error retains ordinary SSE framing: ${error}`, async () => {
+  const chunk = { id: "empty-choice", object: "chat.completion.chunk", created: 1, model: "fixture",
+    choices: [{ index: 0, delta: { content: "normal answer" }, finish_reason: "stop", error }] };
+  const ordinary = `id: ordinary-id\nretry: 1000\n: ordinary comment\n${frame(chunk)}data: [DONE]\n\n`;
+  const terminals: number[] = [];
+  const output = await new Response(nativeChatSse(bytes(ordinary), { requestedModel: "fixture",
+    translatorBudget: createTestTranslatorBudget(), signal: new AbortController().signal,
+    onUsage() {}, onTerminal(status) { terminals.push(status); } })).text();
+  expect(terminals).toEqual([200]);
+  expect(output).toBe(ordinary);
+  const { collectChatCompletion } = await import("../../src/chat/outbound");
+  const base = await collectChatCompletion(bytes(ordinary), "fixture", createTestTranslatorBudget());
+  const actual = await collectChatCompletion(bytes(output), "fixture", createTestTranslatorBudget());
+  expect(actual.choices).toEqual(base.choices);
+  expect(actual.choices[0].message.content).toBe("normal answer");
+});
+
+test("null choice error keeps the native buffered JSON representation", async () => {
+  const original = { id: "empty-choice", object: "chat.completion", created: 1, model: "fixture/model",
+    choices: [{ index: 0, message: { role: "assistant", content: "normal answer" }, finish_reason: "stop", error: null }] };
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(original) });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-chat", baseUrl: `${server.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY } } };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "fixture/model", messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(original);
+  } finally { await server.stop(true); }
+});
+
+for (const stream of [false, true]) for (const [code, message] of [
+  ["undeclared_tool_call", `routed provider emitted undeclared client tool "${KEY}"; only request-declared tools may be called`],
+  ["workflow_sends_exhausted", `OAuth authentication failed. Check the OpenCodex account status and retry. ${KEY}`],
+  [KEY, `upstream stream ended early (upstream_stall_timeout) ${KEY}`],
+]) test(`upstream proxy-message copies remain normalized: ${code} stream=${stream}`, async () => {
+  const error = { type: "upstream_error", code, message, proxyAuthored: true };
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(
+    `event: response.failed\n${frame({ type: "response.failed", response: { status: "failed", error } })}`,
+    { headers: { "content-type": "text/event-stream", "x-opencodex-local-refusal": "credentials_paused" } }) });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-responses", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY } } };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "fixture/model", stream, messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(stream ? 200 : 502);
+    const text = await response.text();
+    const body = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error) : JSON.parse(text);
+    expect(body.error).toBeDefined();
+    expect(body.error.type).toBe(code === "workflow_sends_exhausted" ? "authentication_error" : "server_error");
+    expect(body.error.code).toBe(code === "undeclared_tool_call" ? code : code === "workflow_sends_exhausted" ? "invalid_api_key" : "upstream_server_error");
+    expect(body.error.message).not.toBe(message);
+    expect(text).not.toContain(KEY);
+  } finally { await upstream.stop(true); }
+});
+
+for (const stream of [true, false]) test(`null choice error keeps full-handler SSE behavior stream=${stream}`, async () => {
+  const chunk = { id: "empty-choice", object: "chat.completion.chunk", created: 1, model: "fixture/model",
+    choices: [{ index: 0, delta: { role: "assistant", content: "normal answer" }, finish_reason: "stop", error: null }] };
+  const ordinary = `id: ordinary-id\nretry: 1000\n: ordinary comment\n${frame(chunk)}data: [DONE]\n\n`;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch: () => new Response(ordinary, { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-chat", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY } } };
+    const context = { model: "", provider: "" };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: "fixture/model", stream, messages: [{ role: "user", content: "hi" }] }) }), config, context);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    if (stream) expect(text).toBe(ordinary);
+    else {
+      const { collectChatCompletion } = await import("../../src/chat/outbound");
+      const base = await collectChatCompletion(bytes(ordinary), "fixture/model", createTestTranslatorBudget());
+      expect(JSON.parse(text).choices).toEqual(base.choices);
+      expect(JSON.parse(text).choices[0].message.content).toBe("normal answer");
+    }
+    expect((context as Record<string, unknown>).upstreamError).toBeUndefined();
+  } finally { await upstream.stop(true); }
+});
+
+for (const stream of [false, true]) test(`combo retains its locally constructed tool refusal stream=${stream}`, async () => {
+  const comboId = `owned-tool-${stream}`;
+  const tool = { type: "function_call", id: "fc_owned", call_id: "call_owned", name: "Write", arguments: "{}" };
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(
+    frame({ type: "response.created", response: { id: "resp_owned", status: "in_progress", output: [] } })
+      + frame({ type: "response.output_item.added", item: tool, output_index: 0 }),
+    { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-responses", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY } },
+      combos: { [comboId]: { strategy: "failover", targets: [{ provider: "fixture", model: "model" }] } } };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        model: `combo/${comboId}`, stream, tools: [], messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" });
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.error.code).toBe("undeclared_tool_call");
+    expect(body.error.message).toContain("undeclared client tool");
+    expect(body.error.message).toContain("Write");
+  } finally { await upstream.stop(true); }
+});
+
+for (const stream of [false, true]) test(`direct encoder retains an identified local recovery refusal stream=${stream}`, async () => {
+  const { rememberProxyErrorMessage } = await import("../../src/lib/client-error-body");
+  const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+  const context = {}; const message = "owned local api key refusal";
+  rememberProxyErrorMessage(context, message, { status: 401, type: "authentication_error", code: "invalid_api_key" });
+  const options = { model: "fixture", translatorBudget: createTestTranslatorBudget(), proxyErrorContext: context };
+  const events: AdapterEvent[] = [{ type: "error", message, status: 401, errorType: "authentication_error", code: "invalid_api_key" }];
+  const response = stream ? new Response(encodeChatCompletionSse((async function* () { yield* events; })(), options))
+    : await foldChatCompletion((async function* () { yield* events; })(), options);
+  expect(response.status).toBe(stream ? 200 : 401);
+  const text = await response.text();
+  const body = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error) : JSON.parse(text);
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.code).toBe("invalid_api_key");
+  expect(body.error.message).toBe(message);
+});
+
+for (const stream of [false, true]) test(`copied recovery metadata cannot claim a local message stream=${stream}`, async () => {
+  const { rememberProxyErrorMessage } = await import("../../src/lib/client-error-body");
+  const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+  const context = {}; const message = "owned local api key refusal";
+  rememberProxyErrorMessage(context, message, { status: 401, type: "authentication_error", code: "invalid_api_key" });
+  const options = { model: "fixture", translatorBudget: createTestTranslatorBudget(), proxyErrorContext: context };
+  const event = Object.assign({ type: "error", message: `${message} ${KEY}`, status: 401,
+    errorType: "authentication_error", code: "invalid_api_key" } as AdapterEvent, { proxyAuthored: true });
+  const response = stream ? new Response(encodeChatCompletionSse((async function* () { yield event; })(), options))
+    : await foldChatCompletion((async function* () { yield event; })(), options);
+  expect(response.status).toBe(stream ? 200 : 401);
+  const text = await response.text();
+  const body = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error) : JSON.parse(text);
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.code).toBe("invalid_api_key");
+  expect(body.error.message).toBe("The provider rejected the configured credentials.");
+  expect(text).not.toContain(KEY);
+});
+
+for (const stream of [false, true]) test(`copied local message cannot claim different error fields stream=${stream}`, async () => {
+  const { rememberProxyErrorMessage, CLIENT_ERROR_CONTRACTS } = await import("../../src/lib/client-error-body");
+  const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+  const context = {}; const message = "owned local api key refusal";
+  rememberProxyErrorMessage(context, message, { status: 401, type: "authentication_error", code: "invalid_api_key" });
+  const options = { model: "fixture", translatorBudget: createTestTranslatorBudget(), proxyErrorContext: context };
+  const event: AdapterEvent = { type: "error", message, errorType: KEY, code: "cyber_policy", status: 400 };
+  const response = stream ? new Response(encodeChatCompletionSse((async function* () { yield event; })(), options))
+    : await foldChatCompletion((async function* () { yield event; })(), options);
+  expect(response.status).toBe(stream ? 200 : 400);
+  const text = await response.text();
+  const body = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error) : JSON.parse(text);
+  expect(body.error.code).toBe("cyber_policy");
+  expect(body.error.type).toBe("invalid_request_error");
+  expect(body.error.message).toBe(CLIENT_ERROR_CONTRACTS.cyber_policy);
+  expect(text).not.toContain(KEY);
+});

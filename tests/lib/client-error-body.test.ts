@@ -149,3 +149,106 @@ test("known Chat codes retain their identities, including a local usage refusal"
     expect(JSON.stringify(payload)).not.toContain(KEY);
   }
 });
+test("actionable plan refusal keeps a proxy-written message with the proxy's copy of its token", () => {
+  const PLAN = CLIENT_ERROR_CONTRACTS.model_not_in_plan;
+  expect(PLAN).toContain("(MODEL_NOT_IN_PLAN)");
+  const owned = (code: string | null | undefined, evidence: { code?: string; message?: string }, contract?: keyof typeof CLIENT_ERROR_CONTRACTS) =>
+    ownedChatErrorPayload({ status: 400, type: "invalid_request_error", code, ...(contract ? { contract } : {}), evidence: { status: 400, ...evidence } }).error;
+  // Structured code, exact after case and hyphen folding; the final wire code is unchanged.
+  for (const structured of ["model_not_in_plan", "MODEL_NOT_IN_PLAN", " model-not-in-plan "]) {
+    const error = owned("invalid_request_error", { code: structured, message: KEY });
+    expect(error).toEqual({ message: PLAN, type: "invalid_request_error", param: null, code: "invalid_request_error" });
+  }
+  // A refusal-carrying code with the token as a whole word in the message.
+  for (const code of ["invalid_prompt", "model_not_in_plan"]) {
+    const error = owned(code, { message: `${KEY} refused (MODEL_NOT_IN_PLAN). ${KEY}` }, code === "invalid_prompt" ? "invalid_prompt" : undefined);
+    expect(error).toEqual({ message: PLAN, type: "invalid_request_error", param: null, code });
+    expect(JSON.stringify(error)).not.toContain(KEY);
+  }
+  // Not matched: a longer token, a non-carrier code reading message text, or another contract.
+  expect(owned("invalid_prompt", { message: "MODEL_NOT_IN_PLAN_OTHER" }).message).toBe(CLIENT_ERROR_CONTRACTS.invalid_prompt);
+  expect(owned("invalid_request_error", { message: "MODEL_NOT_IN_PLAN" }).message).not.toBe(PLAN);
+  expect(owned("cyber_policy", { code: "model_not_in_plan" }, "cyber_policy").message).toBe(CLIENT_ERROR_CONTRACTS.cyber_policy);
+  expect(owned("invalid_request_error", { code: KEY + "MODEL_NOT_IN_PLAN" }).message).not.toBe(PLAN);
+});
+
+test("proxy error identity and messages belong to their original request", async () => {
+  const { markProxyError, isProxyError, carryProxyError, rememberProxyErrorMessage, hasProxyErrorMessage,
+    fixedProxyErrorMessage } = await import("../../src/lib/client-error-body");
+  const local = markProxyError(Response.json({ error: { message: "owned local refusal" } }, { status: 403 }));
+  const copy = Response.json({ error: { message: "owned local refusal", proxyAuthored: true } }, { status: 403 });
+  expect(local.status).toBe(403);
+  expect(copy.status).toBe(403);
+  expect(isProxyError(local)).toBe(true);
+  expect(isProxyError(copy)).toBe(false);
+  expect(isProxyError(carryProxyError(local, new Response(null)))).toBe(true);
+  expect(isProxyError(carryProxyError(copy, new Response(null)))).toBe(false);
+  const context = {};
+  rememberProxyErrorMessage(context, "owned tool refusal", { status: 502 });
+  expect(hasProxyErrorMessage(context, "owned tool refusal", {})).toBe(true);
+  expect(hasProxyErrorMessage({}, "owned tool refusal", {})).toBe(false);
+  expect(hasProxyErrorMessage(context, `owned tool refusal ${KEY}`, {})).toBe(false);
+  expect(fixedProxyErrorMessage("upstream stream ended early (upstream_stall_timeout)"))
+    .toBe("upstream stream ended early (upstream_stall_timeout)");
+  expect(fixedProxyErrorMessage(`upstream stream ended early (${KEY})`)).toBeUndefined();
+  expect(fixedProxyErrorMessage(`upstream stream ended early (upstream_stall_timeout) ${KEY}`)).toBeUndefined();
+});
+
+test("an exact proxy sentence never grants upstream type or code ownership", () => {
+  for (const status of [400, 502]) {
+    const body = ownedChatErrorPayload({ status, type: KEY, code: KEY,
+      evidence: { status, type: KEY, code: KEY, message: "upstream stream ended early (upstream_stall_timeout)" } });
+    expect(body.error.type).toBe(status === 400 ? "invalid_request_error" : "server_error");
+    expect(body.error.code).toBeNull();
+    expect(body.error.message).toBe("upstream stream ended early (upstream_stall_timeout)");
+    expect(JSON.stringify(body)).not.toContain(KEY);
+  }
+});
+
+const LOCAL_DIAGNOSTICS = [
+  "internal replay returned a non-JSON response",
+  "upstream returned malformed Chat Completions JSON",
+  "upstream response contained no choices",
+  "upstream response ended without a supported completion boundary",
+  "upstream returned malformed SSE JSON",
+  "upstream returned an invalid SSE event",
+  "upstream SSE ended with an unterminated event",
+  "upstream SSE ended mid tool call without a terminal signal — possible truncation",
+  "upstream SSE ended before a terminal event",
+  "upstream stream stalled without meaningful progress",
+];
+test("locally generated structural diagnostics retain their exact proxy sentences", () => {
+  for (const message of LOCAL_DIAGNOSTICS) {
+    const body = ownedChatErrorPayload({ status: 502, type: "upstream_error", code: "upstream_server_error",
+      evidence: { status: 502, message } });
+    expect(body.error.type).toBe("upstream_error");
+    expect(body.error.code).toBe("upstream_server_error");
+    expect(body.error.message).toBe(message);
+    const copy = ownedChatErrorPayload({ status: 502, type: KEY, code: KEY,
+      evidence: { status: 502, message: `${message} ${KEY}` } });
+    expect(copy.error.type).toBe("server_error");
+    expect(copy.error.code).toBeNull();
+    expect(JSON.stringify(copy)).not.toContain(KEY);
+  }
+});
+
+test("fixed proxy diagnostics retain cyber and context contract precedence", () => {
+  for (const [code, message] of [["cyber_policy", CLIENT_ERROR_CONTRACTS.cyber_policy],
+    ["context_length_exceeded", CLIENT_ERROR_CONTRACTS.context_overflow]]) {
+    const body = ownedChatErrorPayload({ status: 400, code,
+      evidence: { status: 400, message: "upstream stream ended early (upstream_stall_timeout)" } });
+    expect(body.error.code).toBe(code);
+    expect(body.error.message).toBe(message);
+  }
+});
+
+test("committed combo context observes a local guard decision made later", async () => {
+  const { carryProxyErrorContext, rememberProxyErrorMessage, hasProxyErrorMessage } = await import("../../src/lib/client-error-body");
+  const child = {}; const parent = {}; const other = {};
+  carryProxyErrorContext(child, parent);
+  expect(hasProxyErrorMessage(parent, "owned late refusal", {})).toBe(false);
+  rememberProxyErrorMessage(child, "owned late refusal", { status: 502 });
+  expect(hasProxyErrorMessage(parent, "owned late refusal", {})).toBe(true);
+  expect(hasProxyErrorMessage(other, "owned late refusal", {})).toBe(false);
+  expect(hasProxyErrorMessage(parent, `owned late refusal ${KEY}`, {})).toBe(false);
+});

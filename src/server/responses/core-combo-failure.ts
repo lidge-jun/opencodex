@@ -1,4 +1,4 @@
-import { comboFailureEvidence } from "../../lib/client-error-body";
+import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
 import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
@@ -142,6 +142,7 @@ export async function consumeComboFailure(
     },
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
+  carryProxyError(response, failureResponse);
   carryReplayRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
