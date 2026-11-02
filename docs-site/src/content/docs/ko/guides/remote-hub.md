@@ -31,7 +31,13 @@ Codex와 Claude 요청은 클라이언트에서 허브의 데이터 리스너로
 임시 권한은 stdin으로만 전달하며 설정 파일이나 토큰 파일에 저장되지 않습니다.
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -170,6 +176,8 @@ tailscale serve status
 
 관리 포트는 `127.0.0.1:10101`에서만 보여야 합니다. `hub.managementPublicOrigin`은 Serve가 표시한 정확한 HTTPS Origin으로 설정하세요. 직접 TLS 프록시를 운영한다면 `tailscale cert hub-name.tailnet-name.ts.net`으로 ts.net 전체 FQDN 인증서만 발급하고 `127.0.0.1:10101`로만 프록시하세요. 임의의 `Tailscale-User-*` 헤더를 만들지 말고, 신뢰할 수 있는 Tailscale 신원이 없으면 일회용 pairing을 사용하세요.
 
+<a id="giving-the-data-listener-tls"></a>
+
 ### 데이터 리스너에 TLS 붙이기
 
 위의 Serve 매핑은 **관리** 인그레스만 공개합니다. 그 인그레스는 `/v1/*`, `/healthz`, `/readyz`를 제공하지 않으므로 그것만으로는 원격 클라이언트에게 쓸 수 있는 데이터 플레인이 생기지 않습니다. opencodex는 자체적으로 TLS를 종료하지 않습니다. 리스너는 평문 HTTP이고 HTTPS는 항상 운영자가 소유한 프런트엔드입니다.
@@ -192,10 +200,14 @@ Serve가 허용하는 HTTPS 포트는 제한적입니다. 포트가 실제로 �
 그다음 두 Origin을 따로 지정해 연결합니다. 위치 인자 URL이 **데이터** Origin이고(`/readyz`와 `/v1/catalog`를 가져오는 곳), `--management-url`이 pairing과 키 발급에 쓰는 대시보드 Origin입니다. 두 Origin이 같은 포트일 필요는 없습니다.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
 # `ocx hub invite`가 코드까지 채워서 출력해 주는 바로 그 줄입니다.
-echo '<pairing-code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+echo '<pairing-code>' | printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ```
 
 `--management-url`을 생략하면 `/readyz` 응답이 보고하는 `hub.managementPublicOrigin`을 씁니다. 두 Origin이 다르면 명시하는 편이 분명합니다. 두 Origin을 허브에 `hub.dataPublicOrigin`과 `hub.managementPublicOrigin`으로 기록해 두면 `ocx hub invite`가 대신 출력해 줍니다.
@@ -218,9 +230,12 @@ ocx hub invite
 
 일회용 단기 pairing 코드를 발급하고, 다른 컴퓨터에서 실행할 명령을 출력합니다.
 
-```text
-# Run on the other machine:
-echo '<code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+```bash
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash, on the other machine:
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+unset pairing_code
 ```
 
 데이터 Origin은 `--data-url` → `hub.dataPublicOrigin` → 바인드 주소 순서로 결정됩니다. 마지막 대체는 바인드가 다른 컴퓨터가 실제로 호출할 수 있는 주소일 때만 쓸 수 있습니다. 루프백이나 와일드카드 바인드에서는 `http://localhost:<port>`가 되어 상대 컴퓨터가 자기 자신을 호출하게 되고 일회용 코드가 헛되게 소모되므로, `invite`는 대신 거부하고 `ocx config set hub.dataPublicOrigin` 줄(그리고 이번 초대에만 적용하는 `--data-url` 형태)을 출력합니다. 명시한 `--data-url`이나 `hub.dataPublicOrigin`은 되묻지 않습니다. SSH 터널에서는 루프백 데이터 Origin이 정당합니다.
@@ -284,9 +299,16 @@ ocx config set oauthOpenBrowser false
 ## 키 교체와 연결 해제
 
 ```bash
-ocx connect rotate --pairing-code-stdin
-# HTTPS에서만:
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 기존 키와 새 키는 같은 `apiKeyId`로 최대 10분 동안 함께 유효합니다. 클라이언트는 기존 키를 `service-api-token.prev`에 백업하고, 새 키를 원자적으로 적용해 `/v1/catalog`로 확인한 다음 확정합니다. 결과가 불확실하면 임시 권한을 다시 넣어 같은 명령을 실행하세요. 현재 파일과 `.prev`를 모두 확인한 뒤 확정하거나 복원합니다.

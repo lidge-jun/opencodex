@@ -42,9 +42,16 @@ accepts inclusive values from 1 through 120,000 milliseconds.
 Computer 1 owns every coding-agent login and model session. Install and log in to whichever agents
 you want to use there, then run OpenCodex as a Hub:
 
+Keep the Hub running in the foreground in this terminal:
+
 ```bash
 ocx config set runtimeRole hub
 OCX_REMOTE_WORKSPACE_ENABLED=1 ocx start
+```
+
+While the Hub is running, open a second terminal and launch the dashboard:
+
+```bash
 ocx gui
 ```
 
@@ -106,19 +113,42 @@ trust changes. Those remain the separate dashboard/session workflows below.
 The equivalent manual flow is:
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
-printf '%s\n' 'ONE-TIME-CODE' | ocx remote-workspace pair 'https://your-hub.example' \
-  --pairing-code-stdin --root "$PWD"
-ocx remote-workspace agent
+if read -r -s -p 'Pairing code: ' pairing_code; then
+  printf '\n'
+  pairing_status=0
+  printf '%s\n' "$pairing_code" | ocx remote-workspace pair 'https://your-hub.example' \
+    --pairing-code-stdin --root "$PWD" || pairing_status=$?
+  unset pairing_code
+  if [ "$pairing_status" -eq 0 ]; then ocx remote-workspace agent; fi
+  unset pairing_status
+else
+  unset pairing_code
+fi
 ```
 
 On Windows PowerShell, use the command shown in the dashboard. The equivalent manual form is:
 
 ```powershell
-$pairingCode = 'ONE-TIME-CODE'
-$pairingCode | ocx remote-workspace pair 'https://your-hub.example' `
-  --pairing-code-stdin --root (Get-Location).Path
-if ($LASTEXITCODE -eq 0) { ocx remote-workspace agent }
+$pairingSecret = Read-Host 'Pairing code' -AsSecureString
+$pairingBuffer = [IntPtr]::Zero
+$pairingExitCode = 1
+try {
+  $pairingBuffer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pairingSecret)
+  $pairingCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pairingBuffer)
+  $pairingCode | ocx remote-workspace pair 'https://your-hub.example' `
+    --pairing-code-stdin --root (Get-Location).Path
+  $pairingExitCode = $LASTEXITCODE
+} finally {
+  if ($pairingBuffer -ne [IntPtr]::Zero) {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pairingBuffer)
+  }
+  $pairingSecret.Dispose()
+  Remove-Variable pairingCode, pairingSecret, pairingBuffer -ErrorAction SilentlyContinue
+}
+if ($pairingExitCode -eq 0) { ocx remote-workspace agent }
+Remove-Variable pairingExitCode
 ```
 
 The current OCX Bun executable is added as one read-only file to the Linux sandbox automatically. If
@@ -126,9 +156,17 @@ the project needs a user-installed toolchain outside the system paths, pair it e
 exposing the rest of the home directory:
 
 ```bash
-printf '%s\n' 'ONE-TIME-CODE' | ocx remote-workspace pair 'https://your-hub.example' \
-  --pairing-code-stdin --root "$PWD" \
-  --toolchain-root "$HOME/.nvm/versions/node/v24/bin"
+# Bash only: if using zsh, run bash first in this terminal.
+if read -r -s -p 'Pairing code: ' pairing_code; then
+  printf '\n'
+  pairing_status=0
+  printf '%s\n' "$pairing_code" | ocx remote-workspace pair 'https://your-hub.example' \
+    --pairing-code-stdin --root "$PWD" \
+    --toolchain-root "$HOME/.nvm/versions/node/v24/bin" || pairing_status=$?
+  unset pairing_code pairing_status
+else
+  unset pairing_code
+fi
 ```
 
 The native helper source is packaged for review. Building it does not enable Windows or macOS

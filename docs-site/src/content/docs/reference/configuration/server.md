@@ -21,7 +21,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | --- | --- | --- | --- |
 | `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
 | `port` | `number` | `10100` | Proxy listen port. |
-| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a data-admission token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token` — nothing has to be exported by hand. See [Remote access](#remote-access). |
+| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a configured client key in `config.apiKeys` or a shared data token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token`. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event and a Vertex AI `MALFORMED_FUNCTION_CALL` failure that arrives before any output. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
@@ -43,7 +43,6 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `metricsExport.enabled?` | `boolean` | `false` | Enable process-local aggregate request metrics at authenticated `GET /api/metrics`. Restart required; disabled mode returns 404 and starts no exporter activity. |
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | Opt-in recovery for the background service: a small sentinel process probes `/healthz` and, when the proxy stays alive but answers nothing for about a minute of back-to-back probes, terminates it so the service manager (Task Scheduler, launchd, systemd, WinSW) restarts it. Only the managed service child starts one; requests the stuck process held are not replayed. At most three recoveries per hour. Restart required. Automatic recovery requires a numeric bind address (or the default localhost/wildcard mapping); DNS bind names are not monitored. A changed recorded address or port stops monitoring. |
 | `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing a ceiling changes the allowance for requests started afterward; requests already running keep their starting policy. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. With an applicable ceiling, dispatch is also refused if its token reservation cannot be booked, including full tracking capacity. Requests without an applicable ceiling remain observe-only. |
-
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `codexDesktopAuthless?` | `boolean` | `false` | Opt-in authless Codex Desktop routing on a loopback bind: inject the dedicated `opencodex` provider with `requires_openai_auth = false` so Desktop opens without a ChatGPT login. Ignored on non-loopback binds. `ocx system settings --desktop-authless on`. See [Codex integration](/guides/codex-integration/#authless-codex-desktop-opt-in). |
@@ -292,8 +291,7 @@ need it.
 
 ## Remote access
 
-The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet
-IP requires token authentication on both `/api/*` and the data plane.
+The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet IP requires a data-admission credential for model requests: a configured client key in `config.apiKeys` or a shared data token. Management routes `/api/*` use the independent `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token, including on loopback. A data credential does not grant management access; never give the admin token to a model client.
 
 You do not have to produce that token. `ocx service install` provisions one on a non-loopback bind,
 in this order: `OPENCODEX_API_AUTH_TOKEN` from the installing shell, then an existing owner-only
@@ -325,15 +323,13 @@ x-opencodex-api-key: your-secret-token
 
 | Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | not accepted | **required** | not accepted |
-| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/responses` | accepted | accepted | not accepted |
+| `/v1/chat/completions` | accepted | accepted | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
-Responses and Chat Completions reserve `Authorization` for possible Codex Direct passthrough, so only
-the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
-environment token after startup; candidates are compared in constant time.
+Responses and Chat Completions accept a recognized data-plane credential in `x-opencodex-api-key` or, when that dedicated header is absent, in `Authorization: Bearer`. A supplied dedicated header takes precedence, even if invalid; a valid bearer does not rescue it. An unrelated bearer is not a proxy admission credential, and `x-api-key` is not accepted on these routes. Dashboard-generated `apiKeys` and the shared data token are compared in constant time; management credentials do not grant model admission.
 
 Messages and `count_tokens` keep accepting all three admission forms for routed-client compatibility. Native
 Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use

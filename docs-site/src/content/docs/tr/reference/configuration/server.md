@@ -12,7 +12,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy dinleme portu. |
-| `hostname?` | `string` | `"127.0.0.1"` | Bağlama adresi. Geri döngü olmayan bağlamalar `OPENCODEX_API_AUTH_TOKEN` gerektirir. |
+| `hostname?` | `string` | `"127.0.0.1"` | Bağlama adresi. Loopback dışında `config.apiKeys` içinde istemci anahtarı veya sırasıyla `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE`, kurulu ve yalnızca sahibinin okuyabildiği `service-api-token` dosyasından çözülen ortak veri token’ı gerekir. [Uzaktan erişime](#remote-access) bakın. |
 | `proxy?` | `string` | — | Giden HTTP(S) veya SOCKS5 proxy URL'si (`socks5://host:port`) ya da `${ENV_VAR}`. HTTP URL'leri değişkenler boşsa `HTTP_PROXY` / `HTTPS_PROXY`'ye yazılır. SOCKS5 URL'leri yerleşik gerçek SOCKS5 tünelini kullanır ve `ALL_PROXY`'ye de yazılır (`ocx start --socks5`); bu süreçte miras `HTTP(S)_PROXY` temizlenir. Geri döngü `NO_PROXY` içinde kalır. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Metin veya araç çağrısı içermeyen bir Responses tamamlamasını aynı istekle bir kez yeniden denemeyi açıkça etkinleştirir. Yeniden deneme ücretlendirilebilir. `OCX_EMPTY_COMPLETION_RETRY=0`, yapılandırmayı değiştirmeden devre dışı bırakır; combo ve routed-compaction turları hariçtir. |
 | `stallTimeoutSec?` | `number` | `300` (public) / kapalı (local) | Akış kesilmeden önce anlamlı üst sunucu ilerlemesi olmadan geçen saniye (Responses ve yerel Chat). Ayarlanmamışsa **yerel** üst sunucu (loopback, private, `.local`/`.lan` adı) için varsayılan kapalı, genel üst sunucu için 300 sn; pozitif değer ikisine de uygulanır (en az 1 sn); `0` sessizlik watchdog'unu her yerde kapatır. Canonical ChatGPT SSE'yi akışsız JSON'a katlayan Responses isteklerinde watchdog kapalı olsa bile bağımsız 15 dakikalık toplam tur sınırı kalır. `/v1/responses/compact` için bekleyen gövde okumaları bu bütçeyi paylaşır ama yerel üst sunucuda bile varsayılan 300 sn'dir; açık değer (`0` dahil) önceliklidir. |
@@ -42,20 +42,18 @@ Komut, geçerli dedicated-provider geçmişi de dahil olmak üzere kullanıcı i
 
 Yerel Chat de üst sunucu çıktısını beklerken `stallTimeoutSec` kullanır. Boş olmayan metin, akıl yürütme, ret içeriği, araç güncellemeleri ve bitiş olayları süreyi yeniler; bağlantıyı canlı tutan yorumlar, yalnızca rol ve yalnızca kullanım bilgileri yenilemez. Yavaş istemcinin okumasını beklemek süreyi duraklatır. Zaman aşımı `upstream_stall_timeout` üretir: akış istemcileri hata olayı, akışsız istemciler HTTP 502 alır. Sonuç tamamlanmadan iptal edilen istek, başarılı bir kısmi yanıt yerine iptal hatası döndürür. Akışsız Chat, LF ve CRLF ayraçlarını ve çok satırlı data alanlarını destekler.
 
+<a id="remote-access"></a>
+
 ## Uzaktan erişim
 
-Varsayılan `127.0.0.1` bağlaması yalnızca geri döngüdür. `0.0.0.0` gibi geri
-döngü olmayan bir adres hem `/api/*` hem de veri düzleminde belirteç kimlik
-doğrulaması gerektirir. Başlamadan önce belirteci dışa aktarın:
+Varsayılan `127.0.0.1` yalnızca loopback’e bağlanır. `0.0.0.0` gibi loopback dışı adreslerde model istekleri `config.apiKeys` içindeki istemci anahtarını veya ortak veri token’ını gerektirir. `/api/*` yönetim yolları loopback’te de ayrı `OPENCODEX_ADMIN_AUTH_TOKEN` ya da oluşturulan yönetici token’ını kullanır. Veri kimlik bilgileri yönetim erişimi sağlamaz; yönetici token’ını model istemcisine vermeyin.
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-Proxy bu değişken olmadan uzak bir bağlamayı reddeder. Bir arka plan servisi
-için launchd, systemd veya Görev Zamanlayıcı'nın alması amacıyla `ocx service
-install`'dan önce dışa aktarın. İstemciler şunu göndermelidir:
+Örnek bir ortam token’ı kullanır. `OCX_API_TOKEN_FILE` veya özel `service-api-token` dosyası zaten token sağlıyorsa ya da geçerli bir istemci anahtarı ayarlıysa dışa aktarma gerekmez. `ocx service install` eksik token dosyasını oluşturabilir; bu değişkenin dışa aktarılması zorunlu değildir. Model istemcileri şunu gönderebilir:
 
 ```text
 x-opencodex-api-key: your-secret-token
@@ -63,16 +61,13 @@ x-opencodex-api-key: your-secret-token
 
 | Uç nokta | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | kabul edilmez | **gerekli** | kabul edilmez |
-| `/v1/chat/completions` | kabul edilmez | **gerekli** | kabul edilmez |
+| `/v1/responses` | kabul edilir | kabul edilir | kabul edilmez |
+| `/v1/chat/completions` | kabul edilir | kabul edilir | kabul edilmez |
 | `/v1/messages` | kabul edilir | kabul edilir | kabul edilir |
 | `/v1/messages/count_tokens` | kabul edilir | kabul edilir | kabul edilir |
 | `/v1/models` | kabul edilir | kabul edilir | kabul edilir |
 
-Responses ve Chat Completions, olası Codex Direct doğrudan geçişi için
-`Authorization`'ı ayırır, bu nedenle orada yalnızca özel kabul başlığı kabul
-edilir. Kontrol paneli tarafından oluşturulan `apiKeys`, başlangıçtan sonra
-ortam belirtecinin yerini alabilir; adaylar sabit zamanda karşılaştırılır.
+Responses ve Chat Completions, tanınan veri düzlemi kimlik bilgisini `x-opencodex-api-key` üzerinden; bu özel başlık yoksa `Authorization: Bearer` üzerinden kabul eder. Özel başlık geçersiz olsa da önceliklidir; geçerli bearer bu reddi gidermez. İlgisiz bearer proxy erişimi vermez ve bu yollar `x-api-key` kabul etmez. Oluşturulan `apiKeys` ve ortak veri token’ı sabit zamanda karşılaştırılır; yönetici kimlik bilgileri model erişimi sağlamaz.
 
 Messages ve `count_tokens`, yönlendirilen istemci uyumluluğu için üç kabul
 formunu da kabul etmeye devam eder. Yerel Anthropic doğrudan geçişi geri döngü

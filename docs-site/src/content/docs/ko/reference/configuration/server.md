@@ -10,7 +10,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
-| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
+| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 비루프백에서는 `config.apiKeys`의 클라이언트 키 또는 `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 소유자 전용 `service-api-token` 순서로 확인한 공유 데이터 토큰이 필요합니다. [원격 접근](#remote-access)을 참고하세요. |
 | `proxy?` | `string` | — | 송신용 HTTP(S) 또는 SOCKS5 프록시 URL(`socks5://host:port`) 또는 `${ENV_VAR}`입니다. HTTP URL은 해당 변수가 비어 있을 때 `HTTP_PROXY` / `HTTPS_PROXY`에 적용됩니다. SOCKS5 URL은 내장 SOCKS5 터널을 사용하고 `ALL_PROXY`에도 적용되며(`ocx start --socks5`), 이 프로세스에서 상속된 `HTTP(S)_PROXY`를 지웁니다. 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Canonical Codex Responses 응답의 선택적 safety-buffering 헤더 두 개와 SSE 힌트를 제거합니다. 공급자의 안전 정책이나 거절 응답은 바뀌지 않습니다. Native WS 메타데이터와 compact는 제외됩니다. |
@@ -42,7 +42,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 
 ## Remote access
 
-기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0`이나 tailnet IP처럼 루프백이 아닌 주소는 `/api/*`와 데이터 플레인 모두에서 토큰 인증이 필요합니다.
+기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0`이나 tailnet IP 같은 비루프백 주소의 모델 요청에는 `config.apiKeys`에 설정한 클라이언트 키 또는 공유 데이터 토큰이 필요합니다. 관리 경로 `/api/*`는 루프백에서도 별도의 `OPENCODEX_ADMIN_AUTH_TOKEN` 또는 생성된 관리자 토큰을 사용합니다. 데이터 자격 증명은 관리 접근을 허용하지 않습니다. 관리자 토큰을 모델 클라이언트에 제공하지 마세요.
 
 토큰을 직접 만들 필요는 없습니다. 루프백이 아닌 바인드에서 `ocx service install`이 다음 순서로 토큰을 준비합니다: 설치하는 셸의 `OPENCODEX_API_AUTH_TOKEN` → 기존 owner-only `service-api-token` 파일 → 무작위 32바이트 새 값. 결과는 `0600`으로 기록되고 실행 래퍼(launchd plist, systemd unit, Windows 래퍼)가 시작할 때 그 파일을 읽으므로, 값이 서비스 정의나 argv에 들어가지 않습니다. 포그라운드 `ocx start`도 같은 우선순위(환경 변수 → `OCX_API_TOKEN_FILE` → 설치된 `service-api-token`)를 적용하므로 토큰을 내보내지 않아도 루프백이 아닌 hostname에 바인드합니다.
 
@@ -63,13 +63,13 @@ x-opencodex-api-key: your-secret-token
 
 | 엔드포인트 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | 허용되지 않음 | **필수** | 허용되지 않음 |
-| `/v1/chat/completions` | 허용되지 않음 | **필수** | 허용되지 않음 |
+| `/v1/responses` | 허용 | 허용 | 허용되지 않음 |
+| `/v1/chat/completions` | 허용 | 허용 | 허용되지 않음 |
 | `/v1/messages` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 
-Responses와 Chat Completions는 `Authorization`을 향후 Codex Direct 패스스루 용도로 예약해 두므로, 여기서는 전용 admission 헤더만 허용됩니다. 대시보드에서 생성한 `apiKeys`는 시작 후 환경 토큰을 대체할 수 있으며, 후보 값은 상수 시간으로 비교합니다.
+Responses와 Chat Completions는 인식된 데이터 플레인 자격 증명을 `x-opencodex-api-key`에서 받으며, 이 전용 헤더가 없을 때는 `Authorization: Bearer`에서도 받습니다. 전용 헤더가 있으면 잘못된 값이어도 우선하므로, 유효한 bearer로 그 거부를 우회할 수 없습니다. 무관한 bearer는 프록시 접근을 허용하지 않으며 이 경로는 `x-api-key`를 받지 않습니다. 생성된 `apiKeys`와 공유 데이터 토큰은 상수 시간으로 비교됩니다. 관리 자격 증명은 모델 접근 권한을 부여하지 않습니다.
 
 Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 admission 형식을 계속 허용합니다. 하지만 비루프백
 바인드의 네이티브 Anthropic 패스스루는 프록시 admission을 `x-opencodex-api-key`로만 받고,

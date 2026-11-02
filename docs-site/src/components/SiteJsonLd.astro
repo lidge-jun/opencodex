@@ -11,17 +11,18 @@
 const SITE_URL = 'https://opencodex.me';
 
 interface Props {
-	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
+	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr' | 'es';
 }
 const { locale } = Astro.props;
 
 // Locale path segment (root/English has none) mapped to its BCP-47 tag.
-const langs = { fr: 'fr', ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja', tr: 'tr' } as const;
+const langs = { es: 'es', fr: 'fr', ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja', tr: 'tr' } as const;
 
 const homeUrl = locale ? `${SITE_URL}/${locale}/` : `${SITE_URL}/`;
 const inLanguage = locale ? langs[locale] : 'en';
 
 const descriptions = {
+	es: "Una única pasarela local para tus herramientas de programación con IA y tus modelos: usa los proveedores que elijas con Codex, Claude Code, Claude Desktop y Grok Build, y conecta más herramientas mediante configuraciones administradas.",
 	en: 'One local gateway for your AI coding tools and models: use the providers you choose with Codex, Claude Code, Claude Desktop and Grok Build, and connect more tools through managed configs.',
 	fr: 'Une passerelle locale unique pour vos outils de code IA et vos modèles : utilisez les fournisseurs de votre choix avec Codex, Claude Code, Claude Desktop et Grok Build, et connectez d’autres outils via des configurations gérées.',
 	ko: 'AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨이: Codex, Claude Code, Claude Desktop, Grok Build에서 원하는 프로바이더를 쓰고, 관리형 설정으로 더 많은 도구를 연결하세요.',

@@ -76,14 +76,15 @@ ocx agent sidecar web --model gpt-5.6-luna
 ocx agent sidecar web --enabled off
 ```
 
-`--enabled off` is the same switch as the Dashboard's Off row: OpenCodex stops running the
-sidecar and the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`,
-which is what lets an MCP search server be the only search path. `--enabled on` removes that
-marker-owned line again. When the save actually moves the switch, the command reports the
-Codex-side write it triggered (`codexWebSearch` in `--json`, a trailing `Codex config:` line
-otherwise) and points at `ocx sync` when it could not happen; a save that leaves the switch
-where it was has nothing to report and prints no `Codex config:` line. The flag works for
-`vision` too.
+For the web-search sidecar, `--enabled off` is the same switch as the dashboard's Off row:
+OpenCodex stops running the sidecar and the Codex integration writes `web_search = "disabled"`
+into `~/.codex/config.toml`, allowing an MCP search server to be the only search path.
+`--enabled on` removes that marker-owned line. A save that actually changes the switch reports
+the attempted native Codex application in `codexWebSearch` with `--json`, or a trailing
+`Codex config:` line otherwise. A successful receipt confirms the rewrite. A saved setting
+whose native application was deferred or refused reports the reason and the applicable next
+step, such as `ocx sync`; inspect that reason before retrying. An unchanged save has no native
+write to report and prints no `Codex config:` line. The enablement flag also works for `vision`.
 
 ### Injection defaults and sidecar runtime settings
 
@@ -467,9 +468,9 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 
 | Alias | Equivalent resource |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
-| `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
+| `ocx logs [filters] [--follow] [--json\|--jsonl\|--events]` | `ocx observe logs` |
+| `ocx usage [--range <today\|1d\|7d\|30d\|all>] [--since <timestamp> --until <timestamp>] [--surface <all\|codex\|claude\|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
+| `ocx usage compare [--range <today\|1d\|7d\|30d>] [--json]` | `ocx observe usage compare` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -567,10 +568,12 @@ maximum; unavailable values fail active speed filters. Protocol none includes
 absent or invalid traces. Conversation matching uses the same hash-aware IDs as
 ordinary logs. Interception selects string-valued rewrite markers.
 
-Unknown/repeated/conflicting flags, invalid bounds, and follow/events fail before
-discovery. Malformed, oversized or failed reads are nonzero, not empty results.
-To reduce response size, reduce the scan limit; reducing output limit does not
-change the fetch. For streaming use the separate follow forms below.
+Unknown, repeated or conflicting flags, invalid bounds, and unsupported follow/events options
+are refused before discovery: they write an error to stderr and exit 2. Operational failures,
+including discovery failures and malformed, oversized, refused or transport-failed reads, write
+an error to stderr and exit 1. These failures are not zero values or empty results.
+To reduce response size, reduce the scan limit; reducing output limit does not change the fetch.
+For streaming use the separate follow forms below.
 
 ### Search usage model rows
 
@@ -808,7 +811,7 @@ about a newly selected key.
 
 Transcription requires a nonempty regular file of at most 25,000,000 bytes with a
 30-second local read limit, and a multipart body capped at 32 MiB. Models are
-gpt-4o-transcribe, gpt-4o-mini-transcribe or whisper-1, subject to target support.
+`gpt-4o-transcribe`, `gpt-4o-mini-transcribe` or `whisper-1`, subject to target support.
 Upload/response share 130 seconds; response is capped at 2 MiB. Success returns
 only `{text}`, including empty text, with exact-key redaction. Failure leaves
 stdout empty and prints fixed stderr/nonzero; no JSON error envelope or raw body.

@@ -133,7 +133,7 @@ describe("docs link targets", () => {
   });
 
   test("locale URLs fall back to English pages, and the old project prefix does not resolve", () => {
-    expect(LOCALES).toEqual(expect.arrayContaining(["fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"]));
+    expect(LOCALES).toEqual(expect.arrayContaining(["es", "fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"]));
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/guides/macos-menu-bar/"))).toBe(true);
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/ko/guides/desktop-app/"))).toBe(true);
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/opencodex/guides/macos-menu-bar/"))).toBe(false);

@@ -82,9 +82,11 @@ en fait le fournisseur par défaut :
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+Conservez les guillemets simples : ils transmettent la référence littéralement, sans placer le secret dans les arguments du processus ni enregistrer sa valeur dans la configuration. Fournissez `ANTHROPIC_API_KEY` au proxy avant son démarrage et aux commandes qui résolvent les identifiants, comme la synchronisation des modèles. Un export ultérieur dans un autre terminal ne modifie pas un proxy déjà lancé. Pour un service en arrière-plan, configurez son environnement de démarrage puis redémarrez-le ; l’installation du service ne conserve pas automatiquement les variables de fournisseur du terminal.
 
 `ocx provider add` écrit la configuration locale. Ajoutez `--sync` si un proxy est déjà actif et que vous
 souhaitez synchroniser immédiatement les modèles avec Codex ; sinon, exécutez `ocx sync` ultérieurement.
@@ -104,17 +106,11 @@ le routage persistant et le comportement de basculement.
 
 ## Liaisons à distance et LAN
 
-La liaison de bouclage par défaut n’exige aucun identifiant du plan de données. Une liaison hors bouclage,
-telle que `0.0.0.0`, exige soit `OPENCODEX_API_AUTH_TOKEN`, soit au moins une entrée `apiKeys` configurée.
-L’installation du service exige spécifiquement `OPENCODEX_API_AUTH_TOKEN` et l’enregistre pour le processus
-du service. Définissez donc cette variable avant `ocx service install` :
+Les routes de modèle locales en bouclage n’exigent pas de token de données. Une liaison hors bouclage, telle que `0.0.0.0`, exige une clé client configurée dans `config.apiKeys` ou un token partagé provenant de `OPENCODEX_API_AUTH_TOKEN`, de `OCX_API_TOKEN_FILE` ou du fichier privé `service-api-token`. `ocx service install` peut créer ce fichier s’il est absent. Si vous fournissez un token par variable d’environnement, définissez-la avant `ocx start` ou `ocx service install` :
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-Les requêtes de modèle `/v1/*` utilisent cet identifiant propre au plan de données. Les requêtes de contrôle
-`/api/*` exigent l’identifiant administrateur distinct décrit dans l’[API de gestion](/fr/reference/management-api/)
-et ne doivent jamais réutiliser un identifiant du plan de données. Consultez aussi les règles d’accès à
-distance dans [Configuration](/fr/reference/configuration/) avant d’exposer OpenCodex au-delà de la machine locale.
+Les requêtes de modèle utilisent les identifiants du plan de données. La gestion utilise un identifiant indépendant : `OPENCODEX_ADMIN_AUTH_TOKEN` ou le token administrateur généré dans un fichier protégé. Un token de données ne donne aucun accès de gestion. Le tableau de bord suit les règles de session et d’accès de l’[API de gestion](/fr/reference/management-api/#authentication-model). Ne donnez jamais le token administrateur à un client de modèle. Consultez l’[accès à distance](/fr/reference/configuration/server/#remote-access) avant d’exposer le proxy hors de la machine locale.

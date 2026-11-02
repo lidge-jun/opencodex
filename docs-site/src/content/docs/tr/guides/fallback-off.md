@@ -103,7 +103,7 @@ aktarıcısı ise `502` döndürür:
 { "error": "link tunnel unavailable", "code": "home_unreachable", "message": "The Home is unreachable, and OpenCodex did not serve this request from this device's local providers. …" }
 ```
 
-Yerel sağlayıcıya hiçbir şey gönderilmez; bağlantı anahtarı ve istek gövdesi cihazdan çıkmaz.
+Yerel sağlayıcıya hiçbir şey gönderilmez. Hata yönlendirme başlamadan önce oluşursa bağlantı anahtarı ve istek gövdesi cihazdan çıkmaz. Yönlendirme başladıysa Home isteği almış veya işlemiş olabilir; sonuç belirsizdir. Yeniden denemeden önce Home’daki durumu kontrol edin. OpenCodex gönderilmeye başlanmış isteği otomatik olarak tekrarlamaz.
 
 ### Cihaz ayarları
 

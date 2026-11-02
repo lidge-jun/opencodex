@@ -23,9 +23,16 @@ Executor에는 opencodex만 필요합니다. Codex, Claude Code, Pi, ChatGPT 로
 
 컴퓨터 1이 모든 코딩 에이전트 로그인과 모델 세션을 소유합니다. 사용할 에이전트를 이 컴퓨터에 설치하고 로그인한 뒤 opencodex를 Hub로 실행하세요.
 
+이 터미널에서 Hub를 포그라운드로 계속 실행합니다.
+
 ```bash
 ocx config set runtimeRole hub
 OCX_REMOTE_WORKSPACE_ENABLED=1 ocx start
+```
+
+Hub를 실행한 상태에서 다른 터미널을 열고 대시보드를 시작합니다.
+
+```bash
 ocx gui
 ```
 
@@ -45,27 +52,58 @@ Codex 원격 작업 공간은 현재 App Server 권한 프로필을 사용합니
 같은 작업을 수동으로 하려면 다음을 실행하세요.
 
 ```bash
+# Bash only: if using zsh, run bash first in this terminal.
 cd /path/to/project
-printf '%s\n' 'ONE-TIME-CODE' | ocx remote-workspace pair 'https://your-hub.example' \
-  --pairing-code-stdin --root "$PWD"
-ocx remote-workspace agent
+if read -r -s -p 'Pairing code: ' pairing_code; then
+  printf '\n'
+  pairing_status=0
+  printf '%s\n' "$pairing_code" | ocx remote-workspace pair 'https://your-hub.example' \
+    --pairing-code-stdin --root "$PWD" || pairing_status=$?
+  unset pairing_code
+  if [ "$pairing_status" -eq 0 ]; then ocx remote-workspace agent; fi
+  unset pairing_status
+else
+  unset pairing_code
+fi
 ```
 
 Windows PowerShell에서는 대시보드에 표시되는 명령을 사용하세요. 수동 명령은 다음과 같습니다.
 
 ```powershell
-$pairingCode = 'ONE-TIME-CODE'
-$pairingCode | ocx remote-workspace pair 'https://your-hub.example' `
-  --pairing-code-stdin --root (Get-Location).Path
-if ($LASTEXITCODE -eq 0) { ocx remote-workspace agent }
+$pairingSecret = Read-Host 'Pairing code' -AsSecureString
+$pairingBuffer = [IntPtr]::Zero
+$pairingExitCode = 1
+try {
+  $pairingBuffer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pairingSecret)
+  $pairingCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pairingBuffer)
+  $pairingCode | ocx remote-workspace pair 'https://your-hub.example' `
+    --pairing-code-stdin --root (Get-Location).Path
+  $pairingExitCode = $LASTEXITCODE
+} finally {
+  if ($pairingBuffer -ne [IntPtr]::Zero) {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pairingBuffer)
+  }
+  $pairingSecret.Dispose()
+  Remove-Variable pairingCode, pairingSecret, pairingBuffer -ErrorAction SilentlyContinue
+}
+if ($pairingExitCode -eq 0) { ocx remote-workspace agent }
+Remove-Variable pairingExitCode
 ```
 
 현재 OCX Bun 실행 파일은 Linux 샌드박스에 읽기 전용 파일 하나로 자동 추가됩니다. 프로젝트에 시스템 경로 밖에 사용자 설치 도구 체인이 필요하다면 홈 디렉터리 전체를 노출하지 말고 명시적으로 페어링하세요.
 
 ```bash
-printf '%s\n' 'ONE-TIME-CODE' | ocx remote-workspace pair 'https://your-hub.example' \
-  --pairing-code-stdin --root "$PWD" \
-  --toolchain-root "$HOME/.nvm/versions/node/v24/bin"
+# Bash only: if using zsh, run bash first in this terminal.
+if read -r -s -p 'Pairing code: ' pairing_code; then
+  printf '\n'
+  pairing_status=0
+  printf '%s\n' "$pairing_code" | ocx remote-workspace pair 'https://your-hub.example' \
+    --pairing-code-stdin --root "$PWD" \
+    --toolchain-root "$HOME/.nvm/versions/node/v24/bin" || pairing_status=$?
+  unset pairing_code pairing_status
+else
+  unset pairing_code
+fi
 ```
 
 네이티브 헬퍼 소스는 검토할 수 있도록 패키지에 포함됩니다. 빌드해도 이번 변경에서 Windows나 macOS 명령이 활성화되지는 않습니다. `--executor-helper`는 검토된 헬퍼를 선택하는 옵션입니다. 바이너리가 존재하거나 경로가 설정되어 있다는 사실만으로 명령 지원이 입증되지는 않습니다.

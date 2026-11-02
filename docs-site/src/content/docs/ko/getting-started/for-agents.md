@@ -56,9 +56,11 @@ ocx health --json
 
 ```bash
 ocx provider add anthropic-apikey \
-  --api-key "$ANTHROPIC_API_KEY" \
+  --api-key '${ANTHROPIC_API_KEY}' \
   --set-default
 ```
+
+작은따옴표를 유지하세요. 참조를 그대로 전달하므로 비밀 값이 프로세스 인수나 설정 파일에 들어가지 않습니다. `ANTHROPIC_API_KEY`를 프록시 시작 전에 시작 환경에 설정하고, 모델 동기화처럼 자격 증명을 해석하는 CLI 프로세스에도 제공하세요. 나중에 다른 터미널에서 export해도 실행 중인 프록시는 갱신되지 않습니다. 백그라운드 서비스는 시작 환경을 설정한 뒤 재시작하세요. 서비스 설치만으로 터미널의 임의 공급자 변수가 보존되지는 않습니다.
 
 `ocx provider add`는 로컬 설정을 기록합니다. 라이브 프록시가 이미 실행 중이고 모델을 즉시 Codex와 동기화하려면 `--sync`를 추가하세요. 그렇지 않으면 나중에 `ocx sync`를 실행하면 됩니다. 레지스트리에 없는 커스텀 공급자는 `--adapter`와 `--base-url`이 모두 필요합니다.
 
@@ -74,11 +76,11 @@ ocx combo set main \
 
 ## 원격 및 LAN 바인드
 
-기본 루프백 바인드에는 API 토큰이 필요하지 않습니다. `0.0.0.0` 같은 비루프백 바인드는 `OPENCODEX_API_AUTH_TOKEN`이 필요하며, 이 토큰이 없으면 프록시가 시작을 거부합니다. `ocx start`를 실행하기 전에, 또는 `ocx service install`을 실행하기 전에 변수를 설정해야 서비스가 이를 전달받습니다:
+일반적인 루프백 모델 경로에는 데이터 토큰이 필요하지 않습니다. `0.0.0.0` 같은 비루프백 바인드에는 `config.apiKeys`에 설정한 클라이언트 키나 `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE`, 소유자만 읽을 수 있는 `service-api-token` 파일에서 확인한 공유 토큰이 필요합니다. 파일이 없으면 `ocx service install`이 생성할 수 있습니다. 환경 변수로 토큰을 제공한다면 `ocx start` 또는 `ocx service install` 전에 설정하세요:
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-그다음 클라이언트는 관리 요청과 모델 요청을 인증해야 합니다. 로컬 머신 밖으로 opencodex를 노출하기 전에 원격 액세스 규칙은 [Configuration](/reference/configuration/)에서 확인하세요.
+모델 요청에는 데이터 플레인 인증을 사용합니다. 관리에는 별도 자격 증명인 `OPENCODEX_ADMIN_AUTH_TOKEN` 또는 보호된 파일에 생성된 관리자 토큰을 사용합니다. 데이터 토큰은 관리 접근 권한을 부여하지 않습니다. 대시보드는 [관리 API](/ko/reference/management-api/#authentication-model)의 세션 및 접근 규칙을 따릅니다. 관리자 토큰을 모델 클라이언트에 제공하지 마세요. 외부에 공개하기 전에 [원격 접근](/ko/reference/configuration/server/#remote-access)을 확인하세요.

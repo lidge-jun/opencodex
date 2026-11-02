@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
 
-const locales = ["", "fr/", "ja/", "ko/", "ru/", "tr/", "zh-cn/", "zh-tw/"] as const;
+const locales = ["", "es/", "fr/", "ja/", "ko/", "ru/", "tr/", "zh-cn/", "zh-tw/"] as const;
 
 test("each integration guide explains GJC reasoning export", async () => {
   for (const locale of locales) {

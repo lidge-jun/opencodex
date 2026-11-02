@@ -52,10 +52,24 @@ back, `ocx restore back` re-points Codex at the proxy.
 
 **Or bring the proxy back instead:**
 
+In one terminal, start the foreground proxy and leave that terminal open:
+
 ```bash
 ocx start
-ocx service install   # keep it running across restarts
 ```
+
+In a second terminal, confirm that `ocx ready --json` reports `ready: true` before installing the service. Then repeat the checks to verify the resulting service:
+
+```bash
+ocx ready --json
+ocx status --json
+ocx service install   # keep it running across restarts
+ocx ready --json
+ocx status --json
+ocx service status --json
+```
+
+An explicit service install stops the tracked foreground proxy before starting the managed service, so the first terminal may exit during installation. It refuses installation if that cleanup cannot be completed safely, then checks that an OpenCodex runtime answers on the installed service port. The pre-install readiness check only verifies the foreground proxy; use the post-install readiness, proxy status and service status together to check the handover.
 
 `ocx status` reports whether the proxy is answering and whether Codex is
 currently routed through it. `ocx doctor` explains the same state in more

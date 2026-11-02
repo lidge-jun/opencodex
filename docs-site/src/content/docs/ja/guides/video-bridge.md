@@ -18,15 +18,13 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 >
 > ```json
 > {
->   「プロバイダー」: {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>   "providers": {
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> `ocx login xai` (OAuth) 経由でオンボードした場合、プロバイダーは `authMode: "oauth"` のままになります。
-> ブリッジは静かに起動しません。 **または**環境で`XAI_API_KEY`を設定します
-> 上に示したようにキーをハードコーディングします。
+> `ocx login xai`（OAuth）で設定した場合、プロバイダーは `authMode: "oauth"` のままで、ブリッジは有効になりません。環境変数 `XAI_API_KEY` を設定し、上の `${XAI_API_KEY}` 参照を維持して、`authMode: "key"` を明示的に指定してください。キーをコミット、ログ、共有レポートに直接記載しないでください。
 
 ## 構成
 

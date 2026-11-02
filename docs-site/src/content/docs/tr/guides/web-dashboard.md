@@ -22,6 +22,11 @@ sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
 ocx start
+```
+
+Proxy bu terminalde çalışmaya devam etsin. İkinci bir terminalde GUI geliştirme sunucusunu başlatın:
+
+```bash
 bun run dev:gui
 ```
 

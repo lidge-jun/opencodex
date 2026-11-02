@@ -75,9 +75,11 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 非ループバックの例:
 
+これはリモートクライアントを手動で設定する例です。先に TLS フロントエンドを設定し、その HTTPS URL を使ってください。OpenCodex は TLS を終端せず、`ocx opencode` もその URL を自動検出しません。LAN 上でも平文 HTTP では転送中の認証情報が露出します。代わりにプロキシをループバックにバインドし、ローカル SSH トンネルを使うこともできます。[データリスナーの TLS](/ja/guides/remote-hub/#giving-the-data-listener-tls) を参照してください。
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

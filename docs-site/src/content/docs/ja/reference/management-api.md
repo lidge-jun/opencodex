@@ -7,6 +7,8 @@ Management API は opencodex のコントロール プレーンです。 `http:/
 
 対話型クライアントには [ウェブダッシュボード](/guides/web-dashboard/) を使用するか、自動化を構築する場合はこのリファレンスを使用します。永続値は最終的に [構成](/reference/configuration/) に従います。
 
+<a id="authentication-model"></a>
+
 ## 認証モデル
 
 Management API には、データプレーン API キーとは独立した独自の管理者資格情報があります。起動時に、opencodex は次の順序で解決します。

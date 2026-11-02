@@ -130,12 +130,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-Pour un proxy joignable sur le réseau, pointez `base_url` vers l’adresse que `grok` peut réellement
-joindre et utilisez votre jeton d’entrée :
+Configurez un frontal TLS avant de fournir le jeton et utilisez son URL HTTPS, ou passez par un tunnel local sur l’interface de bouclage. Grok enregistre la valeur littérale de `api_key` dans `~/.grok/config.toml` : limitez l’accès à ce fichier et excluez-le du contrôle de version et des sauvegardes partagées.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

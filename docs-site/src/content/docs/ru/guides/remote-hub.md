@@ -12,7 +12,13 @@ Remote Hub хранит учётные данные провайдеров, ка
 `standalone` объединяет всё на одной машине; `hub` владеет секретами и статистикой; `client` хранит только состояние подключения и отдельный ключ данных.
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -66,6 +72,8 @@ tailscale serve status
 
 `/healthz` подтверждает только работу процесса. Проверьте также `/readyz`, авторизованный `GET /v1/catalog` и реальный ответ модели. Собственный TLS-прокси должен использовать `tailscale cert hub-name.tailnet-name.ts.net` и проксировать только на `127.0.0.1:10101`. Не подделывайте `Tailscale-User-*`; без доверенной идентификации используйте одноразовое pairing.
 
+<a id="giving-the-data-listener-tls"></a>
+
 ### TLS для слушателя данных
 
 Показанное выше сопоставление Serve публикует только **управляющий** вход. Он никогда не отдаёт `/v1/*`, `/healthz` и `/readyz`, поэтому сам по себе не даёт удалённому клиенту работоспособного плана данных. opencodex к тому же не терминирует TLS: слушатель работает по открытому HTTP, а HTTPS всегда обеспечивает фронтенд на стороне оператора.
@@ -86,9 +94,13 @@ Serve принимает ограниченный набор HTTPS-портов;
 Затем подключайтесь, указывая оба origin по отдельности. Позиционный URL — это origin **данных**, именно оттуда берутся `/readyz` и `/v1/catalog`; `--management-url` — origin панели, который используется для pairing и выдачи ключа. Совпадение портов не требуется:
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the management admin token without echoing it.
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --admin-token-stdin
+unset admin_token
 ```
 
 Если `--management-url` опущен, он берётся из ответа `/readyz`, который сообщает `hub.managementPublicOrigin`. Когда origin различаются, указать его явно понятнее.
@@ -102,10 +114,16 @@ ocx connect https://hub-name.tailnet-name.ts.net:8443 \
 ## OAuth, ротация и отключение
 
 ```bash
-ocx config set oauthOpenBrowser false
-ocx connect rotate --pairing-code-stdin
-# только HTTPS:
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 OAuth запускается через `POST /api/oauth/login`. Если callback недоступен, передайте итоговый URL или код как `{provider,input}` в `POST /api/oauth/login/code`. Не помещайте код в argv или логи.

@@ -93,10 +93,7 @@ On start, opencodex:
   Codex's model catalog**,
 - listens on `http://localhost:<port>/v1`.
 
-If the requested port is busy, `ocx start` stops and tells you what holds it: run `ocx stop` first
-when the holder is an opencodex, or start on a free port with `ocx start --port <port>`. It does not
-move to another port by itself — that is what used to leave two proxies running with Codex pointed
-at the newer one.
+A live opencodex instance using the same `OPENCODEX_HOME` prevents a second start, even on a free port. Stop that instance first with `ocx stop`, or use a separate `OPENCODEX_HOME` for an independent instance. If an unrelated process holds the requested port, `ocx start` identifies it; choose a free port with `ocx start --port <port>`. It never changes ports automatically, which avoids leaving two proxies running with Codex pointed at the newer one.
 
 Check it:
 
@@ -177,11 +174,7 @@ OpenAI-compatible base URL `http://localhost:10100/v1` or the Anthropic base URL
 
 ## Choose sub-agent models (optional)
 
-A fresh config features five native models in Codex's sub-agent picker: `gpt-5.5`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-6-astra`. Open `ocx gui` to replace or
-reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model
-and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and
-understand when guidance, native defaults, and fallback apply.
+A fresh config includes `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` in Codex's sub-agent picker. Open `ocx gui` to replace or reorder up to five native or routed models. The dashboard can also set one preferred sub-agent model and reasoning effort. See [Sub-agent Surface](/guides/sub-agent-surface/) to choose v1/base/v2 and understand when guidance, native defaults, and fallback apply.
 
 ## Logging in instead of pasting a key
 

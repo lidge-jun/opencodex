@@ -22,14 +22,12 @@ job to xAI, polls until completion, and downloads the result.
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> If you onboarded via `ocx login xai` (OAuth), the provider stays in `authMode: "oauth"`
-> and the bridge silently won't activate. Set `XAI_API_KEY` in the environment **or**
-> hard-code the key as shown above.
+> If you onboarded via `ocx login xai` (OAuth), the provider remains in `authMode: "oauth"` and the bridge does not activate. Set `XAI_API_KEY` in the environment, keep the `${XAI_API_KEY}` reference shown above, and explicitly select `authMode: "key"`. Keep literal keys out of commits, logs, and shared reports.
 
 ## Configuration
 
@@ -78,7 +76,7 @@ The `video_gen` tool accepts:
 
 - **xAI only**: Video generation is only available through xAI's Grok Imagine Video API
 - **Asynchronous**: Video generation takes 30-120 seconds
-- **Cost**: Video generation is a paid xAI feature (~$0.05/sec @480p, ~$0.07/sec @720p)
+- **Cost**: video generation is a paid xAI feature. Check the [official pricing](https://docs.x.ai/developers/pricing) before using it.
 - **One video per call**: Each `video_gen` call produces one video
 - **Coexists with Image Bridge**: Both bridges can be enabled simultaneously
 - **Web search priority**: When a web search sidecar is active for a turn (non-`runTurn` adapter), the video bridge is skipped — the two cannot run concurrently. A `console.warn` is emitted so you can detect this in logs.

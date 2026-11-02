@@ -3,7 +3,7 @@ title: Pi
 description: 在 Pi 中使用任意已路由模型 - `ocx export` 会为 Pi 的 `models.json` 写入一个自定义 provider 块，并连接到正在运行的代理。
 ---
 
-Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 opencodex 不会启动它。相反，`ocx export` 会序列化 `opencodex` provider 块 - 基础 URL、模型列表，以及 Pi 会插值的 env 引用 - 然后你把它合并到自己的配置中。
+Pi 从单个全局 JSON 文件读取提供商。opencodex 不会启动 Pi；`ocx export` 输出 `opencodex` 提供商块，其中包含基础 URL、模型列表和非秘密的本地密钥占位符。请将其合并到现有配置中。
 
 ## 快速开始
 
@@ -11,10 +11,15 @@ Pi 从一个全局 JSON 文件而不是环境变量中读取 providers，所以 
 
 ```bash
 ocx start
+```
+
+保持此进程运行。在另一个终端中输出配置：
+
+```bash
 ocx export --client pi
 ```
 
-输出会先显示 JSON，然后打印目标路径、合并警告、env 导出行，以及有多少模型带有权威上下文窗口限制。
+JSON 之后会显示目标路径、合并警告、回环使用提示，以及具有已确认上下文限制的模型数量。此导出仅支持无需认证的回环代理，不会配置远程访问认证。
 
 ```json
 {
@@ -22,7 +27,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -68,22 +73,7 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## 准入密钥
 
-这里有两个很容易混淆的 key，但这个文件里只会出现第一个：
-
-| Key | 它是什么 | 它存放在哪里 |
-| --- | --- | --- |
-| 代理准入密钥 | opencodex 自己的凭据，在仪表盘的 **API** 选项卡中生成 | 通过 `apiKey` 以 `$OPENCODEX_API_KEY` 形式引用；实际值保存在你的环境中 |
-| Provider key | 你的 Anthropic / OpenAI / OpenRouter key | opencodex 自己的配置中，见 [Providers](/guides/providers/) |
-
-导出的配置只包含引用，从不包含 secret。Pi 会插值裸的 `$NAME`，所以变量是：
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-这个名字只属于 Pi。opencode 使用不同的变量（`OPENCODEX_OPENCODE_API_KEY`，以 `{env:…}` 形式出现） - 见 [opencode 指南](/guides/opencode/)。
-
-**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以 `$OPENCODEX_API_KEY` 引用是无效的，你可以不设置这个变量。它只在 `hostname` 超出回环范围时才有意义，而这也是代理会在没有 token 的情况下拒绝启动的时候 - 见 [远程访问](/zh-cn/reference/configuration/server/#远程访问)。
+导出的 `apiKey` 是非秘密占位符 `opencodex-loopback`，无需导出密钥环境变量。导出器只允许无需认证的回环代理，会拒绝远程代理或受令牌保护的代理。提供商凭证保留在 opencodex 配置中，参见[提供商](/zh-cn/guides/providers/)；不要把上游提供商密钥放入此 Pi 配置块。远程访问应使用支持代理访问凭证的集成。修改占位符不会启用 Pi 的远程导出。
 
 ## 模型元数据
 
@@ -91,7 +81,11 @@ export OPENCODEX_API_KEY=<your key>
 
 输出上限使用目录或生成元数据中已知的模型上限，仅在未知时回退到 `32000`。输出上限始终不超过 context window；已知低于 `32000` 的上限也会保留。
 
-有两个字段是刻意省略的。`cost` 需要全部四个价格字段，而 opencodex 没有已路由模型的价格数据 - 如果输出 0，会等于断言所有模型都是免费的。`reasoning` 在 Pi 里是一个布尔值，而目录里是一个 effort 层级，把二者互相映射只能是猜测。
+`cost` 有意省略：它要求完整的四个价格字段，而 opencodex 没有路由模型的价格数据。输出零会误称所有模型都免费。
+
+当目录的 effort 层级**非空**时，导出 `"reasoning": true`；层级缺失或显式为空时则不声明推理支持。`thinkingLevelMap` 用 `null` 隐藏没有已声明目标的 Pi 层级，防止显示或发送列表之外的值。若声明了 `ultra` 而没有 `max`，则把 Pi 的 `max` 映射到 `ultra`。需要其他映射时，请按 Pi 文档手动修改 `thinkingLevelMap`。
+
+`reasoning` 是从目录派生的 Pi 界面元数据，不证明上游原生支持推理参数。实际 `reasoning_effort` 取决于适配器和模型，可被透传、转换、限制、模拟或省略（例如 `noReasoningModels`）。此布尔值只决定 Pi 是否提供该控件。
 
 ## Schema 状态
 

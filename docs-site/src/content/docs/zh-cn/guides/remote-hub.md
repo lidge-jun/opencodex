@@ -12,7 +12,13 @@ Remote Hub 将提供商凭据、模型目录和使用记录保存在一台主机
 `standalone` 在一台机器上运行全部功能；`hub` 保存提供商密钥和使用记录；`client` 只保存连接状态和专属数据密钥。
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -65,6 +71,8 @@ tailscale serve status
 
 `/healthz` 只证明进程存活。还必须验证 `/readyz`、经过身份验证的 `GET /v1/catalog` 和一次真实模型响应。管理端口只能监听 `127.0.0.1`。自建 TLS 代理应使用 `tailscale cert hub-name.tailnet-name.ts.net`，并仅代理到 `127.0.0.1:10101`。不要伪造 `Tailscale-User-*`；没有可信身份时请使用一次性配对。
 
+<a id="giving-the-data-listener-tls"></a>
+
 ### 为数据监听器提供 TLS
 
 上面的 Serve 映射只发布**管理**入口。该入口从不提供 `/v1/*`、`/healthz` 或 `/readyz`，因此仅凭它并不能让远程客户端获得可用的数据平面。opencodex 自身也不终结 TLS：监听器是明文 HTTP，HTTPS 始终由运维方自建的前端负责。
@@ -85,9 +93,13 @@ Serve 只接受有限的几个 HTTPS 端口。请用 `tailscale serve status` �
 连接时把两个 origin 分开写。位置参数 URL 是**数据** origin，`/readyz` 和 `/v1/catalog` 都从这里获取；`--management-url` 是用于配对和密钥签发的控制台 origin。两者不必共用端口：
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the management admin token without echoing it.
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --admin-token-stdin
+unset admin_token
 ```
 
 省略 `--management-url` 时，它取自 `/readyz` 响应，而该响应报告的正是 `hub.managementPublicOrigin`。两个 origin 不同时，显式写出更清楚。
@@ -101,10 +113,16 @@ Serve 就绪后，请针对 HTTPS 数据 origin 重新执行验收检查：`/rea
 ## OAuth、密钥轮换与断开
 
 ```bash
-ocx config set oauthOpenBrowser false
-ocx connect rotate --pairing-code-stdin
-# 仅限 HTTPS：
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 通过 `POST /api/oauth/login` 启动 OAuth。如果回调无法到达 hub，将最终 URL 或授权码作为 `{provider,input}` 发送到 `POST /api/oauth/login/code`。不要把 OAuth 码放入 argv 或日志。

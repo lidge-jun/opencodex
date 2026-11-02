@@ -60,4 +60,36 @@ test("contributor docs report the test and shipped Bun pins from package.json", 
     const versions = /The suite uses Bun (\d+\.\d+\.\d+) \([^)]*testRunnerBun[^)]*\) while the shipped runtime is (\d+\.\d+\.\d+)\./.exec(text);
     expect(versions?.slice(1)).toEqual([pkg.testRunnerBun, pkg.dependencies.bun]);
   }
+  const spanish = await Bun.file(repoPath("docs-site/src/content/docs/es/contributing.md")).text();
+  const versions = /La suite usa Bun (\d+\.\d+\.\d+),[^\n]*entorno de ejecución distribuido es (\d+\.\d+\.\d+)\./.exec(spanish);
+  expect(versions?.slice(1)).toEqual([pkg.testRunnerBun, pkg.dependencies.bun]);
+});
+
+test("architecture transport notes identify the current bundle and historical runtime", async () => {
+  const pkg = await Bun.file(repoPath("package.json")).json();
+  for (const [path, statement] of [
+    ["reference/architecture.md", /current package bundles Bun \*\*(\d+\.\d+\.\d+)\*\*/],
+    ["es/reference/architecture.md", /paquete actual incluye Bun \*\*(\d+\.\d+\.\d+)\*\*/],
+    ["fr/reference/architecture.md", /package actuel inclut Bun \*\*(\d+\.\d+\.\d+)\*\*/],
+    ["ko/reference/architecture.md", /현재 패키지에는 Bun \*\*(\d+\.\d+\.\d+)\*\*/],
+  ] as const) {
+    const text = await Bun.file(repoPath(`docs-site/src/content/docs/${path}`)).text();
+    expect(statement.exec(text)?.[1], path).toBe(pkg.dependencies.bun);
+    expect(text, path).not.toMatch(/Bundled Bun 1\.3\.14|El Bun 1\.3\.14 incluido/);
+  }
+});
+
+test("Windows memory guidance reports the shipped runtime in every current-bundle statement", async () => {
+  const pkg = await Bun.file(repoPath("package.json")).json();
+  const cases = [
+    ["troubleshooting/windows-memory.md", /current package bundles Bun\s*\**(\d+\.\d+\.\d+)/g],
+    ["es/troubleshooting/windows-memory.md", /(?:paquete actual incluye Bun|incluye Bun)\s*\**(\d+\.\d+\.\d+)/g],
+  ] as const;
+  for (const [path, statement] of cases) {
+    const text = await Bun.file(repoPath(`docs-site/src/content/docs/${path}`)).text();
+    const versions = [...text.matchAll(statement)].map(match => match[1]);
+    expect(versions.length, `${path} intro and recovery guidance`).toBe(2);
+    expect(versions, path).toEqual([pkg.dependencies.bun, pkg.dependencies.bun]);
+    expect(text, `${path} historical investigation remains historical`).toContain("1.3.14");
+  }
 });
