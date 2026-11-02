@@ -14,6 +14,28 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function home() { const root = mkdtempSync(join(tmpdir(), "ocx-update-sync-")); roots.push(root); return root; }
 
+test("sync child accepts only a matching parent-held mutex", () => {
+  const root = home(), lock = tryAcquireUpdateSyncMutex(root, "sync");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const script = `import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => 0));`;
+    for (const [heldBy, expected] of [[String(process.pid), 0], [String(process.pid + 1), 1], ["", 1]] as const) {
+      const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], { env: { ...process.env, OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: heldBy, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+      expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: expected });
+    }
+  } finally { lock.release(); }
+}, 45000);
+
+test("a matching parent pid cannot turn an update lease into a sync lease", () => {
+  const root = home(), lock = tryAcquireUpdateSyncMutex(root, "update");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const script = `import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => 0));`;
+    const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], { env: { ...process.env, OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: String(process.pid), npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 7, stderr: expect.stringContaining("update-in-flight") });
+  } finally { lock.release(); }
+}, 15000);
+
 test.skipIf(process.platform === "win32")("legacy Node and Bun update refuse a sync holder before their work", () => {
   const root = home(), config = join(root, "config"), packageRoot = join(root, "node_modules", "@bitkyc08", "opencodex");
   mkdirSync(join(packageRoot, "bin"), { recursive: true }); mkdirSync(config);

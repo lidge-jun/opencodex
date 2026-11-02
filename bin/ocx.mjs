@@ -12,6 +12,7 @@ import { guardedRun, guardedSpawn, guardedSpawnSync, guardedExit, probeProcessAl
 import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
+import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
@@ -1388,6 +1389,7 @@ if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
 }
 
 const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();
+delete inheritedEnv.OCX_SYNC_MUTEX_HELD_BY;
 const desktopPlan = planDesktopCliHandoff({ selfPaths: [fileURLToPath(import.meta.url), process.execPath] });
 if (desktopPlan.kind === "error") {
   if (desktopPlan.issue.startsWith("record-")) {
@@ -1396,6 +1398,18 @@ if (desktopPlan.kind === "error") {
     console.error(`opencodex: Desktop CLI handoff refused (${desktopPlan.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
   }
   process.exit(1);
+}
+let releaseSyncLease = () => {};
+if (process.argv[2] === "sync") {
+  const syncLease = acquireSyncGuard(configDir(), process.argv.slice(2));
+  if (syncLease.kind === "refused") process.exit(syncLease.exit);
+  inheritedEnv.OCX_SYNC_MUTEX_HELD_BY = String(process.pid);
+  let released = false;
+  releaseSyncLease = () => {
+    if (released) return;
+    try { syncLease.release(); released = true; } catch (error) { console.error(`opencodex: sync mutex release failed: ${error.message}`); }
+  };
+  process.once("exit", releaseSyncLease);
 }
 if (desktopPlan.kind === "handoff") {
   const result = await runDesktopCliHandoff(desktopPlan, {
@@ -1406,6 +1420,7 @@ if (desktopPlan.kind === "handoff") {
     process.exit(127);
   }
   if (result.kind === "exit") {
+    releaseSyncLease();
     if (result.signal) {
       relayOwnSignal(result.signal);
     } else {
@@ -1618,6 +1633,7 @@ child.on("error", err => {
 
 child.on("exit", (code, signal) => {
   clearHandlers();
+  releaseSyncLease();
   // Mirror the child's terminating signal/exit code so this launcher's status matches.
   if (signal) {
     relayOwnSignal(signal);

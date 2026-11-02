@@ -11,6 +11,8 @@ import { initializeNodeLauncherContext } from "../../src/cli/launcher-context";
 import { buildNativeClaudeEnv } from "../../src/cli/claude";
 import { observeManagingClis } from "../../src/service/managing-cli";
 import { repoPath } from "../helpers/repo-root";
+import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
+import { createLegacyUpdateSession } from "../../src/update/orchestrated-session.mjs";
 
 // Explicit private fixtures; only temp paths are written by this helper.
 function writeFileSync(path: string, data: Parameters<typeof writeFile>[1]): void {
@@ -234,6 +236,50 @@ function packageFixture() {
 }
 const posixTest = process.platform === "win32" ? test.skip : test;
 const launcher = repoPath("bin", "ocx.mjs");
+posixTest("sync Desktop handoff refuses an update before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const result = spawnSync("node", [launcher, "sync", "--json"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 7, stderr: expect.stringContaining("update-in-flight") });
+    expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    expect(lstatExists(ran)).toBe(false);
+  } finally { lock.release(); }
+}, 15000);
+
+function lstatExists(path: string) { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
+
+posixTest("old Desktop sync stays under launcher mutex until it exits", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\necho ready:$OCX_SYNC_MUTEX_HELD_BY\nread line\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  try {
+    const ready = await new Promise<string>((resolve, reject) => { child.stdout!.once("data", data => resolve(String(data))); child.once("error", reject); child.once("exit", () => reject(Error("target exited before ready"))); });
+    expect(ready.trim()).toBe(`ready:${child.pid}`);
+    const session = createLegacyUpdateSession({ home: fixture.env.OPENCODEX_HOME! });
+    expect(session.start()).toEqual({ ok: false, error: "sync-in-progress" });
+    child.stdin!.end("done\n");
+    expect(await exited).toBe(0);
+  } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
+}, 15000);
+posixTest("sync launcher releases its mutex after forwarding a signal and waiting for Desktop", async () => {
+  const fixture = packageFixture();
+  writeFileSync(fixture.target, "#!/bin/sh\ntrap 'exit 29' TERM\necho ready\nwhile :; do sleep 1; done\n"); chmodSync(fixture.target, 0o700);
+  const child = spawn("node", [launcher, "sync"], { env: { ...fixture.env, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("exit", resolve);
+      child.stdout!.once("data", () => child.kill("SIGTERM"));
+    });
+    expect(code).toBe(29);
+    const lease = tryAcquireUpdateSyncMutex(fixture.env.OPENCODEX_HOME!, "update");
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") lease.release();
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }
+}, 15000);
 posixTest("real Node launcher regenerates proof, forwards argv/stdin, mirrors exit and bypasses Bun lookup", () => {
   const fixture = packageFixture();
   writeFileSync(fixture.target, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconsole.log(JSON.stringify({ argv: process.argv.slice(2), context: JSON.parse(process.env.OCX_NODE_LAUNCH_CONTEXT), stdin: fs.readFileSync(0, 'utf8'), bypass: process.env.OCX_NO_DESKTOP_HANDOFF }));\nprocess.exit(23);\n`);

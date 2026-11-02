@@ -71,6 +71,33 @@ export function inspectUpdateSyncMutex(home) {
   } catch { return "unknown"; }
 }
 
+/** A delegated child may reuse only its live parent's sync lease. */
+export function parentHoldsSyncMutex(home, claimedPid = process.env.OCX_SYNC_MUTEX_HELD_BY) {
+  if (claimedPid !== String(process.ppid)) return false;
+  try {
+    const holder = inspectOwnershipMutationLease(paths(home), { processImage: () => null, lockPath: mutexPath(home) });
+    return holder?.alive === true && holder.record === "complete" && holder.holderKind === "sync" && holder.pid === process.ppid;
+  } catch { return false; }
+}
+
+/** Shared wire format for launcher and Bun sync admission refusals. */
+export function refuseSync(reason, args) {
+  const exit = reason === "sync-in-progress" ? 1 : 7;
+  console.error(reason);
+  if (args.includes("--json")) console.log(JSON.stringify({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit }, fanout: { state: "not-applicable", reason }, children: [] }));
+  return exit;
+}
+
+export function acquireSyncGuard(home, args) {
+  const lease = tryAcquireUpdateSyncMutex(home, "sync");
+  if (lease.kind !== "acquired") return { kind: "refused", exit: refuseSync(lease.holder === "sync" ? "sync-in-progress" : "update-in-flight", args) };
+  if (inspectUpdateMarker(home) !== "free") {
+    lease.release();
+    return { kind: "refused", exit: refuseSync("update-in-flight", args) };
+  }
+  return lease;
+}
+
 function inspectOwnershipLease(home) {
   try {
     const statePaths = serviceStateFilesFor(home, isTestHomeGuardArmed() ? home : join(homedir(), ".opencodex"));
