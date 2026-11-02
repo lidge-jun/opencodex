@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remotePinnedSyncArgv } from "../../src/link/ssh-argv";
@@ -15,7 +15,11 @@ function isolatedArgv(): string[] {
 }
 function toolDir(home: string): string {
   const bin = join(home, "bin"); mkdirSync(bin);
-  for (const command of ["sh", "uname", "mktemp", "sleep", "cat", "awk", "wc", "rm"]) symlinkSync(`/usr/bin/${command}`, join(bin, command));
+  for (const command of ["sh", "uname", "mktemp", "sleep", "cat", "awk", "wc", "rm"]) {
+    const executable = Bun.which(command);
+    if (!executable) throw new Error(`Required test tool not found on PATH: ${command}`);
+    symlinkSync(executable, join(bin, command));
+  }
   return bin;
 }
 function run(version: string) {
@@ -29,6 +33,22 @@ function run(version: string) {
   const proc = Bun.spawnSync(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), calls: readFileSync(join(home, "calls"), "utf8"), elapsed: Date.now() - started, remaining: readdirSync(home).filter(name => name.startsWith("ocx-fanout.")) };
 }
+test.skipIf(process.platform === "win32").each([["2.93.0", 0], ["2.92.9", 121]] as const)("keeps the version capture private and removes it after %s", (version, expectedExit) => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fanout-private-")); dirs.push(home);
+  const bin = toolDir(home), desktop = join(home, ".opencodex-desktop", "bin");
+  mkdirSync(desktop, { recursive: true });
+  const realMktemp = Bun.which("mktemp"), realLn = Bun.which("ln"), realLs = Bun.which("ls");
+  if (!realMktemp || !realLn || !realLs) throw new Error("mktemp, ln and ls are required for the private capture regression");
+  unlinkSync(join(bin, "mktemp")); symlinkSync(realLn, join(bin, "ln")); symlinkSync(realLs, join(bin, "ls"));
+  writeFileSync(join(home, "victim"), "untouched");
+  writeFileSync(join(bin, "mktemp"), '#!/bin/sh\np=$("$REAL_MKTEMP" "$@") || exit 1\nprintf "%s" "$p" > "$HOME/created"\nif [ -d "$p" ]; then ls -ld "$p" > "$HOME/mode"; fi\nln -s "$HOME/victim" "$p.ready"\nprintf "%s\\n" "$p"\n', { mode: 0o755 });
+  writeFileSync(join(desktop, "ocx"), `#!/bin/sh\nif [ "$1" = --version ]; then sleep 0.1; printf '%s\\n' '${version}'; else printf 'synced\\n'; fi\n`, { mode: 0o755 });
+  const child = Bun.spawnSync(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin, REAL_MKTEMP: realMktemp }, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(expectedExit);
+  expect(readFileSync(join(home, "victim"), "utf8")).toBe("untouched");
+  expect(readFileSync(join(home, "mode"), "utf8").slice(0, 10)).toBe("drwx------");
+  expect(existsSync(readFileSync(join(home, "created"), "utf8"))).toBe(false);
+});
 test.skipIf(process.platform === "win32").each(["2.93.0", "2.93.0+build.5"])("pins the selected %s executable", version => {
   const result = run(version);
   expect(result.code).toBe(0);

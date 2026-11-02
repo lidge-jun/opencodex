@@ -50,7 +50,9 @@ the Home, so Children keep a stale catalog until someone syncs them one by one.
   failed or skipped Home sync a Child could only receive whatever the failed run left behind. Every
   Child is then `skipped` with `home-sync-failed` or `home-sync-skipped`, and the Home exit code is
   kept. A Home sync that throws is caught by the runner. JSON mode prints the document (`home.state
-  failed`, `home.exit` 1, every hub-initiated Child `skipped` `home-sync-failed`) and one sanitized
+  failed`, `home.exit` 1, every hub-initiated Child `skipped` `home-sync-failed` when the link store is
+  readable; an unreadable store instead yields `fanout.state` `failed`, reason `link-store-unreadable`,
+  and no children) and one sanitized
   `Sync failed: ...` stderr line. Human mode prints
   one stderr line, `Children were not synced because the Home sync failed.`, when a best-effort
   store read (any error swallowed, so it can never replace the original error) finds a link, then

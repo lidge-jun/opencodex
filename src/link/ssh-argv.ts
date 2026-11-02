@@ -244,16 +244,17 @@ export function quoteRemote(argv: readonly string[]): string {
 const REMOTE_PINNED_SYNC_SCRIPT = `export PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 case "$(uname -s 2>/dev/null)" in Windows*|MSYS*|MINGW*|CYGWIN*) exit ${REMOTE_PLATFORM_UNSUPPORTED};; esac
 umask 077
-tmp=$(mktemp "\${TMPDIR:-/tmp}/ocx-fanout.XXXXXXXX") || exit 127
-trap 'rm -f "$tmp" "$tmp.ready"' EXIT HUP INT TERM
+dir=$(mktemp -d "\${TMPDIR:-/tmp}/ocx-fanout.XXXXXXXX") || exit 127
+tmp=$dir/version; ready=$dir/ready
+trap 'rm -rf "$dir"' EXIT HUP INT TERM
 try_ocx() {
   c=$1; shift
   [ -x "$c" ] || return
   ( ulimit -c 0; ulimit -f 1; exec "$c" --version ) >"$tmp" 2>/dev/null & vp=$!
-  ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$tmp.ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
-  while [ ! -f "$tmp.ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
+  ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
+  while [ ! -f "$ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
   { wait "$vp"; status=$?; } 2>/dev/null
-  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; rm -f "$tmp.ready"
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; rm -f "$ready"
   [ "$status" -eq 0 ] || return
   bytes=$(wc -c < "$tmp" 2>/dev/null) || return
   [ "$bytes" -le 256 ] 2>/dev/null || return
@@ -279,7 +280,7 @@ try_ocx() {
   status=$?
   if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
   if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
-  rm -f "$tmp" "$tmp.ready"; trap - EXIT HUP INT TERM
+  rm -rf "$dir"; trap - EXIT HUP INT TERM
   printf 'ocx-fanout:selected:%s\\n' "$version" >&2
   printf '%s\\n' 'ocx-fanout:stdout-begin'
   exec "$c" sync --expect-link "$1" --json

@@ -87,7 +87,7 @@ test("human sync reports a damaged link store without exposing its path", async 
 test("committed Home catalog fans out after the Home step; refused refresh does not", async () => {
   const temp = mkdtempSync(join(tmpdir(), "ocx-sync-gate-"));
   const previousHome = process.env.OPENCODEX_HOME, previousExit = process.exitCode;
-  process.env.OPENCODEX_HOME = temp; process.exitCode = undefined;
+  process.env.OPENCODEX_HOME = temp; process.exitCode = 0;
   const linkDir = join(temp, "link"); mkdirSync(linkDir, { recursive: true });
   const link = { id: "lnk_0123456789abcdef", alias: "fake", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAA", tunnelPort: 27001, apiKeyId: "test", createdAt: "2026-01-01T00:00:00Z", remotePlatform: "posix" as const };
   writeFileSync(join(temp, "config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai" }));
@@ -126,14 +126,14 @@ test("committed Home catalog fans out after the Home step; refused refresh does 
   } finally {
     sync.mockRestore(); status.mockRestore(); child.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
-    process.exitCode = previousExit; rmSync(temp, { recursive: true, force: true });
+    process.exitCode = previousExit ?? 0; rmSync(temp, { recursive: true, force: true });
   }
 });
 
 test("fan-out discovers unstored platforms despite shell startup output", async () => {
   const temp = mkdtempSync(join(tmpdir(), "ocx-sync-platform-"));
   const previousHome = process.env.OPENCODEX_HOME, previousExit = process.exitCode;
-  process.env.OPENCODEX_HOME = temp; process.exitCode = undefined;
+  process.env.OPENCODEX_HOME = temp; process.exitCode = 0;
   const linkDir = join(temp, "link"); mkdirSync(linkDir, { recursive: true });
   const link = { id: "lnk_0123456789abcdef", alias: "fake", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAA", tunnelPort: 27001, apiKeyId: "test", createdAt: "2026-01-01T00:00:00Z" };
   writeFileSync(join(temp, "config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai" }));
@@ -187,6 +187,6 @@ test("fan-out discovers unstored platforms despite shell startup output", async 
   } finally {
     sync.mockRestore(); status.mockRestore(); runner.mockRestore(); child.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
-    process.exitCode = previousExit; rmSync(temp, { recursive: true, force: true });
+    process.exitCode = previousExit ?? 0; rmSync(temp, { recursive: true, force: true });
   }
 });

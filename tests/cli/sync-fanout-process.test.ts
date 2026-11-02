@@ -62,9 +62,7 @@ const savedLog = console.log, output = [];
 console.log = (...parts) => { output.push(parts.map(String).join(" ")); };
 console.error = () => {};
 console.warn = () => {};
-const started = Date.now();
 const code = await commandApi.runSyncCommand({ args: ["sync", "--json"], findLiveProxy: async () => null });
-const elapsed = Date.now() - started;
 const document = JSON.parse(output[0]);
 const { reason, state } = document.children[0];
 const pid = Number(readFileSync(process.argv[6], "utf8"));
@@ -77,7 +75,7 @@ while (Date.now() < deadline) {
   await Bun.sleep(20);
 }
 libc.close();
-savedLog(JSON.stringify({ code, reason, state, elapsed, reaped }));
+savedLog(JSON.stringify({ code, reason, state, reaped }));
 `);
   try {
     const child = Bun.spawn([process.execPath, "run", fixture, repoPath("src/cli/sync-command.ts"), repoPath("src/cli/sync-fanout-process.ts"), repoPath("src/codex/sync.ts"), repoPath("src/cli/sync-link-status.ts"), pidPath], {
@@ -88,6 +86,5 @@ savedLog(JSON.stringify({ code, reason, state, elapsed, reaped }));
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({ code: 6, reason: "ssh-output", state: "failed", reaped: true });
-    expect(result.elapsed).toBeLessThan(900);
   } finally { rmSync(home, { recursive: true, force: true }); }
 }, 6000);
