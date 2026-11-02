@@ -1766,6 +1766,8 @@ describe("request log metadata", () => {
       usage: { inputTokens: 9, outputTokens: 64 },
       failureDetail: "Output reached the requested token limit (max_output_tokens)",
     });
+    // A successful output-limit terminal is not an upstream failure.
+    expect(entries[0].upstreamCondition).toBeUndefined();
     expect(entries[0]).not.toHaveProperty("errorCode");
   });
 

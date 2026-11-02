@@ -108,14 +108,16 @@ const str = (value: unknown): string | undefined => typeof value === "string" ? 
 export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
   const status = typeof entry.status === "number" ? entry.status : undefined;
   const errorCode = normalizeLogErrorCode(entry.errorCode, status);
-  const failed = (status !== undefined && status >= 400) || (typeof entry.terminalStatus === "string" && entry.terminalStatus !== "completed");
+  // The HTTP status decides when present: a 200 that stopped at the requested output limit is an
+  // incomplete terminal but a successful request, not an upstream failure.
+  const failed = status !== undefined ? status >= 400 : typeof entry.terminalStatus === "string" && entry.terminalStatus !== "completed";
   // A client that closed the request is not an upstream condition.
   const clientClosed = status === 499 || errorCode === "client_closed_request" || errorCode === "client_cancelled";
   let upstreamCondition: UpstreamCondition | undefined = isUpstreamCondition(entry.upstreamCondition) ? entry.upstreamCondition : undefined;
   const evidence = str(entry.upstreamError) ?? str(entry.upstreamErrorCode) ?? str(entry.upstreamErrorType);
   if (!upstreamCondition && failed && !clientClosed && evidence !== undefined && status !== undefined) {
     upstreamCondition = classifyUpstreamCondition({
-      status: status >= 400 ? status : 502,
+      status,
       code: str(entry.upstreamErrorCode),
       type: str(entry.upstreamErrorType),
       message: str(entry.upstreamError),

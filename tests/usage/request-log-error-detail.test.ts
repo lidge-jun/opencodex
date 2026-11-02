@@ -79,6 +79,7 @@ describe("errorDetailFor", () => {
   test("local refusals and successes get no condition", () => {
     expect(errorDetailFor({ status: 503, errorCode: "server_busy" })).toEqual({ errorCode: "server_busy" });
     expect(errorDetailFor({ status: 200, upstreamError: "rate limit" })).toEqual({});
+    expect(errorDetailFor({ status: 200, terminalStatus: "incomplete", upstreamError: "Output reached the requested token limit" })).toEqual({});
     // A client close is not an upstream condition, whatever text the context captured.
     expect(errorDetailFor({ status: 499, upstreamError: "client closed request" })).toEqual({});
     expect(errorDetailFor({ status: 502, errorCode: "client_closed_request", upstreamError: "x" })).toEqual({ errorCode: "client_closed_request" });
