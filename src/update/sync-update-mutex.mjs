@@ -105,10 +105,21 @@ export function inspectUpdateMarker(home) {
     const marker = value;
     if (!Number.isSafeInteger(marker.pid) || Number(marker.pid) <= 0 || typeof marker.phase !== "string"
       || !Number.isSafeInteger(marker.startedAt) || Number(marker.startedAt) <= 0) return "unknown";
-    if (["installed", "failed", "refused"].includes(marker.phase)) return "free";
-    if (!["preflight", "mutating", "overrun"].includes(marker.phase)) return "unknown";
-    try { process.kill(Number(marker.pid), 0); return "active"; }
-    catch (error) { return error?.code === "ESRCH" ? "free" : "unknown"; }
+    const terminal = ["installed", "failed", "refused"].includes(marker.phase);
+    if (!terminal && !["preflight", "mutating", "overrun"].includes(marker.phase)) return "unknown";
+    const ids = [];
+    if (!terminal) ids.push(marker.pid);
+    for (const key of ["installerPid", "installerPgid"]) {
+      if (marker[key] === undefined) continue;
+      if (!Number.isSafeInteger(marker[key]) || marker[key] <= 0 || (key === "installerPgid" && process.platform === "win32")) return "unknown";
+      ids.push(key === "installerPgid" ? -marker[key] : marker[key]);
+    }
+    let unknown = false;
+    for (const id of ids) {
+      try { process.kill(id, 0); return "active"; }
+      catch (error) { if (error?.code !== "ESRCH") unknown = true; }
+    }
+    return unknown ? "unknown" : "free";
   } catch (error) { return !found && error?.code === "ENOENT" ? "free" : "unknown"; }
   finally { if (fd !== undefined) closeSync(fd); }
 }

@@ -139,3 +139,10 @@ test("a live overrun marker remains in flight and malformed markers are uncertai
   writeFileSync(path, "{");
   expect(isUpdateInFlight(root, deps)).toBe(true);
 });
+
+test("a failed marker retains the update fence while its installer remains alive", () => {
+  const root = home(), path = join(root, "update-orchestrated.json");
+  writeFileSync(path, JSON.stringify({ pid: 2147483647, installerPid: process.pid, phase: "failed", startedAt: 1 }));
+  expect(inspectUpdateMarker(root)).toBe("active");
+  expect(isUpdateInFlight(root)).toBe(true);
+});
