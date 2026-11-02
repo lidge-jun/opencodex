@@ -392,11 +392,11 @@ The request-scoped fallback is stable across retries and distinct across client 
 The Messages bridge carries a separate private Codex pool identity without changing replay headers.
 It requires admission and excludes spawn markers, any ingress parent or thread header (even empty)
 and a replay with a complete pool key. Explicit session_id then session-id aliases win; conflicting,
-empty-only or invalid aliases block derivation. Otherwise validated metadata, then the Claude session
-header, supplies the value. Every value, aliases included, is HMAC-keyed with a process-local secret
-over its admission scope (loopback, or the principal a remote caller must have), so no caller can name
-another scope's pool key, not even as a complete pair. Shared system cohorts and prompt_cache_key never
-supply it. A complete caller-supplied session-id + thread-id pair is not synthesized and stays unscoped.
+empty-only or invalid aliases block derivation. Otherwise the metadata session (the uuid form of the
+metadata-derived prompt_cache_key), then the Claude session header, supplies the value; a system-derived
+cohort key never does. Every value, aliases included, is HMAC-keyed with a process-local secret over its
+admission scope (loopback, or the principal a remote caller must have), so no caller can name another
+scope's pool key, not even as a complete pair. A caller-supplied complete pair stays unscoped.
 
 The identity is selection-only: session-id and thread-id are completed for Codex account selection
 (final and alternate-account), selection previews, recovery and the route-independent pool key used
