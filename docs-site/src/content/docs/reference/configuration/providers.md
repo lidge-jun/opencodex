@@ -330,6 +330,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. A healthy committed key is never overridden, so a manual key selection stands. |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | Prefers the key-pool entry that served a conversation's last successful turn, to reuse its upstream prompt cache. Applies with 2+ key-pool entries, independently of `apiKeyPoolStrategy`; OAuth/forward routes are excluded. Bindings match the exact provider and routed model: a different model does not inherit the binding. Disabled, removed, cooling, or pacing-saturated entries are not preferred, and 429/401 rotation still proceeds. With round-robin request pacing, recovery stays request-local and does not change the saved active key. Logs report `released` only when the matching binding was removed. Proxy-generated refusals preserve a healthy binding; an upstream refusal releases only the binding matching the serving provider and pool entry. `auto` (default) keeps a warm binding with ≥1024 tokens read or written, **or a detected tool-result continuation even below that threshold**. Warmth lasts 5 minutes, or 1 hour after a reported long-retention write. When no cache-write counter is reported, the sent prompt counts as written; an explicit zero is respected. This also pins providers that do not cache, so use `off` where load spreading matters more. `session` ignores warmth and token thresholds while the entry stays eligible; `turn` prefers only warm tool-result continuations. **Every binding expires 24 hours after its last recorded success**, and restart forgets all bindings. Changing the active key manually does not supersede a live binding; use `off` or disable its pool entry to override affinity. Unrelated dashboard provider saves preserve an omitted mode, including `off`. Log rows expose `cacheAffinity`/`cacheAffinityReason`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, a nonempty `models` list is followed by `retainModels`; an empty or omitted `models` list instead seeds `defaultModel` (if configured), then `retainModels`, removing duplicate ids in first-seen order. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
@@ -1927,39 +1928,4 @@ from the tool-call cache for those turns. Preserve their supplied reasoning for 
 
 ## Auto-pause permanently refused accounts
 
-`providers.<provider>.accountAutoPause` is opt-in and defaults to off. It applies to that
-provider's OAuth accounts, Codex pool accounts (including the main account in pool mode),
-and configured API-key pool entries. For example:
-
-```sh
-ocx config set providers.anthropic.accountAutoPause.enabled true
-ocx config set providers.anthropic.accountAutoPause.consecutiveFailures 2
-```
-
-`consecutiveFailures` is an integer from 1 to 100; omitting it uses 2. Only exact,
-account-scoped HTTP 401/403 refusals qualify: an organization forbidding OAuth, an inactive
-or expired subscription, an account denied API/Claude Code access or disabled by Google for a Terms of Service violation, or a downgrade to a free
-plan with no credits. A model permission error, expired access token, quota window, 429,
-5xx, malformed response or network failure never pauses an account.
-
-The counter is process-local, serialized per account, and resets on a successful HTTP
-response, explicit resume or a new login. Token refresh alone does not reset an OAuth
-account's streak. Transient errors leave the counter unchanged. Restarting the proxy clears
-counters; completed pauses, their fixed reason codes and timestamps persist. Independent
-proxy processes maintain independent counters. Changing, disabling or re-enabling the policy, disabling the provider,
-or changing its endpoint discards in-flight refusal observations, so a refusal from a request
-sent under the earlier policy can never pause an account afterwards. A refusal counts only for the credential that actually
-reached the upstream: when a local plugin rewrites the credential or destination of a send, that
-send never counts toward a pause. For Codex pool accounts this includes the workspace
-(`chatgpt-account-id`) the request was sent for.
-
-At the threshold, OpenCodex excludes the account using its existing pause mechanism and
-attempts an eligible sibling for the current request within the existing retry/send budget.
-Fixed Codex account selectors and account-bound uploaded files retain their restrictions.
-A pause never cancels already dispatched work or changes credentials. It emits one generic
-log line without account identifiers or upstream error text.
-
-`ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
-the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
-reason and allow selection again. On an API-key row, clicking Resume also activates the key.
-This policy never resumes an account automatically.
+See [Account auto-pause](/reference/configuration/account-auto-pause/) for configuration, qualifying refusals, and recovery.

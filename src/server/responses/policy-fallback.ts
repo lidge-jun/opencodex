@@ -159,8 +159,17 @@ function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): v
   delete logCtx.usageFromBridge;
   delete logCtx.upstreamError;
   delete logCtx.terminalHttpStatus;
+  delete logCtx.observedTerminalStatus;
   delete logCtx.terminalErrorCode;
   delete logCtx.terminalIncompleteReason;
+  delete logCtx.cacheAffinity;
+  delete logCtx.cacheAffinityReason;
+  delete logCtx.affinityKeptEntryId;
+  delete logCtx.affinityKeyEntryId;
+  delete logCtx.affinityProviderName;
+  delete logCtx.affinityModel;
+  delete logCtx.cacheAffinityApplicable;
+  delete logCtx.terminalSource;
 }
 
 /**

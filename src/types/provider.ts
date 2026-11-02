@@ -10,6 +10,21 @@ import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
  */
 export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
 
+/**
+ * Per-provider conversation affinity to the credential that served a conversation's
+ * last turn, so that credential's upstream prompt cache is read again instead of
+ * rebuilt on another key. `auto` keeps a binding only while the cache it built is
+ * measured to be worth keeping and still warm; `session` keeps it while the
+ * credential stays eligible; `turn` only across immediate continuations; `off`
+ * disables binding entirely. See src/providers/cache-affinity.ts.
+ */
+export type CacheAffinityMode = "auto" | "session" | "turn" | "off";
+
+/** Provider cache-affinity outcome recorded on a request-log row. */
+export type CacheAffinityOutcome = "kept" | "bound" | "released";
+/** Why that outcome happened; mirrors the store's keep reasons plus lifecycle outcomes. */
+export type CacheAffinityLogReason = "cache" | "session" | "turn" | "continuation" | "new" | "quota" | "auth";
+
 /** Request-owned identity of the configured key, before env/keychain resolution. */
 export interface ProviderApiKeySelection {
   entryId?: string;
@@ -17,6 +32,8 @@ export interface ProviderApiKeySelection {
   revision?: string;
   /** Request-local allocation; does not replace the saved active key. */
   distributed?: boolean;
+  /** Request-local cache-affinity pick; survives selection re-reads while its entry stays live. */
+  cacheAffinity?: boolean;
 }
 
 export interface OpenRouterProviderRouting {
@@ -1027,6 +1044,14 @@ export interface OcxProviderConfig {
    * fields. Default off; only enable for providers that document this parameter.
    */
   promptCacheKey?: boolean;
+  /**
+   * Conversation affinity to the key-pool credential that served a conversation's
+   * last turn, so its upstream prompt cache is read again on the next turn instead
+   * of rebuilt on another key. Only affects providers with 2+ key-pool entries;
+   * eligibility (cooldowns, pacing, disabled keys) always outranks the preference.
+   * Default `auto`. See src/providers/cache-affinity.ts.
+   */
+  cacheAffinity?: CacheAffinityMode;
   /**
    * Opt-in: forward caller `service_tier` values to the upstream `/chat/completions` body.
    * On a classified route it governs foreign values (for example `flex`), not proxy-owned

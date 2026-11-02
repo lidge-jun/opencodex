@@ -1202,6 +1202,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   foldDeveloperRoleToSystem: "editor",
   singleLeadingSystemMessage: "editor",
   promptCacheKey: "editor",
+  cacheAffinity: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",
   autoToolChoiceOnlyModels: "editor",

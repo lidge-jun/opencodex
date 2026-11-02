@@ -101,6 +101,7 @@ selector，而不是分配一个新名称。
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai`（或别名 `azure`）之一。 |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | 优先使用处理上一次成功轮次的密钥，适用于至少有两个条目的密钥池，不包括 OAuth/forward。默认值为 `auto`。本地拒绝保留绑定；上游拒绝仅释放与实际提供服务的供应商和条目匹配的绑定。参阅[完整英文约定](/reference/configuration/providers/#provider-entries-ocxproviderconfig)。 |
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。`maxConcurrentRequests` 是限制进行中请求数的正整数，提供商或模型规则都可以只配置此项。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配，并可增加延迟或收紧并发限制。排队等待不计入响应头超时。覆盖 HTTP 以及显式适配器 `fetchResponse`/`runTurn` 调用。配置并发上限时，标准 Responses WebSocket 请求改用 HTTP/SSE，以便在响应体完成、出错或取消时释放并发名额。 对包括 Cursor 在内的 `runTurn` 适配器，并发上限计算进行中的回合数，而非物理发送数：同一回合内的 RunSSE 和 BidiAppend 可以重叠，其他回合仍须等待。后续发送仍遵守启动间隔。 |
 | `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 正常请求的密钥选择：默认 `active` 保留已保存密钥和现有错误切换；`round-robin` 按顺序分配可用池密钥，不修改已保存的选择。均衡的是分配次数，不是令牌或费用。 |

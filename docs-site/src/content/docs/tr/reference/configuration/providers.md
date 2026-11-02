@@ -117,6 +117,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | Alan | Tip | Anlamı |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (veya takma ad `azure`) seçeneklerinden biri. |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | En az iki anahtarlı havuzlarda son başarılı turu sunan anahtarı tercih eder; OAuth/forward kapsam dışıdır. Varsayılan `auto`. Yerel retler bağı korur; upstream reddi yalnızca hizmet veren sağlayıcı ve kayıtla eşleşen bağı kaldırır. [İngilizce tam sözleşmeye](/reference/configuration/providers/#provider-entries-ocxproviderconfig) bakın. |
 | `baseUrl` | `string` | Yukarı akış API temel URL'si. Çoğu yerleşik sabit uç nokta uyumsuzluğu yok sayar; çakışma güvenli anahtar önayarları aynı adlı daha eski özel bir hedefi korur. |
 | `responsesPath?` | `string` | Anahtar kimlik doğrulamalı `openai-responses` istekleri için göreli kaynak yolu. `/` ile başlamalı ve şema, sorgu veya parça içermemelidir. |
 | `chatCompletionsPath?` | `string` | `openai-chat` istekleri için göreli kaynak yolu; `responsesPath`'in aynasıdır ve aynı şekil kurallarına tabidir. Bir upstream Chat Completions ve Responses'u farklı öneklerde sunduğunda gereklidir: model başına wire override adaptörü değiştirir ve `baseUrl`'e dokunmaz, bu yüzden bu ayar olmadan etkin bir Chat isteği Responses base'e gönderilir. Gönderilen örnek Z.AI'dir. |
