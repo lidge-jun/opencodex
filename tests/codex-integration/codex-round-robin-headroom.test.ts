@@ -220,6 +220,18 @@ describe("round-robin new placement prefers accounts under their threshold", () 
     expect(newPlacements(config, 4)).not.toContain("a");
   });
 
+  test("a manual selection also takes the next Reserve placement until a Reserve dispatch spends it", () => {
+    const config = makeConfig();
+    usage(95, 10, 10);
+    resetCodexRoutingForManualSelection("a");
+    expect(previewCodexAccountForRequest(null, config, NOW, "reserve")).toBe("a");
+    expect(resolveCodexAccountForThread(null, config, NOW, "reserve")).toBe("a");
+    // A shared success spends only the shared one-shot; Reserve keeps its own until it is used there.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: NOW + 1 });
+    recordCodexUpstreamOutcome(config, "a", 200, { now: NOW + 2, modelId: "gpt-reserve" });
+    expect(newPlacements(config, 4, "reserve")).not.toContain("a");
+  });
+
   test("a child of a live conversation still starts on its parent's account", () => {
     const config = makeConfig();
     usage(10, 10, 10);

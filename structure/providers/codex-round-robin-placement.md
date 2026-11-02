@@ -25,10 +25,12 @@ the threshold drops out of the list the ring sees, which releases it for the nex
 rotation once its usage is back under the threshold.
 
 An operator's unspent manual selection for the scope stays in the list whatever its usage
-(`unspentManualPreference` in `src/codex/routing/active-account.ts`). Manual selection seeds the ring so
-the next placement lands on the chosen account; dropping that account here would clear the seed and let
-a preference overrule an explicit choice. A successful dispatch on it spends the selection, after which
-the account is narrowed like any other.
+(`unspentManualPreference` in `src/codex/routing/active-account.ts`). Manual selection seeds the shared
+ring and each independent quota-scope ring, and records a one-shot for each of them, so the next
+placement in every scope lands on the chosen account; dropping that account here would clear the seed
+and let a preference overrule an explicit choice. A successful dispatch in a scope spends that scope's
+one-shot, after which the account is narrowed like any other there. Only the shared one-shot guards the
+shared active cursor (`manualPreferenceBlocks`).
 
 ## What does not move
 
