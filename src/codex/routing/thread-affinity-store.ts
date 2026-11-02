@@ -2,16 +2,15 @@ import { Database } from "bun:sqlite";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   chmodSync,
-  closeSync,
   lstatSync,
-  openSync,
   realpathSync,
-  type Stats,
 } from "node:fs";
 import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { initializeConfigOwnership, recordOwnedConfigPath } from "../../lib/config-ownership";
+import { sameFileIdentity, type FileIdentity } from "../../lib/file-identity";
 import { isPassiveRead } from "../../lib/passive-read";
+import { assertPrivateSqliteEntryOrMissing, assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "../../lib/private-sqlite-path";
 import {
   assertStorageOwned,
   currentSpendLedgerOwnerGeneration,
@@ -67,6 +66,8 @@ type Scope = {
   generation: number;
   token: SpendLedgerStorage;
   db?: Database;
+  /** The database file the handle was opened on; every write transaction re-checks the path against it. */
+  file?: FileIdentity;
   secret?: Uint8Array;
   disabled: boolean;
   poisoned: boolean;
@@ -135,13 +136,15 @@ function retire(): void {
     warning();
   }
 }
-function checkFile(path: string): Stats {
-  const stat = lstatSync(path);
+// BigInt stats: NTFS file IDs exceed Number.MAX_SAFE_INTEGER, and a rounded identity can match a
+// different file.
+function checkFile(path: string) {
+  const stat = lstatSync(path, { bigint: true });
   if (
     !stat.isFile() ||
     stat.isSymbolicLink() ||
-    stat.nlink !== 1 ||
-    (process.platform !== "win32" && stat.uid !== process.getuid!())
+    stat.nlink !== 1n ||
+    (process.platform !== "win32" && stat.uid !== BigInt(process.getuid!()))
   )
     throw new Error("unsafe file");
   return stat;
@@ -158,19 +161,18 @@ function open(s: Scope): void {
     for (const suffix of ["", "-journal", "-wal", "-shm"])
       if (!recordOwnedConfigPath(s.home, path + suffix) && initializeConfigOwnership(s.home))
         throw new Error("ownership");
-    try {
-      closeSync(openSync(path, "wx", 0o600));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
+    // Refuses a link or reparse point at the database or a sidecar before anything is created:
+    // Windows creates a new file through a link at its name.
+    preparePrivateSqliteDatabase(path);
     const before = checkFile(path);
-    if (before.size > 8 * 1024 * 1024) throw new Error("oversized");
+    if (before.size > 8n * 1024n * 1024n) throw new Error("oversized");
     if (process.platform !== "win32") chmodSync(path, 0o600);
     if (!hardenSecretPath(path, { required: true }).ok) throw new Error("acl");
     checkFile(path);
     assertStorageOwned(s.token);
     // SQLite creates sidecars in the private, hardened config directory, as with
     // spend-ledger-owner.sqlite and config-mutation.sqlite.
+    assertPrivateSqliteSidecars(path);
     db = new Database(path);
     db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const version = (
@@ -254,8 +256,9 @@ function open(s: Scope): void {
     ).value;
     db.exec("COMMIT");
     const after = checkFile(path);
-    if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("replaced");
+    if (!sameFileIdentity(before, after)) throw new Error("replaced");
     s.db = db;
+    s.file = after;
     s.secret = secret;
     s.pruneTimer = setInterval(() => {
       if (current === s) {
@@ -278,6 +281,18 @@ function open(s: Scope): void {
     s.disabled = true;
     warning();
   }
+}
+/**
+ * Refuse a write unless the database is still the single-link private file this handle opened and
+ * no sidecar name holds a link: the rollback journal is created per transaction, and a link added
+ * to the database since open would expose every later write.
+ */
+function assertWritable(s: Scope): void {
+  const path = spendLedgerStoragePath(s.token);
+  assertPrivateSqliteSidecars(path);
+  if (!assertPrivateSqliteEntryOrMissing(path)) throw new Error("missing");
+  const now = checkFile(path);
+  if (!s.file || !sameFileIdentity(now, s.file)) throw new Error("replaced");
 }
 function resolvedHome(acquiredHome?: string): string {
   let home = resolve(acquiredHome ?? getConfigDir());
@@ -473,6 +488,7 @@ function pruneOnly(s: Scope): boolean {
   if (!s.db || s.disabled) return false;
   try {
     assertStorageOwned(s.token);
+    assertWritable(s);
     s.db.exec("BEGIN IMMEDIATE");
     // Pending touches first, so a pin used since its last persisted timestamp is not evicted as idle.
     if (!s.poisoned) applyTouches(s, s.db);
@@ -517,6 +533,7 @@ function flush(s: Scope, clean: boolean): boolean {
   const db = s.db;
   for (let attempt = 0; attempt < 2; attempt++) try {
     assertStorageOwned(s.token);
+    assertWritable(s);
     db.exec("BEGIN IMMEDIATE");
     // Touches go before the log as well as after it, so the pruning between chunks sees the live
     // last-used times and cannot evict a pin that is in use but persisted with an old timestamp.
