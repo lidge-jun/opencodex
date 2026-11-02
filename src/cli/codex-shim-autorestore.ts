@@ -20,7 +20,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "uninstall" || command === "remove") return true;
   // Contract discovery and orchestrated update must validate before any repair.
   if (command === "capabilities") return true;
-  if (command === "update" && args.some(arg => ["--plan", "--yes", "--json", "--expect-plan"].includes(arg) || arg.startsWith("--expect-plan="))) return true;
+  if (command === "update" && args.some(arg => ["--plan", "--yes", "--json", "--expect-plan", "--not-after"].includes(arg) || /^(--expect-plan|--not-after)=/.test(arg))) return true;
+  if (command === "sync") return true;
   if (command === "status" || command === "doctor") return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
   if (command === "codex") return true;
@@ -41,10 +42,6 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // The desktop's approval-bound stop must validate its snapshot before any unrelated
   // CLI repair changes the installation it was approved against.
   if (command === "stop" && args.some(arg => arg.startsWith("--expect-"))) return true;
-  // A pinned sync (#7694) must change nothing when its expected Home or hub key does not hold,
-  // so the root preflight may not repair the shim first; the sync runner repairs it only after
-  // the locked identity check passed (runCodexShimAutoRestore in src/cli/dispatch.ts).
-  if (command === "sync" && args.some(arg => /^--expect-(link|hub-key)(=|$)/.test(arg))) return true;
   // The entire updater-inspection namespace is zero-effect, including malformed
   // or future actions. A later `apply` implementation must own its preflight.
   if (command === "system" && args[1] === "codex-cli-update") return true;

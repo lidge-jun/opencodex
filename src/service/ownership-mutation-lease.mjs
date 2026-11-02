@@ -51,6 +51,9 @@ function leasePath(statePaths) {
   }
 }
 
+/** The same path used by acquisition, for conservative read-only inspection. */
+export function ownershipMutationLeasePath(statePaths) { return leasePath(statePaths); }
+
 function ownerName(record) {
   return `v1-${record.pid}-${record.processInstance}-${record.token}.json`;
 }
@@ -143,6 +146,7 @@ function leaseHolder(path, now, alive, image) {
     path,
     pid,
     alive: live,
+    holderKind: observed?.record.holderKind ?? null,
     image: live ? image(pid) : null,
     ageMs: since === null ? null : Math.max(0, now() - since),
     record: observed ? "complete" : incomplete?.ownerPath ? "incomplete" : incomplete ? "empty" : "unreadable",
@@ -212,14 +216,20 @@ export function acquireOwnershipMutationLease(
   const path = leasePath(statePaths);
   const nested = held.get(path);
   if (nested) {
+    if (options.isolated) {
+      const error = new Error("another operation owns the isolated mutation lease");
+      error.code = "OWNERSHIP_MUTATION_LEASE_BUSY";
+      error.holder = leaseHolder(path, options.now ?? Date.now, options.processAlive ?? processAlive, options.processImage ?? processImage);
+      throw error;
+    }
     nested.depth += 1;
     return createLeaseHandle(path, nested.generation, nested.snapshot.record.token, options);
   }
   const now = options.now ?? Date.now;
   const alive = options.processAlive ?? processAlive;
   const explicitJoinToken = options.joinToken;
-  const envJoinToken = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
-  const joinToken = explicitJoinToken ?? envJoinToken ?? delegatedTokens.get(path);
+  const envJoinToken = options.isolated ? undefined : process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  const joinToken = options.isolated ? undefined : explicitJoinToken ?? envJoinToken ?? delegatedTokens.get(path);
   if (joinToken) {
     const owner = readOwner(path);
     if (owner?.record.token === joinToken && alive(owner.record.pid)) {
@@ -237,7 +247,7 @@ export function acquireOwnershipMutationLease(
   const deadline = now() + wait;
   if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   for (;;) {
-    const record = { version: 1, pid: process.pid, processInstance: PROCESS_INSTANCE, token: randomUUID(), createdAt: now() };
+    const record = { version: 1, pid: process.pid, processInstance: PROCESS_INSTANCE, token: randomUUID(), createdAt: now(), ...(options.holderKind ? { holderKind: options.holderKind } : {}) };
     const ownerPath = join(path, ownerName(record));
     let madeDirectory = false;
     let descriptor = null;

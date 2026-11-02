@@ -7,6 +7,9 @@ export interface OwnershipMutationLeaseOptions {
   readonly joinToken?: string;
   /** Names the current executable at the recorded PID, identity unverified; uses `ps` on POSIX and omits the default image lookup on Windows. */
   readonly processImage?: (pid: number) => string | null;
+  /** Isolated locks cannot re-enter or inherit ownership delegation. */
+  readonly isolated?: boolean;
+  readonly holderKind?: "sync" | "update";
 }
 
 /** The recorded lease owner, identity unverified, read for diagnostics; never used to reclaim it. */
@@ -16,6 +19,7 @@ export interface OwnershipMutationLeaseHolder {
   readonly pid: number | null;
   /** Liveness of the current process at the recorded PID; identity is not verified. */
   readonly alive: boolean | null;
+  readonly holderKind: "sync" | "update" | null;
   /** The current executable at the recorded PID when alive and readable; identity is not verified. */
   readonly image: string | null;
   /** Milliseconds since the owner was written, on the clock stale recovery uses. */
@@ -26,6 +30,7 @@ export interface OwnershipMutationLeaseHolder {
 export interface OwnershipMutationLease { readonly token: string; release(): void }
 
 export declare const OWNERSHIP_MUTATION_LEASE_TOKEN_ENV: "OCX_OWNERSHIP_MUTATION_LEASE_TOKEN";
+export declare function ownershipMutationLeasePath(statePaths: readonly string[]): string;
 
 export declare function ownershipMutationLeaseChildEnvironment(
   environment: NodeJS.ProcessEnv,

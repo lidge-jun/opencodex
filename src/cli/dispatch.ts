@@ -404,7 +404,7 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleLogoutCommand } = await import("./logout-command");
     return handleLogoutCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
-  sync: async deps => {
+  sync: async deps => (await import("./sync-update-guard")).withSyncUpdateGuard(async () => {
     const syncArgs = deps.args.slice(1);
     // #7694: parse the expected identity before anything else reads or writes state.
     const { parseSyncExpectation, reportSyncExpectationMismatch, SYNC_EXPECTATION_USAGE_EXIT } = await import("./sync-expectation");
@@ -414,6 +414,7 @@ const commandRunners: Record<string, CommandRunner> = {
       return SYNC_EXPECTATION_USAGE_EXIT;
     }
     const expectation = parsedExpectation.expectation;
+    if (!expectation) await (await import("./codex-shim-autorestore")).runCodexShimAutoRestoreAsync();
     const restartScope = readRestartScope(syncArgs, console);
     // The wire field keeps APP-SERVER-ONLY meaning and is deliberately not widened. A
     // remote hub must not end a local user's conversations because a field name acquired
@@ -568,7 +569,7 @@ const commandRunners: Record<string, CommandRunner> = {
       }
     }
     return code;
-  },
+  }),
   v2: async deps => {
     const { cmdV2 } = await import("./v2");
     return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);
