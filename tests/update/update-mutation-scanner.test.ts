@@ -32,6 +32,10 @@ for (const [name, body, accepted] of [
   ["missing release", `${refusalDeclaration} if (!entered.ok) { process.exit(10); }`, false],
   ["extra statement", `${refusalDeclaration} if (!entered.ok) { releaseUpdateLease(); extra(); process.exit(10); }`, false],
   ["intervening statement", `${refusalDeclaration} extra(); ${refusalBranch}`, false],
+  ["not awaited", `const entered = session.enterMutation(); ${refusalBranch}`, false],
+  ["different call", `const entered = await session.finish(); ${refusalBranch}`, false],
+  ["inverted condition", `${refusalDeclaration} if (entered.ok) { releaseUpdateLease(); process.exit(10); }`, false],
+  ["else branch", `${refusalDeclaration} ${refusalBranch.replace(/ \}$/, " } else { extra(); }")}`, false],
 ] as const) lint("launcher mutation-entry refusal: " + name, () => {
   const text = `async function runPackageManagerSelfUpdate() { const homePolicy = {}; ${body} }`;
   const failures = scan(text, "scanner", "bin/ocx.mjs");
