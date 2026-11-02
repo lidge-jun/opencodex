@@ -1,0 +1,46 @@
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/** Forward catchable signals and require a close event within 60 seconds after interruption. */
+export function waitForOrchestratedChild(child, options = {}) {
+  const signals = options.signals ?? process;
+  const startTimer = options.setTimer ?? setTimeout;
+  const stopTimer = options.clearTimer ?? clearTimeout;
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  return new Promise(resolve => {
+    let timer;
+    let settled = false;
+    const handlers = new Map();
+    const cleanupSignals = () => {
+      for (const [signal, handler] of handlers) signals.removeListener(signal, handler);
+      if (timer !== undefined) stopTimer(timer);
+    };
+    const onClose = (code, signal) => {
+      child.removeListener("error", onError);
+      if (settled) return;
+      settled = true;
+      cleanupSignals();
+      resolve({ confirmed: true, code, signal });
+    };
+    const armTimer = () => {
+      if (timer !== undefined) return;
+      timer = startTimer(() => {
+        if (settled) return;
+        settled = true;
+        cleanupSignals();
+        // Keep the child listeners until close: a late error must not become unhandled.
+        resolve({ confirmed: false, code: null, signal: null });
+      }, timeoutMs);
+    };
+    const onError = () => armTimer();
+    child.once("close", onClose);
+    child.on("error", onError);
+    for (const signal of SIGNALS) {
+      const handler = () => {
+        armTimer();
+        try { child.kill(signal); } catch { /* Wait for close or return uncertainty. */ }
+      };
+      handlers.set(signal, handler);
+      signals.on(signal, handler);
+    }
+  });
+}

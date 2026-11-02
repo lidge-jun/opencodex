@@ -2,15 +2,39 @@ import { expect, test } from "bun:test";
 import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import { classifyOrchestratedOutcome, type OutcomeInput } from "../../src/update/orchestrated-outcome.mjs";
 import { verifyOrchestratedInstall } from "../../src/update/orchestrated-tree.mjs";
 import { verifyOrchestratedPnpmInstall } from "../../src/update/orchestrated-pnpm.mjs";
+import { waitForOrchestratedChild } from "../../src/update/orchestrated-child.mjs";
 
 const base: OutcomeInput = {
   fromVersion: "2.0.0", toVersion: "2.1.0", installer: "npm", childExited: true,
   childExitCode: 1, outcome: { phase: "preflight" }, previousVerified: true,
   targetVerified: false, runtimeHealthy: true, restarted: false,
 };
+
+test("a signal is forwarded and completion waits for close or the bounded timer", async () => {
+  const signals = new EventEmitter(), child = new EventEmitter();
+  const forwarded: string[] = [];
+  Object.assign(child, { kill: (signal: string) => { forwarded.push(signal); return true; } });
+  let deadline: (() => void) | undefined;
+  const deps = { signals, setTimer: (callback: () => void) => { deadline = callback; return 1; }, clearTimer: () => {} };
+  const waiting = waitForOrchestratedChild(child as never, deps);
+  signals.emit("SIGTERM");
+  expect(forwarded).toEqual(["SIGTERM"]);
+  expect(deadline).toBeDefined();
+  child.emit("close", 1, null);
+  expect(await waiting).toEqual({ confirmed: true, code: 1, signal: null });
+
+  const stillRunning = new EventEmitter();
+  Object.assign(stillRunning, { kill: () => true });
+  const uncertain = waitForOrchestratedChild(stillRunning as never, deps);
+  signals.emit("SIGINT");
+  deadline!();
+  expect(await uncertain).toEqual({ confirmed: false, code: null, signal: null });
+  expect(signals.listenerCount("SIGINT")).toBe(0);
+});
 
 test("exit classification requires confirmed termination and independently verified active state", () => {
   expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "refused", error: "plan-changed" } })).toMatchObject({ exitCode: 10, result: { applied: false, error: "plan-changed", rolledBack: false } });
