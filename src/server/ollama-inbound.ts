@@ -9,6 +9,8 @@
  */
 import { OllamaCodecError, consumeOllamaChatChunk, createOllamaStreamState, ollamaBufferedResponse, ollamaStreamTerminal, ollamaToChat, type OllamaKind } from "../protocols/codecs/ollama";
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { parseRetryAfterMs } from "../combos";
+import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import type { OcxConfig } from "../types";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
@@ -26,20 +28,48 @@ const SHOW_BODY_LIMIT_BYTES = 64 * 1024;
 // ceiling read these from the request Chat sees. Never authorization, cookies or admission keys.
 const IDENTITY_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id", "x-codex-parent-thread-id"] as const;
 
-export function ollamaError(status: number, message: string, headers?: HeadersInit): Response {
-  const out = new Headers(headers);
-  out.set("content-type", "application/json");
-  out.delete("content-length");
-  return new Response(JSON.stringify({ error: message }), { status, headers: out });
+/** Upper bound for the retry advice this surface passes on. */
+export const OLLAMA_MAX_RETRY_AFTER_SECONDS = 3600;
+
+/**
+ * Retry-After as an integer we format ourselves. The incoming value may come from an upstream,
+ * so only the parsed delay crosses this boundary, never its bytes; unparseable values are dropped.
+ */
+export function ollamaRetryAfter(value: string | null | undefined, now = Date.now()): string | undefined {
+  if (value?.trim() === "0") return "0";
+  const ms = parseRetryAfterMs(value, now);
+  if (ms === undefined) return undefined;
+  return String(Math.min(OLLAMA_MAX_RETRY_AFTER_SECONDS, Math.max(0, Math.ceil(ms / 1000))));
 }
 
-/** Reshape an existing proxy refusal (capacity, workflow, drain) without changing status or retry advice. */
+/**
+ * Every Ollama error response is built from scratch: content type, our own error text, and
+ * optionally a reformatted Retry-After. Callers add CORS and the request-log id; nothing is
+ * copied from another response.
+ */
+export function ollamaError(status: number, message: string, retryAfter?: string | null): Response {
+  const headers = new Headers({ "content-type": "application/json" });
+  const advice = ollamaRetryAfter(retryAfter);
+  if (advice !== undefined) headers.set("Retry-After", advice);
+  return new Response(JSON.stringify({ error: message }), { status, headers });
+}
+
+const LOCAL_REFUSAL_CODE = /^[a-z0-9-]{1,64}$/;
+
+/** Reshape an existing proxy refusal (capacity, workflow, drain) keeping its status and retry advice. */
 export function toOllamaRefusal(response: Response): Response {
   try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
   const message = response.status === 429 ? "request budget exhausted; retry later"
     : response.status === 499 ? "request cancelled"
       : response.status === 503 ? "server temporarily unavailable; retry later" : "request refused";
-  return ollamaError(response.status, message, response.headers);
+  const native = ollamaError(response.status, message, response.headers.get("retry-after"));
+  // The workflow refusal names its local reason; keep it only in the closed code form.
+  const code = response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER);
+  if (code !== null && LOCAL_REFUSAL_CODE.test(code)) {
+    native.headers.set(WORKFLOW_LOCAL_REFUSAL_HEADER, code);
+    native.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
+  }
+  return native;
 }
 
 export function handleOllamaVersion(): Response {
@@ -175,8 +205,7 @@ export async function handleOllamaGeneration(
     await finalLog.waitForInner();
     if (req.signal.aborted) return cancelledNonStream(finalLog);
     finalLog.commit({ status: inner.ok ? 502 : inner.status, terminalStatus: "failed", closeReason: "non_stream" });
-    const retryAfter = inner.headers.get("retry-after");
-    return ollamaError(inner.ok ? 502 : inner.status, message, retryAfter ? { "Retry-After": retryAfter } : undefined);
+    return ollamaError(inner.ok ? 502 : inner.status, message, inner.headers.get("retry-after"));
   }
   return stream
     ? streamOllama(kind, model, createdAt, inner.body, finalLog, req.signal)

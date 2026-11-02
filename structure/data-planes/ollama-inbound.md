@@ -35,7 +35,10 @@ and workflow identity headers (`session_id`, `session-id`, `thread-id`, `x-sessi
 `x-codex-parent-thread-id`, so the workflow root's spend ceiling still applies) and the client
 signal, linked to the same session lane; authorization, cookies and admission keys never cross the
 hop. Native error bodies are a fixed message chosen by HTTP status (`ollamaInnerErrorMessage`);
-upstream-authored error text is never forwarded. Buffered and NDJSON output map Chat
+upstream-authored error text is never forwarded. Response headers are generated, never copied:
+`content-type`, `Retry-After` reformatted by `ollamaRetryAfter` as an integer of seconds (at most
+3600) or dropped, `Allow` on 405, a closed `x-opencodex-local-refusal` code on local refusals, plus
+CORS and `x-opencodex-request-id` from the dispatcher. Buffered and NDJSON output map Chat
 finish `stop`, `tool_calls` and `length` to `done_reason`; content filtering, unknown finishes and a
 missing finish are native errors without `done: true`. A stream emits its single `done: true` record
 only after the Chat stream reached EOF and the inner path settled, so trailing usage is included and

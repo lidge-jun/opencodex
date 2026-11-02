@@ -5,15 +5,18 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import { OLLAMA_MAX_RETRY_AFTER_SECONDS, ollamaRetryAfter, toOllamaRefusal } from "../../src/server/ollama-inbound";
 import type { OcxConfig } from "../../src/types";
 import { usageLogPath } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // A provider key with no recognizable prefix: pattern-based redaction cannot spot it.
 const PROVIDER_KEY = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+// All digits, so a Retry-After parser accepts it as a delay in seconds.
+const NUMERIC_KEY = "73915028461739205817";
 const saved = process.env.OPENCODEX_HOME;
 let home = "";
-let mode: "status400" | "status401" | "status500" | "frame" = "status400";
+let mode: "status400" | "status401" | "status500" | "frame" | "retryAfter429" | "retryAfter400" = "status400";
 let upstream: ReturnType<typeof Bun.serve>;
 
 beforeAll(() => {
@@ -31,6 +34,9 @@ beforeAll(() => {
       ];
       return new Response(frames.join(""), { headers: { "content-type": "text/event-stream" } });
     }
+    if (mode === "retryAfter429" || mode === "retryAfter400") {
+      return Response.json({ error: { message: "slow down" } }, { status: mode === "retryAfter429" ? 429 : 400, headers: { "retry-after": echoed } });
+    }
     const status = mode === "status401" ? 401 : mode === "status500" ? 500 : 400;
     return Response.json({ error }, { status, headers: { "x-upstream-echo": echoed } });
   } });
@@ -40,12 +46,13 @@ afterAll(() => {
   if (saved === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = saved;
   if (home) removeTreeWithRetry(home);
 });
-beforeEach(() => {
+function saveProvider(apiKey: string) {
   saveConfig({
     port: 0, defaultProvider: "fx",
-    providers: { fx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["m1"] } },
+    providers: { fx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey, allowPrivateNetwork: true, models: ["m1"] } },
   } as unknown as OcxConfig);
-});
+}
+beforeEach(() => saveProvider(PROVIDER_KEY));
 
 async function exchange(path: string, body: Record<string, unknown>) {
   const server = startServer(0);
@@ -93,4 +100,55 @@ describe("Ollama error bodies never carry upstream text", () => {
       expect(existsSync(usageLogPath()) ? readFileSync(usageLogPath(), "utf8") : "").not.toContain(PROVIDER_KEY);
     });
   }
+});
+
+describe("Ollama responses never copy upstream header bytes", () => {
+  for (const path of ["/api/chat", "/api/generate"] as const) {
+    for (const stream of [false, true]) {
+      for (const [retryMode, status] of [["retryAfter429", 429], ["retryAfter400", 400]] as const) {
+        test(path + " stream=" + stream + " upstream " + status + " with a numeric key in Retry-After", async () => {
+          mode = retryMode;
+          saveProvider(NUMERIC_KEY);
+          const request = path === "/api/chat"
+            ? { model: "fx/m1", messages: [{ role: "user", content: "hi" }], stream }
+            : { model: "fx/m1", prompt: "hi", stream };
+          const result = await exchange(path, request);
+          expect(result.status).toBe(status);
+          expect(result.text).not.toContain(NUMERIC_KEY);
+          expect(result.headers).not.toContain(NUMERIC_KEY);
+          // The advice survives only as an integer we formatted, clamped to the surface's bound.
+          const retryAfter = (JSON.parse(result.headers) as [string, string][]).find(([name]) => name === "retry-after")?.[1];
+          expect(retryAfter).toMatch(/^[0-9]{1,4}$/);
+          expect(Number(retryAfter)).toBeLessThanOrEqual(OLLAMA_MAX_RETRY_AFTER_SECONDS);
+          expect(JSON.stringify(result.rows)).not.toContain(NUMERIC_KEY);
+          expect(existsSync(usageLogPath()) ? readFileSync(usageLogPath(), "utf8") : "").not.toContain(NUMERIC_KEY);
+        });
+      }
+    }
+  }
+
+  test("retry advice is reformatted, clamped, or dropped; never echoed", () => {
+    expect(ollamaRetryAfter("0")).toBe("0");
+    expect(ollamaRetryAfter("7")).toBe("7");
+    expect(ollamaRetryAfter("1.2")).toBe("2");
+    expect(ollamaRetryAfter(" 07 ")).toBe("7");
+    expect(Number(ollamaRetryAfter(NUMERIC_KEY))).toBeLessThanOrEqual(OLLAMA_MAX_RETRY_AFTER_SECONDS);
+    expect(ollamaRetryAfter(NUMERIC_KEY)).not.toBe(NUMERIC_KEY);
+    expect(ollamaRetryAfter(PROVIDER_KEY)).toBeUndefined();
+    expect(ollamaRetryAfter(null)).toBeUndefined();
+    const now = Date.UTC(2026, 0, 1);
+    expect(ollamaRetryAfter(new Date(now + 90_000).toUTCString(), now)).toBe("90");
+  });
+
+  test("a refusal keeps only headers this surface generates", () => {
+    const refusal = new Response("{}", { status: 429, headers: {
+      "retry-after": NUMERIC_KEY, "x-opencodex-local-refusal": "workflow-sends-exhausted",
+      "x-upstream-echo": PROVIDER_KEY, "set-cookie": "a=" + PROVIDER_KEY,
+    } });
+    const native = toOllamaRefusal(refusal);
+    expect([...native.headers.keys()].sort()).toEqual(["access-control-expose-headers", "content-type", "retry-after", "x-opencodex-local-refusal"]);
+    expect(Number(native.headers.get("retry-after"))).toBeLessThanOrEqual(OLLAMA_MAX_RETRY_AFTER_SECONDS);
+    const odd = toOllamaRefusal(new Response("{}", { status: 503, headers: { "x-opencodex-local-refusal": PROVIDER_KEY + " x" } }));
+    expect([...odd.headers.keys()]).toEqual(["content-type"]);
+  });
 });

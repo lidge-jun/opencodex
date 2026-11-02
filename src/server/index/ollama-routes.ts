@@ -42,7 +42,9 @@ export async function dispatchOllamaRoute(req: Request, url: URL, deps: OllamaRo
   if (!route) return undefined;
   const { config, policy } = deps;
   if (req.method !== route.method) {
-    return withCors(ollamaError(405, `method ${req.method} not allowed`, { Allow: route.method }), req, policy);
+    const refused = ollamaError(405, `method ${req.method} not allowed`);
+    refused.headers.set("Allow", route.method);
+    return withCors(refused, req, policy);
   }
   if (route.kind === "version" || route.kind === "tags" || route.kind === "show") {
     // Model discovery never forwards Authorization upstream, so the broader admission set is safe.
@@ -56,7 +58,7 @@ export async function dispatchOllamaRoute(req: Request, url: URL, deps: OllamaRo
   }
   const kind = route.kind;
   disableResponsesRequestTimeout(req, deps.requestServer);
-  if (isDraining()) return toOllamaRefusal(deps.drainingResponse(req, policy));
+  if (isDraining()) return withCors(toOllamaRefusal(deps.drainingResponse(req, policy)), req, policy);
   const admission = resolveResponsesApiAuth(req, policy);
   if (!admission) return withCors(ollamaError(401, "opencodex API key required"), req, policy);
   if (!isAllowedRequestOrigin(req, policy)) return withCors(ollamaError(403, "cross-origin data-plane request blocked"), req, policy);
