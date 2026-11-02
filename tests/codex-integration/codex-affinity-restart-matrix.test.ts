@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { helperPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { copySeededAffinityHome, removeSeededAffinityTemplates } from "../helpers/codex-affinity-seed";
+
+afterAll(removeSeededAffinityTemplates);
 
 const names = ["codex-affinity.sqlite", "codex-affinity.sqlite-journal", "codex-affinity.sqlite-wal", "codex-affinity.sqlite-shm"];
 const memoryOnly = "Codex affinity persistence unavailable; continuing in memory.";
@@ -20,7 +23,7 @@ function worker(home: string, file: string, action: string): any {
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.length ? JSON.parse(result.stdout.toString()) : undefined;
 }
-function seed(home: string) { return worker(home, "codex-affinity-restart-worker.ts", "write"); }
+function seed(home: string) { return copySeededAffinityHome("write", home); }
 function matrix(home: string, action: string) { return worker(home, "codex-affinity-matrix-worker.ts", action); }
 function inHome(fn: (home: string) => void) {
   const home = mkdtempSync(join(tmpdir(), "ocx-affinity-extra-"));
@@ -138,7 +141,7 @@ test("a hot rollback journal from an interrupted writer is recovered, not refuse
 
 test("a home without an ownership manifest still persists affinity and gains no manifest", () => inHome(home => {
   writeFileSync(join(home, "unowned"), "keep");
-  expect(seed(home).account).toBe("a");
+  expect(worker(home, "codex-affinity-restart-worker.ts", "write").account).toBe("a");
   expect(existsSync(join(home, names[0]!))).toBe(true);
   expect(worker(home, "codex-affinity-restart-worker.ts", "read").account).toBe("a");
   expect(existsSync(join(home, ".opencodex-uninstall.json"))).toBe(false);
@@ -248,12 +251,16 @@ test("restoration accepts a 512-byte model component and rejects 513 bytes", () 
 }));
 
 test("home switching drops pending writes and does not carry recorded anchors across homes", () => inHome(homeA => inHome(homeB => {
-  seed(homeA); seed(homeB);
+  worker(homeA, "codex-affinity-restart-worker.ts", "write");
+  worker(homeB, "codex-affinity-restart-worker.ts", "write");
+  const secrets: unknown[] = [];
   for (const home of [homeA, homeB]) {
     const db = new Database(join(home, names[0]!));
+    secrets.push((db.query("SELECT value FROM meta WHERE name='secret'").get() as { value: unknown }).value);
     db.exec("DELETE FROM threads; DELETE FROM issuers");
     db.close();
   }
+  expect(secrets[0]).not.toEqual(secrets[1]);
   const result = Bun.spawnSync([process.execPath, helperPath("codex-affinity-home-switch-worker.ts"), homeB], {
     env: { ...process.env, OPENCODEX_HOME: homeA, CODEX_HOME: homeA }, stdout: "pipe", stderr: "pipe",
   });
@@ -281,7 +288,8 @@ for (const mutation of ["bind", "delete", "issuer"] as const) {
 for (const path of ["responses", "compact"] as const) {
   for (const issuer of ["unknown", "known"] as const) {
     test(`${path} handler ${issuer} restored issuer with an uploaded file`, () => inHome(home => {
-      worker(home, "codex-affinity-restart-worker.ts", issuer === "unknown" ? "unknown-write" : "write");
+      if (path === "responses" && issuer === "unknown") worker(home, "codex-affinity-restart-worker.ts", "unknown-write");
+      else copySeededAffinityHome(issuer === "unknown" ? "unknown-write" : "write", home);
       const result = worker(home, "codex-affinity-handler-worker.ts", path);
       expect(result.status).toBe(400);
       expect(result.bodies).toHaveLength(0);
@@ -291,7 +299,7 @@ for (const path of ["responses", "compact"] as const) {
 
 for (const path of ["responses", "compact"] as const) {
   test(`${path} permits a file for the same stored account with unknown issuer`, () => inHome(home => {
-    worker(home, "codex-affinity-restart-worker.ts", "unknown-write");
+    copySeededAffinityHome("unknown-write", home);
     const result = Bun.spawnSync([process.execPath, helperPath("codex-affinity-handler-worker.ts"), path, "same"], { env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     const parsed = JSON.parse(result.stdout.toString());
