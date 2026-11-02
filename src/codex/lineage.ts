@@ -48,10 +48,10 @@ import { retainedUtf8Bytes } from "../lib/admission";
 
 const CODEX_LINEAGE_COMPONENT_MAX_BYTES = 512;
 const CODEX_LINEAGE_KEY = randomBytes(32);
-let conversationAnchorObserver: ((key: string, anchor: string) => void) | undefined;
+let conversationAnchorObserver: ((key: string, familyId: string, threadId: string) => void) | undefined;
 
 /** Register the consumer of derived cohort anchors, or remove it. */
-export function setCodexConversationAnchorObserver(fn?: (key: string, anchor: string) => void): void {
+export function setCodexConversationAnchorObserver(fn?: (key: string, familyId: string, threadId: string) => void): void {
   conversationAnchorObserver = fn;
 }
 
@@ -159,7 +159,7 @@ export function codexConversationKeyFor(familyId: string, threadId: string): str
     .update("\0")
     .update(threadId)
     .digest("base64url")}`;
-  conversationAnchorObserver?.(key, familyId);
+  conversationAnchorObserver?.(key, familyId, threadId);
   return key;
 }
 

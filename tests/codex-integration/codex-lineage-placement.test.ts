@@ -55,18 +55,20 @@ const ACCOUNT_IDS = ["a", "b", "c"] as const;
 const NOW = 1_700_000_000_000;
 
 test("lineage observer receives the derived key and cohort anchor", () => {
-  const seen: Array<[string, string]> = [];
-  setCodexConversationAnchorObserver((key, anchor) => seen.push([key, anchor]));
+  const seen: Array<[string, string, string]> = [];
+  setCodexConversationAnchorObserver((key, family, thread) => seen.push([key, family, thread]));
   try {
     const key = codexConversationKeyFor("cohort", "cohort");
-    expect(seen).toEqual([[key, "cohort"]]);
+    expect(seen).toEqual([[key, "cohort", "cohort"]]);
     expect(codexConversationKeyFor("cohort", "cohort")).toBe(key);
     expect(seen).toHaveLength(2);
+    const other = codexConversationKeyFor("family", "thread");
+    expect(seen[2]).toEqual([other, "family", "thread"]);
   } finally {
     setCodexConversationAnchorObserver();
   }
   codexConversationKeyFor("cohort", "cohort");
-  expect(seen).toHaveLength(2);
+  expect(seen).toHaveLength(3);
 });
 
 function installScratchHome(): void {
