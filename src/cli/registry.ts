@@ -187,6 +187,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
+      "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
@@ -290,8 +291,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "update",
-    usage: "ocx update [--tag latest|preview]",
+    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]",
     summary: "Update opencodex. Preview installs stay on the preview tag unless overridden.",
+    details: [
+      "--plan --json previews an orchestrated update; --yes --json applies it. --expect-plan binds apply to the returned planToken; --not-after sets a Unix millisecond mutation deadline.",
+      "Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.",
+    ],
   },
   {
     name: "provider",
@@ -731,11 +736,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "capabilities",
-    usage: "ocx capabilities [--json] [--mutating-only] [--route <path>]",
+    usage: "ocx capabilities [--json] [--mutating-only | --route <path> | --contracts]",
     summary: "List the declared CLI capabilities and the management routes they drive.",
     details: [
       "The machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.",
       "--route <path> answers the inverse question: which commands drive this management route.",
+      "--contracts lists versioned machine contracts; combine with --json for a JSON envelope.",
     ],
   },
   {

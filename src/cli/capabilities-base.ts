@@ -216,11 +216,29 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["update"],
+    summary: "Plan or apply an OpenCodex update.",
+    routes: [],
+    flags: [
+      { name: "--plan", value: "boolean", summary: "Preview an orchestrated update with --json." },
+      { name: "--yes", value: "boolean", summary: "Apply an orchestrated update with --json." },
+      { name: "--json", value: "boolean", summary: "Emit a versioned plan or result." },
+      { name: "--tag", value: "string", summary: "Select latest or preview for the legacy update or plan." },
+      { name: "--version", value: "string", summary: "Select an exact version for a plan or apply." },
+      { name: "--expect-plan", value: "string", summary: "Require the apply plan to match this planToken." },
+      { name: "--not-after", value: "string", summary: "Refuse mutation after this Unix millisecond deadline." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: ["Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage."],
+  },
+  {
     command: ["capabilities"],
     summary: "List the declared CLI capabilities and the management routes they drive.",
     routes: [],
     flags: [
       { name: "--json", value: "boolean", summary: "Emit the full capability table as JSON." },
+      { name: "--contracts", value: "boolean", summary: "List versioned machine contracts, optionally as JSON." },
       { name: "--mutating-only", value: "boolean", summary: "Restrict output to capabilities that mutate state." },
       { name: "--route", value: "string", summary: "Show which capabilities drive a management route." },
     ],
@@ -762,6 +780,7 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "none",
     details: [
       "The Aside refresh uses the live server; other catalog synchronization also performs local work.",
+      "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7.",
       "--expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.",
     ],
     usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",

@@ -77,6 +77,7 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the full capability table as JSON. |
+| `--contracts` | boolean | List versioned machine contracts, optionally as JSON. |
 | `--mutating-only` | boolean | Restrict output to capabilities that mutate state. |
 | `--route` | string | Show which capabilities drive a management route. |
 
@@ -103,6 +104,7 @@ State-changing: yes. JSON mode: `none`.
 | `--expect-hub-key` | string | Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed. |
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
+- An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7.
 - --expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.
 
 ### `ocx stop`

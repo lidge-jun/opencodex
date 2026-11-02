@@ -1269,7 +1269,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
 const updateHelpRequested = process.argv[2] === "update" && !isOrchestratedUpdateArgv(process.argv.slice(3)) &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
-  console.log("Usage: ocx update [--tag latest|preview]\n\nUpdate opencodex. Preview installs stay on the preview tag unless overridden.");
+  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
   process.exit(0);
 }
 

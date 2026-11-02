@@ -1,7 +1,30 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { runCapabilities } from "../../src/cli/capabilities-command";
+import { findCommand } from "../../src/cli/registry";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repoPath } from "../helpers/repo-root";
 
 describe("capabilities argument validation", () => {
+  test("update, sync and capabilities help expose orchestration contracts", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-help-"));
+    try {
+      const launcher = spawnSync(process.execPath, [repoPath("bin/ocx.mjs"), "update", "--help"], {
+        encoding: "utf8", env: { ...process.env, HOME: home, OPENCODEX_HOME: join(home, "ocx"), CODEX_HOME: join(home, "codex") },
+      });
+      expect(launcher.status).toBe(0);
+      const entry = findCommand("update")!;
+      for (const flag of ["--plan", "--yes", "--json", "--expect-plan", "--not-after"]) {
+        expect([entry.usage, ...entry.details ?? []].join(" ")).toContain(flag);
+        expect(launcher.stdout).toContain(flag);
+      }
+      for (const code of ["10", "11", "12", "64"]) expect(launcher.stdout).toContain(code);
+      expect(findCommand("capabilities")!.usage).toContain("--contracts");
+      expect(findCommand("sync")!.details!.join(" ")).toContain("exit 7");
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
   test("contracts are present in every JSON shape and can be queried alone", async () => {
     const out = spyOn(console, "log").mockImplementation(() => {});
     const err = spyOn(console, "error").mockImplementation(() => {});
