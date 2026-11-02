@@ -193,10 +193,17 @@ the matching emitted flat frame. Usage contains only finite, non-negative numeri
 `rejected_prediction_tokens`; each object is rebuilt and all other properties are omitted.
 Service tier uses `boundedServiceTier` from `src/lib/response-service-tier.ts`; unknown values are omitted.
 Choices retain only the first choice fields the collector consumes: closed finish reason, completion
-text/refusal/reasoning content, declared reasoning entry fields and tool-call content. Unknown finish
-reasons become `error`; unknown reasoning types/formats and extra nested metadata are omitted. Thinking
-signatures use the existing signature validator. Raw chunks still feed usage and log observers before
-projection. This bounded ordinary-chunk source is separate from the failure-verdict sink; collection
+text/refusal/reasoning content, declared reasoning entry fields and tool-call content. Reasoning entries
+preserve `reasoning.summary.summary`, `reasoning.text.text` (and any validated signature), and
+`reasoning.encrypted.data`. Shared entry metadata accepts non-negative safe integer indices, bounded
+versioned format descriptors, and reasoning IDs of at most 128 characters in the `reasoning-`,
+`reasoning_`, `summary-`, `summary_`, `rs-` or `rs_` namespaces; valid primitive values remain unchanged.
+Unknown finish reasons become `error`; unknown reasoning types and extra diagnostic metadata are omitted.
+Thinking signatures use the existing signature validator. Raw chunks still feed usage and log observers
+before projection. The native capture also reads `delta.reasoning` and original tool identities;
+that observer sees the original chunk, while the buffered collector keeps its existing
+`reasoning_content` behavior. Fields the collector ignores (including legacy `function_call`, roles,
+choice indices and annotations) are not newly exposed by this projection. This bounded ordinary-chunk source is separate from the failure-verdict sink; collection
 consumes its entries and releases all retained bytes on exit.
 An original SSE event name exactly equal to `error` selects the fixed proxy line `event: error` before
 the owned flat data payload, preserving the SDK's error signal. Other upstream event names are dropped.

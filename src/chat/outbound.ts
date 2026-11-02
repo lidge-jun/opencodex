@@ -29,7 +29,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { truncationReasonFor } from "../responses/truncated-stop-reason";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
-import { ANTHROPIC_REASONING_DETAIL_FORMAT, reasoningDetailEntriesForItem } from "./reasoning-details";
+import { reasoningDetailEntriesForItem } from "./reasoning-details";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -1057,14 +1057,20 @@ function flatCollectorChoices(value: unknown): Rec[] | undefined {
     delta.refusal = typeof original.refusal === "string" || original.refusal === null ? original.refusal : false;
   }
   if (Array.isArray(original.reasoning_details)) delta.reasoning_details = original.reasoning_details.filter(isRec).flatMap(detail => {
-    const type = detail.type === "reasoning.text" ? "reasoning.text" : detail.type === "reasoning.encrypted" ? "reasoning.encrypted" : undefined;
+    const type = detail.type === "reasoning.text" ? "reasoning.text" : detail.type === "reasoning.encrypted" ? "reasoning.encrypted"
+      : detail.type === "reasoning.summary" ? "reasoning.summary" : undefined;
     if (!type) return [];
     const entry: Rec = { type };
     if (type === "reasoning.text") {
       if (typeof detail.text === "string") entry.text = detail.text;
       if (typeof detail.signature === "string" && isLikelyRealAnthropicThinkingSignature(detail.signature)) entry.signature = detail.signature;
+    } else if (type === "reasoning.summary") {
+      if (typeof detail.summary !== "string") return [];
+      entry.summary = detail.summary;
     } else if (typeof detail.data === "string") entry.data = detail.data;
-    if (detail.format === ANTHROPIC_REASONING_DETAIL_FORMAT) entry.format = ANTHROPIC_REASONING_DETAIL_FORMAT;
+    if (typeof detail.format === "string" && /^[A-Za-z][A-Za-z0-9._-]{0,95}-v[1-9][0-9]{0,3}$/.test(detail.format)) entry.format = detail.format;
+    if (typeof detail.id === "string" && detail.id.length <= 128
+      && /^(?:reasoning[-_]|summary[-_]|rs[-_])[A-Za-z0-9._:-]+$/.test(detail.id)) entry.id = detail.id;
     if (typeof detail.index === "number" && Number.isSafeInteger(detail.index) && detail.index >= 0) entry.index = detail.index;
     return [entry];
   });

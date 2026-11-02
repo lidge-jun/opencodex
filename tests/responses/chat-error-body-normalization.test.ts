@@ -265,7 +265,7 @@ test("translated errors select condition wording despite an upstream local-refus
   } finally { await upstream.stop(true); }
 });
 
-async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false, withMetadata = false) {
+async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false, withMetadata = false, deltaOverride: Record<string, unknown> = {}) {
   const { clearComboTargetCooldowns, clearComboSelectionState } = await import("../../src/combos");
   const { clearKeyCooldowns } = await import("../../src/providers/key-failover");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
@@ -274,7 +274,7 @@ async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boole
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     const body = await req.json() as { model: string }; sends.push(body.model);
     if (body.model === "backup") return Response.json({ id: "fixture-backup", object: "chat.completion", created: 1, model: "backup", choices: [{ index: 0, message: { role: "assistant", content: "backup" }, finish_reason: "stop" }] });
-    return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: withMetadata ? KEY : "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, ...(withMetadata ? { error: { message: KEY, type: KEY, code: KEY, param: KEY } } : {}) }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning" }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: withMetadata ? KEY : "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, ...(withMetadata ? { error: { message: KEY, type: KEY, code: KEY, param: KEY } } : {}) }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning", ...deltaOverride }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   try {
     const row = { adapter: "openai-chat", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key" as const, apiKey: KEY, transientRetryOn5xx: { attempts: 1 } };
@@ -418,5 +418,74 @@ test("flat collector reasoning entries retain content without additional metadat
   const message = (body.choices as Array<{ message: Record<string, unknown> }>)[0]!.message;
   expect(message.content).toBe("visible");
   expect(message.reasoning_details).toEqual([{ type: "reasoning.text", text: "summary", index: 0 }]);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+
+const flatReasoningFixtures: Record<string, Record<string, unknown>> = {
+  summary: { type: "reasoning.summary", summary: "Summary text\nΩ.", index: 0 },
+  "summary identity": { type: "reasoning.summary", summary: "Summary with identity.", index: 1, format: "openai-responses-v1", id: "rs_summary_1" },
+  text: { type: "reasoning.text", text: "Reasoning text\nΩ.", index: 0 },
+  "signed text": { type: "reasoning.text", text: "Signed text.", signature: "SyntheticReasoningSignature0000==", index: 2, format: "anthropic-claude-v1", id: "reasoning-text-2" },
+  "MiniMax text": { type: "reasoning.text", text: "MiniMax text.", index: 0, format: "MiniMax-response-v1", id: "reasoning-text-1" },
+  encrypted: { type: "reasoning.encrypted", data: "SyntheticEncryptedReasoningPayload", index: 0 },
+  "encrypted identity": { type: "reasoning.encrypted", data: "SyntheticEncryptedReasoningPayload", index: 3, format: "anthropic-claude-v1", id: "rs_encrypted_1" },
+};
+function flatCompletionDelta(details: Record<string, unknown>, diagnostics = false) {
+  return { role: "assistant", content: "Answer text\nΩ.", refusal: "Refusal content.", reasoning_content: "Visible thinking.",
+    reasoning_details: [{ ...details, ...(diagnostics ? { error: { message: KEY, type: KEY, code: KEY, param: KEY }, metadata: KEY } : {}) }],
+    tool_calls: [{ index: 0, id: "fixture-call", type: "function", function: { name: "lookup", arguments: '{"q":"Ω"}' } }],
+    ...(diagnostics ? { error: { message: KEY }, metadata: KEY } : {}),
+  };
+}
+for (const [name, details] of Object.entries(flatReasoningFixtures)) {
+  test(`flat reasoning content matches the base collector: ${name}`, async () => {
+    const { collectChatCompletion } = await import("../../src/chat/outbound");
+    const clean = { usage: numericFlatUsage, service_tier: "default", choices: [{ index: 0, finish_reason: "stop", delta: flatCompletionDelta(details) }] };
+    const legacy = await collectChatCompletion(bytes(frame(clean) + "data: [DONE]\n\n"), "fixture", createTestTranslatorBudget());
+    const current = await collectFlatMetadata({ ...clean, choices: [{ index: 0, finish_reason: "stop", delta: flatCompletionDelta(details, true) }] });
+    expect(legacy.object).toBe("chat.completion"); expect(current.object).toBe("chat.completion"); expect(current.choices).toHaveLength(1);
+    const expectedMessage = (legacy.choices as Array<{ message: Record<string, unknown> }>)[0]!.message;
+    expect(expectedMessage.reasoning_details).toEqual([details]);
+    expect(completionFacts(current)).toEqual(completionFacts(legacy));
+    expect(JSON.stringify(current)).not.toContain(KEY);
+  });
+  test(`flat reasoning content matches the base handler: ${name}`, async () => {
+    const legacy = await flatEndpointExchange(false, false, false, true, false, flatCompletionDelta(details));
+    const current = await flatEndpointExchange(false, false, true, true, false, flatCompletionDelta(details, true));
+    expect(legacy.status).toBe(200); expect(current.status).toBe(200);
+    const expected = JSON.parse(legacy.text); const body = JSON.parse(current.text);
+    expect(expected.choices[0].message.reasoning_details).toEqual([details]);
+    expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+    expect(completionFacts(body)).toEqual(completionFacts(expected));
+    expect(current.facts).toEqual(legacy.facts); expect(current.sends).toEqual(["first"]);
+    expect(current.text).not.toContain(KEY);
+  });
+}
+test("flat summary entries keep text while excluding invalid primitives and diagnostics", async () => {
+  const body = await collectFlatMetadata({ choices: [{ finish_reason: "stop", delta: { reasoning_details: [
+    { type: "reasoning.summary", summary: "Summary content.", index: KEY, format: { message: KEY }, id: KEY, error: { message: KEY, type: KEY, code: KEY, param: KEY } },
+  ] } }] });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  const message = (body.choices as Array<{ message: Record<string, unknown> }>)[0]!.message;
+  expect(message.reasoning_details).toEqual([{ type: "reasoning.summary", summary: "Summary content." }]);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+test("flat native capture retains the reasoning alias while buffered content matches base", async () => {
+  const { ChatCompletionsCollectorSource, collectChatCompletion } = await import("../../src/chat/outbound");
+  const delta = { role: "assistant", content: "Answer.", reasoning: "Capture-only reasoning.",
+    function_call: { name: "legacy", arguments: "{}" },
+    tool_calls: [{ index: 0, id: "fixture-call", type: "function", function: { name: "lookup", arguments: "{}" } }] };
+  const clean = { choices: [{ index: 0, finish_reason: "stop", delta }] };
+  const legacy = await collectChatCompletion(bytes(frame(clean) + "data: [DONE]\n\n"), "fixture", createTestTranslatorBudget());
+  const raw = { ...clean, type: "error", message: KEY, code: KEY };
+  const budget = createTestTranslatorBudget(); const source = new ChatCompletionsCollectorSource(budget);
+  const observed: Record<string, unknown>[] = [];
+  const stream = nativeChatSse(bytes(frame(raw) + "data: [DONE]\n\n"), { requestedModel: "fixture", translatorBudget: budget, collectorSource: source,
+    signal: new AbortController().signal, onUsage() {}, onChunk(chunk) { observed.push(chunk); } });
+  const body = await collectChatCompletion(stream, "fixture", budget, undefined, source);
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  expect(observed).toHaveLength(1); expect(observed[0]).toEqual(raw);
+  expect(completionFacts(body)).toEqual(completionFacts(legacy));
+  expect((body.choices as Array<{ message: Record<string, unknown> }>)[0]!.message.reasoning_content).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain(KEY);
 });
