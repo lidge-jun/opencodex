@@ -3,13 +3,13 @@
 // tables so each group is reviewed on its own. The base tables merge these rows unchanged;
 // a file key may appear in only one table. Row classes follow the base tables: read-only,
 // pre-mutation, guarded (mutation-guard wrapper or a fresh authorizeMutation), or delegated
-// (a dedicated child reachable only through a guarded parent spawn, which the reason names).
+// (inside a dedicated child entry; the reason names the guarded spawn its reviewed caller uses and what the child itself enforces).
 import type { UpdateReviewTable } from "./update-review-table";
 
 export const orchestratedEntryReview: UpdateReviewTable = {
   staticImports: {
     "src/update/orchestrated-entry.ts": [
-      "import { mkdtempSync, readFileSync, realpathSync, rmSync } from \"node:fs\";", // pre-mutation/private-artifact: probe cache and child result directory, plus manifest reads
+      "import { mkdtempSync, readFileSync, realpathSync, rmSync } from \"node:fs\";", // pre-mutation: registry probe cache and its cleanup, plus manifest and canonical path reads
       "import { dirname, join, resolve } from \"node:path\";", // read-only: calculate install and temporary paths
       "import { fileURLToPath } from \"node:url\";", // read-only: resolve this module location
       "import { packageVersion } from \"../lib/package-version\";", // read-only: observe installed version
@@ -24,7 +24,7 @@ export const orchestratedEntryReview: UpdateReviewTable = {
       "import { inspectLiveOrchestratedIdentity } from \"./orchestrated-live-identity\";", // read-only: inspect live serving identity
       "import { planUpdateRuntimeHandling } from \"./runtime-ownership.mjs\";", // read-only: classify runtime ownership
       "import { isUpdateInFlight } from \"./sync-update-mutex\";", // read-only: inspect update mutex
-      "import { encodeOrchestratedExpect, type OrchestratedExpect } from \"./orchestrated-session.mjs\";", // read-only: encode child expectation
+      "import { createOrchestratedResultChannel, encodeOrchestratedExpect, type OrchestratedExpect } from \"./orchestrated-session.mjs\";", // encode child expectation; result channel (rows in update-review-orchestrated-child.ts)
       "import { waitForOrchestratedChild } from \"./orchestrated-child.mjs\";", // read-only: observe own update child completion
       "import { classifyOrchestratedOutcome, type Outcome } from \"./orchestrated-outcome.mjs\";", // read-only: classify observed outcome
       "import { verifyOrchestratedInstall } from \"./orchestrated-tree.mjs\";", // read-only: verify installed tree
@@ -62,15 +62,13 @@ export const orchestratedEntryReview: UpdateReviewTable = {
   deferredImports: [],
   primitive: [
     ["src/update/orchestrated-entry.ts:runOrchestratedUpdate:probeSpawn(exe, args, options)", "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
-    ["src/update/orchestrated-entry.ts:applyOrchestratedBun:deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: \"1\" }, stdio: [\"ignore\", 2, 2] })", "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
-    ["src/update/orchestrated-entry.ts:<module>:import { mkdtempSync, readFileSync, realpathSync, rmSync } from \"node:fs\";", "private probe and result directory creation and cleanup; package mutation remains separately guarded"],
+    ["src/update/orchestrated-entry.ts:applyOrchestratedBun:deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: \"1\", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: [\"ignore\", 2, 2] })", "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
+    ["src/update/orchestrated-entry.ts:<module>:import { mkdtempSync, readFileSync, realpathSync, rmSync } from \"node:fs\";", "registry probe cache directory and its cleanup, plus manifest and canonical path reads; package mutation remains separately guarded"],
     ["src/update/orchestrated-live-identity.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from \"node:fs\";", "read-only runtime record inspection using a bounded descriptor"],
     ["src/update/orchestrated-entry.ts:<module>:probeSpawnSync", "bounded registry version probe passed to latestVersion"],
     ["src/update/orchestrated-identity-probe-entry.ts:<module>:import.meta.main", "direct probe entry detection only"],
     ["src/update/orchestrated-entry.ts:<module>:mkdtempSync(join(tmpdir(), \"ocx-registry-probe-\"))", "exclusive disposable registry probe cache under OS temp"],
     ["src/update/orchestrated-entry.ts:<module>:rmSync(cache, { recursive: true, force: true })", "remove only this registry probe's disposable cache"],
-    ["src/update/orchestrated-entry.ts:applyOrchestratedBun:mkdtempSync(join(tmpdir(), \"ocx-update-\"))", "exclusive private child result directory under OS temp"],
-    ["src/update/orchestrated-entry.ts:applyOrchestratedBun:rmSync(directory, { recursive: true, force: true })", "remove only this child result directory after child exit or before spawn"],
     ["src/update/orchestrated-live-identity.ts:readRuntimeRecord:openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))", "open runtime record read-only with no-follow and verify identity"],
     ["src/update/orchestrated-live-identity.ts:readRuntimeRecord:readSync(fd, bytes, 0, bytes.length, 0)", "bounded read from this runtime record descriptor"],
     ["src/update/orchestrated-live-identity.ts:readRuntimeRecord:closeSync(fd)", "close this runtime record descriptor"],
@@ -78,11 +76,9 @@ export const orchestratedEntryReview: UpdateReviewTable = {
   process: [],
   contracts: [
     ["src/update/orchestrated-entry.ts", "runOrchestratedUpdate", "probeSpawn(exe, args, options)", 1, "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
-    ["src/update/orchestrated-entry.ts", "applyOrchestratedBun", "deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: \"1\" }, stdio: [\"ignore\", 2, 2] })", 1, "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
+    ["src/update/orchestrated-entry.ts", "applyOrchestratedBun", "deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: \"1\", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, stdio: [\"ignore\", 2, 2] })", 1, "ordinary launcher for the orchestrated update child, as job.ts spawnGuiUpdateWorker; the child takes the sync/update mutex, ownership lease, plan-token and attested identity checks and its own home authorization before any mutation"],
     ["src/update/orchestrated-entry.ts", "<module>", "mkdtempSync(join(tmpdir(), \"ocx-registry-probe-\"))", 1, "exclusive disposable registry probe cache under OS temp"],
     ["src/update/orchestrated-entry.ts", "<module>", "rmSync(cache, { recursive: true, force: true })", 1, "remove only this registry probe's disposable cache"],
-    ["src/update/orchestrated-entry.ts", "applyOrchestratedBun", "mkdtempSync(join(tmpdir(), \"ocx-update-\"))", 1, "exclusive private child result directory under OS temp"],
-    ["src/update/orchestrated-entry.ts", "applyOrchestratedBun", "rmSync(directory, { recursive: true, force: true })", 1, "remove only this child result directory after child exit or before spawn"],
     ["src/update/orchestrated-live-identity.ts", "readRuntimeRecord", "openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))", 1, "open runtime record read-only with no-follow and verify identity"],
     ["src/update/orchestrated-live-identity.ts", "readRuntimeRecord", "readSync(fd, bytes, 0, bytes.length, 0)", 1, "bounded read from this runtime record descriptor"],
     ["src/update/orchestrated-live-identity.ts", "readRuntimeRecord", "closeSync(fd)", 1, "close this runtime record descriptor"],

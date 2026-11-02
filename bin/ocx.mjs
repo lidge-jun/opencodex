@@ -244,7 +244,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
   if (child) {
     try {
       const expected = decodeOrchestratedExpect(child.expect);
-      session = createOrchestratedChildSession({ home: configDir(), resultPath: child.resultPath, expect: expected,
+      session = createOrchestratedChildSession({ home: configDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect: expected,
         notAfter: child.notAfter, verifyIdentity: () => {
           const bun = resolveBun({ allowInstall: false, allowMissing: true });
           if (!bun) return false;

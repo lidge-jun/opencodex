@@ -15,7 +15,7 @@ const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
   ["bin/ocx.mjs:<module>:process.once(\"exit\", releaseSyncLease)","pre-mutation: release the sync admission lease on exit",1],
   ["bin/ocx.mjs:<module>:process.exit(10)","pre-mutation: refuse apply when the runtime is unavailable",1],
   ["bin/ocx.mjs:<module>:child.kill()","pre-mutation: terminate own sync child after delegate publication failure",1],
-  ["src/update/posix-install-supervisor.mjs:supervise:process.kill(-pid, \"SIGKILL\")","delegated: terminate own installer group in child of guardedSpawnSync at posix-install-supervisor.mjs:18",2],
+  ["src/update/posix-install-supervisor.mjs:supervise:process.kill(-pid, \"SIGKILL\")","supervisor child: terminates only the installer group this supervisor spawned",2],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.exit(10)","pre-mutation session start refusal or mutation entry refusal; scanner checks the latter exact branch",2],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.exit(1)","terminal failure only; cannot publish successful update",32],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.exit(0)","ordinary launcher/help/probe or terminal prompt outcome; update success remains guarded",1],

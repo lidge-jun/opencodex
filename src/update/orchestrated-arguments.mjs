@@ -4,9 +4,11 @@ export function isOrchestratedUpdateArgv(argv) {
   return argv.some(arg => /^(--plan|--yes|--json|--expect-plan|--not-after|--orchestrated-expect|--orchestrated-result)(?:=|$)/.test(arg));
 }
 
-/** Internal child grammar is accepted only in the explicitly marked child process. */
+/** Internal child grammar is accepted only in the explicitly marked child process, with its result capability. */
 export function parseOrchestratedChildArgs(argv, env) {
   if (env.OCX_UPDATE_ORCHESTRATED_CHILD !== "1") return { ok: false };
+  const resultCapability = env.OCX_UPDATE_RESULT_CAPABILITY;
+  if (typeof resultCapability !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(resultCapability)) return { ok: false };
   const values = new Map();
   const allowed = new Set(["--version", "--orchestrated-expect", "--orchestrated-result", "--not-after"]);
   for (let i = 0; i < argv.length; i++) {
@@ -17,7 +19,7 @@ export function parseOrchestratedChildArgs(argv, env) {
   const version = values.get("--version"), expect = values.get("--orchestrated-expect"), resultPath = values.get("--orchestrated-result"), deadline = values.get("--not-after");
   if (!version || !strictSemver(version) || !expect || !resultPath || (deadline !== undefined
     && (!/^\d+$/.test(deadline) || !Number.isSafeInteger(Number(deadline)) || Number(deadline) <= 0))) return { ok: false };
-  return { ok: true, version, expect, resultPath, ...(deadline === undefined ? {} : { notAfter: Number(deadline) }) };
+  return { ok: true, version, expect, resultPath, resultCapability, ...(deadline === undefined ? {} : { notAfter: Number(deadline) }) };
 }
 
 function strictSemver(value) {

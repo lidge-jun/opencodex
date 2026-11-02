@@ -7,9 +7,19 @@ export interface OrchestratedExpect {
 }
 export declare function encodeOrchestratedExpect(value: OrchestratedExpect): string;
 export declare function decodeOrchestratedExpect(encoded: string): OrchestratedExpect;
+export interface OrchestratedResultChannel {
+  directory: string;
+  resultPath: string;
+  capability: string;
+  read(): Record<string, unknown> | null;
+  dispose(): void;
+}
+export declare function createOrchestratedResultChannel(): OrchestratedResultChannel;
+export declare function issueOrchestratedResultCapability(path: string): { capability: string; identity: import("node:fs").Stats };
 export declare function createOrchestratedChildSession(options: {
   home: string;
   resultPath: string;
+  resultCapability: string;
   expect: OrchestratedExpect;
   notAfter?: number;
   now?: () => number;

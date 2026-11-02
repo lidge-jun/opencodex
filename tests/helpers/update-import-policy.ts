@@ -234,17 +234,17 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { existsSync, realpathSync } from \"node:fs\";",
     "import { win32 } from \"node:path\";"
   ],
-  // Dedicated supervisor entry is launched only by the package-guarded parent.
+  // Supervisor entry: its reviewed caller launches it through the package-guarded spawn; it runs only what its stdin caller supplies.
   "src/update/posix-install-supervisor-entry.mjs": [
-    // Delegated entry invokes the guarded parent's supervisor body.
+    // Supervisor entry body; see the supervisor rows for what it enforces.
     'import { runPosixInstallerSupervisorMain } from "./posix-install-supervisor.mjs";',
   ],
   "src/update/posix-install-supervisor.mjs": [
-    // Delegated installer spawn follows guardedSpawnSync at line 18.
+    // Installer spawn in the supervisor child; its reviewed caller launches it through guardedSpawnSync at line 18.
     'import { spawn } from "node:child_process";',
     // Guarded package authorization precedes supervisor spawn.
     'import { guardedSpawnSync } from "./mutation-guard.mjs";',
-    // Delegated marker operations follow guardedSpawnSync at line 18.
+    // Marker publication in the supervisor child: replaces only a mutating marker.
     'import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";',
     // Read-only resolution of the supervisor entry.
     'import { fileURLToPath } from "node:url";',
@@ -362,7 +362,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
 export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports);
 const baseDeferredImports: readonly string[] = [
   // Read-only identity verification before the child enters mutation.
-  'src/update/index.ts:runUpdate:session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, expect, notAfter: child.notAfter, verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) })',
+  'src/update/index.ts:runUpdate:session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter, verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) })',
   "src/update/index.ts:resolvedRuntimeOwnership:{ resolveServiceOwnership } = await import(\"../service\")",
   "src/update/index.ts:runUpdateWithSession:{ serviceStatePaths } = await import(\"../service\")",
   "src/update/index.ts:runUpdateWithSession:{ inspectUpdateServiceHome } = await import(\"./service-home-authority\")",
