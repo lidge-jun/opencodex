@@ -78,7 +78,7 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
   return (
     <div className="ui-v2 flex flex-col gap-8 font-sans text-fg">
       <header className="flex max-w-[640px] flex-col gap-2">
-        <h1 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em]">{t("shellV2.setupTitle")}</h1>
+        <h1 className="m-0 text-title font-semibold tracking-[-0.025em]">{t("shellV2.setupTitle")}</h1>
         <p className="m-0 text-[15px] text-fg-muted">{t("shellV2.setupIntro")}</p>
       </header>
 
@@ -91,7 +91,7 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
         </div>
         <div className="h-1 overflow-hidden rounded-full bg-surface-2" role="progressbar"
           aria-labelledby="setup-essentials" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneCount}>
-          <motion.div className="h-full rounded-full bg-success" initial={false}
+          <motion.div className="h-full rounded-full bg-accent" initial={false}
             animate={{ width: `${(doneCount / steps.length) * 100}%` }}
             transition={{ duration: reduce ? 0 : 0.6, ease: [0.22, 1, 0.36, 1] }} />
         </div>

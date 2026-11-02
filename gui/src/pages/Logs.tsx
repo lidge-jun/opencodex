@@ -708,7 +708,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   return (
     <div className="logs-page flex min-w-0 flex-col gap-5 font-sans text-fg">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="m-0 text-[24px] leading-tight font-semibold tracking-[-0.025em]">{t("nav.logs")}</h2>
+        <h2 className="m-0 text-title font-semibold tracking-[-0.025em]">{t("nav.logs")}</h2>
         <div
           className="inline-flex items-center gap-0.5 rounded-control bg-surface p-0.5 ring-1 ring-inset ring-line"
           role="tablist"

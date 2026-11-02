@@ -1407,7 +1407,7 @@ export default function Storage({ apiBase }: { apiBase: string }) {
     <div className="storage-v2 flex min-w-0 flex-col gap-4 font-sans text-fg">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-1 basis-80 flex-col gap-1">
-          <h2 id="storage-page-title" className="m-0 text-[24px] leading-tight font-semibold tracking-[-0.025em]">{t("storage.title")}</h2>
+          <h2 id="storage-page-title" className="m-0 text-title font-semibold tracking-[-0.025em]">{t("storage.title")}</h2>
           <p className="m-0 text-[13px] leading-5 text-fg-muted">{t("storage.subtitle")}</p>
         </div>
         <div className="storage-page-head-actions flex items-center gap-2">

@@ -36,10 +36,10 @@
   --blue: var(--ocx-highlight);
   --blue-soft: var(--ocx-highlight-soft);
 
-  --radius-xs: 8px;
-  --radius-sm: 10px;
-  --radius: 16px;
-  --radius-lg: 20px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
 
   --font-ui: "Geist Variable", "Wanted Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-code: "Geist Mono Variable", "Wanted Sans Variable", ui-monospace, monospace;
@@ -61,9 +61,9 @@
 /* ---- surfaces: borderless soft cards ------------------------------------- */
 .card,
 .panel {
-  border-color: transparent;
+  border: 1px solid var(--ocx-line);
   background: var(--ocx-surface);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 .panel-accent {
   border-color: transparent;
@@ -77,13 +77,12 @@
 }
 .btn:active:not(:disabled) { scale: 0.97; }
 .btn-primary {
-  background: linear-gradient(to bottom, var(--ocx-accent-top), var(--ocx-accent-bottom));
+  background: var(--ocx-accent);
   color: var(--ocx-on-accent);
-  box-shadow: var(--ocx-glow), inset 0 0 0 1px rgb(255 255 255 / 0.2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(to bottom, var(--ocx-accent-top), var(--ocx-accent-bottom));
-  box-shadow: var(--ocx-glow-hover), inset 0 0 0 1px rgb(255 255 255 / 0.4);
+  background: color-mix(in oklab, var(--ocx-accent) 88%, var(--ocx-bg));
 }
 
 /* ---- segmented controls: recessed track, raised selected pill ------------- */
@@ -153,13 +152,13 @@
 
 /* ---- page heads: the same title scale as the v2 hubs ---------------------- */
 .page-head > :is(h1, h2) {
-  font-size: 26px;
-  line-height: 1.2;
+  font-size: 20px;
+  line-height: 1.4;
   font-weight: 600;
   letter-spacing: -0.025em;
 }
 @media (max-width: 640px) {
-  .page-head > :is(h1, h2) { font-size: 22px; }
+  .page-head > :is(h1, h2) { font-size: 18px; }
 }
 
 /* ---- page tabs: pill tabs instead of an underline ------------------------- */
@@ -183,27 +182,41 @@
   box-shadow: inset 0 0 0 1px var(--ocx-line);
 }
 
-/* ---- sidebar -------------------------------------------------------------- */
+/* ---- sidebar: a tool's navigation, not a stack of buttons ------------------------
+   Rows are 32px, 13px medium text in the muted ink with a 16px icon; hover and the
+   current page are a faint tone step, no raised plate, ring or shadow. Tier labels are
+   small and quiet, in sentence case. The foot shares the same row rhythm and sits
+   under a hairline (foundations.md, "Sidebar"). */
+.sidebar nav { gap: 1px; }
 .nav-item {
-  border-radius: 0.625rem;
-  transition: background-color 0.2s, color 0.2s;
+  min-height: 32px;
+  padding: 0 8px;
+  gap: 10px;
+  border-radius: 6px;
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s;
 }
+.nav-item svg { width: 16px; height: 16px; color: var(--ocx-fg-subtle); }
+.nav-item:hover { background: light-dark(rgb(9 9 11 / 0.045), rgb(255 255 255 / 0.05)); color: var(--ocx-fg); }
 .nav-item.active {
-  background: var(--ocx-raised);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 0 0 1px var(--ocx-line);
+  background: light-dark(rgb(9 9 11 / 0.07), rgb(255 255 255 / 0.08));
+  color: var(--ocx-fg);
+  font-weight: 500;
+  box-shadow: none;
 }
 .nav-item.active svg { color: var(--ocx-fg); }
 
-/* ---- sidebar tiers (Everyday / Set up / Fine-tuning) ---------------------- */
-.nav-tier { display: flex; flex-direction: column; gap: 2px; }
-.nav-tier + .nav-tier { margin-top: 14px; }
+.nav-tier { display: flex; flex-direction: column; gap: 1px; }
+.nav-tier + .nav-tier { margin-top: 18px; }
 .nav-tier-label {
-  padding: 4px 10px 6px;
+  padding: 0 8px 4px;
   color: var(--ocx-fg-subtle);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .app--nav-collapsed .nav-tier-label { visibility: hidden; }
 
@@ -234,7 +247,16 @@
 }
 
 /* ---- sidebar foot: proxy capsule, language + theme, GitHub + version ------ */
-.sidebar-foot > .ui-v2:first-child { margin-bottom: 6px; }
+.sidebar-foot {
+  gap: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--ocx-line);
+}
+.sidebar-foot > .ui-v2:first-child { margin-bottom: 2px; }
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link) { min-height: 32px; padding: 0 8px 0 10px; font-size: 13px; color: var(--ocx-fg-muted); }
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link):hover { color: var(--ocx-fg); }
+.sidebar-foot :is(.lang-toggle, .sidebar-github-link) svg { width: 16px; height: 16px; }
 .sidebar-pref-row {
   display: flex;
   align-items: center;
@@ -303,38 +325,6 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 }
 @supports not selector(::-webkit-scrollbar) {
   * { scrollbar-width: thin; scrollbar-color: light-dark(rgb(9 9 11 / 0.22), rgb(255 255 255 / 0.2)) transparent; }
-}
-
-/* ---- moving border: a white beam travelling the proxy body's edge ----------
-   Aceternity's moving border as a rotating conic gradient masked to a 1px ring,
-   animated through a registered property instead of a per-frame script. White
-   on dark; on a light page a white beam would vanish, so it runs zinc there. */
-@property --ocx-beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
-.ocx-beam::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  padding: 1px;
-  border-radius: inherit;
-  --ocx-beam-color: light-dark(#71717a, #ffffff);
-  background: conic-gradient(from var(--ocx-beam-angle),
-    transparent 0deg 250deg,
-    color-mix(in oklab, var(--ocx-beam-color) 30%, transparent) 300deg,
-    var(--ocx-beam-color) 340deg,
-    transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  opacity: 0;
-  transition: opacity 0.4s;
-  pointer-events: none;
-}
-.ocx-beam > * { position: relative; z-index: 1; }
-.ocx-beam--on::before { opacity: 1; animation: ocx-beam-spin 6s linear infinite; }
-@keyframes ocx-beam-spin { to { --ocx-beam-angle: 360deg; } }
-@media (prefers-reduced-motion: reduce) {
-  .ocx-beam--on::before { animation: none; opacity: 0; }
 }
 
 /* ---- sidebar foot orbs: bare icons, a soft plate only on hover -------------
@@ -447,7 +437,7 @@ a:hover { text-decoration-color: var(--ocx-highlight); }
 .empty .title { color: var(--ocx-fg); font-size: 15px; line-height: 20px; font-weight: 500; letter-spacing: -0.015em; }
 
 /* page intro under a title */
-.page-sub { color: var(--ocx-fg-muted); font-size: 14px; line-height: 1.55; }
+.page-sub { color: var(--ocx-fg-muted); font-size: 13px; line-height: 1.55; }
 
 /* ---- sticky section strip: glass, not a painted band ------------------------
    The strip stays reachable while the page scrolls, so it must hide the rows
@@ -571,4 +561,15 @@ body { background: var(--ocx-bg); }
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border-right-color: var(--ocx-line);
+}
+
+/* ---- figures: tabular numerals in the UI face ----------------------------------
+   Stat values used Geist Mono, so "2.96.0" or "0시간 32분" read as code and their
+   width jumped between tiles. Figures are the UI face with tabular numerals; mono
+   stays for ids and commands (foundations.md, "Type"). */
+:is(.stat .value, .stat .value.mono, .stat-value) {
+  font-family: var(--font-ui);
+  font-size: 1.375rem; /* text-stat */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }

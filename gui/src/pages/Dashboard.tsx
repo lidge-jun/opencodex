@@ -83,7 +83,7 @@ export default function Dashboard({ apiBase, readOnly = false, connected = false
       {error && <Notice tone="warn">{t("dash.staleData")} <button className="btn btn-ghost" type="button"
         onClick={() => d.refreshDashboard()}>{t("common.retry")}</button></Notice>}
       <header className="mb-5 flex flex-col gap-1.5">
-        <h2 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-fg">{t("shellV2.pageProxyDetails")}</h2>
+        <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("shellV2.pageProxyDetails")}</h2>
         <p className="m-0 max-w-[68ch] text-[14px] leading-[1.55] text-fg-muted">
           {selectedSection === "overview" ? t("proxyV2.pageLede") : t("dash.subtitle")}
         </p>

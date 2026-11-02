@@ -142,10 +142,17 @@
   --color-danger: var(--ocx-danger);
   --color-danger-soft: var(--ocx-danger-soft);
 
-  --radius-control: 0.625rem;
-  --radius-card: 1rem;
-  --radius-panel: 1.25rem;
-  --radius-sheet: 1.5rem;
+  /* tight radii read as a tool, not a toy (foundations.md, "Radius") */
+  /* type scale (foundations.md, "Type"): title 20 / section 14 / body 13 / meta 12, stat 22 */
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.75rem;
+  --text-stat: 1.375rem;
+  --text-stat--line-height: 1.75rem;
+
+  --radius-control: 0.5rem;
+  --radius-card: 0.625rem;
+  --radius-panel: 0.75rem;
+  --radius-sheet: 1rem;
 
   --shadow-sm: var(--ocx-shadow-sm);
   --shadow-md: var(--ocx-shadow-md);

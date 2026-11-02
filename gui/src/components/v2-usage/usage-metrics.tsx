@@ -55,7 +55,7 @@ function Stat({ label, term, hint, value, spark, foot, meter }: {
         {hint && <UsageHint text={hint} />}
       </div>
       <div className="mt-auto flex min-w-0 items-end justify-between gap-3">
-        <span className="stat-value truncate text-[24px] leading-8 font-semibold tracking-[-0.025em] text-fg tabular-nums">{value}</span>
+        <span className="stat-value truncate text-stat font-semibold tracking-[-0.025em] text-fg tabular-nums">{value}</span>
         {spark && <Sparkline values={spark} />}
       </div>
       {meter !== undefined && (

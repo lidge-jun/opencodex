@@ -267,7 +267,7 @@ export default function Advisor({ apiBase }: { apiBase: string }) {
     <div className="pv2-page flex max-w-[60rem] flex-col gap-5">
       <header className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1.5">
-          <h2 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-fg">{t("nav.advisor")}</h2>
+          <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("nav.advisor")}</h2>
           <HelpButton label={t("proxyV2.detailsFor", { name: t("nav.advisor") })} expanded={aboutOpen}
             controls="advisor-about" onClick={() => setAboutOpen(open => !open)} />
         </div>

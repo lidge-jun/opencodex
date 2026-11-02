@@ -123,6 +123,65 @@ v2는 위 v1 토큰을 `src/design/bridge.css`에서 아래 `--ocx-*` 토큰으�
 ### v2 둥글기 주의
 
 v1 토큰 `--radius-xs`, `--radius-sm`, `--radius-lg`는 Tailwind의 `rounded-xs`, `rounded-sm`,
-`rounded-lg`가 읽는 변수와 이름이 같다. v1 값(8px, 10px, 20px)이 이기므로 v2 컴포넌트에서는
+`rounded-lg`가 읽는 변수와 이름이 같다. v1 값(6px, 8px, 12px)이 이기므로 v2 컴포넌트에서는
 이 세 유틸리티를 쓰지 않는다. `rounded-control`, `rounded-card`처럼 v2 이름을 쓰거나
 `rounded-[8px]`처럼 값을 명시한다.
+
+## Professional pass (v2)
+
+도구다운 대시보드(Linear, Vercel, Stripe 계열)를 기준으로 한다. 꾸밈이 아니라 정보가 먼저 보여야 한다.
+`gui/tests/professional-rules.test.ts`가 아래 규칙을 지킨다.
+
+### 캔버스와 표면
+
+- 페이지 바탕은 단색 `--ocx-bg` 하나다. 배경 그라데이션, 흐린 색 덩어리, 유리(backdrop-filter) 금지.
+- 사이드바는 단색 레일(`--rail`)과 오른쪽 1px 경계선.
+- 카드와 패널은 1px 경계선(`--ocx-line`)으로 구분한다. 그림자는 떠 있는 것(메뉴, 대화상자)에만.
+
+### Radius
+
+| 토큰 | 값 | 쓰는 곳 |
+|---|---:|---|
+| `--radius-control` / `rounded-control` | 8px | 버튼, 입력, 선택 |
+| `--radius-card` / `rounded-card` | 10px | 카드, 타일 |
+| `--radius-panel` / `rounded-panel` | 12px | 패널, 섹션 |
+| `--radius-sheet` | 16px | 대화상자 |
+
+알약(999px)은 상태 배지와 스위치에만 쓴다.
+
+### Type
+
+| 단계 | 크기 | 쓰는 곳 |
+|---|---:|---|
+| title (`text-title`) | 20px / 600 | 페이지 제목 |
+| stat (`text-stat`) | 22px / 600 | 지표 숫자 |
+| section | 14px / 600 | 섹션·카드 제목 |
+| body | 13px / 400–500 | 본문, 컨트롤, 사이드바 |
+| meta | 12px | 보조 설명, 단위 |
+
+숫자는 UI 글꼴의 고정폭 숫자(`tabular-nums`)로 쓴다. 고정폭(mono) 글꼴은 id, 명령, 경로 같은
+기계 텍스트에만 쓴다.
+
+### Motion and decoration
+
+- 상태 점은 깜빡이지 않는다(`animate-ping`/`animate-pulse` 금지). 움직임은 상태가 바뀔 때만
+  (전환, 진행 중 스피너).
+- 버튼은 단색 채움이다. 그라데이션·광택·번짐 없음.
+- 기능적인 그라데이션(로딩 스켈레톤, 단색 사각형으로 그린 아이콘)은 예외다.
+
+### 색
+
+색은 상태(정상·경고·오류)에만 쓴다. 진행률, 선택, 강조는 흑백 단계(`--ocx-accent` 반전색)로 한다.
+링크와 키보드 포커스만 스카이블루.
+
+### Sidebar
+
+- 메뉴 행 32px, 13px medium, 아이콘 16px. 텍스트는 `--ocx-fg-muted`, 아이콘은 `--ocx-fg-subtle`.
+- 호버와 현재 페이지는 은은한 톤 단계 하나. 떠 있는 판, 링, 그림자 없음.
+- 분류 제목은 11.5px, 문장형(대문자 변환 없음).
+- 아래쪽은 1px 경계선 아래 같은 32px 행: 프록시 상태 행(정지된 점 + 이름 + 켜진 시간 + 아이콘
+  버튼), 언어 + 테마, GitHub + 버전.
+
+### 레이아웃
+
+본문 열은 최대 1120px, 좌우 40px 여백. 페이지 머리는 제목(20px) + 한 줄 설명 + 오른쪽 동작.

@@ -2,16 +2,16 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 /*
- * Design system v2 button. The primary variant is the Aceternity studio
- * button in the inverse primary: a top-to-bottom gradient with a top sheen;
- * hover only dims it a touch, no glow. The rest are quiet neutrals so one
- * primary action per surface stands out.
+ * Design system v2 button. The primary is a flat fill in the inverse primary
+ * (white on dark, near-black on light); hover only eases it a touch. No
+ * gradient, sheen or glow: the rest are quiet neutrals so one primary action
+ * per surface stands out (foundations.md, "Motion and decoration").
  */
 const VARIANTS = {
   primary:
-    "bg-linear-to-b from-accent-top to-accent-bottom text-on-accent shadow-glow ring-1 ring-inset ring-white/20 hover:shadow-glow-hover hover:brightness-[0.94]",
+    "bg-accent text-on-accent shadow-sm hover:bg-accent/88",
   outline:
-    "bg-raised text-fg shadow-sm ring-1 ring-inset ring-line-strong hover:bg-surface",
+    "bg-raised text-fg ring-1 ring-inset ring-line-strong hover:bg-surface",
   ghost: "bg-transparent text-fg-muted hover:bg-surface hover:text-fg",
   danger:
     "bg-danger-soft text-danger ring-1 ring-inset ring-danger/20 hover:bg-danger hover:text-on-accent",

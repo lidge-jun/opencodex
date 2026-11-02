@@ -186,7 +186,7 @@ export function PageHeader({ title, subtitle, actions }: { title: ReactNode; sub
   return (
     <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
       <div className="flex min-w-0 flex-col gap-1">
-        <h2 className="m-0 text-[24px] leading-tight font-semibold tracking-[-0.025em] text-fg">{title}</h2>
+        <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{title}</h2>
         {subtitle && <p className="m-0 max-w-[68ch] text-[14px] leading-5 text-fg-muted">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}

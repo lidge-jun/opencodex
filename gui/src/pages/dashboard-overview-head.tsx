@@ -39,16 +39,16 @@ export function DashboardOverviewHead({
               {online ? t("dash.online") : t("dash.offline")}
             </span>
           </HeadTile>
-          <HeadTile label={t("dash.version")} busy={healthLoading} mono title={health?.version}>
+          <HeadTile label={t("dash.version")} busy={healthLoading} title={health?.version}>
             <span className="dash-stat-version block truncate">{health?.version ?? "—"}</span>
           </HeadTile>
-          <HeadTile label={t("dash.uptime")} busy={healthLoading} mono>
+          <HeadTile label={t("dash.uptime")} busy={healthLoading}>
             {health ? formatUptime(health.uptime, locale) : "—"}
           </HeadTile>
           <HeadTile label={t("dash.providers")} busy={healthLoading}>
             {providers.length}
           </HeadTile>
-          <HeadTile label={t("dash.tokens30d")} busy={usageLoading} mono
+          <HeadTile label={t("dash.tokens30d")} busy={usageLoading}
             sub={hasUsage ? t("dash.coverage").replace("{pct}", `${Math.round(usage30d.summary.coverageRatio * 100)}%`) : undefined}>
             {hasUsage ? formatTokens(usage30d.summary.totalTokens, locale) : "—"}
           </HeadTile>
@@ -103,13 +103,14 @@ export function DashboardOverviewHead({
   );
 }
 
-function HeadTile({ label, children, sub, mono, busy, title }: {
-  label: string; children: React.ReactNode; sub?: string | undefined; mono?: boolean; busy?: boolean; title?: string | undefined;
+// Figures are the UI face with tabular numerals, never monospace (foundations.md, "Type").
+function HeadTile({ label, children, sub, busy, title }: {
+  label: string; children: React.ReactNode; sub?: string | undefined; busy?: boolean; title?: string | undefined;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-card bg-surface px-4 py-3" aria-busy={busy || undefined} title={title}>
       <span className="text-xs font-medium text-fg-subtle">{label}</span>
-      <span className={cn("min-w-0 truncate text-[17px] leading-6 font-semibold tracking-[-0.01em] tabular-nums text-fg", mono && "font-mono text-[15px]")}>{children}</span>
+      <span className="min-w-0 truncate text-[17px] leading-6 font-semibold tracking-[-0.01em] tabular-nums text-fg">{children}</span>
       {sub && <span className="dash-stat-coverage truncate text-xs text-fg-subtle">{sub}</span>}
     </div>
   );

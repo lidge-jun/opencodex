@@ -92,10 +92,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
       <motion.header {...rise(0)} className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           <span className="relative inline-flex size-3 shrink-0" aria-hidden>
-            {online && !reduce && <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-50" />}
             <span className={cn("relative size-3 rounded-full", !online ? "bg-danger" : failures.length ? "bg-warning" : "bg-success")} />
           </span>
-          <h1 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-balance">{headline}</h1>
+          <h1 className="m-0 text-title font-semibold tracking-[-0.025em] text-balance">{headline}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={onReloadCodex} disabled={reloadingCodex}>
@@ -107,7 +106,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
       </motion.header>
 
       <motion.section {...rise(0.06)} className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label={t("shellV2.tileVersion")} value={health.data?.version ? `v${health.data.version}` : "—"} mono />
+        <Stat label={t("shellV2.tileVersion")} value={health.data?.version ? `v${health.data.version}` : "—"} />
         <Stat label={t("shellV2.tileUptime")} value={online ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
         <Stat label={t("shellV2.tileRequests")} value={number.format(requests7d)} />
         <Stat label={t("shellV2.tileTokens")} value={compact.format(tokens7d)} />
@@ -120,7 +119,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
             <span className="text-[13px] text-fg-muted tabular-nums">{t("shellV2.checklistProgress", { done: String(doneCount), total: String(steps.length) })}</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-            <motion.div className="h-full rounded-full bg-success" initial={false}
+            <motion.div className="h-full rounded-full bg-accent" initial={false}
               animate={{ width: `${(doneCount / steps.length) * 100}%` }} transition={{ duration: reduce ? 0 : 0.6, ease: [0.22, 1, 0.36, 1] }} />
           </div>
           {allDone ? (
@@ -185,11 +184,11 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   );
 }
 
-function Stat({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-card bg-surface px-4 py-3.5">
       <span className="text-xs font-medium text-fg-subtle">{label}</span>
-      <span className={cn("truncate text-[20px] leading-7 font-semibold tracking-[-0.02em] tabular-nums", mono && "font-mono text-[17px]")}>{value}</span>
+      <span className="truncate text-stat font-semibold tracking-[-0.02em] tabular-nums">{value}</span>
     </div>
   );
 }

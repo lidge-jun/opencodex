@@ -64,7 +64,7 @@ export default function AdvancedHub({ navigate }: AdvancedHubProps) {
     <div className="ui-v2 flex flex-col gap-6 font-sans text-fg">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex max-w-[640px] flex-col gap-2">
-          <h1 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em]">{t("shellV2.pageAllSettings")}</h1>
+          <h1 className="m-0 text-title font-semibold tracking-[-0.025em]">{t("shellV2.pageAllSettings")}</h1>
           <p className="m-0 text-[15px] text-fg-muted">{t("shellV2.advancedIntro")}</p>
         </div>
         <label className="relative flex w-full items-center sm:w-72">

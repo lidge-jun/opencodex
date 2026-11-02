@@ -24,12 +24,11 @@ interface ProxyControlsProps {
 }
 
 /*
- * Design system v2 proxy panel, in the React Bits Pro application-UI form: an outer tinted
- * frame with a header line (title, live status) around an inset raised body that holds the
- * detail and the actions. While the proxy runs, a thin white beam travels the body's edge
- * (Aceternity's moving border, done in CSS so the sidebar runs no per-frame script); it stops
- * with the proxy and under reduced motion. Restart spins while in flight and flashes a check
- * when it settles. Both are bare icons until hovered; stop's plate turns red.
+ * Design system v2 proxy status, as one sidebar row: a static status dot, the title and how
+ * long it has been up, then restart and stop as bare icons (a soft plate on hover; stop's turns
+ * red). No panel, beam or pulse: the row reads like the navigation above it. Restart spins while
+ * in flight and shows a check for a moment when it settles. The status word stays available to
+ * assistive tech and as the row's tooltip.
  */
 export function ProxyControls({
   label,
@@ -49,52 +48,47 @@ export function ProxyControls({
   const reduce = useReducedMotion();
   const done = useSettledFlash(restarting);
   const live = !stopping;
+  const status = stopping ? stoppingLabel : statusLabel;
 
   return (
-    <div className={cn("ui-v2 relative rounded-[12px] bg-surface p-1 ring-1 ring-line ring-inset", className)}>
-      <div className="flex items-center gap-2 px-2 pt-0.5 pb-1.5">
-        <span className="min-w-0 flex-1 truncate text-xs leading-4 font-medium text-fg-muted">{label}</span>
-        <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-xs leading-4 font-medium", live ? "text-success" : "text-fg-subtle")}>
-          <span className="relative inline-flex size-1.5" aria-hidden>
-            {live && !reduce && <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-60" />}
-            <span className={cn("relative size-1.5 rounded-full", live ? "bg-success" : "bg-fg-subtle")} />
-          </span>
-          {stopping ? stoppingLabel : statusLabel}
+    <div className={cn("ui-v2 flex h-[var(--ocx-control-h)] items-center gap-2 pr-1 pl-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
+      <span className={cn("size-2 shrink-0 rounded-full", live ? "bg-success" : "bg-fg-subtle")} aria-hidden />
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-5">
+        <span className="shrink-0 font-medium text-fg">{label}</span>
+        <span className="sr-only">{status}</span>
+        <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!stopping && !!detail ? undefined : true}>
+          {stopping ? stoppingLabel : detail ?? statusLabel}
         </span>
-      </div>
-
-      <div className={cn("ocx-beam relative flex items-center gap-1 rounded-[8px] bg-raised py-1 pr-1 pl-2.5 shadow-sm ring-1 ring-line ring-inset", live && "ocx-beam--on")}>
-        <span className="min-w-0 flex-1 truncate text-xs leading-4 text-fg-muted tabular-nums">{detail ?? label}</span>
-        {session && (
-          <TrayButton onClick={session.onClick} disabled={session.busy}
-            label={session.busy ? session.busyLabel : session.label} title={session.label}>
-            <IconX />
-          </TrayButton>
-        )}
-        <TrayButton onClick={onRestart} disabled={restarting}
-          label={restarting ? restartingLabel : restartLabel} title={restartLabel}>
-          <AnimatePresence mode="popLayout" initial={false}>
-            {done ? (
-              <motion.svg key="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-                strokeLinecap="round" strokeLinejoin="round" className="text-success"
-                initial={reduce ? false : { scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.4, opacity: 0 }} transition={{ type: "spring", stiffness: 500, damping: 28 }}>
-                <path d="M5 12l5 5L20 7" />
-              </motion.svg>
-            ) : (
-              <motion.span key="refresh" className={cn("inline-flex", restarting && "animate-spin")}
-                initial={reduce ? false : { scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.4, opacity: 0 }}>
-                <IconRefresh />
-              </motion.span>
-            )}
-          </AnimatePresence>
+      </span>
+      {session && (
+        <TrayButton onClick={session.onClick} disabled={session.busy}
+          label={session.busy ? session.busyLabel : session.label} title={session.label}>
+          <IconX />
         </TrayButton>
-        <TrayButton onClick={onStop} disabled={stopping} danger
-          label={stopping ? stoppingLabel : stopLabel} title={stopping ? stoppingLabel : stopLabel}>
-          <IconPower />
-        </TrayButton>
-      </div>
+      )}
+      <TrayButton onClick={onRestart} disabled={restarting}
+        label={restarting ? restartingLabel : restartLabel} title={restartLabel}>
+        <AnimatePresence mode="popLayout" initial={false}>
+          {done ? (
+            <motion.svg key="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
+              strokeLinecap="round" strokeLinejoin="round" className="text-success"
+              initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}>
+              <path d="M5 12l5 5L20 7" />
+            </motion.svg>
+          ) : (
+            <motion.span key="refresh" className={cn("inline-flex", restarting && "animate-spin")}
+              initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}>
+              <IconRefresh />
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </TrayButton>
+      <TrayButton onClick={onStop} disabled={stopping} danger
+        label={stopping ? stoppingLabel : stopLabel} title={stopping ? stoppingLabel : stopLabel}>
+        <IconPower />
+      </TrayButton>
     </div>
   );
 }
@@ -115,8 +109,8 @@ function TrayButton({ onClick, disabled, label, title, danger, children }: {
       aria-label={label}
       title={title}
       className={cn(
-        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[6px] bg-transparent text-fg-muted",
-        "transition-[background-color,color,scale] duration-150 ease-soft active:scale-95",
+        "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[6px] bg-transparent text-fg-subtle",
+        "transition-[background-color,color] duration-150 ease-soft",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5",
         danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-accent-soft hover:text-fg",

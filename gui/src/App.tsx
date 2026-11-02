@@ -312,10 +312,8 @@ export default function App() {
   const themeSwitch = <ThemeSwitch theme={theme} onChange={setTheme} />;
   const displayedVersion: string = healthPoll.data?.version ?? __APP_VERSION__;
   const uptime = healthPoll.data?.uptime ?? null;
-  // The proxy card's second line: how long it has been up, in the Home tile's own words.
-  const uptimeLabel = uptime === null ? undefined : t("shellV2.proxyUptime", {
-    time: t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }),
-  });
+  // The sidebar row is narrow, so it shows the time alone; the status word is its tooltip.
+  const uptimeLabel = uptime === null ? undefined : t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) });
 
   const [stopping, setStopping] = useState(false);
 

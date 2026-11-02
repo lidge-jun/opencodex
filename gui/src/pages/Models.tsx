@@ -2578,7 +2578,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       */}
       <div className="page-head">
         <div className="ui-v2 flex min-w-0 flex-col gap-1">
-          <h2 className="m-0 text-[26px] leading-tight font-semibold tracking-[-0.025em] text-fg">{t("nav.models")}</h2>
+          <h2 className="m-0 text-title font-semibold tracking-[-0.025em] text-fg">{t("nav.models")}</h2>
           <p className="m-0 text-[14px] leading-5 text-fg-muted">{t(SUBTITLE_TKEY[tab][0])}</p>
         </div>
         <div className="page-head-actions">
