@@ -74,10 +74,16 @@ requested model and alias, and every attempt's target), the bundled Codex catalo
 (`src/codex/catalog/pinned-models.ts`), or the bundled metadata catalog for the selected provider
 (`src/generated/model-metadata.ts`). It returns the proxy's copy of the matched id. `servedModel` and
 `resolvedModel` pass it independently at capture (`recordObservedServedModel` and the passthrough
-`openai-model` header in `src/server/responses/passthrough-delivery.ts`, which also rewrites or drops the
-relayed `openai-model` and `x-codex-safety-buffering-faster-model` headers), and again in `addRequestLog`,
+`openai-model` header in `src/server/responses/passthrough-delivery.ts`), and again in `addRequestLog`,
 `normalizeUsageEntry` and hydration through `modelIdentityLogFields`; anything else is not recorded. Relayed
 WebSocket model headers use the same rule with the requested model as the known id.
+`sanitizePassthroughHeaders` in `src/server/relay.ts` applies the rule to the relayed `openai-model` and
+`x-codex-safety-buffering-faster-model` headers itself, so no passthrough branch (redirects, error
+statuses, JSON answered as JSON or re-framed as SSE) can relay an unknown value. The passthrough passes it
+the route's ids plus the models the user configured for the selected provider (`models`,
+`selectedModels`, `retainModels`, `defaultModel`) and the ids its last live discovery cached, so a
+provider-owned hint naming one of them survives as the proxy's copy. Rows do not see that provider list,
+so a served model that only it names is relayed in the header but not recorded.
 `tests/usage/request-log-identity-bounds.test.ts`, `tests/usage/request-log-served-model.test.ts` and
 `tests/server/response-model-identity.test.ts` cover capture, live, ledger, hydration, the `/api/logs` DTO
 and the passthrough header.

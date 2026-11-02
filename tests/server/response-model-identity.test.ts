@@ -63,6 +63,65 @@ describe("a passthrough openai-model header is kept only as a known model id", (
     expect(logCtx.servedModel).toBe(expected);
     expect(JSON.stringify([...response.headers, body, logCtx.servedModel, logCtx.resolvedModel])).not.toContain(PROVIDER_KEY);
   });
+
+  // Every alternate passthrough branch builds its headers through the same filter: redirects, error
+  // statuses, and a JSON upstream answered as JSON or re-framed as SSE.
+  const ALTERNATES: Array<[string, number, boolean, Record<string, string>, string]> = [
+    ...[301, 302, 307, 308].map(status => [`redirect ${status}`, status, false, { location: "https://provider.example.test/moved" }, "location"] as [string, number, boolean, Record<string, string>, string]),
+    ["error 429", 429, false, { "content-type": "application/json" }, "content-type"],
+    ["error 500", 500, false, { "content-type": "application/json" }, "content-type"],
+    ["JSON answered as JSON", 200, false, { "content-type": "application/json" }, "content-type"],
+    ["JSON re-framed as SSE", 200, true, { "content-type": "application/json" }, "content-type"],
+  ];
+  test.each(ALTERNATES)("%s never relays an unknown model header", async (_name, status, stream, extra, present) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const redirect = status >= 300 && status < 400;
+    const body = redirect ? null : status >= 400
+      ? JSON.stringify({ error: { type: "server_error", message: "fixture failure" } })
+      : JSON.stringify(responseSnapshot(undefined));
+    globalThis.fetch = (async () => new Response(body, {
+      status,
+      headers: { ...extra, "openai-model": PROVIDER_KEY, "x-codex-safety-buffering-faster-model": PROVIDER_KEY },
+    })) as unknown as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-openai/gpt-5.5", input: "hi", stream }),
+    }), routedConfig("fixture-openai", "openai-responses", "gpt-5.5"), logCtx, {});
+    const text = await response.text();
+    // Non-vacuous: the response took this branch and kept its ordinary headers.
+    expect(response.status).toBe(status);
+    expect(response.headers.has(present)).toBe(true);
+    expect(response.headers.has("openai-model")).toBe(false);
+    expect(response.headers.has("x-codex-safety-buffering-faster-model")).toBe(false);
+    expect(JSON.stringify([...response.headers, text, logCtx.servedModel, logCtx.resolvedModel])).not.toContain(PROVIDER_KEY);
+  });
+
+  // A provider-owned hint naming a model the user configured for this provider survives as the
+  // proxy's copy; an unconfigured or prefixless value is still dropped.
+  test.each([
+    ["a configured model", "configured-hint-model", "configured-hint-model"],
+    ["an unconfigured model", "unconfigured-hint-model", undefined],
+    ["a prefixless key", PROVIDER_KEY, undefined],
+  ])("the faster-model hint naming %s", async (_name, hint, expected) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    globalThis.fetch = (async () => new Response(JSON.stringify(responseSnapshot(undefined)), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-codex-safety-buffering-enabled": "true", "x-codex-safety-buffering-faster-model": hint },
+    })) as unknown as typeof fetch;
+    const config = routedConfig("fixture-openai", "openai-responses", "gpt-5.5");
+    config.providers["fixture-openai"]!.models = ["gpt-5.5", "configured-hint-model"];
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-openai/gpt-5.5", input: "hi", stream: false }),
+    }), config, { model: "", provider: "" }, {});
+    const text = await response.text();
+    // Non-vacuous: the passthrough answered and relayed its other safety-buffering hint.
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-codex-safety-buffering-enabled")).toBe("true");
+    expect(response.headers.get("x-codex-safety-buffering-faster-model") ?? undefined).toBe(expected);
+    expect(JSON.stringify([...response.headers, text])).not.toContain(PROVIDER_KEY);
+  });
 });
 
 function responseSnapshot(model: unknown): Record<string, unknown> {

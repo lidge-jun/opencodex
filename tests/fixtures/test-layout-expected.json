@@ -1588,5 +1588,5 @@
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
   ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "link-connection-generation.test.ts": "clients"
-  ,"request-log-error-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server"
+  ,"request-log-error-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server"
 }

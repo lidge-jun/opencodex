@@ -1,8 +1,9 @@
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
-import { knownModelIdentity } from "../../lib/model-identity";
 import { routeKnownModels } from "../../usage/log";
+import { getStaleCached } from "../../codex/model-cache";
+import type { OcxProviderConfig } from "../../types";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
@@ -486,16 +487,16 @@ export async function deliverPassthroughResponse(
     });
   }
 
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    // Every relayed header set below goes through this filter with the route's known models, so a
+    // reported model (row and header) is only ever a model id this route or a catalog already names.
+    const passthroughHeaderOptions = {
+      ...codexSafetyBufferingOptions,
+      knownModels: [...routeKnownModels(logCtx), ...providerKnownModels(route.providerName, route.provider)],
+      provider: logCtx.provider,
+    };
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions);
     if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
-    // A reported model is kept, in the row and in the relayed header, only when it equals a model id
-    // this route already knows; the client receives the proxy's copy of that id, or no header.
-    const knownModels = routeKnownModels(logCtx);
-    const resolvedModel = knownModelIdentity(headers.get("openai-model")?.trim(), knownModels, logCtx.provider);
-    for (const name of ["openai-model", "x-codex-safety-buffering-faster-model"]) {
-      const known = name === "openai-model" ? resolvedModel : knownModelIdentity(headers.get(name)?.trim(), knownModels, logCtx.provider);
-      if (known) headers.set(name, known); else headers.delete(name);
-    }
+    const resolvedModel = headers.get("openai-model") ?? undefined;
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
@@ -625,7 +626,7 @@ export async function deliverPassthroughResponse(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions),
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions),
       });
     }
     if (!upstreamResponse.ok) {
@@ -1170,7 +1171,7 @@ export async function deliverPassthroughResponse(
           rememberPassthroughResponseChecked(client.terminal.response);
         }
 
-        const jsonHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+        const jsonHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
         jsonHeaders.set("content-type", "application/json");
         return markPreinspectedJsonResponse(new Response(clientJson, {
           status: upstreamResponse.status,
@@ -1512,7 +1513,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {
@@ -1559,4 +1560,17 @@ export async function deliverPassthroughResponse(
       status: upstreamResponse.status,
       headers,
     });
+}
+
+/**
+ * Model ids the user configured for the selected provider (its models, selection and retention
+ * lists and default) plus the ids its last live discovery cached. A provider-owned model hint that
+ * names one of them is relayed as the proxy's copy; anything else is not.
+ */
+function providerKnownModels(providerName: string, provider: OcxProviderConfig): string[] {
+  return [
+    ...(provider.models ?? []), ...(provider.selectedModels ?? []), ...(provider.retainModels ?? []),
+    ...(provider.defaultModel ? [provider.defaultModel] : []),
+    ...(getStaleCached(providerName) ?? []).map(model => model.id),
+  ];
 }
