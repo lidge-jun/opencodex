@@ -476,7 +476,11 @@ function flush(s: Scope, clean: boolean): boolean {
       const op = s.log[i]!;
       if (op.args.length) db.query(op.sql).run(...op.args);
       else db.exec(op.sql);
-      if ((i + 1) % 256 === 0) prune(db, Date.now());
+      // Touches before every chunk prune, so rows this chunk inserted carry their live last-used time.
+      if ((i + 1) % 256 === 0) {
+        applyTouches(s, db);
+        prune(db, Date.now());
+      }
     }
     // Again after the log: rows the log just inserted take their live last-used time.
     applyTouches(s, db);

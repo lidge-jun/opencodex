@@ -309,3 +309,15 @@ test("a release inside a passive read still commits the final flush", async () =
   expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
 });
 
+
+test("a pin bound and touched in the same pending batch survives a chunk prune", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); flushCodexAffinityStoreForTests();
+  const now = Date.now();
+  const db = new Database(path()); const insert = db.query("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)");
+  db.exec("BEGIN"); for (let i = 0; i < 2048; i++) insert.run(`filler-${i}`, "legacy", "account-a", fence, now - 500, now - 500); db.exec("COMMIT"); db.close();
+  const k = bind(fence); recordThreadTouch(k, "legacy"); live!.lastUsedAt = now;
+  for (let i = 0; i < 255; i++) { const fresh = codexConversationKeyFor(`batch-${i}`, `batch-${i}`); recordThreadBind(fresh, "shared", { scope: "shared", accountId: "account-a", fence, createdAt: now, lastUsedAt: now }); }
+  flushCodexAffinityStoreForTests(); lease.release(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
+});
+
