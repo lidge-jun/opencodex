@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
 import { isSafeResponseHeader, normalizeSafeResponseHeader, safeResponseHeaders } from "../../src/server/safe-response-headers";
+import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
 import { buildWsErrorFrame } from "../../src/server/ws-bridge";
 
 // A provider key with no recognizable prefix, so pattern-based redaction cannot spot it.
@@ -89,15 +90,94 @@ describe("response metadata headers are allowlisted by name and rebuilt by contr
     expect(JSON.stringify([...owner.snapshot()])).not.toContain(PROVIDER_KEY);
   });
 
-  test("identifiers keep their grammar; credential-shaped text does not pass", () => {
-    expect(normalizeSafeResponseHeader("x-request-id", "req_abc-123")).toBe("req_abc-123");
-    expect(normalizeSafeResponseHeader("x-request-id", "req " + PROVIDER_KEY)).toBeUndefined();
-    expect(normalizeSafeResponseHeader("openai-request-id", "a".repeat(129))).toBeUndefined();
+  test("request ids, the models etag and quota limit labels are never relayed", () => {
+    for (const name of ["x-request-id", "openai-request-id", "x-models-etag", "x-codex-primary-limit-name", "x-codex-bengalfox-limit-name"]) {
+      expect(isSafeResponseHeader(name)).toBe(false);
+      expect(normalizeSafeResponseHeader(name, "req_abc-123")).toBeUndefined();
+    }
     expect(normalizeSafeResponseHeader("openai-model", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
     expect(normalizeSafeResponseHeader("openai-model", "model+" + PROVIDER_KEY)).toBeUndefined();
     expect(normalizeSafeResponseHeader("openai-model", "sk-proj-" + PROVIDER_KEY)).toBeUndefined();
-    expect(normalizeSafeResponseHeader("x-codex-primary-limit-name", "GPT-5 (weekly)")).toBe("GPT-5 (weekly)");
-    expect(normalizeSafeResponseHeader("x-codex-primary-limit-name", "line\nbreak")).toBeUndefined();
+  });
+
+  test("the turn-state token is replaced by a proxy handle that maps back", () => {
+    const handle = normalizeSafeResponseHeader("x-codex-turn-state", PROVIDER_KEY)!;
+    expect(handle).toMatch(/^ocx-ts-[0-9a-f]{32}$/);
+    expect(handle).not.toContain(PROVIDER_KEY);
+    expect(resolveTurnStateHandle(handle)).toBe(PROVIDER_KEY);
+    expect(normalizeSafeResponseHeader("x-codex-turn-state", "bad value")).toBeUndefined();
+  });
+
+  test("quota windows are relayed only for known limit families", () => {
+    expect(normalizeSafeResponseHeader("x-codex-primary-used-percent", "5")).toBe("5");
+    expect(normalizeSafeResponseHeader("x-codex-bengalfox-primary-used-percent", "5")).toBe("5");
+    expect(normalizeSafeResponseHeader(`x-codex-${PROVIDER_KEY.toLowerCase()}-primary-used-percent`, "5")).toBeUndefined();
+    expect(normalizeSafeResponseHeader("x-codex-extra-secondary-used-percent", "5")).toBeUndefined();
+  });
+
+  test("no upstream header bytes reach the WebSocket error frame or the metadata frame", () => {
+    const upstreamHeaders: Record<string, string> = {
+      "x-request-id": PROVIDER_KEY, "openai-request-id": PROVIDER_KEY, "x-models-etag": PROVIDER_KEY,
+      "x-codex-turn-state": PROVIDER_KEY, "x-codex-primary-limit-name": PROVIDER_KEY, "x-codex-primary-reset-at": NUMERIC_KEY,
+      [`x-codex-${PROVIDER_KEY.toLowerCase()}-primary-used-percent`]: "5", "x-ratelimit-remaining": "7",
+    };
+    const errorFrame = JSON.stringify(buildWsErrorFrame(429, { message: "Rate limited" }, new Headers(upstreamHeaders)));
+    const owner = new CodexWsMetadata();
+    owner.commit();
+    const metadataFrame = owner.consume({ type: "codex.response.metadata", headers: upstreamHeaders }, 600)!;
+    const snapshot = JSON.stringify([...owner.snapshot()]);
+    // Non-vacuous: each output carries the allowlisted count and the turn-state handle.
+    for (const text of [errorFrame, metadataFrame, snapshot]) {
+      expect(text).toContain("x-ratelimit-remaining");
+      expect(text).toMatch(/ocx-ts-[0-9a-f]{32}/);
+      expect(text.toLowerCase()).not.toContain(PROVIDER_KEY.toLowerCase());
+      expect(text).not.toContain(NUMERIC_KEY);
+    }
+  });
+
+  test("the codex.rate_limits frame is rebuilt from known fields with bounded values", () => {
+    const owner = new CodexWsMetadata();
+    owner.commit();
+    const text = owner.consume({
+      type: "codex.rate_limits", secret: PROVIDER_KEY, nested: { deeper: { key: PROVIDER_KEY } },
+      plan_type: "plus", metered_limit_name: "codex_bengalfox", limit_name: PROVIDER_KEY,
+      rate_limits: {
+        allowed: true, limit_reached: false, extra: PROVIDER_KEY,
+        primary: { used_percent: 33.333333, window_minutes: 300, reset_at: 1_900_000_000, note: PROVIDER_KEY },
+        secondary: { used_percent: Number(NUMERIC_KEY), window_minutes: Number(NUMERIC_KEY), reset_at: 1.5 },
+      },
+      credits: { has_credits: true, unlimited: false, balance: "12.50", owner: PROVIDER_KEY },
+    }, 900)!;
+    expect(JSON.parse(text)).toEqual({
+      type: "codex.rate_limits", plan_type: "plus", metered_limit_name: "codex_bengalfox",
+      rate_limits: {
+        allowed: true, limit_reached: false,
+        primary: { used_percent: 33.33, window_minutes: 300, reset_at: 1_900_000_000 },
+        secondary: { used_percent: 100 },
+      },
+      credits: { has_credits: true, unlimited: false, balance: "12.5" },
+    });
+    expect(owner.snapshot().get("x-codex-bengalfox-secondary-used-percent")).toBe("100");
+    for (const output of [text, JSON.stringify([...owner.snapshot()])]) {
+      expect(output).not.toContain(PROVIDER_KEY);
+      expect(output).not.toContain(NUMERIC_KEY.slice(0, 12));
+    }
+  });
+
+  test("every retained rate-limit field drops a prefixless key", () => {
+    const owner = new CodexWsMetadata();
+    owner.commit();
+    const text = owner.consume({
+      type: "codex.rate_limits", plan_type: PROVIDER_KEY, metered_limit_name: PROVIDER_KEY,
+      rate_limits: { allowed: PROVIDER_KEY, primary: { used_percent: 5, reset_at: Number(NUMERIC_KEY) } },
+      credits: { has_credits: PROVIDER_KEY, balance: NUMERIC_KEY },
+    }, 600)!;
+    // An unknown limit id drops its windows rather than relabelling them as ordinary quota.
+    expect(JSON.parse(text)).toEqual({ type: "codex.rate_limits", rate_limits: {}, credits: {} });
+    expect([...owner.snapshot()]).toHaveLength(0);
+    const ordinary = owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 5, reset_at: Number(NUMERIC_KEY) } } }, 200)!;
+    expect(JSON.parse(ordinary)).toEqual({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 5 } } });
+    expect([...owner.snapshot()]).toEqual([["x-codex-primary-used-percent", "5"]]);
   });
 
   test("the native WebSocket metadata path relays the same rebuilt values", () => {

@@ -77,17 +77,34 @@ same check. `tests/usage/request-log-identity-bounds.test.ts` covers capture, li
 response metadata (WebSocket metadata frames, the WS-to-HTTP projection, the HTTP-to-WS error bridge) by
 exact name in a `Map`, so a header named after an `Object.prototype` member (`constructor`, `__proto__`,
 `toString`) never resolves, and `normalizeSafeResponseHeader` returns only primitive strings, validating or
-rebuilding each value against its contract:
-retry advice through `formatClientRetryAfter`; request ids `[A-Za-z0-9_-]` up to 128; models through
-`boundedModelIdentity`; rate-limit counts as non-negative integers (fractions round down, clamped to
-10^12); rate-limit resets as integer seconds (rounded up, clamped to eight days) or Go-style durations
-rebuilt from whole seconds (whole milliseconds below one second); booleans, credit balances and quota
-percentages, windows and reset times as numbers this proxy formats; turn state and etags by token
-grammar. Codex quota windows may name a limit family
-(`x-codex-<family>-primary-used-percent`), whose name segment follows the native frame's bounded grammar.
-Free-text headers such as the promo message are not relayed. `codex-ws-metadata.ts` checks the raw byte
-budget first, then keeps only normalized values. `tests/server/safe-response-headers.test.ts` covers the
-allowlist and each contract.
+rebuilding each value against its contract, so no upstream bytes are copied:
+retry advice through `formatClientRetryAfter`; models through `boundedModelIdentity`; rate-limit counts
+as non-negative integers (fractions round down, clamped to 10^12); rate-limit resets as integer seconds
+(rounded up, clamped to eight days) or Go-style durations rebuilt from whole seconds (whole milliseconds
+below one second); booleans, credit balances and quota percentages, windows and reset times as numbers
+this proxy formats. Codex quota windows are relayed for the ordinary family and the metered
+`bengalfox` family only (`CODEX_QUOTA_FAMILIES`): a header name is upstream text too, so any other family
+is dropped. Request ids, the models etag (the client reads this proxy's own catalog, which carries no
+validator), quota limit labels and free-text headers such as the promo message are not relayed.
+
+The turn-state token is the one value a client must send back: Codex replays `x-codex-turn-state` on
+later requests of the turn, and on the WebSocket upgrade, to keep the turn on one backend.
+`src/server/turn-state-handles.ts` issues a random handle (`ocx-ts-` and 32 hex digits) per token,
+holds the mapping in process memory (bounded to 4096 entries, six-hour expiry), and translates it back at
+ingress: the server's `fetch` entry rewrites the inbound header, which also covers WebSocket upgrades,
+and the WebSocket message handler rewrites `client_metadata["x-codex-turn-state"]` in each frame. An
+unknown or expired handle is removed; a value that is not a handle passes unchanged.
+
+`codex-ws-metadata.ts` checks the raw byte budget first, then keeps only normalized values. It rebuilds
+the native `codex.rate_limits` frame field by field: known limit ids (`codex`, `codex_bengalfox`), a
+closed set of plan labels, the `allowed`/`limit_reached` flags, quota windows with the percent clamped to
+100 at two decimals and integer window and reset values, and the credit flags with a reformatted balance.
+Every other field is discarded, and the windows of an unknown limit id are dropped rather than relabelled.
+The connection-level `x-reasoning-included` seed stays present, since Codex reads it by presence, but
+carries only an exact `true`/`false` or an empty value.
+`tests/server/safe-response-headers.test.ts` covers the allowlist, each contract and both WebSocket
+consumers; `tests/server/turn-state-handles.test.ts` covers the handle map and drives a real server over
+HTTP and WebSocket.
 
 ## Client retry advice
 

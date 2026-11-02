@@ -216,6 +216,7 @@ import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-er
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
+import { translateInboundTurnState } from "../turn-state-handles";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -324,6 +325,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // `maxInboundBodyBytes` edit needs a restart, which the config doc states.
       maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
+      // A turn-state handle this proxy issued maps back to the upstream token before any route reads it.
+      translateInboundTurnState(req.headers);
       const ingress = ingressForServer(requestServer);
       // Bind management-origin trust to the actual Bun listener object resolved above.
       // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.

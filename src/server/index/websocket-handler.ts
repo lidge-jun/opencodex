@@ -93,6 +93,7 @@ import type { ServeOptionsContext } from "./serve-options";
 import type { RequestMetricsRecorder } from "../request-metrics";
 import { resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
+import { translateInboundTurnStateMetadata } from "../turn-state-handles";
 
 /**
  * The WebSocket half of the Bun.serve options, split out of serve-options.ts to keep that file
@@ -212,6 +213,7 @@ export function createWebsocketHandler(
         let frame: Record<string, unknown>;
         try {
           frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>;
+          translateInboundTurnStateMetadata(frame);
         } catch {
           return; // text-only contract; ignore unparseable frames
         }

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
+import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
 import {
   buildWarmupCompletionFrames,
   pumpResponsesSseToWebSocket,
@@ -323,13 +324,14 @@ describe("WS endpoint re-framer (120/132)", () => {
       "x-codex-secondary-primary-reset-at": "1781928000",
       "x-codex-secondary-limit-name": "Secondary",
     }));
+    // The turn-state token comes back as a proxy handle; unknown families and limit labels are dropped.
+    expect(resolveTurnStateHandle(outbound["x-codex-turn-state"]!)).toBe("state");
+    expect(outbound["x-codex-turn-state"]).toMatch(/^ocx-ts-[0-9a-f]{32}$/);
     expect(outbound).toEqual({
       "retry-after": "2",
-      "x-codex-turn-state": "state",
+      "x-codex-turn-state": outbound["x-codex-turn-state"],
       "x-codex-primary-used-percent": "100",
       "x-codex-primary-window-minutes": "15",
-      "x-codex-secondary-primary-reset-at": "1781928000",
-      "x-codex-secondary-limit-name": "Secondary",
       "x-ratelimit-remaining": "4",
     });
   });

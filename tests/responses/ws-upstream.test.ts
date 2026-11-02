@@ -29,12 +29,12 @@ import {
   CODEX_WS_LIVENESS_PING_INTERVAL_MS,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../../src/server/responses/ws-upstream";
-import type { OcxProviderConfig } from "../../src/types";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, shouldUseCodexWsUpstream, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { installCompactionRoutingAclFixture as installRoutingAclFixture } from "../helpers/compaction-routing-fixtures";
-// Allowlisted metadata names only: ten quota headers per family, so 128 headers span 13 families.
+// Quota headers under families this proxy does not know: ten per family, all of them dropped.
 const quotaFamilyHeaders = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`x-codex-family-${Math.floor(i / 10)}-${["primary-used-percent", "primary-window-minutes", "primary-reset-at", "secondary-used-percent", "secondary-window-minutes", "secondary-reset-at", "tertiary-used-percent", "tertiary-window-minutes", "tertiary-reset-at", "limit-name"][i % 10]}`, "1"]));
 installRoutingAclFixture();
 
@@ -765,8 +765,8 @@ describe("codexWsUpstreamFetch", () => {
     expect(response.headers.get("x-codex-primary-used-percent")).toBe("31");
     expect(response.headers.get("x-codex-primary-window-minutes")).toBe("10080");
     expect(response.headers.get("x-codex-credits-balance")).toBe("12.5");
-    expect(response.headers.get("x-models-etag")).toBe("catalog-v2");
-    expect(response.headers.get("x-codex-turn-state")).toBe("turn-state");
+    expect(response.headers.has("x-models-etag")).toBe(false);
+    expect(resolveTurnStateHandle(response.headers.get("x-codex-turn-state")!)).toBe("turn-state");
     expect(response.headers.has("authorization")).toBe(false);
     expect(response.headers.has("set-cookie")).toBe(false);
     const text = await response.text();
@@ -928,8 +928,8 @@ describe("codexWsUpstreamFetch", () => {
       expect(response.headers.get("x-codex-primary-reset-at")).toBe("1800000000");
       expect(response.headers.get("x-codex-credits-has-credits")).toBe("true");
       expect(response.headers.get("retry-after")).toBe("60");
-      expect(response.headers.get("x-request-id")).toBe("fixture-request");
-      expect(response.headers.get("x-codex-extra-secondary-used-percent")).toBe("25");
+      expect(response.headers.has("x-request-id")).toBe(false);
+      expect(response.headers.has("x-codex-extra-secondary-used-percent")).toBe(false);
       expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("0");
       expect(isCodexWsUpstreamResponse(response)).toBe(false);
       expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
@@ -1007,26 +1007,25 @@ describe("codexWsUpstreamFetch", () => {
       expect(response.headers.has("x-codex-primary-reset-at")).toBe(false);
       expect(response.headers.get("x-codex-secondary-used-percent")).toBe("40");
       expect(response.headers.get("x-codex-secondary-reset-at")).toBe("1900000000");
-      expect(response.headers.get("x-models-etag")).toBe("prelude-catalog");
+      expect(response.headers.has("x-models-etag")).toBe(false);
       expect(observations).toEqual(["30"]);
       expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
       expect(await response.json()).toEqual({ error: refusal.error });
     });
 
-    const boundedHeaders = quotaFamilyHeaders;
     const quotaFamilies = (count: number) => Object.fromEntries(
       Array.from({ length: count }, (_, i) => [`x-codex-family-${i}-primary-used-percent`, "1"]));
     test.each([
       ["value", { "x-codex-turn-state": "x".repeat(4096) }, true],
       ["value overflow", { "x-codex-turn-state": "x".repeat(4097) }, false],
       ["UTF-8 overflow", { "x-codex-turn-state": "é".repeat(2049) }, false],
-      ["header count", boundedHeaders(128), true], ["header count overflow", boundedHeaders(129), false],
-      ["families", quotaFamilies(16), true], ["family overflow", quotaFamilies(17), false],
+      ["unknown families are dropped", { ...quotaFamilyHeaders(129), ...quotaFamilies(17) }, true],
     ] as Array<[string, Record<string, string>, boolean]>)("enforces metadata budget: %s", async (_name, headers, accepted) => {
       const response = await receive({ ...refusal, headers });
       if (accepted) {
         expect(response.status).toBe(429);
-        for (const [name, value] of Object.entries(headers)) expect(response.headers.get(name)).toBe(value);
+        // Turn state returns as a proxy handle for the same token; unknown quota families never pass.
+        for (const [name, value] of Object.entries(headers)) expect(name === "x-codex-turn-state" ? resolveTurnStateHandle(response.headers.get(name)!) : response.headers.get(name)).toBe(name === "x-codex-turn-state" ? value : null);
         expect(await response.json()).toEqual({ error: refusal.error });
       } else {
         // The overflow lands before any response event: an honest 502, never a 200 whose
@@ -1655,12 +1654,12 @@ describe("codexWsUpstreamFetch", () => {
 });
 
 describe("native WS metadata boundaries", () => {
-  test("tertiary and label-only metadata families share the native family budget", () => {
+  test("unknown tertiary and label-only metadata families are dropped without spending the budget", () => {
     for (const suffix of ["tertiary-used-percent", "limit-name"]) {
       const owner = new CodexWsMetadata();
       owner.commit();
       const headers = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-codex-family-${i}-${suffix}`, "1"]));
-      expect(() => owner.consume({ type: "codex.response.metadata", headers }, 2000)).toThrow("header budget");
+      expect(owner.consume({ type: "codex.response.metadata", headers }, 2000)).toBe('{"type":"codex.response.metadata","headers":{}}');
       expect([...owner.snapshot()]).toHaveLength(0);
     }
   });
@@ -1709,8 +1708,8 @@ describe("native WS metadata boundaries", () => {
 
   test("metadata value and cumulative prelude bounds cannot be bypassed by small frames", () => {
     const owner = new CodexWsMetadata();
-    owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES);
-    expect(() => owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES + 1) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES + 1)).toThrow("value");
+    owner.consume({ type: "codex.response.metadata", headers: { "x-codex-turn-state": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES);
+    expect(() => owner.consume({ type: "codex.response.metadata", headers: { "x-codex-turn-state": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES + 1) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES + 1)).toThrow("value");
     const prelude = new CodexWsMetadata();
     prelude.consume({ type: "codex.rate_limits" }, CODEX_WS_METADATA_MAX_BYTES);
     expect(() => prelude.consume({ type: "codex.rate_limits" }, 1)).toThrow("prelude");
@@ -1721,7 +1720,7 @@ describe("native WS metadata boundaries", () => {
     const owner = new CodexWsMetadata(() => { calls++; });
     owner.commit();
     const text = owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "good", authorization: "secret", "set-cookie": "secret", "x-codex-turn-state": "bad\r\nvalue" } }, 100);
-    expect(text).toBe('{"type":"codex.response.metadata","headers":{"x-models-etag":"good"}}');
+    expect(text).toBe('{"type":"codex.response.metadata","headers":{}}');
     owner.finish();
     const endedCalls = calls;
     owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 40 } } }, 100);
@@ -1729,22 +1728,16 @@ describe("native WS metadata boundaries", () => {
     expect(owner.snapshot().has("x-codex-primary-used-percent")).toBe(false);
   });
 
-  test("metadata family and header-count caps reject only the overflowing addition", () => {
+  test("only known quota families are relayed, so unknown family names never reach the budget", () => {
     const families = new CodexWsMetadata();
     families.commit();
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 17; i++) {
       families.consume({ type: "codex.rate_limits", metered_limit_name: `codex-family-${i}`, rate_limits: { primary: { used_percent: i } } }, 100);
     }
-    expect(families.snapshot().get("x-codex-family-15-primary-used-percent")).toBe("15");
-    expect(() => families.consume({ type: "codex.rate_limits", metered_limit_name: "codex-family-16", rate_limits: { primary: { used_percent: 16 } } }, 100)).toThrow("header budget");
-    expect(families.snapshot().has("x-codex-family-16-primary-used-percent")).toBe(false);
-    const headers = new CodexWsMetadata();
-    headers.commit();
-    headers.consume({ type: "codex.response.metadata", headers: quotaFamilyHeaders(128) }, 4000);
-    expect([...headers.snapshot()]).toHaveLength(128);
-    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-codex-family-12-tertiary-window-minutes": "2" } }, 100)).not.toThrow();
-    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-codex-family-13-limit-name": "1" } }, 100)).toThrow("header budget");
-    expect([...headers.snapshot()]).toHaveLength(128);
+    families.consume({ type: "codex.response.metadata", headers: quotaFamilyHeaders(129) }, 4000);
+    expect([...families.snapshot()]).toHaveLength(0);
+    families.consume({ type: "codex.rate_limits", metered_limit_name: "codex_bengalfox", rate_limits: { primary: { used_percent: 3 } } }, 100);
+    expect([...families.snapshot()]).toEqual([["x-codex-bengalfox-primary-used-percent", "3"]]);
   });
 });
 

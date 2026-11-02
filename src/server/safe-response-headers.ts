@@ -1,17 +1,17 @@
 import { formatClientRetryAfter } from "../lib/client-retry-after";
 import { boundedModelIdentity } from "../lib/model-identity";
+import { issueTurnStateHandle } from "./turn-state-handles";
 
 /**
  * Upstream response headers a client may receive as response metadata (WebSocket frames, the
  * WS-to-HTTP projection). Each name is listed explicitly and each value is validated or rebuilt
- * against its contract; a value that does not fit is dropped. Nothing is copied by prefix.
+ * against its contract; a value that does not fit is dropped. No value is copied: numbers and
+ * booleans are reformatted, models pass the identity bound, and the turn-state token is replaced by
+ * a proxy-owned handle. Request ids, the models etag and quota limit labels are not relayed.
  */
 type Normalize = (value: string) => string | undefined;
 
-const REQUEST_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const OPAQUE_TOKEN = /^[A-Za-z0-9._~+/=:-]{1,8192}$/;
-const ETAG = /^(?:W\/)?"?[A-Za-z0-9._:-]{1,128}"?$/;
-const LIMIT_NAME = /^[A-Za-z0-9 ._()-]{1,64}$/;
 const NUMBER = /^\d{1,15}(?:\.\d{1,6})?$/;
 
 function bool(value: string): string | undefined {
@@ -88,12 +88,11 @@ const COUNT = count(1e12);
 // "toString") can never resolve to an inherited value.
 const EXACT: ReadonlyMap<string, Normalize> = new Map<string, Normalize>([
   ["retry-after", value => formatClientRetryAfter(value)],
-  ["x-request-id", value => REQUEST_ID.test(value) ? value : undefined],
-  ["openai-request-id", value => REQUEST_ID.test(value) ? value : undefined],
-  ["x-codex-turn-state", value => OPAQUE_TOKEN.test(value) ? value : undefined],
+  // Codex echoes the turn-state token on later requests of the turn; it receives a handle that
+  // src/server/turn-state-handles.ts maps back before the request is forwarded.
+  ["x-codex-turn-state", value => OPAQUE_TOKEN.test(value) ? issueTurnStateHandle(value) : undefined],
   ["openai-model", boundedModelIdentity],
   ["x-codex-safety-buffering-faster-model", boundedModelIdentity],
-  ["x-models-etag", value => ETAG.test(value) ? value : undefined],
   ["x-reasoning-included", bool],
   ["x-codex-credits-has-credits", bool],
   ["x-codex-credits-unlimited", bool],
@@ -117,10 +116,13 @@ const EXACT: ReadonlyMap<string, Normalize> = new Map<string, Normalize>([
   ["x-ratelimit-tokens-query-cost", COUNT],
 ]);
 
-// Codex quota windows, optionally per limit family (`x-codex-<family>-primary-used-percent`). The
-// family segment follows the same bounded grammar the native rate-limit frame uses.
-const QUOTA_WINDOW = /^x-codex(?:-[a-z0-9]+(?:-[a-z0-9]+){0,3})?-(?:primary|secondary|tertiary)-(used-percent|window-minutes|reset-at)$/;
-const QUOTA_LIMIT_NAME = /^x-codex(?:-[a-z0-9]+(?:-[a-z0-9]+){0,3})?-limit-name$/;
+/**
+ * Codex quota limit families this proxy relays: the ordinary windows (`x-codex-primary-...`) and the
+ * metered `bengalfox` family (`x-codex-bengalfox-primary-...`, native `codex_bengalfox`). A header
+ * name is upstream text too, so any other family is dropped rather than echoed.
+ */
+export const CODEX_QUOTA_FAMILIES = ["bengalfox"] as const;
+const QUOTA_WINDOW = new RegExp(`^x-codex(?:-(?:${CODEX_QUOTA_FAMILIES.join("|")}))?-(?:primary|secondary|tertiary)-(used-percent|window-minutes|reset-at)$`);
 const QUOTA_VALUE: ReadonlyMap<string, Normalize> = new Map<string, Normalize>([
   ["used-percent", decimal(100)],
   ["window-minutes", integer(1e7)],
@@ -133,7 +135,6 @@ function normalizer(lower: string): Normalize | undefined {
   if (exact) return exact;
   const window = QUOTA_WINDOW.exec(lower);
   if (window) return QUOTA_VALUE.get(window[1]!);
-  if (QUOTA_LIMIT_NAME.test(lower)) return value => LIMIT_NAME.test(value) ? value : undefined;
   return undefined;
 }
 

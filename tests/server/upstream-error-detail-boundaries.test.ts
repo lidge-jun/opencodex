@@ -71,8 +71,14 @@ async function exchange(path: string, body: Record<string, unknown>, headers: Re
     });
     await res.text();
     const responseHeaders = [...res.headers.entries()];
-    await Bun.sleep(150);
-    const rows = getRequestLogEntries().filter(entry => !earlier.has(entry.requestId));
+    // Poll until the request's row is live and persisted, so no absence check can pass on an empty read.
+    const deadline = Date.now() + 5_000;
+    let rows = getRequestLogEntries().filter(entry => !earlier.has(entry.requestId));
+    while (rows.length === 0 || !rows.every(row => readUsageEntries().some(entry => entry.requestId === row.requestId))) {
+      if (Date.now() > deadline) throw new Error(`no persisted request-log row for ${path} within 5s (live rows: ${rows.length})`);
+      await Bun.sleep(20);
+      rows = getRequestLogEntries().filter(entry => !earlier.has(entry.requestId));
+    }
     return { status: res.status, responseHeaders, rows, printed };
   } finally {
     try { await server?.stop(true); } finally { Object.assign(console, originals); }
@@ -120,7 +126,9 @@ describe("upstream error details stay out of retry advice and request logs", () 
           expect(persisted).not.toContain(PROVIDER_KEY);
           expect(persisted).not.toContain(NUMERIC_KEY);
           const ids = new Set(result.rows.map(row => row.requestId));
-          const hydrated = JSON.stringify(readUsageEntries().filter(entry => ids.has(entry.requestId)).map(requestLogEntryFromPersistedUsage));
+          const hydratedRows = readUsageEntries().filter(entry => ids.has(entry.requestId)).map(requestLogEntryFromPersistedUsage);
+          expect(hydratedRows.length).toBe(ids.size);
+          const hydrated = JSON.stringify(hydratedRows);
           expect(hydrated).not.toContain(PROVIDER_KEY);
           expect(hydrated).not.toContain(NUMERIC_KEY);
           const printed = result.printed.join("\n");
