@@ -22,7 +22,8 @@ function image(value: unknown): Obj {
   const data = string(value, "image", true);
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) fail("Invalid image encoding");
   let bytes: Uint8Array;
-  try { bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0)); } catch { return fail("Invalid image encoding"); }
+  // The pattern above already validated the whole string; decode only the signature window.
+  try { bytes = Uint8Array.from(atob(data.slice(0, 16)), c => c.charCodeAt(0)); } catch { return fail("Invalid image encoding"); }
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   if ((data.endsWith("==") && (alphabet.indexOf(data[data.length - 3]!) & 15) !== 0) ||
       (data.endsWith("=") && !data.endsWith("==") && (alphabet.indexOf(data[data.length - 2]!) & 3) !== 0)) fail("Invalid image encoding");

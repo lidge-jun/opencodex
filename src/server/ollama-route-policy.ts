@@ -41,20 +41,33 @@ export function preflightOllamaRoute(config: OcxConfig, selector: string, req: R
   return { ok: true, route };
 }
 
+/** The configured models one enabled provider offers here; shared by the list and the point lookup. */
+function providerCatalogModels(config: OcxConfig, name: string): string[] {
+  const provider = Object.hasOwn(config.providers, name) ? config.providers[name] : undefined;
+  if (!provider || provider.disabled === true) return [];
+  const models = new Set([...(provider.models ?? []), ...(provider.defaultModel ? [provider.defaultModel] : []),
+    ...(provider.retainModels ?? []), ...(provider.selectedModels ?? []),
+    ...(config.customModels ?? []).filter(model => model.provider === name).map(model => model.modelId)]);
+  return [...models].filter(model => model && !(provider.selectedModels?.length && !provider.selectedModels.includes(model)));
+}
+
+function catalogRoute(config: OcxConfig, name: string, model: string, req: Request): { selector: string; route: RouteResult } | undefined {
+  const selector = `${name}/${model}`;
+  const result = preflightOllamaRoute(config, selector, req);
+  return result.ok && result.route.providerName === name && result.route.modelId === model ? { selector, route: result.route } : undefined;
+}
+
 /** Configuration-only inventory; this does not imply any locally stored Ollama model. */
 export function listOllamaRoutes(config: OcxConfig, req: Request): Array<{ selector: string; route: RouteResult }> {
-  const rows: Array<{ selector: string; route: RouteResult }> = [];
-  for (const [name, provider] of Object.entries(config.providers)) {
-    if (provider.disabled === true) continue;
-    const models = new Set([...(provider.models ?? []), ...(provider.defaultModel ? [provider.defaultModel] : []),
-      ...(provider.retainModels ?? []), ...(provider.selectedModels ?? []),
-      ...(config.customModels ?? []).filter(model => model.provider === name).map(model => model.modelId)]);
-    for (const model of models) {
-      if (!model || (provider.selectedModels?.length && !provider.selectedModels.includes(model))) continue;
-      const selector = `${name}/${model}`;
-      const result = preflightOllamaRoute(config, selector, req);
-      if (result.ok && result.route.providerName === name && result.route.modelId === model) rows.push({ selector, route: result.route });
-    }
-  }
-  return rows;
+  return Object.keys(config.providers).flatMap(name =>
+    providerCatalogModels(config, name).flatMap(model => catalogRoute(config, name, model, req) ?? []));
+}
+
+/** The listed route for one selector, with the same eligibility as the list but one preflight. */
+export function findOllamaRoute(config: OcxConfig, selector: string, req: Request): { selector: string; route: RouteResult } | undefined {
+  const slash = selector.indexOf("/");
+  if (slash <= 0) return undefined;
+  const name = selector.slice(0, slash);
+  const model = selector.slice(slash + 1);
+  return providerCatalogModels(config, name).includes(model) ? catalogRoute(config, name, model, req) : undefined;
 }

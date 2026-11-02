@@ -205,6 +205,7 @@ import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
 import type { AdmittedHttpTurnOptions } from "../admitted-http-turn";
 import { isOllamaNativePath } from "../ollama-native-paths";
+import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
@@ -442,7 +443,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               } : {}),
               error: { code: "package_tree_changed", message },
             }, 503, req, policy)
-          : packageTreeChangedResponse(req, policy, message);
+          : isOllamaNativePath(url.pathname)
+            ? withCors(ollamaError(503, message), req, policy)
+            : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;

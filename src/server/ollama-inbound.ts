@@ -19,7 +19,7 @@ import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-mod
 import { handleChatCompletions } from "./chat-completions";
 import { VERSION } from "./management-api";
 import { createNativeFinalLog, type NativeFinalLog } from "./native-final-log";
-import { linkRequestSessionLane, listOllamaRoutes, preflightOllamaRoute } from "./ollama-route-policy";
+import { findOllamaRoute, linkRequestSessionLane, listOllamaRoutes, preflightOllamaRoute } from "./ollama-route-policy";
 import { DecompressedBodyTooLargeError, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, type RequestLogContext } from "./request-log";
 
@@ -54,7 +54,21 @@ export function ollamaError(status: number, message: string, retryAfter?: string
   return new Response(JSON.stringify({ error: message }), { status, headers });
 }
 
-const LOCAL_REFUSAL_CODE = /^[a-z0-9-]{1,64}$/;
+/**
+ * The local refusal codes this surface passes on, each mapped to a constant defined here. The
+ * emitted header value is always the constant; an incoming value only selects it, and any value
+ * not in this table is dropped.
+ */
+const LOCAL_REFUSAL_CODES: ReadonlyMap<string, string> = new Map([
+  ["workflow_sends_exhausted", "workflow_sends_exhausted"],
+  ["workflow_children_exhausted", "workflow_children_exhausted"],
+  ["workflow_concurrency_exhausted", "workflow_concurrency_exhausted"],
+  ["workflow_spend_exhausted", "workflow_spend_exhausted"],
+  ["workflow_tracking_exhausted", "workflow_tracking_exhausted"],
+  ["workflow_send_replayed", "workflow_send_replayed"],
+  ["workflow_pool_history_unresolved", "workflow_pool_history_unresolved"],
+  ["workflow_spend_undurable", "workflow_spend_undurable"],
+]);
 
 /** Reshape an existing proxy refusal (capacity, workflow, drain) keeping its status and retry advice. */
 export function toOllamaRefusal(response: Response): Response {
@@ -63,9 +77,9 @@ export function toOllamaRefusal(response: Response): Response {
     : response.status === 499 ? "request cancelled"
       : response.status === 503 ? "server temporarily unavailable; retry later" : "request refused";
   const native = ollamaError(response.status, message, response.headers.get("retry-after"));
-  // The workflow refusal names its local reason; keep it only in the closed code form.
-  const code = response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER);
-  if (code !== null && LOCAL_REFUSAL_CODE.test(code)) {
+  // The workflow refusal names its local reason; only a recognized code selects our constant.
+  const code = LOCAL_REFUSAL_CODES.get(response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER) ?? "");
+  if (code !== undefined) {
     native.headers.set(WORKFLOW_LOCAL_REFUSAL_HEADER, code);
     native.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
   }
@@ -96,7 +110,10 @@ export async function handleOllamaShow(config: OcxConfig, req: Request, admissio
     return ollamaError(400, "model is required");
   }
   // Same eligibility as /api/tags: a configured concrete route the caller's key may use.
-  if (!eligibleRoutes(config, req, admission).some(row => row.selector === model)) return ollamaError(404, "model not found");
+  // Same eligibility as /api/tags, resolved for this selector only.
+  const row = findOllamaRoute(config, model, req);
+  const scope = resolveAdmissionModelScope(config, admission);
+  if (!row || !routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId })) return ollamaError(404, "model not found");
   // Only facts this proxy knows. No file size, digest, template, license or local model details.
   return Response.json({ details: {}, model_info: {}, capabilities: ["completion"] });
 }

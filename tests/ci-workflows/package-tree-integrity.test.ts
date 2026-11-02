@@ -841,8 +841,9 @@ console.log(JSON.stringify({ calls }));
         const native = await fetch(new URL(path, server.url), {
           method, signal, ...(method === "POST" ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "test/gpt-test", prompt: "hi" }) } : {}),
         });
-        expect({ path, status: native.status }).toEqual({ path, status: 503 });
-        expect(await native.json()).toMatchObject({ error: { code: "package_tree_changed" } });
+        expect({ path, status: native.status, retryAfter: native.headers.get("retry-after") }).toEqual({ path, status: 503, retryAfter: "5" });
+        // Ollama clients read error as a string.
+        expect(await native.json()).toEqual({ error: expect.stringContaining("restart") });
       }
     }));
   });

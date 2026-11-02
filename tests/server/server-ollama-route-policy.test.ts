@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { OcxConfig } from "../../src/types";
-import { listOllamaRoutes, preflightOllamaRoute, linkRequestSessionLane } from "../../src/server/ollama-route-policy";
+import { findOllamaRoute, listOllamaRoutes, preflightOllamaRoute, linkRequestSessionLane } from "../../src/server/ollama-route-policy";
 import { getOrAllocateRequestSessionLane } from "../../src/server/request-log-conversation";
 
 const originalFetch = globalThis.fetch;
@@ -80,6 +80,20 @@ describe("Ollama route preflight", () => {
     expect(again.ok && again.route.provider.headers?.["x-opencode-session"]).toBe(result.route.provider.headers?.["x-opencode-session"]);
     const other = preflightOllamaRoute(c, "opencode-go/glm-5.2", original);
     expect(other.ok && other.route.provider.adapter).toBe("openai-responses");
+    expect(sends).toBe(0);
+  });
+  test("the point lookup matches the list for every selector and refuses everything else", () => {
+    const c = config();
+    c.customModels = [{ id: "custom", provider: "keyed", modelId: "vendor/custom" }];
+    c.providers.off = { adapter: "openai-chat", baseUrl: "https://off.example/v1", authMode: "key", apiKey: "fixture", models: ["model"], disabled: true };
+    const listed = listOllamaRoutes(c, req());
+    expect(listed.map(row => row.selector)).toContain("keyed/vendor/custom");
+    for (const row of listed) expect(findOllamaRoute(c, row.selector, req())?.selector).toBe(row.selector);
+    for (const selector of ["keyed/absent", "off/model", "cursorless/model", "policy/daily", "daily", "combo/group", "model", "/model", "constructor/model", "__proto__/model"]) {
+      expect({ selector, found: findOllamaRoute(c, selector, req()) }).toEqual({ selector, found: undefined });
+    }
+    c.providers.keyed!.selectedModels = ["model"];
+    expect(findOllamaRoute(c, "keyed/vendor/custom", req())).toBeUndefined();
     expect(sends).toBe(0);
   });
 });

@@ -37,8 +37,9 @@ signal, linked to the same session lane; authorization, cookies and admission ke
 hop. Native error bodies are a fixed message chosen by HTTP status (`ollamaInnerErrorMessage`);
 upstream-authored error text is never forwarded. Response headers are generated, never copied:
 `content-type`, `Retry-After` reformatted by `ollamaRetryAfter` as an integer of seconds (at most
-3600) or dropped, `Allow` on 405, a closed `x-opencodex-local-refusal` code on local refusals, plus
-CORS and `x-opencodex-request-id` from the dispatcher. Buffered and NDJSON output map Chat
+3600) or dropped, `Allow` on 405, an `x-opencodex-local-refusal` constant looked up from the known
+workflow refusal codes (anything else is dropped), plus CORS and `x-opencodex-request-id` from the
+dispatcher. The package-tree fence answers these paths in the same native shape. Buffered and NDJSON output map Chat
 finish `stop`, `tool_calls` and `length` to `done_reason`; content filtering, unknown finishes and a
 missing finish are native errors without `done: true`. A stream emits its single `done: true` record
 only after the Chat stream reached EOF and the inner path settled, so trailing usage is included and

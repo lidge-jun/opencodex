@@ -6,6 +6,8 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { OLLAMA_MAX_RETRY_AFTER_SECONDS, ollamaRetryAfter, toOllamaRefusal } from "../../src/server/ollama-inbound";
+import { workflowDenialSummary, type WorkflowDenial } from "../../src/lib/workflow-budget";
+import { workflowRefusalResponse } from "../../src/server/workflow-refusal";
 import type { OcxConfig } from "../../src/types";
 import { usageLogPath } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -142,13 +144,29 @@ describe("Ollama responses never copy upstream header bytes", () => {
 
   test("a refusal keeps only headers this surface generates", () => {
     const refusal = new Response("{}", { status: 429, headers: {
-      "retry-after": NUMERIC_KEY, "x-opencodex-local-refusal": "workflow-sends-exhausted",
+      "retry-after": NUMERIC_KEY, "x-opencodex-local-refusal": "workflow_sends_exhausted",
       "x-upstream-echo": PROVIDER_KEY, "set-cookie": "a=" + PROVIDER_KEY,
     } });
     const native = toOllamaRefusal(refusal);
     expect([...native.headers.keys()].sort()).toEqual(["access-control-expose-headers", "content-type", "retry-after", "x-opencodex-local-refusal"]);
     expect(Number(native.headers.get("retry-after"))).toBeLessThanOrEqual(OLLAMA_MAX_RETRY_AFTER_SECONDS);
-    const odd = toOllamaRefusal(new Response("{}", { status: 503, headers: { "x-opencodex-local-refusal": PROVIDER_KEY + " x" } }));
-    expect([...odd.headers.keys()]).toEqual(["content-type"]);
+    // Values that are not a recognized local code never cross, whatever their shape.
+    for (const forged of [NUMERIC_KEY, PROVIDER_KEY, "workflow-sends-exhausted", "WORKFLOW_SENDS_EXHAUSTED", "constructor"]) {
+      const odd = toOllamaRefusal(new Response("{}", { status: 429, headers: { "x-opencodex-local-refusal": forged } }));
+      expect({ forged, headers: [...odd.headers.keys()] }).toEqual({ forged, headers: ["content-type"] });
+    }
+  });
+
+  test("every real local refusal code maps to this surface's own constant", () => {
+    const reasons: WorkflowDenial[] = ["workflow-concurrency-exhausted", "workflow-sends-exhausted", "workflow-children-exhausted",
+      "workflow-spend-exhausted", "workflow-tracking-exhausted", "workflow-send-replayed", "workflow-spend-undurable", "workflow-pool-history-unresolved"];
+    for (const reason of reasons) {
+      const produced = workflowRefusalResponse(reason);
+      const expected = workflowDenialSummary(reason).code;
+      expect(produced.headers.get("x-opencodex-local-refusal")).toBe(expected);
+      const native = toOllamaRefusal(produced);
+      expect({ reason, status: native.status, code: native.headers.get("x-opencodex-local-refusal") }).toEqual({ reason, status: 429, code: expected });
+      expect(native.headers.get("access-control-expose-headers")).toBe("x-opencodex-local-refusal");
+    }
   });
 });
