@@ -12,6 +12,7 @@ import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import { clearConversationStateIssuerMap, peekConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { resolveClaudeBridgePoolSession } from "../../src/server/claude-bridge-pool-session";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig } from "../../src/types";
@@ -23,9 +24,13 @@ const originalFetch = globalThis.fetch;
 const local: DataPlaneAdmission = { kind: "loopback", source: "loopback" };
 const metadataUuid = "9745d86c-d579-494a-8d0e-f69a5214cf96";
 const principal = (id: string): DataPlaneAdmission => ({ kind: "configured", keyId: "fixture", source: "dedicated", contextPrincipalId: id });
-// Independent oracle for the documented remote scoping; no production helper builds it.
-const scoped = (principalId: string, value: string) => new Bun.CryptoHasher("sha256")
+// What a caller could compute from public inputs; the keyed bridge identity must never equal it.
+const publicDigest = (principalId: string, value: string) => new Bun.CryptoHasher("sha256")
   .update(JSON.stringify(["opencodex-caller-session-v1", principalId, value])).digest("hex");
+// The bridge's own identity for these inputs (same process key), used to read its bookkeeping.
+const bridgeIdentity = (admission: DataPlaneAdmission, ingress: Record<string, string> = {}, metadataSessionId?: string) =>
+  resolveClaudeBridgePoolSession({ ingress: new Headers(ingress), replay: new Headers(ingress), admission, metadataSessionId })!;
+const poolKey = (identity: string) => codexPoolAffinityKey(new Headers({ "session-id": identity, "thread-id": identity }))!;
 const account = (wire: Headers | undefined) => wire?.get("chatgpt-account-id");
 /** The pool identity is selection-only: no attempt may carry a synthesized pair upstream. */
 function expectNoSynthesizedPair(wire: Headers) {
@@ -89,7 +94,7 @@ test("pool binds multiple turns and separates sessions while preserving the nati
 });
 
 test("a synthesized identity with a recorded parent follows the parent's account", async () => {
-  const child = "9745d86c-d579-494a-8d0e-f69a5214cf96";
+  const child = bridgeIdentity(local, {}, metadataUuid);
   // A complete caller pair keeps dev behavior, so this binds the root to the first round-robin pick.
   await turn(undefined, local, { "session-id": "fixture-root", "thread-id": "fixture-root" });
   const childHeaders = new Headers({ "session-id": child, "thread-id": child, "x-codex-parent-thread-id": "fixture-root" });
@@ -135,10 +140,26 @@ test("remote principals sending the same session alias do not share a pool bindi
 
 test("an alias equal to another principal's derived identity does not join that binding", async () => {
   await turn("user_test_account__session_conversation-native", principal("b"));
-  await turn(undefined, principal("a"), { session_id: scoped("b", metadataUuid) });
-  await turn(undefined, principal("a"), { session_id: scoped("b", metadataUuid) });
+  const victim = bridgeIdentity(principal("b"), {}, metadataUuid);
+  await turn(undefined, principal("a"), { session_id: victim });
+  await turn(undefined, principal("a"), { session_id: victim });
   expect(account(wires[1])).not.toBe(account(wires[0]));
   expect(account(wires[2])).toBe(account(wires[1]));
+  expect(peekConversationStateIssuer(poolKey(victim))).toBe(account(wires[0])!.replace(/^account-/, ""));
+});
+
+test("a complete caller pair built from public inputs cannot address a synthesized identity", async () => {
+  await turn("user_test_account__session_conversation-native", principal("b"));
+  const victim = bridgeIdentity(principal("b"), {}, metadataUuid);
+  const victimAccount = account(wires[0])!.replace(/^account-/, "");
+  // Raw metadata session and the publicly computable digest are what an attacker could know.
+  for (const guess of [metadataUuid, publicDigest("b", metadataUuid)]) {
+    expect(guess).not.toBe(victim);
+    expect(poolKey(guess)).not.toBe(poolKey(victim));
+    await turn(undefined, principal("a"), { "session-id": guess, "thread-id": guess });
+  }
+  expect(account(wires[1])).not.toBe(account(wires[0]));
+  expect(peekConversationStateIssuer(poolKey(victim))).toBe(victimAccount);
 });
 
 test("caller session-id aliases and complete pairs reach the wire exactly as sent", async () => {
@@ -214,8 +235,10 @@ for (const variant of ["local-metadata", "remote-alias"] as const) test(`alterna
   const alternate = account(wires[1]);
   expect(alternate).toBeTruthy();
   expect(alternate).not.toBe(account(wires[0]));
-  const identity = variant === "local-metadata" ? metadataUuid : scoped("fixture-principal", "fixture-alias");
-  const key = codexPoolAffinityKey(new Headers({ "session-id": identity, "thread-id": identity }))!;
+  const identity = variant === "local-metadata"
+    ? bridgeIdentity(local, {}, metadataUuid)
+    : bridgeIdentity(principal("fixture-principal"), { session_id: "fixture-alias" });
+  const key = poolKey(identity);
   // The alternate account's conversation-state issuer is recorded under the initial selection key.
   expect(peekConversationStateIssuer(key)).toBe(alternate!.replace(/^account-/, ""));
   await send();

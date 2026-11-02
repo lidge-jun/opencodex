@@ -393,9 +393,9 @@ The Messages bridge carries a separate private Codex pool identity without chang
 It requires admission and excludes spawn markers, any ingress parent or thread header (even empty)
 and a replay with a complete pool key. Explicit session_id then session-id aliases win; conflicting,
 empty-only or invalid aliases block derivation. Otherwise validated metadata, then the Claude session
-header, supplies the value. Loopback keeps it raw; every remote value, aliases included, needs a
-principal and becomes the SHA-256 digest of the caller-session domain, principal and value, so remote
-principals never share or guess another's pool key. Shared system cohorts and prompt_cache_key never
+header, supplies the value. Every value, aliases included, is HMAC-keyed with a process-local secret
+over its admission scope (loopback, or the principal a remote caller must have), so no caller can name
+another scope's pool key, not even as a complete pair. Shared system cohorts and prompt_cache_key never
 supply it. A complete caller-supplied session-id + thread-id pair is not synthesized and stays unscoped.
 
 The identity is selection-only: session-id and thread-id are completed for Codex account selection
