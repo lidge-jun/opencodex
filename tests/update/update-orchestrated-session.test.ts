@@ -51,6 +51,24 @@ test("finalizing a failed transaction retains the recorded installer identity", 
   expect(isUpdateInFlight(f.home)).toBe(true);
 });
 
+test("an untracked installer is fenced before it can start", async () => {
+  const f = fixture(), session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  session.start(); await session.enterMutation();
+  session.noteUntrackedInstaller();
+  expect(read(join(f.home, "update-orchestrated.json"))).toMatchObject({ phase: "mutating", terminationUnconfirmed: true });
+  session.finish({ phase: "failed", error: "installer-termination-unconfirmed" });
+  expect(isUpdateInFlight(f.home)).toBe(true);
+});
+
+test("a confirmed untracked installer releases its fence only after finalization", async () => {
+  const f = fixture(), session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  session.start(); await session.enterMutation(); session.noteUntrackedInstaller();
+  session.confirmInstallerExit();
+  expect(isUpdateInFlight(f.home)).toBe(true);
+  session.finish({ phase: "installed", activeRoot: f.home });
+  expect(isUpdateInFlight(f.home)).toBe(false);
+});
+
 test("preflight must be writable before proceeding", () => {
   const f = fixture();
   const session = createOrchestratedChildSession({ ...f, resultPath: join(f.home, "missing", "result"), verifyIdentity: () => true });

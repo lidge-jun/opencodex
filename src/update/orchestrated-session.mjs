@@ -50,8 +50,8 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
   }
   assertNotRealHomeUnderTest(home);
   const markerPath = join(home, "update-orchestrated.json");
-  let state = "new", mutex, startedAt;
-  const marker = (phase, preserveInstaller = false) => {
+  let state = "new", mutex, startedAt, untrackedPending = false;
+  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false) => {
     let installer = {};
     if (preserveInstaller) {
       const current = JSON.parse(readFileSync(markerPath, "utf8"));
@@ -59,7 +59,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (current.installerPid !== undefined) installer.installerPid = current.installerPid;
       if (current.installerPgid !== undefined) installer.installerPgid = current.installerPgid;
     }
-    atomicJson(markerPath, { pid, phase, startedAt, ...installer });
+    atomicJson(markerPath, { pid, phase, startedAt, ...installer, ...(terminationUnconfirmed ? { terminationUnconfirmed: true } : {}) });
   };
   return {
     start() {
@@ -103,11 +103,20 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       state = "mutating";
       return { ok: true };
     },
+    noteUntrackedInstaller() {
+      if (state !== "mutating") throw new Error("orchestrated session is not mutating");
+      marker("mutating", true, true); untrackedPending = true;
+    },
+    confirmInstallerExit() {
+      if (state !== "mutating" || !untrackedPending) throw new Error("no untracked installer");
+      marker("mutating", true); untrackedPending = false;
+    },
     finish(outcome) {
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
+      if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed" };
       atomicJson(resultPath, outcome);
-      marker(outcome.phase, true);
+      marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed");
       mutex.release(); mutex = undefined; state = "finished";
     },
   };

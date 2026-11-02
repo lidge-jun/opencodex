@@ -146,3 +146,10 @@ test("a failed marker retains the update fence while its installer remains alive
   expect(inspectUpdateMarker(root)).toBe("active");
   expect(isUpdateInFlight(root)).toBe(true);
 });
+
+test("unconfirmed installer termination without a recorded pid remains uncertain", () => {
+  const root = home(), path = join(root, "update-orchestrated.json");
+  writeFileSync(path, JSON.stringify({ pid: process.pid, phase: "failed", startedAt: 1, terminationUnconfirmed: true }));
+  expect(inspectUpdateMarker(root)).toBe("unknown");
+  expect(isUpdateInFlight(root)).toBe(true);
+});

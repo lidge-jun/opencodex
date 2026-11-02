@@ -107,6 +107,7 @@ export function inspectUpdateMarker(home) {
       || !Number.isSafeInteger(marker.startedAt) || Number(marker.startedAt) <= 0) return "unknown";
     const terminal = ["installed", "failed", "refused"].includes(marker.phase);
     if (!terminal && !["preflight", "mutating", "overrun"].includes(marker.phase)) return "unknown";
+    if (marker.terminationUnconfirmed !== undefined && marker.terminationUnconfirmed !== true) return "unknown";
     const ids = [];
     if (!terminal) ids.push(marker.pid);
     for (const key of ["installerPid", "installerPgid"]) {
@@ -119,7 +120,7 @@ export function inspectUpdateMarker(home) {
       try { process.kill(id, 0); return "active"; }
       catch (error) { if (error?.code !== "ESRCH") unknown = true; }
     }
-    return unknown ? "unknown" : "free";
+    return unknown || (marker.terminationUnconfirmed && marker.installerPgid === undefined) ? "unknown" : "free";
   } catch (error) { return !found && error?.code === "ENOENT" ? "free" : "unknown"; }
   finally { if (fd !== undefined) closeSync(fd); }
 }

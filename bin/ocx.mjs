@@ -43,7 +43,7 @@ import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { scopeTranspilerCacheToRuntime } from "../src/lib/bun-transpiler-cache-scope.mjs";
 import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
-import { runNpmInstall } from "../src/update/npm-install.mjs";
+import { runNpmInstall, runWindowsInstallerSync } from "../src/update/npm-install.mjs";
 import { runPosixInstallerSync } from "../src/update/posix-install-supervisor.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
@@ -1003,10 +1003,13 @@ async function runPackageManagerSelfUpdate(manager, child) {
           runNpm: (args) => {
             const invocation = npmInvocation(args);
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
-            if (process.platform === "win32") return runNpmInstall(invocation, {
-              authorizeMutation: homePolicy.authorizeMutation,
-              env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
-            });
+            if (process.platform === "win32") {
+              if (child) session.noteUntrackedInstaller();
+              return runNpmInstall(invocation, {
+                authorizeMutation: homePolicy.authorizeMutation,
+                env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
+              }).then(result => { if (child && result.processTreeExited === true) session.confirmInstallerExit(); return result; });
+            }
             if (!invocation) return { status: 1 };
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
             if (child) return runPosixInstallerSync({ file: invocation.file, args: invocation.args,
@@ -1049,10 +1052,17 @@ async function runPackageManagerSelfUpdate(manager, child) {
           runPnpm: (args, capture = false) => {
             const invocation = pnpmOwnerInvocation(owner, args);
             if (!invocation) return { status: 1 };
-            if (child && process.platform !== "win32" && !capture) return withPnpmCommandCwd(args, cwd => runPosixInstallerSync({
-              file: invocation.file, args: invocation.args, cwd, markerPath: join(configDir(), "update-orchestrated.json"),
-              authorizeMutation: homePolicy.authorizeMutation, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)),
-            }));
+            if (child && !capture) return withPnpmCommandCwd(args, cwd => {
+              const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
+              if (process.platform === "win32") {
+                session.noteUntrackedInstaller();
+                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
+                if (result.processTreeExited === true) session.confirmInstallerExit();
+                return result;
+              }
+              return runPosixInstallerSync({ file: invocation.file, args: invocation.args, cwd, markerPath: join(configDir(), "update-orchestrated.json"),
+                authorizeMutation: homePolicy.authorizeMutation, env });
+            });
             return withPnpmCommandCwd(args, cwd => homePolicy.authorizeMutation("package") ? guardedSpawnSync(homePolicy.authorizeMutation, "package", invocation.file, invocation.args, {
               ...invocation.options,
               stdio: capture ? "pipe" : "inherit",

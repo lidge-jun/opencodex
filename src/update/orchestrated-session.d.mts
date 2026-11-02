@@ -19,5 +19,7 @@ export declare function createOrchestratedChildSession(options: {
   start(): { ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight" };
   finishPreflight(): void;
   enterMutation(): Promise<{ ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight" | "deadline-passed" | "plan-changed" }>;
+  noteUntrackedInstaller(): void;
+  confirmInstallerExit(): void;
   finish(outcome: { phase: "installed"; activeRoot: string } | { phase: "failed"; error?: string; rollbackPerformed?: boolean }): void;
 };
