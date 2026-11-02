@@ -3,7 +3,7 @@ import { buildOrchestratedPlan, type PlanInputs } from "../../src/update/orchest
 import { classifyPlanRuntimeOwner, decideOrchestratedApply, observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
 import { applyOrchestratedBun } from "../../src/update/orchestrated-entry";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, truncateSync, rmSync, cpSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, truncateSync, rmSync, cpSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createOrchestratedChildSession, decodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
@@ -74,6 +74,33 @@ const base: PlanInputs = {
   currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", runtimeOwner: "none",
   cliRoot: "/fixture/ocx", identity: { kind: "absent" }, ownershipPermits: true, updateInFlight: false,
 };
+
+test.each(["bun", "npm"] as const)("%s driver retains verified install when its post-install identity probe throws", async installer => {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-probe-throw-"))), root = join(home, "package");
+  try {
+    for (const dir of ["bin", "src/cli", "node_modules/bun/bin", "node_modules/zod"]) mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.1.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(root, "bin/ocx.mjs"), "x".repeat(1024)); writeFileSync(join(root, "src/cli/index.ts"), "export {};\n");
+    for (const dep of ["bun", "zod"]) writeFileSync(join(root, `node_modules/${dep}/package.json`), "{}");
+    const bun = join(root, "node_modules/bun/bin/bun"); closeSync(openSync(bun, "w")); truncateSync(bun, 10 * 1024 * 1024);
+    const identity = { kind: "live" as const, servingRoot: root, runtime: { pid: 123, port: 1234, hostname: "127.0.0.1", command: ["/bun", "/fixture"] } };
+    const plan = buildOrchestratedPlan({ ...base, installer, cliRoot: root, identity, runtimeOwner: "unmanaged" });
+    let calls = 0;
+    const probe = () => { if (++calls > 1) throw new Error("identity unavailable"); return identity; };
+    const spawn = (_exe: string, args: string[]) => {
+      const child = new EventEmitter(); Object.assign(child, { kill: () => true, unref: () => {} });
+      writeFileSync(args[args.indexOf("--orchestrated-result") + 1]!, JSON.stringify({ phase: "installed", activeRoot: root }));
+      queueMicrotask(() => child.emit("close", 0, null)); return child as never;
+    };
+    const result = installer === "bun"
+      ? await applyOrchestratedBun(plan, { ok: true, mode: "apply" }, { home, identity: async () => probe(), now: () => 100, spawn })
+      : await (await import("../../src/update/" + "orchestrated-node-driver.mjs")).applyNodeOrchestratedUpdate({ ok: true, mode: "apply" }, {
+        installer, currentVersion: "2.0.0", cliRoot: root, home, launcher: join(root, "bin/ocx.mjs"), resolveBun: () => ({ path: bun }),
+        plan: () => ({ status: 0, stdout: JSON.stringify(plan) }), identity: probe, spawn,
+      });
+    expect(result).toMatchObject({ exitCode: 12, result: { applied: true, healthy: false, error: "runtime-unverified" } });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 test("apply admission binds the observed plan and deadline before any update driver runs", () => {
   const plan = buildOrchestratedPlan(base);

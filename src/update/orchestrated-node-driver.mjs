@@ -82,11 +82,15 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
     const previousVerified = verify(plan.cliPath, plan.currentVersion);
     let runtimeHealthy = !plan.restartRequired, restarted = false;
     if (plan.restartRequired) {
+      try {
       const afterBun = deps.resolveBun();
       const after = afterBun ? deps.identity(afterBun) : null;
       if (after?.kind === "live" && after.servingRoot === activeRoot) {
         runtimeHealthy = after.healthVersion === (outcome?.phase === "installed" ? plan.targetVersion : plan.currentVersion);
         restarted = after.runtime.pid !== live?.runtime.pid;
+      }
+      } catch {
+        return { exitCode: 12, result: { ...uncertain().result, applied: targetVerified, error: "runtime-unverified" } };
       }
     }
     return classifyOrchestratedOutcome({ ...base(), childExited: true, childExitCode: waited.code, outcome,

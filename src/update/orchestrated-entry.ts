@@ -152,7 +152,7 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
     childExited: false, childExitCode: null, outcome: null, previousVerified: false, targetVerified: false, runtimeHealthy: false, restarted: false } as const;
   const uncertain = () => classifyOrchestratedOutcome(base);
   let directory: string | undefined;
-  let childStarted = false;
+  let childStarted = false, childEverStarted = false;
   try {
     const before = await deps.identity();
     const live = before.kind === "live" ? before : null;
@@ -170,7 +170,7 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
     const args = ["update", "--version", plan.targetVersion, "--orchestrated-expect", expect, "--orchestrated-result", resultPath,
       ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
     const child = deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1" }, stdio: ["ignore", 2, 2] });
-    childStarted = true;
+    childStarted = true; childEverStarted = true;
     const waited = await waitForOrchestratedChild(child, { overrunMs: (request.notAfter ?? started) + plan.mutationBoundMs - deps.now() });
     if (!waited.confirmed) {
       child.unref();
@@ -186,17 +186,21 @@ export async function applyOrchestratedBun(plan: Plan, request: Request, deps: B
     const previousVerified = verifyOrchestratedInstall(plan.cliPath, plan.currentVersion, "bun");
     let runtimeHealthy = !plan.restartRequired, restarted = false;
     if (plan.restartRequired) {
+      try {
       const after = await deps.identity();
       if (after.kind === "live" && after.servingRoot === activeRoot) {
         const health = await proxyIdentityAt(after.runtime.port, { hostname: after.runtime.hostname, expectedPid: after.runtime.pid });
         runtimeHealthy = health?.version === (outcome?.phase === "installed" ? plan.targetVersion : plan.currentVersion);
         restarted = after.runtime.pid !== live?.runtime.pid;
       }
+      } catch {
+        return { exitCode: 12 as const, result: { ...uncertain().result, applied: targetVerified, error: "runtime-unverified" } };
+      }
     }
     return classifyOrchestratedOutcome({ ...base, childExited: true, childExitCode: waited.code, outcome,
       previousVerified, targetVerified, runtimeHealthy, restarted });
   } catch {
-    if (childStarted) return uncertain();
+    if (childEverStarted) return uncertain();
     return { exitCode: 10 as const, result: { ...uncertain().result, error: "plan-unavailable" } };
   } finally {
     if (directory && !childStarted) { try { rmSync(directory, { recursive: true, force: true }); } catch { /* outcome remains authoritative */ } }
