@@ -39,6 +39,7 @@ import {
   promoteActiveCodexAccount,
   rememberActiveCodexAccount,
   setActiveCodexAccount,
+  unspentManualPreference,
 } from "./active-account";
 
 /**
@@ -315,14 +316,22 @@ export function hasCodexQuotaHeadroom(
  * The score is {@link hasCodexQuotaHeadroom}, the one fill-first and the priority tier already use,
  * so a threshold of 0 or unknown usage counts as headroom. It is a preference, never eligibility:
  * when every account is at or over its threshold the ring sees the full list, exactly as before.
+ *
+ * An operator's unspent manual selection for this scope stays in the list whatever its usage.
+ * Manual selection seeds the ring so the next placement lands on the chosen account, and a
+ * preference must not overrule a person's explicit choice: dropping it here would clear that seed.
+ * Once a dispatch on it succeeds the selection is spent and the account is treated like any other.
  */
 function roundRobinPlacementCandidates(
   config: OcxConfig,
   eligible: readonly string[],
   now: number,
+  quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): readonly string[] {
-  const withHeadroom = eligible.filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
+  const operatorChoice = unspentManualPreference(codexPoolKeyForScope(quotaScope));
+  const withHeadroom = eligible.filter(id =>
+    id === operatorChoice || hasCodexQuotaHeadroom(config, id, selectionOptions, now));
   return withHeadroom.length > 0 ? withHeadroom : eligible;
 }
 
@@ -503,6 +512,7 @@ export function pickUnboundStrategyAccount(
       config,
       listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions),
       now,
+      quotaScope,
       selectionOptions,
     );
     const limit = stickyLimitForConfig(config);

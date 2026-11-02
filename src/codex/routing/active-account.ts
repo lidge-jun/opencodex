@@ -143,6 +143,11 @@ export function manualPreferenceBlocks(poolKey: string, accountId: string): bool
   return preferred !== undefined && preferred !== accountId;
 }
 
+/** The unspent operator selection for this pool scope, if any. Read-only. */
+export function unspentManualPreference(poolKey: string): string | undefined {
+  return manualPreference.get(poolKey);
+}
+
 export function getEffectiveActiveCodexAccountId(config: OcxConfig): string | undefined {
   return runtimeActiveCodexAccountId ?? config.activeCodexAccountId;
 }

@@ -24,6 +24,12 @@ sticky count stay keyed per quota scope through `codexPoolKeyForScope`. A sticky
 the threshold drops out of the list the ring sees, which releases it for the next placement; it rejoins
 rotation once its usage is back under the threshold.
 
+An operator's unspent manual selection for the scope stays in the list whatever its usage
+(`unspentManualPreference` in `src/codex/routing/active-account.ts`). Manual selection seeds the ring so
+the next placement lands on the chosen account; dropping that account here would clear the seed and let
+a preference overrule an explicit choice. A successful dispatch on it spends the selection, after which
+the account is narrowed like any other.
+
 ## What does not move
 
 Bound conversations never reach the narrowing. Round-robin reuses a live binding past the threshold

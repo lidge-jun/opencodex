@@ -10,6 +10,7 @@ import {
   pickAlternateCodexAccount,
   previewCodexAccountForRequest,
   recordCodexUpstreamOutcome,
+  resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
@@ -206,6 +207,17 @@ describe("round-robin new placement prefers accounts under their threshold", () 
     const config = makeConfig({ codexAccountPriorities: { a: 10, b: 10, c: 0 } });
     usage(95, 10, 10);
     expect(newPlacements(config, 4)).toEqual(["b", "b", "b", "b"]);
+  });
+
+  test("an operator's manual selection takes its first placement even over the threshold", () => {
+    const config = makeConfig();
+    usage(95, 10, 10);
+    resetCodexRoutingForManualSelection("a");
+    expect(previewCodexAccountForRequest(null, config, NOW)).toBe("a");
+    expect(resolveCodexAccountForThread(null, config, NOW)).toBe("a");
+    // A successful dispatch spends the one-shot; after that the headroom preference applies again.
+    recordCodexUpstreamOutcome(config, "a", 200, { now: NOW + 1 });
+    expect(newPlacements(config, 4)).not.toContain("a");
   });
 
   test("a child of a live conversation still starts on its parent's account", () => {
