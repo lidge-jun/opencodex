@@ -920,6 +920,7 @@
   "inbound-body-admission.test.ts": "server",
   "inbound-body-budget.test.ts": "server",
   "admitted-http-turn.test.ts": "server", "server-native-final-log.test.ts": "server", "server-ollama-route-policy.test.ts": "server",
+  "server-ollama-inbound.test.ts": "server", "server-ollama-inbound-lifecycle.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server", "responses-ollama-codec.test.ts": "responses",
   "config-concurrent-inbound-body.test.ts": "config",
   "inline-think-boundaries.test.ts": "adapters/openai", "input-admission.test.ts": "server",
