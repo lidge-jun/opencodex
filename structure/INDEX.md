@@ -99,6 +99,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/openai-tiers.md`](providers/openai-tiers.md) | Pool/Direct account modes, API-key separation, and the public provider and quota contract. |
 | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) | Independent credit-evidence renewal for opted-in exhausted Codex pool accounts. |
 | [`providers/openai-accounts.md`](providers/openai-accounts.md) | Migration and restore, wire identity, store concurrency, pool ordering and exclusions, quota observations, and account-bound retention. |
+| [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) | Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries. |
 | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) | Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API. |
 | [`providers/cursor.md`](providers/cursor.md) | Cursor native exec, parameterized models, checkpoints, and active-context usage. |
 | [`providers/google.md`](providers/google.md) | Gemini thought-text, response parts, thought-signature replay, and adjacency repair. |
@@ -289,6 +290,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/installation-id.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
+| `src/codex/routing/selection.ts` | [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/shim.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |

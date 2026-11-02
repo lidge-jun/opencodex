@@ -88,9 +88,9 @@ session affinity and usage-aware new-session selection across those OAuth accoun
 to another account whether the pool is on or off, and the toggle does not switch that off; pause
 an account to keep it out of failover. For **new**
 sessions,
-`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
-lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
-`max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
+`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) keeps the active account until its usage in the window set by `quotaWindow`
+(`five-hour` by default, or `weekly` / `max-utilization`) reaches `autoSwitchThreshold`
+(default 80), then moves to the least-used account, preferring accounts still under their own threshold; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default** and experimental.
 
