@@ -1,5 +1,5 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { acquireOwnershipMutationLease, inspectOwnershipMutationLease, ownershipMutationLeasePath } from "../service/ownership-mutation-lease.mjs";
 import { serviceStateFilesFor } from "../service/install-state-contract.mjs";
 import { homedir } from "node:os";
@@ -7,6 +7,31 @@ import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "./test-home-gu
 
 
 function paths(home) { return [join(home, "sync-update")]; }
+function ensureHome(home) {
+  try { lstatSync(home); return; } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const parent = dirname(home);
+  if (parent === home) throw new Error("missing home authority");
+  ensureHome(parent);
+  try { mkdirSync(home, { mode: 0o700 }); }
+  catch (error) { if (error?.code !== "EEXIST") throw error; }
+  const stat = lstatSync(home);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("home creation was replaced");
+}
+function missingHome(home) {
+  let current = home;
+  for (;;) {
+    try { lstatSync(current); realpathSync.native(current); return current !== home; }
+    catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      // A dangling symlink is not evidence that the home is absent.
+      try { lstatSync(current); throw new Error("unresolved home authority"); }
+      catch (again) { if (again?.code !== "ENOENT") throw again; }
+      const parent = dirname(current);
+      if (parent === current) throw new Error("missing home authority");
+      current = parent;
+    }
+  }
+}
 function mutexPath(home) {
   const canonicalHome = realpathSync.native(home);
   try { lstatSync(join(canonicalHome, "sync-update")); throw new Error("mutex authority path is occupied"); }
@@ -22,6 +47,7 @@ function holderKind(holder) {
 export function tryAcquireUpdateSyncMutex(home, kind, deps = {}) {
   assertNotRealHomeUnderTest(home);
   try {
+    ensureHome(home);
     const lease = acquireOwnershipMutationLease(paths(home), { ...deps, waitMs: 0, isolated: true, holderKind: kind, processImage: () => null, lockPath: mutexPath(home) });
     return { kind: "acquired", release: () => lease.release() };
   } catch (error) {
@@ -36,6 +62,7 @@ export function tryAcquireUpdateSyncMutex(home, kind, deps = {}) {
 export function inspectUpdateSyncMutex(home) {
   assertNotRealHomeUnderTest(home);
   try {
+    if (missingHome(home)) return "free";
     const lock = mutexPath(home);
     try { lstatSync(lock); } catch (error) {
       return error?.code === "ENOENT" ? "free" : "unknown";

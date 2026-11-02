@@ -1,13 +1,35 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectUpdateMarker, inspectUpdateSyncMutex, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
+import { withSyncUpdateGuard } from "../../src/cli/sync-update-guard";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function home() { const root = mkdtempSync(join(tmpdir(), "ocx-update-sync-")); roots.push(root); return root; }
+
+test("a fresh home is free in plans and sync can acquire its guard", async () => {
+  const root = home(), fresh = join(root, "missing"), previous = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = fresh;
+  try {
+    expect(inspectUpdateSyncMutex(fresh)).toBe("free");
+    expect(isUpdateInFlight(fresh)).toBe(false);
+    let ran = false;
+    expect(await withSyncUpdateGuard(async () => { ran = true; return 0; })).toBe(0);
+    expect(ran).toBe(true);
+    if (process.platform !== "win32") expect(statSync(fresh).mode & 0o777).toBe(0o700);
+    expect(inspectUpdateSyncMutex(fresh)).toBe("free");
+  } finally { if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; }
+});
+
+test.skipIf(process.platform === "win32")("a dangling home symlink remains uncertain", () => {
+  const root = home(), link = join(root, "link");
+  symlinkSync(join(root, "absent"), link);
+  expect(inspectUpdateSyncMutex(link)).toBe("unknown");
+  expect(tryAcquireUpdateSyncMutex(link, "sync")).toEqual({ kind: "busy", holder: "unknown" });
+});
 
 test("sync and update holders exclude one another and identify their kind", () => {
   const root = home();
