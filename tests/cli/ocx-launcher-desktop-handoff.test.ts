@@ -64,6 +64,14 @@ function fakeSpawn(error?: string, exitSignal: NodeJS.Signals | null = null) {
 }
 
 describe("Desktop record and handoff policy", () => {
+  test("contract discovery and updates answer from the invoked package even with a Desktop record", () => {
+    for (const argv of [["capabilities", "--contracts", "--json"], ["update", "--plan", "--json"]]) {
+      expect(planDesktopCliHandoff({ platform: "linux", argv, env: {}, recordRead: ready() }, deps))
+        .toEqual({ kind: "continue", reason: "excluded" });
+    }
+    expect(planDesktopCliHandoff({ platform: "linux", argv: ["capabilities", "--json"], env: {}, recordRead: ready() }, deps).kind)
+      .toBe("handoff");
+  });
   test("fixed record location and injected reader path", () => {
     expect(desktopCliRecordPath({ platform: "darwin", home: "/Users/example" })).toBe("/Users/example" + "/.opencodex-desktop/cli.json");
     expect(desktopCliRecordPath({ platform: "win32", env: { USERPROFILE: "C:\\Users\\example" } })).toBe("C:\\Users\\example\\.opencodex-desktop\\cli.json");

@@ -10,6 +10,7 @@ export function desktopHandoffExcluded(argv, env = process.env) {
   const args = argv.filter(arg => !arg.startsWith(PROOF_PREFIX));
   return env.OCX_NO_DESKTOP_HANDOFF === "1"
     || ["update", "uninstall", "remove"].includes(args[0])
+    || (args[0] === "capabilities" && args.includes("--contracts"))
     || (args[0] ?? "").startsWith("__")
     || isCodexCliUpdateInspectionArgv(["node", "ocx.mjs", ...args]);
 }
