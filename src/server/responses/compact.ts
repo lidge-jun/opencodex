@@ -1,3 +1,4 @@
+import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -97,6 +98,7 @@ import { codexFailureWindowOutcomeMeta } from "../../codex/routing/failure-windo
 import {
   applyAccountChangeConversationStateScrub,
   conversationStateBindingFromAuth,
+  compactAlternateAffinityKey,
   accountChangeFileReferenceRefusal,
   rememberServingConversationStateIssuer,
   conversationCarriesUploadedFiles,
@@ -1084,8 +1086,12 @@ export async function handleResponsesCompact(
       } = {},
     ) => {
       // A gateway response is not evidence about any Codex account.
-      if (gatewayTransport || !usesCodexForwardPoolAuth(ctx, route.provider)) return;
+      if (gatewayTransport) return;
       if ((outcome === 401 || outcome === 403) && upstream && wasPermanentAccountRefusal(upstream)) return;
+      if (!usesCodexForwardPoolAuth(ctx, route.provider)) {
+        if (isKeyedRequestOwnedMain(ctx) && typeof outcome === "number" && (!upstream || !isNonReplayableResponse(upstream)) && isCanonicalOpenAiForwardProvider(route.provider)) releaseRequestOwnedMainOnOutcome(ctx, outcome, selectedModelId);
+        return;
+      }
       recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {
         ...meta,
         ...codexFailureWindowOutcomeMeta(ctx),
@@ -1428,9 +1434,7 @@ export async function handleResponsesCompact(
     const scrubCompactStateForAlternate = (alternateAuthCtx: CodexAuthContext): void => {
       const binding = conversationStateBindingFromAuth(
         alternateAuthCtx,
-        (authCtx.kind === "pool" || authCtx.kind === "main-pool")
-          ? authCtx.affinityKey
-          : codexPoolAffinityKey(req.headers),
+        compactAlternateAffinityKey(authCtx, () => codexPoolAffinityKey(req.headers)),
       );
       if (!binding) return;
       for (const body of [raw, compactBody]) {
@@ -1438,7 +1442,7 @@ export async function handleResponsesCompact(
           body,
           bindingKey: binding.bindingKey,
           servingAccountId: binding.accountId,
-          priorAccountId: authCtx.accountId,
+          priorAccountId: conversationStateAccountId(authCtx),
           logCtx,
         });
       }

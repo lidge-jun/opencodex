@@ -561,7 +561,7 @@ A keyring-backed Codex request can carry its own forwardable ChatGPT bearer whil
 in Pool mode. When the effective manual pin is `__main__`, main is not paused, and its cached quota still
 has headroom, auth resolution validates the caller bearer's own gated-model roster and uses that
 request-owned credential before stored-Pool selection. The credential never enters Pool persistence,
-affinity, entitlement cache, or health state, and this decision never reads the physical main credential.
+entitlement cache, or health state, nor by default affinity ([request-owned affinity](codex-request-owned-affinity.md)); this never reads the physical main credential.
 If the caller lacks the requested model, a stored-account model detour may serve the request without
 clearing the healthy shared main pin. With quota-strategy cache affinity, the same detour preserves an
 ordinary added-account binding and shared selection beyond the proactive-switch threshold until genuine
@@ -574,7 +574,7 @@ A forwardable request-owned bearer IS main's live credential for that request â€
 sent if selection named main â€” so `requestOwnedMainCredentialIsLive` answers the pool-liveness
 question yes, and main is compared against the stored accounts on the operator's own usage, priority
 and reset ordering. Selecting main then serves it from the caller's credential without claiming,
-reading, reconciling or priming the stored profile, and without owning affinity or health state.
+reading, reconciling or priming the stored profile, and without owning health state or (by default) affinity.
 A main that wins only through that bearer is also never recorded as the shared active account: the
 request resolves to main, while the persisted and runtime shared active account remain unchanged.
 Answering that question with the pin predicate instead scored main `main_credential_unavailable` on

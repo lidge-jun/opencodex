@@ -675,7 +675,7 @@
     "codex-plugins-doctor.test.ts": "codex-integration",
     "codex-pool-plan-exclusion.test.ts": "codex-integration",
     "codex-pool-refresh-backoff.test.ts": "codex-integration",
-    "codex-pool-request-owned-main.test.ts": "codex-integration",
+    "codex-pool-request-owned-main.test.ts": "codex-integration", "codex-request-owned-affinity.test.ts": "codex-integration",
     "codex-pool-rotation.test.ts": "codex-integration", "codex-auth-release.test.ts": "codex-integration",
     "codex-priority-failback.test.ts": "codex-integration", "codex-round-robin-headroom.test.ts": "codex-integration",
     "codex-idle-window.test.ts": "codex-integration",

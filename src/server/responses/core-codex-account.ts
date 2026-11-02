@@ -1,3 +1,4 @@
+import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
@@ -912,9 +913,7 @@ export async function retryCodexPoolOnAlternateAccount(
   {
     const binding = conversationStateBindingFromAuth(
       retryAuthCtx,
-      firstAuthCtx.kind === "pool" || firstAuthCtx.kind === "main-pool"
-        ? firstAuthCtx.affinityKey
-        : undefined,
+      firstAuthCtx.affinityKey ?? firstAuthCtx.conversationStateKey,
     );
     if (binding) {
       applyAccountChangeConversationStateScrub({
@@ -925,7 +924,7 @@ export async function retryCodexPoolOnAlternateAccount(
           && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
-        priorAccountId: firstAuthCtx.accountId,
+        priorAccountId: conversationStateAccountId(firstAuthCtx),
         logCtx,
       });
     }
@@ -1164,7 +1163,14 @@ export function codexForwardTerminalOutcomeRecorder(
   modelId?: string,
   logCtx?: RequestLogContext,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
-  if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
+  if (!usesCodexForwardPoolAuth(authCtx, provider)) {
+    if (!isKeyedRequestOwnedMain(authCtx) || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+    return (status, httpStatusOverride) => {
+      const quota = [httpStatusOverride, logCtx?.terminalHttpStatus].find(value => value === 429 || value === 402);
+      const outcome = status === "completed" || (status === "incomplete" && quota === undefined) ? 200 : (quota ?? httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
+      releaseRequestOwnedMainOnOutcome(authCtx, outcome, modelId);
+    };
+  }
   const windowMeta = codexFailureWindowOutcomeMeta(authCtx);
   return (status, httpStatusOverride) => {
     const quotaStatus = [httpStatusOverride, logCtx?.terminalHttpStatus]
