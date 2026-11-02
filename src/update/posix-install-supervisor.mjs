@@ -10,12 +10,13 @@ const failed = message => ({ status: null, groupExited: false, processTreeExited
 // The synchronous transaction waits for this separate supervisor, which keeps a
 // detached group leader blocked until its pid and pgid are durable in the marker.
 export function runPosixInstallerSync({ file, args, markerPath, timeoutMs = 180000, env, cwd, authorizeMutation = () => true }) {
-  if (!authorizeMutation("package")) return { status: 1, groupExited: true };
+  if (!authorizeMutation("package")) return { status: 1, groupExited: true, groupKilled: false };
   const input = JSON.stringify({ file, args, markerPath, timeoutMs, cwd });
   const result = guardedSpawnSync(authorizeMutation, "package", process.execPath, [self, "supervise"], { input, encoding: "utf8", env, cwd, stdio: ["pipe", "pipe", "inherit"] });
   try {
     const value = JSON.parse(result.stdout);
-    if (result.status !== 0 || typeof value.groupExited !== "boolean") throw Error("invalid result");
+    if (result.status !== 0 || typeof value.groupExited !== "boolean" || typeof value.groupKilled !== "boolean"
+      || !(value.status === null || Number.isInteger(value.status)) || !(value.signal === null || typeof value.signal === "string")) throw Error("invalid result");
     return value;
   } catch { return failed("installer supervisor did not confirm process-tree exit"); }
 }
@@ -58,11 +59,12 @@ async function supervise(config) {
   const timed = new Promise(resolve => { timer = setTimeout(() => resolve(null), config.timeoutMs); });
   const result = await Promise.race([closed, timed]); clearTimeout(timer);
   // Even an exited leader may have left descendants in its process group.
-  try { if (alive(pid)) process.kill(-pid, "SIGKILL"); }
+  let groupKilled = false;
+  try { if (alive(pid)) { process.kill(-pid, "SIGKILL"); groupKilled = true; } }
   catch (error) { if (error.code !== "ESRCH") return failed("could not terminate installer group"); }
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
-    try { if (!alive(pid)) return { status: result?.status ?? null, signal: result?.signal ?? null, groupExited: true,
+    try { if (!alive(pid)) return { status: result?.status ?? null, signal: result?.signal ?? null, groupExited: true, groupKilled,
       ...(result?.status == null ? { processTreeExited: false } : {}) }; }
     catch (error) { return failed(`could not inspect installer group: ${error.code ?? error.message}`); }
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -77,7 +79,7 @@ async function main() {
   } else if (process.argv[2] === "install") {
     const child = spawn(input.file, input.args, { cwd: input.cwd, env: process.env, stdio: ["ignore", "inherit", "inherit"] });
     child.on("error", () => { process.exitCode = 1; });
-    child.on("close", (code, signal) => { process.exitCode = signal ? 1 : code ?? 1; });
+    child.on("close", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exitCode = code ?? 1; });
   }
 }
 if (process.argv[1] === self) main().catch(() => { process.exitCode = 1; });

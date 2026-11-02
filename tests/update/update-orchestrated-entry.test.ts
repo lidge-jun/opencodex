@@ -17,9 +17,17 @@ function expireFixtureFence(home: string) {
   const path = join(home, "update-orchestrated.json"), marker = JSON.parse(readFileSync(path, "utf8"));
   expect(["failed", "installed", "refused"]).toContain(marker.phase);
   expect(inspectUpdateSyncMutex(home)).toBe("free");
+  if (marker.fenceUntil === undefined) { expect(inspectUpdateMarker(home)).toBe("free"); return; }
   expect(inspectUpdateMarker(home, { now: () => marker.fenceUntil })).toBe("free");
   marker.fenceUntil = marker.startedAt;
   writeFileSync(path, JSON.stringify(marker));
+}
+
+function expectSyncAdmission(pkg: string, cwd: string, env: Record<string, string | undefined>, admitted: boolean) {
+  const sync = spawnSync(process.execPath, [join(pkg, "src/cli/index.ts"), "sync", "--local-only", "--expect-link", "lnk_0000000000000000"],
+    { cwd, env, encoding: "utf8", timeout: 30000 });
+  // A disconnected-link refusal is reached only after the update guard admits sync.
+  expect({ status: sync.status, stderr: sync.stderr }).toMatchObject({ status: admitted ? 5 : 7 });
 }
 
 test.skipIf(process.platform === "win32")("npm child fences identity, deadline and sync before mutation and installs the pinned version", async () => {
@@ -103,6 +111,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed" });
     expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
     expect(isUpdateInFlight(home)).toBe(true);
+    expectSyncAdmission(pkg, root, env, false);
     expireFixtureFence(home);
     rmSync(result); rmSync(log);
     const unauthorized = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
@@ -129,6 +138,9 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     const updated = run(token);
     expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
+    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
+    expect(isUpdateInFlight(home)).toBe(false);
+    expectSyncAdmission(pkg, root, env, true);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
     const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -228,6 +240,9 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const updated = spawnSync(node, args, { cwd: root, env, encoding: "utf8", timeout: 30000 });
     expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
+    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
+    expect(isUpdateInFlight(home)).toBe(false);
+    expectSyncAdmission(pkg, root, env, true);
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
     const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(calls.find(call => call.args[0] === "list").outcome.phase).toBe("preflight");
@@ -366,6 +381,11 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect({ code, stderr, stdout }).toMatchObject({ code: 0 });
     expect(JSON.parse(stdout)).toMatchObject({ schema: "ocx.update.result/1", applied: true, healthy: true, toVersion: "2.1.0" });
+    expect(JSON.parse(readFileSync(join(ocxHome, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
+    expect(isUpdateInFlight(ocxHome)).toBe(false);
+    expectSyncAdmission(pkg, root, { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
+      CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
+      OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir() }, true);
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8").match(/@preview version/g)).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");

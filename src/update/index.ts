@@ -45,6 +45,8 @@ import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";
+import { runWindowsInstallerSync } from "./npm-install.mjs";
 import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
 import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
@@ -953,9 +955,24 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     }
   } else {
     if (!homePolicy.authorizeMutation("package")) return 1;
-    session?.retainInstallerFence();
     installerUncertain = true;
-    r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
+    if (session && process.platform === "win32") {
+      session.noteUntrackedInstaller();
+      const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
+        env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
+      });
+      if (supervised.processTreeExited === true) session.confirmInstallerExit();
+      if (!Number.isInteger(supervised.status)) session.retainInstallerFence();
+      r = supervised;
+    } else if (session) {
+      try {
+        const supervised = runPosixInstallerSync({ file: target.bin, args: target.args,
+          markerPath: join(getConfigDir(), "update-orchestrated.json"),
+          authorizeMutation: homePolicy.authorizeMutation, env: mutation.unprivilegedEnvironment() });
+        if (!Number.isInteger(supervised.status) || supervised.signal || !supervised.groupExited || supervised.groupKilled !== false) session.retainInstallerFence();
+        r = supervised;
+      } catch (error) { session.retainInstallerFence(); throw error; }
+    } else r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,
       encoding: installStdio === "pipe" ? "utf8" : undefined,
       // The parent watchdog reports overrun without killing an active transaction.

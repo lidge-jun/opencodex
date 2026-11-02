@@ -312,9 +312,9 @@ G1 Admission refuses when plan.updateInFlight is true (exit 10 "update-in-flight
    re-reads the marker and proceeds only if it is positively free (finalized or absent); otherwise refused, marker untouched.
 G2 Legacy `ocx update` (both lanes, interactive and package-only workers) also takes the sync/update mutex as "update" for
    its full mutation lifetime and publishes the marker; held by sync → refuse before any mutation with a clear message.
-G3 Fail-closed fence by time bound: the marker is published (phase "mutating", fenceUntil = startedAt + 900000) BEFORE any
-   installer/supervisor is launched. inspectUpdateMarker treats a non-final marker as active while the worker pid or a
-   recorded installer pid/pgid is alive, OR while now < fenceUntil — so a dead worker or an escaped installer descendant
-   keeps updateInFlight=true (and sync refused) until the bound passes. A timeout-terminated installer finishes "failed"
-   but keeps fenceUntil. Escaped descendants that outlive the 15-minute bound are not contained on POSIX (residual risk,
-   documented); Windows uses the Job Object supervisor.
+G3 Fail-closed fence by time bound: publish the mutating marker with fenceUntil = startedAt + 900000 before launching an
+   installer. A dead worker, timeout, killed group, or unconfirmed exit retains the fence; live or uninspectable recorded
+   installers remain active independently. A normally exited installer with its POSIX process group confirmed gone or
+   Windows Job Object confirmed empty clears the fence on finalization. A POSIX descendant that escapes the group can
+   outlive a normally exiting installer and mutate after the fence clears; this residual is accepted. Windows uses the
+   Job Object supervisor. A timed-out escaped POSIX descendant can also outlive the 15-minute bound.

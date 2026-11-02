@@ -42,6 +42,20 @@ test.skipIf(process.platform === "win32")("POSIX installer timeout terminates it
   expect(() => process.kill(pid, 0)).toThrow();
 }, 20000);
 
+test.skipIf(process.platform === "win32")("POSIX supervisor distinguishes a signalled installer from a normal exit", () => {
+  const f = fixture(), marker = join(f.home, "update-orchestrated.json");
+  const node = Bun.which("node"); if (!node) throw new Error("node unavailable");
+  const entry = pathToFileURL(repoPath("src/update/posix-install-supervisor.mjs")).href;
+  for (const [code, expected] of [["process.exit(0)", { status: 0, signal: null, groupExited: true, groupKilled: false }],
+    ["process.kill(process.pid, 'SIGTERM')", { status: null, signal: "SIGTERM", groupExited: true, groupKilled: false }]] as const) {
+    writeFileSync(marker, JSON.stringify({ pid: process.pid, phase: "mutating", startedAt: Date.now() }));
+    const script = `import {runPosixInstallerSync} from ${JSON.stringify(entry)};console.log(JSON.stringify(runPosixInstallerSync({file:${JSON.stringify(node)},args:['-e',${JSON.stringify(code)}],markerPath:${JSON.stringify(marker)},env:process.env})));`;
+    const result = spawnSync(node, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(result.stdout)).toMatchObject(expected);
+  }
+}, 20000);
+
 test.skipIf(process.platform === "win32")("escaped installer descendant keeps the timed-out marker fenced", () => {
   const f = fixture(), marker = join(f.home, "update-orchestrated.json"), descendant = join(f.home, "escaped");
   writeFileSync(marker, JSON.stringify({ pid: 2147483647, phase: "mutating", startedAt: 100, fenceUntil: 200 }));

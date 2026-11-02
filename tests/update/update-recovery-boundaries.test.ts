@@ -94,7 +94,7 @@ for (const platform of ["win32", "linux"] as const) {
           acquireOwnershipMutationLease: () => ({ token: "fixture", release() {} }),
           transactionalNpmUpdateAsync, transactionalNpmUpdateSync: transactionalNpmUpdate,
           runNpmInstall: async (invocation: { args: string[] }) => { await Promise.resolve(); return stage(invocation.args); },
-          runPosixInstallerSync: ({ args }: { args: string[] }) => ({ ...stage(args), groupExited: true }),
+          runPosixInstallerSync: ({ args }: { args: string[] }) => ({ ...stage(args), groupExited: true, groupKilled: false }),
           launcherUsableAfterNpmUpdate, npmUpdateFailureGuidance, repairCodexShimIfNeeded() {}, launcherStartHint: () => "fixture start",
         }).catch((error: unknown) => { if (typeof error !== "number") throw error; });
         expect(installed).toBe(true);
