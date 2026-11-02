@@ -2,10 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { dispatchOllamaRoute, type OllamaRouteDeps } from "../../src/server/index/ollama-routes";
 import { resetLifecycleDrainStateForTests, setDraining } from "../../src/server/lifecycle";
+import { resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import type { NativeFinalLog, NativeFinalOutcome } from "../../src/server/native-final-log";
 import { bufferedOllama, streamOllama } from "../../src/server/ollama-inbound";
 import { getRequestLogEntries } from "../../src/server/request-log";
@@ -284,6 +285,33 @@ describe("Ollama generation lifecycle", () => {
       expect(persisted?.attempts).toMatchObject(expected);
       expect(persisted?.attemptNormalizationDropped).not.toBe(true);
     });
+  });
+
+  test("the workflow root survives the internal hop, so its token ceiling is enforced", async () => {
+    // Each fixture reply reports 4 tokens; a root ceiling of 20 is spent within a few requests.
+    const statuses = async (root: string | undefined) => {
+      resetWorkflowBudgetsForTest();
+      saveConfig({ ...loadConfig(), spend: { root: { maxTokens: 20 } } } as OcxConfig);
+      const seen: number[] = [];
+      await withServer(async base => {
+        for (let i = 0; i < 10; i++) {
+          const res = await fetch(new URL("/api/chat", base), {
+            method: "POST",
+            headers: { "content-type": "application/json", ...(root ? { "x-codex-parent-thread-id": root } : {}) },
+            body: JSON.stringify({ model: "fx/m1", messages: [{ role: "user", content: "hi" }], stream: false, options: { num_predict: 1 } }),
+          });
+          seen.push(res.status);
+          await res.text();
+        }
+      });
+      return seen;
+    };
+    const rooted = await statuses("ollama-workflow-root-" + crypto.randomUUID());
+    expect(rooted[0]).toBe(200);
+    expect(rooted).toContain(429);
+    // Without a root the request has no root scope, so the root ceiling never applies.
+    expect(await statuses(undefined)).toEqual(Array(10).fill(200));
+    resetWorkflowBudgetsForTest();
   });
 
   test("native rows carry no Chat protocol identity", async () => {

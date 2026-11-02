@@ -9,6 +9,7 @@
   "server-ollama-route-policy.test.ts": "server",
   "server-ollama-inbound.test.ts": "server",
   "server-ollama-inbound-lifecycle.test.ts": "server",
+  "server-ollama-inbound-errors.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
   "responses-ollama-codec.test.ts": "responses"
 }

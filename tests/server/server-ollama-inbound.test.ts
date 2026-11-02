@@ -214,7 +214,8 @@ describe("Ollama-compatible inbound routes", () => {
       await withServer(async base => {
         const res = await post(base, "/api/" + kind, request({ stream: false }));
         expect(res.status).toBe(400);
-        expect((await res.json() as { error: string }).error).toContain("fixture upstream rejected");
+        // Upstream text is never forwarded; the status picks a fixed native message.
+        expect(await res.json()).toEqual({ error: "request rejected" });
         expect(newRows()).toHaveLength(1);
         expect(rowFor(res)!.status).toBe(400);
       });

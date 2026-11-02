@@ -70,6 +70,12 @@ export function createNativeFinalLog(
     commit(outcome) {
       if (committed) return false;
       committed = true;
+      // A native ingress row never persists upstream-authored text: an upstream error can echo
+      // a credential no redaction pattern recognizes. Status, codes we derive, and attribution stay.
+      delete logCtx.upstreamError;
+      delete logCtx.upstreamErrorCode;
+      delete logCtx.upstreamErrorType;
+      delete logCtx.upstreamRequestId;
       let { status, terminalStatus } = outcome;
       if (innerStatus === undefined) {
         // Cut off before the inner path settled: what it observed so far is not a complete

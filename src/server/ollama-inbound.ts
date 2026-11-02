@@ -22,7 +22,9 @@ import { DecompressedBodyTooLargeError, readJsonRequestBody, resolveInboundBodyL
 import { addFinalRequestLog, type RequestLogContext } from "./request-log";
 
 const SHOW_BODY_LIMIT_BYTES = 64 * 1024;
-const SESSION_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id"] as const;
+// Session and workflow identity only: lineage, session lanes and the workflow root's spend
+// ceiling read these from the request Chat sees. Never authorization, cookies or admission keys.
+const IDENTITY_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id", "x-codex-parent-thread-id"] as const;
 
 export function ollamaError(status: number, message: string, headers?: HeadersInit): Response {
   const out = new Headers(headers);
@@ -84,7 +86,7 @@ function failBeforeInner(ids: OllamaLogIds, logCtx: RequestLogContext, status: n
 
 function internalChatRequest(req: Request, chatJson: string): Request {
   const headers = new Headers({ "content-type": "application/json" });
-  for (const name of SESSION_HEADERS) {
+  for (const name of IDENTITY_HEADERS) {
     const value = req.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
@@ -93,13 +95,35 @@ function internalChatRequest(req: Request, chatJson: string): Request {
   return internal;
 }
 
+/**
+ * Native error text is chosen by status only. The inner body can carry upstream-authored text,
+ * which may echo a credential no pattern recognizes, so it is drained and never forwarded.
+ */
+const INNER_ERROR_MESSAGES: Readonly<Record<number, string>> = {
+  400: "request rejected",
+  401: "upstream authentication failed",
+  402: "upstream payment required",
+  403: "request not permitted",
+  404: "model not found",
+  408: "upstream request timed out",
+  409: "request conflict",
+  413: "request too large",
+  422: "request rejected",
+  429: "rate limited; retry later",
+  499: "request cancelled",
+  500: "upstream request failed",
+  502: "upstream request failed",
+  503: "upstream unavailable; retry later",
+  504: "upstream request timed out",
+};
+
+export function ollamaInnerErrorMessage(status: number): string {
+  return INNER_ERROR_MESSAGES[status] ?? (status >= 500 ? "upstream request failed" : "request failed");
+}
+
 async function innerErrorMessage(response: Response): Promise<string> {
-  try {
-    const parsed = JSON.parse(await response.text()) as { error?: { message?: unknown } | string };
-    const message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message;
-    if (typeof message === "string" && message.trim()) return message.slice(0, 500);
-  } catch { /* fall through to the status text */ }
-  return `upstream request failed with status ${response.status}`;
+  await response.body?.cancel().catch(() => {});
+  return ollamaInnerErrorMessage(response.ok ? 502 : response.status);
 }
 
 /** /api/chat and /api/generate. `req` is the admitted, session-promoted request. */

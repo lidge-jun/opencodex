@@ -31,7 +31,11 @@ key's model scope. Show returns no file, digest, template or license facts.
 `keep_alive`, non-JSON formats and remote images are 400s) and projects it to Chat; base64 images
 become Chat `image_url` data URLs with the sniffed media type. `src/server/ollama-inbound.ts` calls
 `handleChatCompletions` with a synthesized request carrying only the content type, caller session
-headers and the client signal, linked to the same session lane. Buffered and NDJSON output map Chat
+and workflow identity headers (`session_id`, `session-id`, `thread-id`, `x-session-id`,
+`x-codex-parent-thread-id`, so the workflow root's spend ceiling still applies) and the client
+signal, linked to the same session lane; authorization, cookies and admission keys never cross the
+hop. Native error bodies are a fixed message chosen by HTTP status (`ollamaInnerErrorMessage`);
+upstream-authored error text is never forwarded. Buffered and NDJSON output map Chat
 finish `stop`, `tool_calls` and `length` to `done_reason`; content filtering, unknown finishes and a
 missing finish are native errors without `done: true`. A stream emits its single `done: true` record
 only after the Chat stream reached EOF and the inner path settled, so trailing usage is included and
@@ -53,6 +57,8 @@ known, the row drops partial usage (so the send settles as unresolved), records
 `observation_barrier_timeout`, and never reports success. Inner Chat runs with
 `suppressProtocolTrace`, so a native row persists no Chat protocol identity (see
 [Protocol Paths](protocol-paths.md#observed-trace)).
+The commit also drops upstream-authored text (`upstreamError`, `upstreamErrorCode`,
+`upstreamErrorType`, `upstreamRequestId`) from the row; status, derived codes and attribution stay.
 
 ## Protocol trace
 
@@ -68,7 +74,9 @@ run. `tests/server/protocol-trace-suppression.test.ts` pins this.
 Coverage: `tests/server/server-ollama-inbound.test.ts` (routes, admission, CORS, buffered and NDJSON
 chat/generate, finish mapping, tools, images, refusals and row agreement),
 `tests/server/server-ollama-inbound-lifecycle.test.ts` (dispatcher ownership, drain, timeout override,
-zero-send selector refusals, cancellation, failover attempts on live and persisted rows),
+zero-send selector refusals, cancellation, failover attempts on live and persisted rows, workflow
+root token ceiling), `tests/server/server-ollama-inbound-errors.test.ts` (fixed error bodies; an
+upstream echoing a prefixless provider key never reaches the body, headers or either log),
 `tests/responses/responses-ollama-codec.test.ts`, `tests/server/server-ollama-route-policy.test.ts`,
 `tests/server/server-native-final-log.test.ts`, `tests/server/admitted-http-turn.test.ts` and
 `tests/server/protocol-trace-suppression.test.ts`. Listener denial is pinned in
