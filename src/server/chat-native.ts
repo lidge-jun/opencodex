@@ -27,7 +27,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
-import { resolveClientRetryAfter } from "../lib/retry-after";
+import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -343,7 +343,8 @@ export async function runNativeChatAttempt(
     cleanupAbort(); upstream.abort();
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
     const refusal = fail(429, error.message, "rate_limit_error");
-    refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+    const advice = formatClientRetryAfter(error.retryAfterSeconds);
+    if (advice !== undefined) refusal.headers.set("Retry-After", advice);
     return refusal;
   }
   // Key selection re-resolves the transport; a single-key route still needs canonical Mistral pacing.
@@ -680,7 +681,8 @@ export async function runNativeChatAttempt(
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = fail(429, sendError.message, "rate_limit_error");
-      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
+      if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
@@ -777,7 +779,7 @@ export async function runNativeChatAttempt(
       status,
       headers: {
         "Content-Type": "application/json",
-        ...(retryAfter ? { "Retry-After": retryAfter } : {}),
+        ...(formatClientRetryAfter(retryAfter) ? { "Retry-After": formatClientRetryAfter(retryAfter)! } : {}),
         ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });

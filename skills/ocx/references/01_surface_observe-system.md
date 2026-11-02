@@ -8,7 +8,27 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 98.
+Declared capabilities: 99.
+
+### `ocx update`
+
+Plan or apply an OpenCodex update.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--plan` | boolean | Preview an orchestrated update with --json. |
+| `--yes` | boolean | Apply an orchestrated update with --json. |
+| `--json` | boolean | Emit a versioned plan or result. |
+| `--tag` | string | Select latest or preview for the legacy update or plan. |
+| `--version` | string | Select an exact version for a plan or apply. |
+| `--expect-plan` | string | Require the apply plan to match this planToken. |
+| `--not-after` | string | Refuse mutation after this Unix millisecond deadline. |
+
+- Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage.
 
 ### `ocx companion`
 

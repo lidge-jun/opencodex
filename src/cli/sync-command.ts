@@ -31,6 +31,8 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       return SYNC_EXPECTATION_USAGE_EXIT;
     }
     const expectation = parsedExpectation.expectation;
+    // The root preflight skips shim repair for every sync so the update/sync mutex is held first.
+    if (!expectation) await (await import("./codex-shim-autorestore")).runCodexShimAutoRestoreAsync();
     const restartScope = readRestartScope(syncArgs, console);
     // The wire field keeps APP-SERVER-ONLY meaning and is deliberately not widened. A
     // remote hub must not end a local user's conversations because a field name acquired
