@@ -77,6 +77,7 @@ const defaultDeps: OrchestratedPlanDeps = {
     const cache = mkdtempSync(join(tmpdir(), "ocx-registry-probe-"));
     const overrides = { npm_config_cache: cache, npm_config_logs_dir: join(cache, "logs"), npm_config_logs_max: "0",
       npm_config_update_notifier: "false", pnpm_config_cache_dir: join(cache, "pnpm-cache"),
+      npm_config_cache_dir: join(cache, "pnpm-cache"), npm_config_store_dir: join(cache, "pnpm-store"),
       pnpm_config_store_dir: join(cache, "pnpm-store"), pnpm_config_state_dir: join(cache, "pnpm-state"),
       BUN_INSTALL_CACHE_DIR: join(cache, "bun-cache"), XDG_CACHE_HOME: join(cache, "xdg-cache"), XDG_STATE_HOME: join(cache, "xdg-state") };
     const keys = new Set(Object.keys(overrides).map(key => key.toLowerCase()));

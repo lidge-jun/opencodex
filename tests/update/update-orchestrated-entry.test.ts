@@ -361,7 +361,7 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
     if (name !== "bun") symlinkSync(repoPath("node_modules", name), join(pkg, "node_modules", name));
   }
   symlinkSync(repoPath("node_modules", "bun"), join(pkg, "node_modules", "bun"));
-  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\nprintf '%s|%s|%s|%s|%s|%s\\n' "$npm_config_cache" "$npm_config_logs_dir" "$npm_config_logs_max" "$npm_config_update_notifier" "$pnpm_config_cache_dir" "$BUN_INSTALL_CACHE_DIR" >> '${envLog}'\n[ "$1" = view ] || exit 1\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\nprintf '%s|%s|%s|%s|%s|%s\\n' "$npm_config_cache" "$npm_config_logs_dir" "$npm_config_logs_max" "$npm_config_update_notifier" "$pnpm_config_cache_dir" "$BUN_INSTALL_CACHE_DIR" >> '${envLog}'\n/bin/mkdir -p "$npm_config_cache"\n: > "$npm_config_cache/probe-write"\n[ "$1" = view ] || exit 1\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
   const nodeCommand = Bun.which("node"); if (!nodeCommand) throw Error("Node required");
   const node = spawnSync(nodeCommand, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
   if (!node) throw Error("Node executable could not be resolved");
