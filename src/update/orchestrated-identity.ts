@@ -4,7 +4,7 @@ import { isLocalAttestationSecret } from "../lib/local-management-attestation";
 import type { HomeOwnershipProof } from "../server/proxy-liveness";
 
 type RecordRead = { kind: "record"; raw: string } | { kind: "missing" } | { kind: "unreadable" };
-type RuntimeIdentity = { pid: number; port: number; hostname: string; command: string[] };
+type RuntimeIdentity = { pid: number; port: number; hostname: string; command: readonly string[] };
 export type ServingIdentity =
   | { kind: "unknown" | "absent" }
   | { kind: "live"; servingRoot: string; runtime: RuntimeIdentity };
