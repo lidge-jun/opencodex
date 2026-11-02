@@ -295,7 +295,7 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
   symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
   writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\ncase "$*" in *dist.integrity*) printf 'sha512-YWJj\\n';; *) if [ -e "$OCX_FIXTURE_PKG/tag-queried" ]; then printf '2.2.0\\n'; else : > "$OCX_FIXTURE_PKG/tag-queried"; printf '2.1.0\\n'; fi;; esac\n`);
   chmodSync(join(path, "npm"), 0o755);
-  writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs");const p=process.env.OCX_FIXTURE_PKG+"/package.json";const m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));'\n`);
+  writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs"),root=process.env.OCX_FIXTURE_PKG;fs.writeFileSync(root+"/installer-ready","");const end=Date.now()+10000;const t=setInterval(()=>{if(!fs.existsSync(root+"/installer-release") && Date.now()<end)return;clearInterval(t);const p=root+"/package.json",m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));},10);'\n`);
   chmodSync(join(path, "bun"), 0o755);
   const proc = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json"], {
     cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
@@ -303,13 +303,28 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
   });
   try {
+    const ready = join(pkg, "installer-ready"), release = join(pkg, "installer-release"), deadline = Date.now() + 15000;
+    while (!existsSync(ready) && Date.now() < deadline && proc.exitCode === null) await Bun.sleep(10);
+    expect(existsSync(ready)).toBe(true);
+    proc.kill("SIGTERM");
+    await Bun.sleep(150);
+    expect(tryAcquireUpdateSyncMutex(ocxHome, "sync")).toMatchObject({ kind: "busy", holder: "update" });
+    expect(isUpdateInFlight(ocxHome)).toBe(true);
+    writeFileSync(release, "release");
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect({ code, stderr, stdout }).toMatchObject({ code: 0 });
     expect(JSON.parse(stdout)).toMatchObject({ schema: "ocx.update.result/1", applied: true, healthy: true, toVersion: "2.1.0" });
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8").match(/@latest version/g)).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    if (proc.exitCode === null) {
+      writeFileSync(join(pkg, "installer-release"), "release");
+      const ended = await Promise.race([proc.exited.then(() => true), Bun.sleep(15000).then(() => false)]);
+      if (!ended) throw new Error(`test worker did not exit; retained ${root}`);
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 }, 60000);
 
 test("a source checkout update plan emits one JSON refusal in a temporary home", async () => {
