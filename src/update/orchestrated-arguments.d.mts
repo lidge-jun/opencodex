@@ -7,3 +7,4 @@ export type OrchestratedUpdateArgs = { ok: false } | {
   notAfter?: number;
 };
 export declare function parseOrchestratedUpdateArgs(argv: readonly string[]): OrchestratedUpdateArgs;
+export declare function isOrchestratedUpdateArgv(argv: readonly string[]): boolean;

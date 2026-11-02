@@ -1,5 +1,10 @@
 const CORE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
+export function isOrchestratedUpdateArgv(argv) {
+  return argv.some(arg => ["--plan", "--yes", "--json", "--expect-plan", "--not-after"].includes(arg)
+    || /^(--expect-plan|--not-after)=/.test(arg));
+}
+
 function strictSemver(value) {
   if (value.length > 128) return false;
   const match = CORE.exec(value);
@@ -24,6 +29,7 @@ export function parseOrchestratedUpdateArgs(argv) {
   }
   const plan = flags.has("--plan"), apply = flags.has("--yes");
   if (plan === apply || !flags.has("--json")) return { ok: false };
+  if (apply && flags.has("--tag")) return { ok: false };
   if (flags.has("--tag") && flags.has("--version")) return { ok: false };
   const tag = flags.get("--tag"), version = flags.get("--version");
   if (tag !== undefined && tag !== "latest" && tag !== "preview") return { ok: false };
