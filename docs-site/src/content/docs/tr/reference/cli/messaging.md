@@ -15,7 +15,8 @@ stdio app-server başlatır. Kayıtlı konuşmaların canlı olduğu doğrulanma
 yanıtı işlenmiş veya yanıtlanmış anlamına gelmez. Kurulum ve sınırlar için
 [İngilizce MCP başvurusuna](/reference/cli/messaging/#mcp-queue-host) bakın.
 
-`--allow-reply-read` seçeneği ayrıca `codex_read_reply` aracını açar ve kayıtlı
+`--allow-reply-read` seçeneği ayrıca `codex_read_reply` ve süre sınırlı
+`codex_wait_reply` araçlarını açar ve kayıtlı
 konuşmanın son yanıt metnini MCP istemcisine aktarabilir. Varsayılan olarak kapalıdır.
 Aynı turda bulunmak tek bir girdiye özel yanıt sahipliği anlamına gelmez.
 [Ayrıntılar ve sınırlar](/reference/cli/messaging/#opt-in-stored-turn-replies).

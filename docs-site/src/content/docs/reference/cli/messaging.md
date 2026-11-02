@@ -78,8 +78,8 @@ automatic reply delivery, steering and automatic client configuration are outsid
 
 ## Opt-in stored turn replies
 
-Add `--allow-reply-read` to the MCP host's existing arguments to expose a third
-tool, `codex_read_reply`. Without this flag the existing two-tool surface and
+Add `--allow-reply-read` to the MCP host's existing arguments to expose
+`codex_read_reply` and `codex_wait_reply`. Without this flag the existing two-tool surface and
 metadata-only discovery stay unchanged. This option explicitly permits conversation
 text to reach the MCP client; local-user access to the selected home is not
 per-project/thread authorization. A client message ID is correlation data, not a
@@ -132,6 +132,34 @@ This opt-in contract was observed with Codex CLI 0.166.0. Older builds or legacy
 stores can be unavailable; there is no unbounded full-history fallback. These
 reads do not prove recipient liveness, goal completion or Claude Desktop registration,
 and do not add automatic reply delivery or a reverse Claude transport.
+
+### Bounded reply waiting
+
+`codex_wait_reply` takes the same thread, receipt and optional cursor as
+`codex_read_reply`, plus an optional integer `waitMs` from 1 to 20,000 (default
+20,000). It makes at most three read snapshots with a two-second pause between
+them. The time budget includes all helpers and pauses; each snapshot reuses the
+existing scoped read validation and text limits. At most nine sequential helper
+invocations are possible per wait. Waits share the host's four-operation limit.
+
+An eligible final text returns immediately with `waitOutcome: reply_observed`,
+even if that text already existed. This is not a new-message subscription or
+exclusive reply ownership. An ambiguous input returns `ambiguous`. A non-null
+next page without eligible text returns `needs_pagination`; pass `nextCursor`
+back to continue. The tool does not silently scan all history.
+
+Otherwise, the tool refreshes the matched turn or repeats the same search
+position until the time or snapshot limit, returning `wait_exhausted` with the
+last successful observation. `attempts` counts snapshots attempted and
+`lastObservationAgeMs` describes that observation's age. A timeout with no
+successful observation, a read failure, or cancellation is unavailable. A read
+failure is not converted to an empty successful wait.
+
+Stored `turnStatus` from another helper can differ from the executing server's
+live state, so even a stored terminal status does not stop the wait early.
+Refresh revisits partially written items; callers still manage pagination and
+update item IDs. Cancellation/disconnect clears pauses and reaps owned helpers.
+The host adds no background watch, automatic delivery, session creation or resume.
 
 ## Discover and send
 

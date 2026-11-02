@@ -46,7 +46,7 @@ rl.on("line", line => {
       if(mode === "reply-stale") user.item.clientId="another-client";
       return emit({id:2,result:{data:[user]}});
     }
-    if(f.method === "thread/turns/list") return emit({id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : mode === "reply-interrupted" ? "interrupted" : "completed",items:[]}],nextCursor:null}});
+    if(f.method === "thread/turns/list") return emit({id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}});
     if(mode === "reply-reject") return emit({id:2,error:{code:-32601,message:"PRIVATE_SERVER"}});
     const searching = !f.params.turnId;
     let data = searching ? [final,user] : [user,commentary,tool,later,final], nextCursor=null;
@@ -71,6 +71,14 @@ rl.on("line", line => {
       const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
       if(reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
+    }
+    if(mode.startsWith("reply-wait-")) {
+      const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
+      const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
+      if(searching && mode === "reply-wait-late-input" && calls.filter(x=>x.frame.method === "thread/items/list").length===1) data=[];
+      if(!searching && (mode === "reply-wait-empty" || (mode !== "reply-wait-late-input" && reads<2))) data=[user,commentary];
+      if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
+      if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
     const frame={id:2,result:{data,nextCursor}};
     return mode === "reply-delay" ? setTimeout(()=>emit(frame),200) : emit(frame);
