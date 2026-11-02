@@ -306,4 +306,3 @@ F2 The synchronous npm transaction blocks the child's event loop, so the overrun
    at notAfter+bound (or start+bound) with the child still alive, the parent emits result exit 12 error "overrun" and
    exits without killing the child; the child's marker stays preflight|mutating with a live pid, so updateInFlight
    stays true until the child finishes (supersedes E3's "child records overrun").
-
