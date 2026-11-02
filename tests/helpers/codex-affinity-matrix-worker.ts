@@ -12,6 +12,14 @@ import { bindThreadAffinity, clearConversationStateIssuerMap, clearThreadAccount
 import type { OcxConfig } from "../../src/types";
 
 const action = process.argv[2]!;
+let hourly: (() => void) | undefined;
+if (action === "hourly") {
+  const original = globalThis.setInterval;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    if (delay === 3_600_000) hourly = callback as () => void;
+    return original(callback, delay);
+  }) as typeof setInterval;
+}
 const lease = acquireSpendLedgerOwner();
 const config = { providers: {}, codexAccounts: ["a", "b"].map(id => ({ id, email: `${id}@test`, isMain: false })), activeCodexAccountId: "a", accountPoolStrategy: "round-robin", autoSwitchThreshold: 80, upstreamFailoverThreshold: 3 } as OcxConfig;
 if (action === "passive") {
@@ -30,9 +38,41 @@ if (action === "passive") {
 const key = codexPoolAffinityKey(new Headers({ "session-id": "restart-session", "thread-id": "restart-thread" }))!;
 const cred = (id: string) => ({ accessToken: `access-${id}`, refreshToken: `refresh-${id}`, expiresAt: Date.now() + 600_000, chatgptAccountId: `acct-${id}` });
 
+if (action === "open-count" || action === "hourly") {
+  const db = new Database(join(process.env.OPENCODEX_HOME!, "codex-affinity.sqlite"));
+  if (action === "hourly") {
+    const realNow = Date.now;
+    Date.now = () => realNow() + 25 * 60 * 60_000;
+    hourly?.();
+  }
+  const threads = db.query("SELECT count(*) AS n FROM threads").get();
+  const issuers = db.query("SELECT count(*) AS n FROM issuers").get();
+  const expired = db.query("SELECT count(*) AS n FROM threads WHERE row_key='expired'").get();
+  db.close();
+  lease.release();
+  console.log(JSON.stringify({ threads, issuers, expired, scheduled: !!hourly }));
+  process.exit(0);
+}
+
 if (action === "probe") {
   getThreadAffinity(key);
   lease.release();
+  process.exit(0);
+}
+if (action.startsWith("late-")) {
+  bindThreadAffinity(key, "a", Date.now());
+  const record = readCodexAccountRecord("a")!;
+  rememberConversationStateIssuer(key, "a", undefined, { generation: record.generation, chatgptAccountId: record.credential!.chatgptAccountId });
+  lease.release();
+  if (action === "late-bind") bindThreadAffinity(key, "b", Date.now());
+  if (action === "late-delete") deleteThreadAffinity(key);
+  if (action === "late-issuer") rememberConversationStateIssuer(key, "b");
+  const next = acquireSpendLedgerOwner();
+  const freshKey = codexPoolAffinityKey(new Headers({ "session-id": "restart-session", "thread-id": "restart-thread" }))!;
+  const pin = getThreadAffinity(freshKey)?.accountId;
+  const issuer = peekConversationStateIssuer(freshKey);
+  next.release();
+  console.log(JSON.stringify({ pin, issuer }));
   process.exit(0);
 }
 if (action === "shared-write") {

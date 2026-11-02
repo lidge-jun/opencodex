@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
@@ -98,6 +98,53 @@ test("pruning keeps newest issuers and prioritizes ordinary bindings over detour
   db.close();
 }));
 
+test("oversized database is disabled without changing its bytes", () => inHome(home => {
+  seed(home);
+  const file = join(home, names[0]!);
+  truncateSync(file, 8 * 1024 * 1024 + 1);
+  const before = readFileSync(file);
+  matrix(home, "probe");
+  expect(readFileSync(file).equals(before)).toBe(true);
+}));
+
+test("open immediately removes expired and excess rows", () => inHome(home => {
+  seed(home);
+  const db = new Database(join(home, names[0]!));
+  const now = Date.now() - 5000;
+  db.exec("BEGIN");
+  const thread = db.query("INSERT INTO threads VALUES (?, 'shared', 'a', 'fence', ?, ?)");
+  const issuer = db.query("INSERT INTO issuers VALUES (?, 'a', 'fence', ?)");
+  for (let i = 0; i < 2050; i++) { thread.run(`bulk-${i}`, now, now); issuer.run(`bulk-${i}`, now); }
+  thread.run("expired", now - 90_000_000, now - 90_000_000);
+  issuer.run("expired", now - 90_000_000);
+  db.exec("COMMIT"); db.close();
+  const result = matrix(home, "open-count");
+  expect(result.threads.n).toBe(2048);
+  expect(result.issuers.n).toBe(2048);
+  expect(result.expired.n).toBe(0);
+}));
+
+test("hourly timer prunes an idle open store", () => inHome(home => {
+  seed(home);
+  const result = matrix(home, "hourly");
+  expect(result.scheduled).toBe(true);
+  expect(result.threads.n).toBe(0);
+  expect(result.issuers.n).toBe(0);
+}));
+
+test("adoption loads at most 64 newest scopes for a row key", () => inHome(home => {
+  seed(home);
+  const db = new Database(join(home, names[0]!));
+  const row = db.query("SELECT row_key, account_id, fence, created_at, last_used_at FROM threads LIMIT 1").get() as { row_key: string; account_id: string; fence: string; created_at: number; last_used_at: number };
+  const insert = db.query("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)");
+  for (let i = 0; i < 80; i++) insert.run(row.row_key, `model-detour:shared:model-${i}`, row.account_id, row.fence, row.created_at, row.last_used_at - i - 1);
+  db.close();
+  const scopes = matrix(home, "scopes").scopes;
+  expect(scopes).toHaveLength(64);
+  expect(scopes).toContain("model-detour:shared:model-0");
+  expect(scopes).not.toContain("model-detour:shared:model-79");
+}));
+
 test("restoration accepts a 512-byte model component and rejects 513 bytes", () => inHome(home => {
   seed(home);
   const file = join(home, names[0]!);
@@ -129,26 +176,38 @@ test("home switching drops pending writes and does not carry recorded anchors ac
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   expect(JSON.parse(result.stdout.toString())).toEqual({ first: "a", rowsB: 1, restoredB: "a" });
-}))); 
+})));
+
+for (const mutation of ["bind", "delete", "issuer"]) {
+  test(`late ${mutation} after release is discarded on reacquisition`, () => inHome(home => {
+    seed(home);
+    expect(matrix(home, `late-${mutation}`)).toEqual({ pin: "a", issuer: "a" });
+    const restored = matrix(home, "read");
+    expect(restored.before).toBe("a");
+    expect(restored.issuer).toBe("a");
+  }));
+}
 
 for (const path of ["responses", "compact"] as const) {
   for (const issuer of ["unknown", "known"] as const) {
     test(`${path} handler ${issuer} restored issuer with an uploaded file`, () => inHome(home => {
       worker(home, "codex-affinity-restart-worker.ts", issuer === "unknown" ? "unknown-write" : "write");
       const result = worker(home, "codex-affinity-handler-worker.ts", path);
-      if (issuer === "known") {
-        expect(result.status).toBe(400);
-        expect(result.bodies).toHaveLength(0);
-      } else {
-        expect(result.status, result.responseBody).toBe(200);
-        expect(result.bodies).toHaveLength(1);
-        expect(result.bodies[0].previous_response_id).toBeUndefined();
-        expect(result.turnStates).toEqual([null]);
-        expect(result.bodies[0].client_metadata?.["x-codex-turn-state"]).toBeUndefined();
-        expect(JSON.stringify(result.bodies[0].input)).toContain("file-test");
-      }
+      expect(result.status).toBe(400);
+      expect(result.bodies).toHaveLength(0);
     }));
   }
+}
+
+for (const path of ["responses", "compact"] as const) {
+  test(`${path} permits a file for the same stored account with unknown issuer`, () => inHome(home => {
+    worker(home, "codex-affinity-restart-worker.ts", "unknown-write");
+    const result = Bun.spawnSync([process.execPath, helperPath("codex-affinity-handler-worker.ts"), path, "same"], { env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const parsed = JSON.parse(result.stdout.toString());
+    expect(parsed.status, parsed.responseBody).toBe(200);
+    expect(parsed.bodies).toHaveLength(1);
+  }));
 }
 
 test("touching an unknown restored issuer extends its durable lifetime", () => inHome(home => {

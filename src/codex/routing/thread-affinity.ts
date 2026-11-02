@@ -6,8 +6,7 @@ import type { CodexThreadLineage } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeLease } from "../../routing/probe-lease";
 import { clearPoolRecoveryState } from "../../routing/probe-lease";
-import { createHash } from "node:crypto";
-import { adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
+import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
 export { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "./thread-affinity-store";
 
 export type ThreadAffinityEntry = {
@@ -215,10 +214,6 @@ type ConversationStateIssuerEntry = {
 };
 const conversationStateIssuerMap = new Map<string, ConversationStateIssuerEntry>();
 
-function identityFence(identity: string | undefined): string | undefined {
-  return identity ? createHash("sha256").update("opencodex/codex-affinity/identity/v1\0").update(identity).digest("hex") : undefined;
-}
-
 export function registerThreadAffinityLiveState(): void {
 registerCodexAffinityLiveState({
   thread: (key, scope) => threadAccountMap.get(key)?.get(scope as ThreadAffinityScope),
@@ -334,6 +329,10 @@ export function peekConversationStateIssuer(
   if (!entry) return undefined;
   entry.lastUsedAt = now;
   return entry.accountId;
+}
+
+export function peekConversationStateStoredIssuerAccount(bindingKey: string): string | undefined {
+  return conversationStateIssuerMap.get(bindingKey)?.storedAccountId;
 }
 
 /**

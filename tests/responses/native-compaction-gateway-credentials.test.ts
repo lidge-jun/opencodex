@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { rememberConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import { handleResponsesCompact } from "../../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import { clearResponseStateForTests, clearResponseStateMemoryForTests } from "../../src/responses/state";
@@ -107,6 +109,26 @@ afterEach(() => {
 });
 
 describe("native compact gateway credential boundary", () => {
+  test("gateway turn state is removed after an account-change scrub", async () => {
+    const realMode = registry.providerCodexAccountMode;
+    const modeSpy = spyOn(registry, "providerCodexAccountMode").mockImplementation((id, provider) =>
+      id === "gw" ? "pool" : realMode(id, provider));
+    const request = compactRequest();
+    const key = codexPoolAffinityKey(request.headers)!;
+    rememberConversationStateIssuer(key, "other");
+    const config = gatewayConfig();
+    config.providers.gw!.headers!["x-codex-turn-state"] = "configured";
+    const states: Array<string | null> = [];
+    globalThis.fetch = (async (_input, init) => {
+      states.push(new Headers(init?.headers).get("x-codex-turn-state"));
+      return Response.json({ object: "response.compaction", output: [] });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponsesCompact(request, config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(states).toEqual([null]);
+    } finally { modeSpy.mockRestore(); }
+  });
   test.each([401, 429])("gateway %i never receives a stored Codex credential", async status => {
     // The router pins the only pool-mode row to the canonical URL today. Model a relaxation of that
     // pin: the native gateway send must hold the boundary on its own.

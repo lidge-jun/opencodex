@@ -12,7 +12,7 @@
 
 import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import type { CodexAuthContext } from "../../codex/auth-context";
-import { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "../../codex/routing/thread-affinity";
+import { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, peekConversationStateStoredIssuerAccount } from "../../codex/routing/thread-affinity";
 import {
   peekConversationStateIssuer,
   rememberConversationStateIssuer,
@@ -323,7 +323,9 @@ export function accountChangeFileReferenceRefusal(
   const { body, bindingKey, servingAccountId, priorAccountId } = args;
   if (!servingAccountId || !bindingKey) return undefined;
   const issuer = peekConversationStateIssuer(bindingKey);
-  const accountChanged = (issuer != null && issuer !== CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER && issuer !== servingAccountId)
+  const accountChanged = (issuer === CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER
+    ? peekConversationStateStoredIssuerAccount(bindingKey) !== servingAccountId
+    : issuer != null && issuer !== servingAccountId)
     || (priorAccountId != null && priorAccountId !== servingAccountId);
   if (!accountChanged) return undefined;
   // Checked against the carriers directly rather than through the portability verdict: that

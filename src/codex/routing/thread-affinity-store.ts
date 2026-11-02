@@ -6,6 +6,7 @@ import {
   lstatSync,
   openSync,
   realpathSync,
+  type Stats,
 } from "node:fs";
 import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
@@ -76,6 +77,7 @@ type Scope = {
   issuerKeys: Map<string, string>;
   consulted: Set<string>;
   timer?: ReturnType<typeof setTimeout>;
+  pruneTimer?: ReturnType<typeof setInterval>;
   scheduled: boolean;
 };
 const TTL = 24 * 60 * 60_000;
@@ -92,6 +94,7 @@ const BASE_SCOPES_EXHAUSTIVE: Exclude<
 void BASE_SCOPES_EXHAUSTIVE;
 let current: Scope | undefined;
 let observedHome: string | undefined;
+let hadScope = false;
 let reader: LiveReader | undefined;
 
 export function registerCodexAffinityLiveState(value: LiveReader): void {
@@ -107,13 +110,14 @@ function retire(): void {
   if (!s) return;
   current = undefined;
   if (s.timer) clearTimeout(s.timer);
+  if (s.pruneTimer) clearInterval(s.pruneTimer);
   try {
     s.db?.close();
   } catch {
     warning();
   }
 }
-function checkFile(path: string): void {
+function checkFile(path: string): Stats {
   const stat = lstatSync(path);
   if (
     !stat.isFile() ||
@@ -122,6 +126,7 @@ function checkFile(path: string): void {
     (process.platform !== "win32" && stat.uid !== process.getuid!())
   )
     throw new Error("unsafe file");
+  return stat;
 }
 function open(s: Scope): void {
   const path = spendLedgerStoragePath(s.token);
@@ -136,11 +141,14 @@ function open(s: Scope): void {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     }
-    checkFile(path);
+    const before = checkFile(path);
+    if (before.size > 8 * 1024 * 1024) throw new Error("oversized");
     if (process.platform !== "win32") chmodSync(path, 0o600);
     if (!hardenSecretPath(path, { required: true }).ok) throw new Error("acl");
     checkFile(path);
     assertStorageOwned(s.token);
+    // SQLite creates sidecars in the private, hardened config directory, as with
+    // spend-ledger-owner.sqlite and config-mutation.sqlite.
     db = new Database(path);
     db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const version = (
@@ -208,18 +216,29 @@ function open(s: Scope): void {
         !rows.some((r) => r.name === "clean")
       )
         throw new Error("meta");
+      db.exec("PRAGMA secure_delete = ON");
       // Only a completed final flush permits the next owner to restore rows.
       if (clean !== 1) db.exec("DELETE FROM threads; DELETE FROM issuers");
       db.exec("UPDATE meta SET value=0 WHERE name='clean'");
     }
+    db.exec("PRAGMA secure_delete = ON");
+    const pageSize = (db.query("PRAGMA page_size").get() as { page_size: number }).page_size;
+    db.exec(`PRAGMA max_page_count = ${Math.floor(8 * 1024 * 1024 / pageSize)}`);
+    prune(db, Date.now());
     const secret = (
       db.query("SELECT value FROM meta WHERE name='secret'").get() as {
         value: Uint8Array;
       }
     ).value;
     db.exec("COMMIT");
+    const after = checkFile(path);
+    if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("replaced");
     s.db = db;
     s.secret = secret;
+    s.pruneTimer = setInterval(() => {
+      if (current === s && !isPassiveRead()) flush(s, false);
+    }, 60 * 60_000);
+    s.pruneTimer.unref();
   } catch {
     try {
       db?.exec("ROLLBACK");
@@ -269,6 +288,8 @@ function scope(): Scope | undefined {
   } catch {
     return undefined;
   }
+  if (hadScope) reader?.clearLive();
+  hadScope = true;
   const s: Scope = {
     home,
     generation,
@@ -335,9 +356,13 @@ export function codexAffinityIdentityFence(
     !record.quotaHistoryIdentity
   )
     return undefined;
+  return identityFence(record.quotaHistoryIdentity);
+}
+export function identityFence(identity: string | undefined): string | undefined {
+  if (!identity) return undefined;
   return createHash("sha256")
     .update("opencodex/codex-affinity/identity/v1\0")
-    .update(record.quotaHistoryIdentity)
+    .update(identity)
     .digest("hex");
 }
 function rememberThreadKey(s: Scope, key: string, rk: string, scopeName: string, accountId: string): void {
@@ -385,6 +410,12 @@ function scheduleTouch(s: Scope): void {
   }, 1000);
   s.timer.unref();
 }
+function prune(db: Database, now: number): void {
+  for (const table of ["threads", "issuers"])
+    db.query(`DELETE FROM ${table} WHERE last_used_at < ? OR last_used_at > ?`).run(now - TTL, now);
+  db.query("DELETE FROM threads WHERE created_at > ?").run(now);
+  db.exec("DELETE FROM threads WHERE rowid IN (SELECT rowid FROM threads ORDER BY (scope LIKE 'model-detour:%') ASC, last_used_at DESC, row_key, scope LIMIT -1 OFFSET 2048); DELETE FROM issuers WHERE rowid IN (SELECT rowid FROM issuers ORDER BY last_used_at DESC, row_key LIMIT -1 OFFSET 2048)");
+}
 function flush(s: Scope, clean: boolean): boolean {
   if (!s.db || s.disabled || s.poisoned || isPassiveRead()) return false;
   const db = s.db;
@@ -416,15 +447,7 @@ function flush(s: Scope, clean: boolean): boolean {
           "UPDATE issuers SET last_used_at=max(last_used_at, ?) WHERE row_key=? AND account_id=? AND fence IS ?",
         ).run(row.lastUsedAt, t.rowKey, row.accountId, row.fence ?? null);
     }
-    const now = Date.now();
-    for (const table of ["threads", "issuers"])
-      db.query(
-        `DELETE FROM ${table} WHERE last_used_at < ? OR last_used_at > ?`,
-      ).run(now - TTL, now);
-    db.query("DELETE FROM threads WHERE created_at > ?").run(now);
-    db.exec(
-      "DELETE FROM threads WHERE rowid IN (SELECT rowid FROM threads ORDER BY (scope LIKE 'model-detour:%') ASC, last_used_at DESC, row_key, scope LIMIT -1 OFFSET 2048); DELETE FROM issuers WHERE rowid IN (SELECT rowid FROM issuers ORDER BY last_used_at DESC, row_key LIMIT -1 OFFSET 2048)",
-    );
+    prune(db, Date.now());
     if (clean) db.exec("UPDATE meta SET value=1 WHERE name='clean'");
     db.exec("COMMIT");
     s.log = [];
@@ -488,7 +511,7 @@ export function adoptStoredThreadRows(
   try {
     const rows = s
       .db!.query(
-        "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=?",
+        "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? ORDER BY last_used_at DESC, scope LIMIT 64",
       )
       .all(rk) as {
       scope: string;

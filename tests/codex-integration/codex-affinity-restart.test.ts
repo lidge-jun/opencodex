@@ -42,7 +42,7 @@ test("an unclean owner discards persisted affinity", () => {
   } finally { removeTreeWithRetry(home); }
 });
 
-test("unknown issuer scrubs continuation without refusing files, while retry moves are refused", () => {
+test("unknown issuer scrubs continuation and refuses files on account moves", () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-affinity-unknown-"));
   try {
     const first = run(home, "unknown-write");
@@ -54,7 +54,7 @@ test("unknown issuer scrubs continuation without refusing files, while retry mov
     expect(result.sameScrub).toBe(true);
     expect(result.fileRefusal).toBeUndefined();
     expect(result.retryRefusal).toBe(400);
-    expect(result.otherFileRefusal).toBeUndefined();
+    expect(result.otherFileRefusal).toBe(400);
   } finally { removeTreeWithRetry(home); }
 });
 

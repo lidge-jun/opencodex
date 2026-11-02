@@ -17,7 +17,7 @@ const mock = (async (input: string | URL | Request, init?: RequestInit) => {
 }) as typeof fetch;
 globalThis.fetch = mock;
 for (const provider of Object.values(config.providers)) Object.assign(provider, { fetch: mock, upstreamWebsocket: false });
-const body = { model: "side/gpt-5.5", stream: false, client_metadata: { "x-codex-turn-state": "old-state" }, input: [{ type: "message", role: "user", content: [{ type: "input_file", file_id: "file-test" }] }] };
+const body = { model: process.argv[3] === "same" ? "gpt-5.5" : "side/gpt-5.5", stream: false, client_metadata: { "x-codex-turn-state": "old-state" }, input: [{ type: "message", role: "user", content: [{ type: "input_file", file_id: "file-test" }] }] };
 const request = compactionRequest(body, undefined, { "session-id": "restart-session", "thread-id": "restart-thread", "x-codex-turn-state": "old-state" });
 const response = process.argv[2] === "compact"
   ? await handleResponsesCompact(request, config, { model: "", provider: "" })
