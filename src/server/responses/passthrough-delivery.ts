@@ -2,7 +2,6 @@ import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../..
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { routeKnownModels } from "../../usage/log";
-import { getStaleCached } from "../../codex/model-cache";
 import type { OcxProviderConfig } from "../../types";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
@@ -491,7 +490,7 @@ export async function deliverPassthroughResponse(
     // reported model (row and header) is only ever a model id this route or a catalog already names.
     const passthroughHeaderOptions = {
       ...codexSafetyBufferingOptions,
-      knownModels: [...routeKnownModels(logCtx), ...providerKnownModels(route.providerName, route.provider)],
+      knownModels: [...routeKnownModels(logCtx), ...providerKnownModels(route.provider)],
       provider: logCtx.provider,
     };
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions);
@@ -1563,14 +1562,13 @@ export async function deliverPassthroughResponse(
 }
 
 /**
- * Model ids the user configured for the selected provider (its models, selection and retention
- * lists and default) plus the ids its last live discovery cached. A provider-owned model hint that
- * names one of them is relayed as the proxy's copy; anything else is not.
+ * Model ids the user configured for the selected provider: its models, selection and retention
+ * lists and default. A provider-owned model hint that names one of them is relayed as the proxy's
+ * copy. Live-discovered ids are not trusted here: the upstream's own /models answer chose them.
  */
-function providerKnownModels(providerName: string, provider: OcxProviderConfig): string[] {
+function providerKnownModels(provider: OcxProviderConfig): string[] {
   return [
     ...(provider.models ?? []), ...(provider.selectedModels ?? []), ...(provider.retainModels ?? []),
     ...(provider.defaultModel ? [provider.defaultModel] : []),
-    ...(getStaleCached(providerName) ?? []).map(model => model.id),
   ];
 }

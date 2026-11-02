@@ -81,8 +81,9 @@ WebSocket model headers use the same rule with the requested model as the known 
 `x-codex-safety-buffering-faster-model` headers itself, so no passthrough branch (redirects, error
 statuses, JSON answered as JSON or re-framed as SSE) can relay an unknown value. The passthrough passes it
 the route's ids plus the models the user configured for the selected provider (`models`,
-`selectedModels`, `retainModels`, `defaultModel`) and the ids its last live discovery cached, so a
-provider-owned hint naming one of them survives as the proxy's copy. Rows do not see that provider list,
+`selectedModels`, `retainModels`, `defaultModel`), so a provider-owned hint naming one of them survives
+as the proxy's copy. Live-discovered ids are never trusted anywhere the rule applies: the upstream's own
+`/models` answer chose them, so a hint naming a model known only from discovery is not relayed. Rows do not see that provider list,
 so a served model that only it names is relayed in the header but not recorded.
 `tests/usage/request-log-identity-bounds.test.ts`, `tests/usage/request-log-served-model.test.ts` and
 `tests/server/response-model-identity.test.ts` cover capture, live, ledger, hydration, the `/api/logs` DTO

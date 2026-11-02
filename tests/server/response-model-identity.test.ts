@@ -5,6 +5,9 @@ import {
 } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
+import { stubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -121,6 +124,44 @@ describe("a passthrough openai-model header is kept only as a known model id", (
     expect(response.headers.get("x-codex-safety-buffering-enabled")).toBe("true");
     expect(response.headers.get("x-codex-safety-buffering-faster-model") ?? undefined).toBe(expected);
     expect(JSON.stringify([...response.headers, text])).not.toContain(PROVIDER_KEY);
+  });
+
+  // Live discovery is the upstream's own answer, so a model id it lists is not trusted: an upstream
+  // that seeds a prefixless key into /models still cannot relay it later as a model header or row.
+  test.each([[302], [200]])("a model id known only from live discovery is dropped (%d)", async status => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    clearModelCache("fixture-openai");
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.endsWith("/models")) {
+          return Response.json({ object: "list", data: [{ id: "gpt-5.5", object: "model" }, { id: PROVIDER_KEY, object: "model" }] });
+        }
+        const headers = { "content-type": "application/json", "openai-model": PROVIDER_KEY, "x-codex-safety-buffering-faster-model": PROVIDER_KEY };
+        return status === 302
+          ? new Response(null, { status, headers: { ...headers, location: "https://provider.example.test/moved" } })
+          : new Response(JSON.stringify(responseSnapshot(PROVIDER_KEY)), { status, headers });
+      }) as unknown as typeof fetch;
+      const config = routedConfig("fixture-openai", "openai-responses", "gpt-5.5");
+      const discovered = await fetchProviderModels("fixture-openai", { ...config.providers["fixture-openai"]!, fetch: stubbedProviderFetch } as OcxProviderConfig);
+      // Non-vacuous: discovery really cached the key as a model of this provider.
+      expect(discovered.map(model => model.id)).toContain(PROVIDER_KEY);
+      expect((getStaleCached("fixture-openai") ?? []).map(model => model.id)).toContain(PROVIDER_KEY);
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture-openai/gpt-5.5", input: "hi", stream: false }),
+      }), config, logCtx, {});
+      await response.text();
+      expect(response.status).toBe(status);
+      expect(logCtx.provider).toBe("fixture-openai");
+      expect(response.headers.has("openai-model")).toBe(false);
+      expect(response.headers.has("x-codex-safety-buffering-faster-model")).toBe(false);
+      expect(logCtx.servedModel).toBeUndefined();
+      expect(JSON.stringify([...response.headers, logCtx.servedModel, logCtx.resolvedModel])).not.toContain(PROVIDER_KEY);
+    } finally {
+      clearModelCache("fixture-openai");
+    }
   });
 });
 
