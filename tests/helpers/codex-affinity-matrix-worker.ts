@@ -6,7 +6,8 @@ import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountC
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import { recordCodexThreadLineage } from "../../src/codex/lineage";
 import { runPassiveRead } from "../../src/lib/passive-read";
-import { recordCodexUpstreamOutcome, resolveCodexAccountForThread } from "../../src/codex/routing";
+import { adoptStoredThreadRows } from "../../src/codex/routing/thread-affinity-store";
+import { recordCodexUpstreamOutcome, resolveCodexAccountForThread, resolveCodexAccountForThreadDetailed } from "../../src/codex/routing";
 import { bindThreadAffinity, clearConversationStateIssuerMap, clearThreadAccountMap, clearThreadAccountMapForAccount, deleteThreadAffinity, deleteThreadAffinitiesForAccount, getThreadAffinity, handOffThreadAffinityGeneration, peekConversationStateIssuer, rememberConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import type { OcxConfig } from "../../src/types";
 
@@ -28,6 +29,23 @@ if (action === "passive") {
 }
 const key = codexPoolAffinityKey(new Headers({ "session-id": "restart-session", "thread-id": "restart-thread" }))!;
 const cred = (id: string) => ({ accessToken: `access-${id}`, refreshToken: `refresh-${id}`, expiresAt: Date.now() + 600_000, chatgptAccountId: `acct-${id}` });
+
+if (action === "probe") {
+  getThreadAffinity(key);
+  lease.release();
+  process.exit(0);
+}
+if (action === "shared-write") {
+  bindThreadAffinity(key, "a", Date.now(), "shared");
+  lease.release();
+  process.exit(0);
+}
+if (action === "scopes") {
+  const scopes = adoptStoredThreadRows(key, Date.now()).map(row => row.scope);
+  lease.release();
+  console.log(JSON.stringify({ scopes }));
+  process.exit(0);
+}
 
 if (action.startsWith("depth-")) {
   const child = new Headers({ "thread-id": "child", "x-codex-parent-thread-id": "root" });
@@ -109,9 +127,16 @@ if (action.startsWith("depth-")) {
     console.log(JSON.stringify({ timestamp, row }));
     process.exit(0);
   }
-  const before = getThreadAffinity(key)?.accountId;
+  const before = getThreadAffinity(key, action === "model-excluded" ? "shared" : undefined)?.accountId;
   const issuer = peekConversationStateIssuer(key);
   resolveCodexAccountForThread("advance-cursor", config);
+  if (action === "model-excluded") {
+    const result = resolveCodexAccountForThreadDetailed(key, config, Date.now(), "shared", { modelEligibleAccountIds: new Set(["b"]) }, "gpt-test");
+    const shared = resolveCodexAccountForThread(key, config, Date.now(), "shared");
+    lease.release();
+    console.log(JSON.stringify({ before, result, shared }));
+    process.exit(0);
+  }
   const selected = resolveCodexAccountForThread(key, config);
   const after = getThreadAffinity(key)?.accountId;
   lease.release();
