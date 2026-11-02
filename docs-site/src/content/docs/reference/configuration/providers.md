@@ -1087,11 +1087,12 @@ eligible on the same account. Passive Fable evidence ages out after thirty minut
 known reset and is revalidated by one serving request at a time. Usage thresholds remain
 soft preferences with an all-drained fallback; these controls are not hard usage or billing caps.
 Active usage probes preserve absent family windows unless the response authoritatively enumerates limits.
-Usage reads prefer the active `limits` rows over legacy quota buckets. An inactive
-session or model window does not constrain admission, and a missing/null five-hour
-bucket does not create a zero-percent five-hour bar. A model-scoped weekly limit
-constrains only that model family while active; the all-model weekly limit applies
-to every model. Legacy Pro/Max usage buckets remain supported.
+Usage reads prefer recognized `limits` rows over legacy quota buckets. Pro, Max 5x and
+Team retain measured five-hour and weekly meters whichever is currently binding. Shared
+usage affects admission and cooldown recovery even when inactive. An explicitly null
+five-hour bucket creates a meter only when Anthropic marks a finite session meter active.
+A model-scoped weekly limit constrains only that model family while active; the all-model
+weekly limit applies to every model. Legacy Pro/Max usage buckets remain supported.
 
 [Ultra replaces Max 20x](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan);
 upstream may still identify it as `claude_max_20x` (shown as `max_20x`). Ultra accounts
