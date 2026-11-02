@@ -5,6 +5,60 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { assertNotRealHomeUnderTest } from "../../src/lib/test-home-guard";
+import { encodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
+
+test("authorized child reaches Bun update preflight while internal flags without authorization are rejected", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-child-entry-"));
+  const home = join(root, "home"), codex = join(root, "codex"), result = join(root, "result.json");
+  mkdirSync(home); mkdirSync(codex); assertNotRealHomeUnderTest(home);
+  const expectValue = encodeOrchestratedExpect({ home, cliRoot: repoPath(), servingRoot: null, runtimePid: null, planToken: "a".repeat(43) });
+  const args = ["update", "--version", "99.0.0", "--orchestrated-expect", expectValue, "--orchestrated-result", result];
+  const run = async (authorized: boolean) => {
+    const proc = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), ...args], { cwd: root, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
+        OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(),
+        OCX_UPDATE_ORCHESTRATED_CHILD: authorized ? "1" : "0" } });
+    return { stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text(), code: await proc.exited };
+  };
+  try {
+    const rejected = await run(false);
+    expect(rejected.code).toBe(64); expect(JSON.parse(rejected.stdout)).toEqual({ error: "usage" }); expect(existsSync(result)).toBe(false);
+    const child = await run(true);
+    expect(child.code).toBe(1);
+    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
+    expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).phase).toBe("failed");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
+test.skipIf(process.platform === "win32")("Bun-global apply runs the real child with the plan's exact target", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-bun-global-"));
+  const home = join(root, "home"), ocxHome = join(home, ".opencodex"), path = join(root, "path");
+  const pkg = join(home, ".bun/install/global/node_modules/@bitkyc08/opencodex"), log = join(root, "commands");
+  mkdirSync(pkg, { recursive: true }); mkdirSync(ocxHome, { recursive: true }); mkdirSync(path);
+  writeFileSync(join(ocxHome, "config.json"), JSON.stringify({ port: 1, hostname: "127.0.0.1" }));
+  cpSync(repoPath("src"), join(pkg, "src"), { recursive: true });
+  cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
+  const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
+  writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
+  symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\ncase "$*" in *dist.integrity*) printf 'sha512-YWJj\\n';; *) if [ -e "$OCX_FIXTURE_PKG/tag-queried" ]; then printf '2.2.0\\n'; else : > "$OCX_FIXTURE_PKG/tag-queried"; printf '2.1.0\\n'; fi;; esac\n`);
+  chmodSync(join(path, "npm"), 0o755);
+  writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs");const p=process.env.OCX_FIXTURE_PKG+"/package.json";const m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));'\n`);
+  chmodSync(join(path, "bun"), 0o755);
+  const proc = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json"], {
+    cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
+      CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
+      OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
+  });
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    expect({ code, stderr, stdout }).toMatchObject({ code: 0 });
+    expect(JSON.parse(stdout)).toMatchObject({ schema: "ocx.update.result/1", applied: true, healthy: true, toVersion: "2.1.0" });
+    expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
+    expect(readFileSync(log, "utf8").match(/@latest version/g)).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60000);
 
 test("a source checkout update plan emits one JSON refusal in a temporary home", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-update-entry-"));

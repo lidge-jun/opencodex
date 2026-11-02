@@ -56,18 +56,26 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
     start() {
       if (state !== "new") throw new Error("orchestrated session already started");
       atomicJson(resultPath, { phase: "preflight" });
-      state = "preflight";
-    },
-    async enterMutation() {
-      if (state !== "preflight") throw new Error("orchestrated session is not in preflight");
       const acquired = tryAcquireUpdateSyncMutex(home, "update");
       if (acquired.kind === "busy") {
         const error = acquired.holder === "sync" ? "sync-in-progress" : "update-in-flight";
         atomicJson(resultPath, { phase: "refused", error }); state = "refused";
         return { ok: false, error };
       }
-      mutex = acquired; state = "entering";
-      startedAt = now();
+      mutex = acquired;
+      try { startedAt = now(); marker("preflight"); }
+      catch (error) { mutex.release(); mutex = undefined; throw error; }
+      state = "preflight";
+      return { ok: true };
+    },
+    finishPreflight() {
+      if (state !== "preflight") return;
+      marker("failed");
+      mutex.release(); mutex = undefined; state = "finished";
+    },
+    async enterMutation() {
+      if (state !== "preflight") throw new Error("orchestrated session is not in preflight");
+      state = "entering";
       marker("mutating");
       atomicJson(resultPath, { phase: "mutating" });
       let error;

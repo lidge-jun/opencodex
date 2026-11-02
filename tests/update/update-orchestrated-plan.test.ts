@@ -1,6 +1,74 @@
 import { expect, test } from "bun:test";
 import { buildOrchestratedPlan, type PlanInputs } from "../../src/update/orchestrated-plan";
 import { classifyPlanRuntimeOwner, decideOrchestratedApply, observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
+import { applyOrchestratedBun } from "../../src/update/orchestrated-entry";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, truncateSync, rmSync, cpSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createOrchestratedChildSession, decodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
+import { isUpdateInFlight } from "../../src/update/sync-update-mutex";
+
+test("Bun apply runs a pinned child and verifies the installed tree", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-bun-apply-"));
+  const root = join(home, "bun", "install", "global", "node_modules", "@bitkyc08", "opencodex");
+  try {
+    for (const dir of ["bin", "src/cli", "node_modules/bun/bin", "node_modules/zod"]) mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.1.0", dependencies: { bun: "1", zod: "1" } }));
+    writeFileSync(join(root, "bin/ocx.mjs"), "x".repeat(1024));
+    writeFileSync(join(root, "src/cli/index.ts"), "export {};\n");
+    writeFileSync(join(root, "node_modules/bun/package.json"), "{}");
+    writeFileSync(join(root, "node_modules/zod/package.json"), "{}");
+    const bun = join(root, "node_modules/bun/bin/bun"); closeSync(openSync(bun, "w")); truncateSync(bun, 10 * 1024 * 1024);
+    const plan = buildOrchestratedPlan({ ...base, installer: "bun", cliRoot: root });
+    const child = new EventEmitter();
+    Object.assign(child, { kill: () => true, unref: () => {} });
+    const spawn = (_exe: string, args: string[], options: { env: Record<string, string> }) => {
+      expect(args.slice(args.indexOf("update") + 1, args.indexOf("update") + 3)).toEqual(["--version", "2.1.0"]);
+      expect(options.env.OCX_UPDATE_ORCHESTRATED_CHILD).toBe("1");
+      writeFileSync(args[args.indexOf("--orchestrated-result") + 1]!, JSON.stringify({ phase: "installed", activeRoot: root }));
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    };
+    const result = await applyOrchestratedBun(plan, { ok: true, mode: "apply" }, { home, identity: async () => ({ kind: "absent" }), spawn, now: () => 100 });
+    expect(result).toMatchObject({ exitCode: 0, result: { applied: true, healthy: true } });
+    const manifest = join(root, "package.json");
+    const setVersion = (version: string) => writeFileSync(manifest, JSON.stringify({ version, dependencies: { bun: "1", zod: "1" } }));
+    setVersion("2.0.0");
+    const run = async (outcome: string | null, code: number) => {
+      const fake = new EventEmitter(); Object.assign(fake, { kill: () => true, unref: () => {} });
+      return applyOrchestratedBun(plan, { ok: true, mode: "apply" }, { home, identity: async () => ({ kind: "absent" }), now: () => 100,
+        spawn: (_exe, args) => {
+          if (outcome !== null) writeFileSync(args[args.indexOf("--orchestrated-result") + 1]!, outcome);
+          queueMicrotask(() => fake.emit("close", code, null)); return fake as never;
+        } });
+    };
+    expect(await run(JSON.stringify({ phase: "refused", error: "plan-changed" }), 10)).toMatchObject({ exitCode: 10, result: { error: "plan-changed" } });
+    expect(await run(JSON.stringify({ phase: "preflight" }), 1)).toMatchObject({ exitCode: 11, result: { applied: false } });
+    expect(await run(JSON.stringify({ phase: "failed", error: "install-failed" }), 1)).toMatchObject({ exitCode: 11 });
+    const other = join(home, "other"); cpSync(root, other, { recursive: true });
+    writeFileSync(join(other, "package.json"), JSON.stringify({ version: "2.1.0", dependencies: { bun: "1", zod: "1" } }));
+    expect(await run(JSON.stringify({ phase: "installed", activeRoot: other }), 0)).toMatchObject({ exitCode: 12 });
+    expect(await run(null, 1)).toMatchObject({ exitCode: 12 });
+    expect(await run("{", 1)).toMatchObject({ exitCode: 12 });
+    truncateSync(bun, 1);
+    expect(await run(JSON.stringify({ phase: "failed" }), 1)).toMatchObject({ exitCode: 12 });
+
+    let killed = false, session: ReturnType<typeof createOrchestratedChildSession> | undefined, resultDir = "";
+    const running = new EventEmitter(); Object.assign(running, { kill: () => { killed = true; return true; }, unref: () => {} });
+    const overrun = await applyOrchestratedBun(plan, { ok: true, mode: "apply", notAfter: 1 }, { home, identity: async () => ({ kind: "absent" }), now: () => 900_002,
+      spawn: (_exe, args) => {
+        resultDir = dirname(args[args.indexOf("--orchestrated-result") + 1]!);
+        session = createOrchestratedChildSession({ home, resultPath: args[args.indexOf("--orchestrated-result") + 1]!,
+          expect: decodeOrchestratedExpect(args[args.indexOf("--orchestrated-expect") + 1]!), verifyIdentity: () => true });
+        session.start(); return running as never;
+      } });
+    expect(overrun).toMatchObject({ exitCode: 12, result: { error: "overrun" } });
+    expect(killed).toBe(false); expect(isUpdateInFlight(home)).toBe(true);
+    session!.finishPreflight(); running.emit("close", 1, null);
+    rmSync(resultDir, { recursive: true, force: true });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 const base: PlanInputs = {
   currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", runtimeOwner: "none",

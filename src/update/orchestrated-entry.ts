@@ -1,5 +1,7 @@
-import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { packageVersion } from "../lib/package-version";
 import { getConfigDir } from "../config/paths";
@@ -15,6 +17,13 @@ import { inspectLiveOrchestratedIdentity } from "./orchestrated-live-identity";
 import type { ServingIdentity } from "./orchestrated-identity";
 import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
 import { isUpdateInFlight } from "./sync-update-mutex";
+import { encodeOrchestratedExpect, type OrchestratedExpect } from "./orchestrated-session.mjs";
+import { waitForOrchestratedChild } from "./orchestrated-child.mjs";
+import { classifyOrchestratedOutcome, type Outcome } from "./orchestrated-outcome.mjs";
+import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
+import { createUpdatePlanToken } from "./orchestrated-token.mjs";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { proxyIdentityAt } from "../server/proxy-liveness";
 
 type Request = Extract<OrchestratedUpdateArgs, { ok: true }>;
 type DetectedInstaller = PlanInputs["installer"] | "standalone";
@@ -65,6 +74,19 @@ const defaultDeps: OrchestratedPlanDeps = {
   inFlight: () => isUpdateInFlight(getConfigDir()),
 };
 
+export async function verifyOrchestratedChildIdentity(expected: OrchestratedExpect, targetVersion: string): Promise<boolean> {
+  if (getConfigDir() !== expected.home) return false;
+  const install = defaultDeps.install();
+  const identity = await defaultDeps.identity();
+  if (install.installer !== "bun" || install.cliRoot !== expected.cliRoot || (identity.kind !== "live" && identity.kind !== "absent")) return false;
+  const live = identity.kind === "live" ? identity : null;
+  if ((live?.servingRoot ?? null) !== expected.servingRoot || (live?.runtime.pid ?? null) !== expected.runtimePid) return false;
+  const ownership = defaultDeps.ownership(identity);
+  return ownership.permits && createUpdatePlanToken({ currentVersion: defaultDeps.currentVersion(), targetVersion,
+    installer: install.installer, cliRoot: install.cliRoot, servingRoot: live?.servingRoot ?? null,
+    runtimeOwner: ownership.runtimeOwner, runtime: live?.runtime ?? null }) === expected.planToken;
+}
+
 /** Observe first, then classify; failures never become permission to update. */
 export async function observeOrchestratedPlan(request: Request, deps: OrchestratedPlanDeps = defaultDeps) {
   let install: ReturnType<OrchestratedPlanDeps["install"]> = { installer: "unknown", cliRoot: process.execPath, desktopPath: false };
@@ -97,6 +119,71 @@ export function decideOrchestratedApply(plan: Awaited<ReturnType<typeof observeO
   return { kind: "proceed" as const };
 }
 
+type Plan = Awaited<ReturnType<typeof observeOrchestratedPlan>>;
+type BunDriverDeps = {
+  home: string;
+  identity: () => Promise<ServingIdentity>;
+  now: () => number;
+  spawn: (exe: string, args: string[], options: { env: Record<string, string | undefined>; stdio: ["ignore", number, number] }) => ChildProcess;
+};
+
+/** The parent owns stdout and verifies the child-reported outcome independently. */
+export async function applyOrchestratedBun(plan: Plan, request: Request, deps: BunDriverDeps) {
+  const base = { fromVersion: plan.currentVersion, toVersion: plan.targetVersion, installer: plan.installer,
+    childExited: false, childExitCode: null, outcome: null, previousVerified: false, targetVerified: false, runtimeHealthy: false, restarted: false } as const;
+  const uncertain = () => classifyOrchestratedOutcome(base);
+  let directory: string | undefined;
+  let childStarted = false;
+  try {
+    const before = await deps.identity();
+    const live = before.kind === "live" ? before : null;
+    const token = createUpdatePlanToken({ currentVersion: plan.currentVersion, targetVersion: plan.targetVersion,
+      installer: plan.installer, cliRoot: plan.cliPath, servingRoot: live?.servingRoot ?? null,
+      runtimeOwner: plan.runtimeOwner, runtime: live?.runtime ?? null });
+    if ((before.kind !== "live" && before.kind !== "absent") || token !== plan.planToken || !plan.targetVersion) {
+      return { exitCode: 10 as const, result: { ...uncertain().result, error: "plan-changed" } };
+    }
+    const started = deps.now();
+    directory = mkdtempSync(join(tmpdir(), "ocx-update-"));
+    const resultPath = join(directory, "result.json");
+    const expect = encodeOrchestratedExpect({ home: deps.home, cliRoot: plan.cliPath, servingRoot: live?.servingRoot ?? null,
+      runtimePid: live?.runtime.pid ?? null, planToken: plan.planToken });
+    const args = ["update", "--version", plan.targetVersion, "--orchestrated-expect", expect, "--orchestrated-result", resultPath,
+      ...(request.notAfter === undefined ? [] : ["--not-after", String(request.notAfter)])];
+    const child = deps.spawn(process.execPath, selfLaunchArgv(args), { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1" }, stdio: ["ignore", 2, 2] });
+    childStarted = true;
+    const waited = await waitForOrchestratedChild(child, { overrunMs: (request.notAfter ?? started) + plan.mutationBoundMs - deps.now() });
+    if (!waited.confirmed) {
+      child.unref();
+      if (waited.reason === "overrun") return { exitCode: 12 as const, result: { ...uncertain().result, error: "overrun" } };
+      return uncertain();
+    }
+    childStarted = false;
+    let outcome: Outcome | null = null;
+    try { outcome = JSON.parse(readFileSync(resultPath, "utf8")) as Outcome; } catch { /* no proof */ }
+    const activeRoot = outcome?.phase === "installed" ? outcome.activeRoot : plan.cliPath;
+    const targetVerified = outcome?.phase === "installed" && activeRoot === plan.cliPath
+      && verifyOrchestratedInstall(activeRoot, plan.targetVersion, "bun");
+    const previousVerified = verifyOrchestratedInstall(plan.cliPath, plan.currentVersion, "bun");
+    let runtimeHealthy = !plan.restartRequired, restarted = false;
+    if (plan.restartRequired) {
+      const after = await deps.identity();
+      if (after.kind === "live" && after.servingRoot === activeRoot) {
+        const health = await proxyIdentityAt(after.runtime.port, { hostname: after.runtime.hostname, expectedPid: after.runtime.pid });
+        runtimeHealthy = health?.version === (outcome?.phase === "installed" ? plan.targetVersion : plan.currentVersion);
+        restarted = after.runtime.pid !== live?.runtime.pid;
+      }
+    }
+    return classifyOrchestratedOutcome({ ...base, childExited: true, childExitCode: waited.code, outcome,
+      previousVerified, targetVerified, runtimeHealthy, restarted });
+  } catch {
+    if (childStarted) return uncertain();
+    return { exitCode: 10 as const, result: { ...uncertain().result, error: "plan-unavailable" } };
+  } finally {
+    if (directory && !childStarted) { try { rmSync(directory, { recursive: true, force: true }); } catch { /* outcome remains authoritative */ } }
+  }
+}
+
 export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   const parsed = parseOrchestratedUpdateArgs(argv);
   if (!parsed.ok) {
@@ -113,6 +200,12 @@ export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   if (admission.kind === "done") {
     console.log(JSON.stringify(admission.result));
     return admission.exitCode;
+  }
+  if (plan.installer === "bun") {
+    const result = await applyOrchestratedBun(plan, parsed, { home: getConfigDir(), identity: defaultDeps.identity,
+      now: Date.now, spawn: (exe, args, options) => spawnProcess(exe, args, options) });
+    console.log(JSON.stringify(result.result));
+    return result.exitCode;
   }
   console.log(JSON.stringify({ schema: "ocx.update.result/1", applied: false, fromVersion: plan.currentVersion,
     toVersion: null, installer: plan.installer, restarted: false, healthy: false, rolledBack: false, error: plan.reason ?? "plan-unavailable" }));

@@ -6,7 +6,7 @@ import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
 import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
@@ -43,6 +43,8 @@ import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 import {
   freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
@@ -417,9 +419,29 @@ async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> 
  * are updated in the Node bin launcher before Bun starts, so Windows does not replace the running
  * Bun binary.
  */
-export async function runUpdate(): Promise<void> {
+export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: true }>): Promise<void> {
+  let session: ReturnType<typeof createOrchestratedChildSession> | undefined;
+  if (child) {
+    try {
+      const expect = decodeOrchestratedExpect(child.expect);
+      session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, expect, notAfter: child.notAfter,
+        verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) });
+      if (!session.start().ok) { process.exitCode = 10; return; }
+    } catch (error) {
+      console.error(`Orchestrated update preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  try { await runUpdateWithSession(child, session); }
+  finally { session?.finishPreflight(); }
+}
+
+async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: true }> | undefined,
+  session: ReturnType<typeof createOrchestratedChildSession> | undefined): Promise<void> {
   const ownership = detectInstallOwnership();
   const installer = ownership.installer;
+  if (child && installer !== "bun") { process.exitCode = 1; return; }
   const current = currentVersion();
   const tag = updateTag(current);
   console.log(`opencodex v${current} (installed via ${installer}, tag ${tag})`);
@@ -454,9 +476,10 @@ export async function runUpdate(): Promise<void> {
     process.exit(1);
   }
   const owner = ownerResult?.ok ? ownerResult.owner : undefined;
-  const latest = latestVersion(tag, installer, owner);
+  const latest = child?.version ?? latestVersion(tag, installer, owner);
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
+    if (child) process.exitCode = 1;
     return;
   }
 
@@ -465,6 +488,7 @@ export async function runUpdate(): Promise<void> {
   const integrity = checkUpdatePackageIntegrity(latest, probeSpawnSync, installer, owner);
   if (integrity.ok === false) {
     console.error(`⚠️  ${integrity.reason} — aborting the update before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
   if (integrity.ok === "skipped") {
@@ -487,11 +511,15 @@ export async function runUpdate(): Promise<void> {
     : updateSpawnTarget(bin, cmdArgs);
   if (!target) {
     console.error(`⚠️  Could not resolve ${bin} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
+    if (child) { process.exitCode = 1; return; }
     process.exit(1);
   }
 
   const { serviceStatePaths } = await import("../service");
-  const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  let mutationStarted = false, completed = false;
+  let updateExitCode: number | undefined;
+  try {
+  updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
   // Ownership inspection imports the service CLI, which reaches this update entry again.
   // Load it only after entering the lease; the policy itself stays a dependency-free import.
   const { inspectUpdateServiceHome } = await import("./service-home-authority");
@@ -518,6 +546,11 @@ export async function runUpdate(): Promise<void> {
   if (!runtimePlan.mayReplacePackage) {
     console.error("⚠️  Update stopped before tray handoff, runtime stop, or package replacement because runtime authority does not permit it.");
     return 1;
+  }
+  if (session) {
+    const admission = await session.enterMutation();
+    if (!admission.ok) return 10;
+    mutationStarted = true;
   }
   let trayWasInstalled = false;
   let trayWasRunning = false;
@@ -1193,5 +1226,14 @@ export async function runUpdate(): Promise<void> {
     throw error;
   }
   });
-  if (updateExitCode) process.exit(updateExitCode);
+  completed = true;
+  } finally {
+    if (session && mutationStarted) session.finish(completed && !updateExitCode
+      ? { phase: "installed", activeRoot: realpathSync.native(packageRoot()) }
+      : { phase: "failed", error: "update-failed" });
+  }
+  if (updateExitCode) {
+    if (child) process.exitCode = updateExitCode;
+    else process.exit(updateExitCode);
+  } else if (child && !mutationStarted) process.exitCode = 1;
 }

@@ -776,7 +776,13 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   update: async deps => {
-    const { isOrchestratedUpdateArgv } = await import("../update/orchestrated-arguments.mjs");
+    const { isOrchestratedUpdateArgv, parseOrchestratedChildArgs } = await import("../update/orchestrated-arguments.mjs");
+    if (process.env.OCX_UPDATE_ORCHESTRATED_CHILD === "1" && deps.args.slice(1).some(arg => /^--orchestrated-(expect|result)(?:=|$)/.test(arg))) {
+      const child = parseOrchestratedChildArgs(deps.args.slice(1), process.env);
+      if (!child.ok) return 64;
+      await (await import("../update")).runUpdate(child);
+      return Number(process.exitCode ?? 0);
+    }
     if (isOrchestratedUpdateArgv(deps.args.slice(1))) return (await import("../update/orchestrated-entry")).runOrchestratedUpdate(deps.args.slice(1));
     // `ocx update --help` must print usage and exit WITHOUT side effects — running the
     // real self-update stops the proxy and drops in-flight routed streams (issue #168).

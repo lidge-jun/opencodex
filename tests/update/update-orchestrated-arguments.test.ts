@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs } from "../../src/update/orchestrated-arguments.mjs";
+import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../../src/update/orchestrated-arguments.mjs";
+
+test("internal child flags require the parent environment and an exact pin", () => {
+  const args = ["--version", "2.1.0", "--orchestrated-expect", "encoded", "--orchestrated-result", "/tmp/result", "--not-after", "123"];
+  expect(parseOrchestratedChildArgs(args, {})).toEqual({ ok: false });
+  expect(parseOrchestratedChildArgs(args, { OCX_UPDATE_ORCHESTRATED_CHILD: "1" })).toMatchObject({ ok: true, version: "2.1.0", expect: "encoded", resultPath: "/tmp/result", notAfter: 123 });
+  for (const invalid of [args.slice(2), [...args, "--tag", "latest"], [...args, "--version", "2.2.0"], args.slice(0, -1)]) {
+    expect(parseOrchestratedChildArgs(invalid, { OCX_UPDATE_ORCHESTRATED_CHILD: "1" })).toEqual({ ok: false });
+  }
+});
 
 test("orchestrated arguments validate selectors, deadline, and plan binding", () => {
   expect(parseOrchestratedUpdateArgs(["--plan", "--json", "--tag", "preview"])).toMatchObject({ ok: true, mode: "plan", tag: "preview" });

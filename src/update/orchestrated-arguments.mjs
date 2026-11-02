@@ -5,6 +5,22 @@ export function isOrchestratedUpdateArgv(argv) {
     || /^(--expect-plan|--not-after|--orchestrated-expect|--orchestrated-result)(?:=|$)/.test(arg));
 }
 
+/** Internal child grammar is accepted only in the explicitly marked child process. */
+export function parseOrchestratedChildArgs(argv, env) {
+  if (env.OCX_UPDATE_ORCHESTRATED_CHILD !== "1") return { ok: false };
+  const values = new Map();
+  const allowed = new Set(["--version", "--orchestrated-expect", "--orchestrated-result", "--not-after"]);
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i], value = argv[++i];
+    if (!allowed.has(flag) || values.has(flag) || !value || value.startsWith("-")) return { ok: false };
+    values.set(flag, value);
+  }
+  const version = values.get("--version"), expect = values.get("--orchestrated-expect"), resultPath = values.get("--orchestrated-result"), deadline = values.get("--not-after");
+  if (!version || !strictSemver(version) || !expect || !resultPath || (deadline !== undefined
+    && (!/^\d+$/.test(deadline) || !Number.isSafeInteger(Number(deadline)) || Number(deadline) <= 0))) return { ok: false };
+  return { ok: true, version, expect, resultPath, ...(deadline === undefined ? {} : { notAfter: Number(deadline) }) };
+}
+
 function strictSemver(value) {
   if (value.length > 128) return false;
   const match = CORE.exec(value);

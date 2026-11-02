@@ -16,6 +16,16 @@ function fixture() {
 }
 function read(path: string) { return JSON.parse(readFileSync(path, "utf8")); }
 
+test("preflight owns the update mutex and remains visible until finalized", () => {
+  const f = fixture(); const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  expect(session.start()).toEqual({ ok: true });
+  expect(isUpdateInFlight(f.home)).toBe(true);
+  expect(tryAcquireUpdateSyncMutex(f.home, "sync")).toMatchObject({ kind: "busy", holder: "update" });
+  session.finishPreflight();
+  expect(isUpdateInFlight(f.home)).toBe(false);
+  expect(read(f.resultPath)).toEqual({ phase: "preflight" });
+});
+
 test("preflight must be writable before proceeding", () => {
   const f = fixture();
   const session = createOrchestratedChildSession({ ...f, resultPath: join(f.home, "missing", "result"), verifyIdentity: () => true });
@@ -27,8 +37,8 @@ test("sync holder refuses without writing an orchestrated marker", async () => {
   const f = fixture(); const lock = tryAcquireUpdateSyncMutex(f.home, "sync");
   if (lock.kind !== "acquired") throw new Error("fixture lock");
   try {
-    const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true }); session.start();
-    expect(await session.enterMutation()).toEqual({ ok: false, error: "sync-in-progress" });
+    const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+    expect(session.start()).toEqual({ ok: false, error: "sync-in-progress" });
     expect(read(f.resultPath)).toEqual({ phase: "refused", error: "sync-in-progress" });
     expect(existsSync(join(f.home, "update-orchestrated.json"))).toBe(false);
   } finally { lock.release(); }
