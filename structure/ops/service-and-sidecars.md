@@ -595,6 +595,7 @@ src/update/async-check.ts uses the existing owner-bound registry target with a b
 
 The pnpm update result retains its legacy `rolledBack` signal for a verified previous version, including an unchanged active tree. Its `rollbackPerformed` field is true only when a rollback transaction succeeds and the restored tree and shims verify; orchestration must use that distinction when reporting an actual rollback.
 `src/update/orchestrated-pnpm.mjs` provides read-only post-update evidence: it re-resolves the selected pnpm owner, requires the original global group and bin directory, and verifies the active package version, source, dependencies and generated shims. It is a verification building block; it does not itself initiate an update.
+The orchestrated outcome classifier treats malformed phase records as unverified and requires an absolute active root on an installed record before it can report success.
 
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
 

@@ -1,3 +1,13 @@
+import { isAbsolute } from "node:path";
+
+function validOutcome(outcome) {
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return false;
+  if (!["preflight", "mutating", "installed", "failed", "refused", "overrun"].includes(outcome.phase)) return false;
+  if (outcome.error !== undefined && typeof outcome.error !== "string") return false;
+  if (outcome.rollbackPerformed !== undefined && typeof outcome.rollbackPerformed !== "boolean") return false;
+  return outcome.phase !== "installed" || (typeof outcome.activeRoot === "string" && isAbsolute(outcome.activeRoot));
+}
+
 /** Classify only independently observed state after confirmed child termination. */
 export function classifyOrchestratedOutcome(input) {
   const result = {
@@ -6,7 +16,7 @@ export function classifyOrchestratedOutcome(input) {
     healthy: false, rolledBack: false,
   };
   const done = (exitCode, error) => ({ exitCode, result: error ? { ...result, error } : result });
-  if (!input.childExited || !input.outcome || input.outcome.phase === "overrun") return done(12, "outcome-unverified");
+  if (!input.childExited || !validOutcome(input.outcome) || input.outcome.phase === "overrun") return done(12, "outcome-unverified");
   if (input.outcome.phase === "refused" && input.childExitCode !== 0) return done(10, input.outcome.error || "runtime-ownership-refused");
   if (input.outcome.phase === "installed" && input.childExitCode === 0) {
     result.applied = input.targetVerified;

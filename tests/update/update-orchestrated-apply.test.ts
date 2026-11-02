@@ -21,9 +21,13 @@ test("exit classification requires confirmed termination and independently verif
   expect(classifyOrchestratedOutcome({ ...base, childExited: false })).toMatchObject({ exitCode: 12 });
   expect(classifyOrchestratedOutcome({ ...base, outcome: null })).toMatchObject({ exitCode: 12 });
   expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "overrun" } })).toMatchObject({ exitCode: 12 });
-  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: { phase: "installed" }, targetVerified: true })).toMatchObject({ exitCode: 0, result: { applied: true, healthy: true } });
-  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: { phase: "installed" }, targetVerified: true, runtimeHealthy: false })).toMatchObject({ exitCode: 12, result: { applied: true, healthy: false, error: "runtime-unhealthy" } });
-  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: { phase: "installed" }, targetVerified: false })).toMatchObject({ exitCode: 12, result: { applied: false, error: "install-unverified" } });
+  const installed = { phase: "installed" as const, activeRoot: join(tmpdir(), "fixture", "install") };
+  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: true })).toMatchObject({ exitCode: 0, result: { applied: true, healthy: true } });
+  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: true, runtimeHealthy: false })).toMatchObject({ exitCode: 12, result: { applied: true, healthy: false, error: "runtime-unhealthy" } });
+  expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: false })).toMatchObject({ exitCode: 12, result: { applied: false, error: "install-unverified" } });
+  for (const malformed of [{ phase: "installed" }, { phase: "installed", activeRoot: "" }, { phase: "refused", error: 42 }, { phase: "failed", rollbackPerformed: "yes" }]) {
+    expect(classifyOrchestratedOutcome({ ...base, childExitCode: malformed.phase === "installed" ? 0 : 1, outcome: malformed as OutcomeInput["outcome"], targetVerified: true })).toMatchObject({ exitCode: 12 });
+  }
 });
 
 test("passive install verification rejects a damaged tree and permits a retained backup", () => {
