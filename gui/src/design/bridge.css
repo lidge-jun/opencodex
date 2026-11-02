@@ -543,8 +543,10 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
   min-height: var(--ocx-control-h);
 }
 /* The same pairing for v2 (Tailwind-sized) buttons: the row's direct children get the md
-   height in a non-inheriting property, which Button's sm size reads before its own token. */
-@property --ocx-row-control-h { syntax: "<length>"; inherits: false; }
+   height in a non-inheriting property, which Button's sm size reads before its own token.
+   Universal syntax on purpose: a typed syntax requires an initial-value, and any initial
+   value would stop Button's fallback (the sm token) from ever applying. */
+@property --ocx-row-control-h { syntax: "*"; inherits: false; }
 :has(> :is(.custom-select, .input, select, input:not([type="checkbox"], [type="radio"]))) > * {
   --ocx-row-control-h: var(--ocx-control-h);
 }

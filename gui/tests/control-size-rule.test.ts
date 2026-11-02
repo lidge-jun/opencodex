@@ -30,7 +30,7 @@ test("v2 Button and SegmentedControl size from the tokens, not from h-7/h-8/h-9"
   expect(button).toContain('sm: "h-[var(--ocx-row-control-h,var(--ocx-control-h-sm))]');
   // ...and the bridge feeds that row height to the children of any row holding a field.
   const bridge = await read("../src/design/bridge.css");
-  expect(bridge).toContain("@property --ocx-row-control-h { syntax: \"<length>\"; inherits: false; }");
+  expect(bridge).toContain("@property --ocx-row-control-h { syntax: \"*\"; inherits: false; }");
   expect(button).toContain('md: "h-[var(--ocx-control-h)]');
   expect(button).not.toMatch(/\bh-(7|8|9)\b/);
   // The app's Select (ui.tsx) has a compact size too; it is the sm token, not a third height.
