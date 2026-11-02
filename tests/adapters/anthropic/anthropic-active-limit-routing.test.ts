@@ -12,7 +12,10 @@ import { hasAnthropicFamilyEnumeration } from "../../../src/providers/quota/anth
 import { anthropicModelPercents } from "../../../src/oauth/anthropic-model-quota";
 import { providerQuotaWindows } from "../../../src/quota-pool/assemble";
 import { probeAnthropicUsageQuota } from "../../../src/providers/claude-cli-usage";
-import { ultraUsage, weeklyReset } from "../../fixtures/anthropic-usage-shapes";
+import { ultraUsage } from "../../fixtures/anthropic-usage-shapes";
+
+/** A weekly reset relative to now, so cached windows never expire mid-suite on a later date. */
+const futureWeeklyReset = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
 import { drainAndRemoveFixtureRoots } from "../../helpers/fixture-teardown";
 import type { OcxConfig } from "../../../src/types";
 
@@ -52,8 +55,8 @@ async function parse(body: unknown) {
 for (const active of [false, true]) test(`real pool selection applies active=${active} Fable only to Fable`, async () => {
   const [a, b] = await seed();
   const quota = await parse({ five_hour: null, seven_day_fable: { utilization: 100 }, limits: [
-    { kind: "weekly_all", percent: 10, is_active: true, resets_at: weeklyReset },
-    { kind: "weekly_scoped", percent: 100, is_active: active, resets_at: weeklyReset,
+    { kind: "weekly_all", percent: 10, is_active: true, resets_at: futureWeeklyReset() },
+    { kind: "weekly_scoped", percent: 100, is_active: active, resets_at: futureWeeklyReset(),
       scope: { model: { display_name: "Fable" } } },
   ] });
   setCachedProviderAccountQuotaForTests("anthropic", a!, quota);
@@ -83,7 +86,7 @@ test("null or explicitly inactive 5h does not fabricate evidence to clear an ear
 
 test("RR1 inactive exhausted weekly excludes all models", async () => {
   const [a, b] = await seed();
-  const quota = await parse({ limits: [{ kind: "weekly_all", percent: 100, is_active: false, resets_at: weeklyReset }] });
+  const quota = await parse({ limits: [{ kind: "weekly_all", percent: 100, is_active: false, resets_at: futureWeeklyReset() }] });
   for (const model of ["claude-sonnet-5-5", "claude-fable-5"]) expect(anthropicModelPercents(quota, model)).toContain(100);
   expect(providerQuotaWindows(quota, "measured", Date.now()).find(row => row.id === "weekly")?.exhausted).toBe(true);
   setCachedProviderAccountQuotaForTests("anthropic", a!, quota);
