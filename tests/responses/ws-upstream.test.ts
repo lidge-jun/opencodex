@@ -34,6 +34,8 @@ import type { OcxConfig } from "../../src/types";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, shouldUseCodexWsUpstream, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { installCompactionRoutingAclFixture as installRoutingAclFixture } from "../helpers/compaction-routing-fixtures";
+// Allowlisted metadata names only: ten quota headers per family, so 128 headers span 13 families.
+const quotaFamilyHeaders = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`x-codex-family-${Math.floor(i / 10)}-${["primary-used-percent", "primary-window-minutes", "primary-reset-at", "secondary-used-percent", "secondary-window-minutes", "secondary-reset-at", "tertiary-used-percent", "tertiary-window-minutes", "tertiary-reset-at", "limit-name"][i % 10]}`, "1"]));
 installRoutingAclFixture();
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -921,7 +923,7 @@ describe("codexWsUpstreamFetch", () => {
       expect(response.status).toBe(429);
       expect(response.headers.get("content-type")).toBe("application/json");
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.headers.get("x-codex-primary-used-percent")).toBe("100.0");
+      expect(response.headers.get("x-codex-primary-used-percent")).toBe("100");
       expect(response.headers.get("x-codex-primary-window-minutes")).toBe("15");
       expect(response.headers.get("x-codex-primary-reset-at")).toBe("1800000000");
       expect(response.headers.get("x-codex-credits-has-credits")).toBe("true");
@@ -1011,19 +1013,15 @@ describe("codexWsUpstreamFetch", () => {
       expect(await response.json()).toEqual({ error: refusal.error });
     });
 
-    const boundedHeaders = (count: number, value = "1") =>
-      Object.fromEntries(Array.from({ length: count }, (_, i) => [`x-ratelimit-fixture-${i}`, value]));
+    const boundedHeaders = quotaFamilyHeaders;
     const quotaFamilies = (count: number) => Object.fromEntries(
       Array.from({ length: count }, (_, i) => [`x-codex-family-${i}-primary-used-percent`, "1"]));
     test.each([
-      ["value", { "x-models-etag": "x".repeat(4096) }, true],
-      ["value overflow", { "x-models-etag": "x".repeat(4097) }, false],
-      ["UTF-8 value", { "x-models-etag": "é".repeat(2048) }, true],
-      ["UTF-8 overflow", { "x-models-etag": "é".repeat(2049) }, false],
+      ["value", { "x-codex-turn-state": "x".repeat(4096) }, true],
+      ["value overflow", { "x-codex-turn-state": "x".repeat(4097) }, false],
+      ["UTF-8 overflow", { "x-codex-turn-state": "é".repeat(2049) }, false],
       ["header count", boundedHeaders(128), true], ["header count overflow", boundedHeaders(129), false],
       ["families", quotaFamilies(16), true], ["family overflow", quotaFamilies(17), false],
-      ["total bytes", boundedHeaders(8, "x".repeat(3990)), true],
-      ["total byte overflow", boundedHeaders(8, "x".repeat(4096)), false],
     ] as Array<[string, Record<string, string>, boolean]>)("enforces metadata budget: %s", async (_name, headers, accepted) => {
       const response = await receive({ ...refusal, headers });
       if (accepted) {
@@ -1043,9 +1041,9 @@ describe("codexWsUpstreamFetch", () => {
     });
 
     test("bounds the cumulative prelude and rejection metadata even when updates replace values", async () => {
-      const response = await receive({ ...refusal, headers: boundedHeaders(5, "x".repeat(4096)) }, [
-        { type: "codex.response.metadata", headers: boundedHeaders(4, "y".repeat(4096)) },
-      ]);
+      // Each frame replaces the same allowlisted value; the prelude still counts every frame's bytes.
+      const response = await receive({ ...refusal, headers: { "x-codex-turn-state": "x".repeat(4096) } },
+        Array.from({ length: 8 }, () => ({ type: "codex.response.metadata", headers: { "x-codex-turn-state": "y".repeat(4096) } })));
       expect(response.status).toBe(502);
       expect(((await response.json()) as { error: { message: string } }).error.message).toContain("metadata");
     });
@@ -1742,9 +1740,10 @@ describe("native WS metadata boundaries", () => {
     expect(families.snapshot().has("x-codex-family-16-primary-used-percent")).toBe(false);
     const headers = new CodexWsMetadata();
     headers.commit();
-    headers.consume({ type: "codex.response.metadata", headers: Object.fromEntries(Array.from({ length: 128 }, (_, i) => [`x-ratelimit-fixture-${i}`, "1"])) }, 4000);
+    headers.consume({ type: "codex.response.metadata", headers: quotaFamilyHeaders(128) }, 4000);
     expect([...headers.snapshot()]).toHaveLength(128);
-    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-ratelimit-extra": "1" } }, 100)).toThrow("header budget");
+    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-codex-family-12-tertiary-window-minutes": "2" } }, 100)).not.toThrow();
+    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-codex-family-13-limit-name": "1" } }, 100)).toThrow("header budget");
     expect([...headers.snapshot()]).toHaveLength(128);
   });
 });

@@ -268,7 +268,8 @@ export function tapAnthropicSseForLog(
       // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
       // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
       // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
-      recordLocalFailureDetail(logCtx, message);
+      recordLocalFailureDetail(logCtx, message, closeReason === "body_stall"
+        ? { code: "body_stall", value: guard?.stallMs ?? 0 } : { code: "body_overflow", value: guard?.maxBytes ?? 0 });
       finalize(502, { terminalStatus: "incomplete", closeReason });
       closeWithErrorFrame(errType, message);
     }
@@ -351,7 +352,7 @@ export function tapAnthropicSseForLog(
           // reset (below), so the client never reads a partial answer as a finished message.
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
-          recordLocalFailureDetail(logCtx, failure);
+          recordLocalFailureDetail(logCtx, failure, { code: lastDeliveredStop === "error" ? "stream_error_stop" : "stream_ended_early" });
           if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
           finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
           closeWithErrorFrame("api_error", failure);
@@ -413,7 +414,7 @@ export function tapAnthropicSseForLog(
         logCtx.transportPhase = "mid_stream";
         logCtx.terminalSource = "synthetic";
         // The runtime error text stays internal; the row keeps the fixed sentence only.
-        recordLocalFailureDetail(logCtx, "anthropic passthrough upstream stream failed");
+        recordLocalFailureDetail(logCtx, "anthropic passthrough upstream stream failed", { code: "stream_failed" });
         logCtx.upstreamError = message.slice(0, 500);
         if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         finalize(502, { terminalStatus: "failed", closeReason: "terminal" });

@@ -26,13 +26,17 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
   the number on hydration.
-- `failureDetail`, proxy-authored transport text (fixed sentences, numeric guard limits, closed provider
-  type names) set through `recordLocalFailureDetail` in `src/server/request-log-failure-detail.ts`, or the
-  fixed label for a known `incomplete_details.reason` (`max_output_tokens`, `upstream_stall_timeout`,
-  `adapter_eof`); single line and at most 500 characters. An unknown reason stays on the context only. A
-  relayed error that exactly matches one of the proxy's own timeout or client-close sentences
-  (`PROXY_SENTENCES`: response-header, connect, body-stall, routed-generation and image-bridge
-  inactivity timeouts, web-search client close) is rebuilt from its number, bounded to seven digits.
+- `failureDetail`, a closed `{ code, value?, type? }` from `src/lib/failure-detail.ts`: `code` is a member of
+  `FAILURE_DETAIL_CODES`, `value` a safe integer (milliseconds or bytes) kept only for codes that take one,
+  and `type` a closed Anthropic error class kept only on `provider_error`. `recordLocalFailureDetail` in
+  `src/server/request-log-failure-detail.ts` takes the detail beside the English text it leaves on the
+  context; `incompleteReasonDetail` maps the known `incomplete_details.reason` values (`max_output_tokens`,
+  `upstream_stall_timeout`, `adapter_eof`), and an unknown reason stays on the context only. A relayed error
+  that exactly matches one of the proxy's own timeout or client-close sentences (`PROXY_SENTENCES`) becomes
+  its code with the parsed number, bounded to seven digits. `boundedFailureDetail` validates every append,
+  read and hydration; free text (a row from an earlier build or an edited one) is dropped. The dashboard
+  renders the code through `failureDetailLabel` in `gui/src/pages/logs-failure-summary.ts` and the
+  `logs.failureDetail.*` catalog keys in every locale.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the
@@ -42,6 +46,36 @@ read and hydration. The Logs detail shows the localized condition and the failur
 round trip; `tests/server/upstream-error-detail-boundaries.test.ts` drives native Chat, Responses
 passthrough and both Messages lanes against an upstream that echoes its credential, and checks the live
 row, `usage.jsonl`, hydration and console output.
+
+## Service tier and model identity
+
+A recorded response service tier is a member of `RESPONSE_SERVICE_TIERS` in
+`src/lib/response-service-tier.ts` (`auto`, `default`, `flex`, `scale`, `priority`, `fast`, `standard`,
+`ultrafast`, case-folded); any other value is omitted. `boundedServiceTier` applies at capture (the
+Responses payload in `src/server/request-log.ts`, both FastWire observers in `src/providers/fastwire.ts`), in
+the live projection for the row and every nested `tierOutcome`, and in `normalizeUsageEntry`. Fast
+confirmation still reads the raw observation, so a configured wire value outside the set confirms Fast
+without being recorded.
+
+`servedModel` and `resolvedModel` each pass `boundedModelIdentity` in `src/lib/model-identity.ts` on their
+own: `[A-Za-z0-9._:/@-]`, at most 128 characters, and unchanged by the secret redactor. `addRequestLog`,
+`normalizeUsageEntry` and hydration apply it through `modelIdentityLogFields`; relayed model headers use the
+same check. `tests/usage/request-log-identity-bounds.test.ts` covers capture, live, ledger, hydration and the
+`/api/logs` DTO.
+
+## Response metadata headers
+
+`src/server/safe-response-headers.ts` lists each upstream response header a client may receive as
+response metadata (WebSocket metadata frames, the WS-to-HTTP projection, the HTTP-to-WS error bridge) by
+exact name, and `normalizeSafeResponseHeader` validates or rebuilds each value against its contract:
+retry advice through `formatClientRetryAfter`; request ids `[A-Za-z0-9_-]` up to 128; models through
+`boundedModelIdentity`; booleans, rate-limit counts, credit balances and quota percentages, windows and
+reset times as numbers this proxy formats; rate-limit resets as Go-style durations it rebuilds; turn state
+and etags by token grammar. Codex quota windows may name a limit family
+(`x-codex-<family>-primary-used-percent`), whose name segment follows the native frame's bounded grammar.
+Free-text headers such as the promo message are not relayed. `codex-ws-metadata.ts` checks the raw byte
+budget first, then keeps only normalized values. `tests/server/safe-response-headers.test.ts` covers the
+allowlist and each contract.
 
 ## Client retry advice
 

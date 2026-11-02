@@ -326,7 +326,7 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(outbound).toEqual({
       "retry-after": "2",
       "x-codex-turn-state": "state",
-      "x-codex-primary-used-percent": "100.0",
+      "x-codex-primary-used-percent": "100",
       "x-codex-primary-window-minutes": "15",
       "x-codex-secondary-primary-reset-at": "1781928000",
       "x-codex-secondary-limit-name": "Secondary",

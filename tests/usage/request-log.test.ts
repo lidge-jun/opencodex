@@ -1729,8 +1729,7 @@ describe("request log metadata", () => {
       status: 502,
       errorCode: "upstream_server_error",
     });
-    expect(entries[0].failureDetail).toContain("upstream_stall_timeout");
-    expect(entries[0].failureDetail).toContain("Upstream stalled");
+    expect(entries[0].failureDetail).toEqual({ code: "stall_timeout" });
   });
 
   test("deferred SSE logging treats the requested output limit as a successful terminal", async () => {
@@ -1764,7 +1763,7 @@ describe("request log metadata", () => {
       status: 200,
       usageStatus: "reported",
       usage: { inputTokens: 9, outputTokens: 64 },
-      failureDetail: "Output reached the requested token limit (max_output_tokens)",
+      failureDetail: { code: "output_limit" },
     });
     // A successful output-limit terminal is not an upstream failure.
     expect(entries[0].upstreamCondition).toBeUndefined();
@@ -1801,8 +1800,7 @@ describe("request log metadata", () => {
       status: 502,
       errorCode: "upstream_server_error",
     });
-    expect(entries[0].failureDetail).toContain("adapter_eof");
-    expect(entries[0].failureDetail).toContain("ended unexpectedly");
+    expect(entries[0].failureDetail).toEqual({ code: "adapter_eof" });
   });
 });
 

@@ -1,3 +1,6 @@
+import type { FailureDetail } from "../lib/failure-detail";
+import { boundedModelIdentity } from "../lib/model-identity";
+import { boundedServiceTier } from "../lib/response-service-tier";
 import { createHash, type Hash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -5,7 +8,7 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
 import {
   normalizePersistedJevDecision,
@@ -382,7 +385,7 @@ export interface PersistedUsageEntry {
   /** Provider quota window end in epoch ms, derived server-side and bounded (src/usage/error-detail.ts). */
   rateLimitResetAt?: number;
   /** Proxy-authored failure text (src/server/request-log-failure-detail.ts), never upstream text. */
-  failureDetail?: string;
+  failureDetail?: FailureDetail;
   /** Where the terminal/failure was observed; absent on historic rows. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /** Whether the terminal came from upstream or a proxy-generated tail. */
@@ -683,7 +686,7 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   if ("responseServiceTier" in outcome && typeof outcome.responseServiceTier !== "string") return null;
   if ("responseTierAuthoritative" in outcome && typeof outcome.responseTierAuthoritative !== "boolean") return null;
   const wireValue = sanitizeLogMetadataString(outcome.wireValue);
-  const responseServiceTier = sanitizeLogMetadataString(outcome.responseServiceTier);
+  const responseServiceTier = boundedServiceTier(outcome.responseServiceTier);
   return {
     ...(outcome.canonical === "priority" ? { canonical: "priority" as const } : {}),
     ...(outcome.wireKind === null
@@ -908,19 +911,9 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
-const MAX_SERVED_MODEL_LENGTH = 200;
-/**
- * An upstream model is an identifier, never free-form text to truncate into one. A value the
- * secret redactor would change is dropped rather than logged, because credential-shaped text can
- * fit the identifier alphabet.
- */
+/** Served and resolved models on a row use the shared model-identity bound (src/lib/model-identity.ts). */
 export function sanitizeServedModel(value: unknown): string | undefined {
-  return typeof value === "string"
-    && value.length <= MAX_SERVED_MODEL_LENGTH
-    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
-    && redactSecretString(value) === value
-    ? value
-    : undefined;
+  return boundedModelIdentity(value);
 }
 
 /** The identity fields that decide whether a response model is ocx's own echo. */
@@ -973,8 +966,9 @@ export function modelIdentityLogFields(source: ServedModelEchoSource & { resolve
 } {
   const sanitized = sanitizeServedModel(source.servedModel);
   const servedModel = isClientSelectorEcho(source, sanitized) ? undefined : sanitized;
+  // The resolved model passes the same validator on its own; it also leaves with a dropped served echo.
   const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
-    ? undefined : source.resolvedModel;
+    ? undefined : sanitizeServedModel(source.resolvedModel);
   return {
     ...(resolvedModel ? { resolvedModel } : {}),
     ...(servedModel ? { servedModel } : {}),
@@ -991,7 +985,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   const tierOutcome = entry.tierOutcome ? normalizeAttemptTierOutcome(entry.tierOutcome) : undefined;
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
-  const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
+  const responseServiceTier = boundedServiceTier(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const { servedModel, resolvedModel } = modelIdentityLogFields(entry);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);

@@ -24,10 +24,10 @@ test("upstream served model persists only when it is a plausible bounded identif
   clearRequestLogsForTests();
   resetUsageReadCacheForTests();
   try {
-    const valid = "vendor/model.v2:@+-_";
+    const valid = "vendor/model.v2:@-_";
     // Credential-shaped but inside the identifier alphabet; built at runtime so no token-like literal is committed.
     const credentialShaped = ["eyJ" + "a".repeat(12), "b".repeat(12), "c".repeat(8)].join(".");
-    const invalid = ["m".repeat(201), "model\ninjected", "model with space", "model\twith-tab", credentialShaped];
+    const invalid = ["m".repeat(129), "model+plus", "model\ninjected", "model with space", "model\twith-tab", credentialShaped];
     for (const [index, model] of [valid, ...invalid].entries()) {
       const context: RequestLogContext = {
         model: "route-model",

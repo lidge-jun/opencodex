@@ -1,4 +1,4 @@
-import { isSafeResponseHeader, safeResponseHeaders } from "../safe-response-headers";
+import { isSafeResponseHeader, normalizeSafeResponseHeader, safeResponseHeaders } from "../safe-response-headers";
 
 export const CODEX_WS_METADATA_MAX_BYTES = 32 * 1024;
 export const CODEX_WS_METADATA_MAX_FAMILIES = 16;
@@ -80,7 +80,9 @@ function quotaHeaders(event: Record<string, unknown>): Headers {
       const value = event.credits[field!];
       if (typeof value === "boolean") headers.set(`x-codex-credits-${suffix}`, String(value));
     }
-    if (typeof event.credits.balance === "string") setMetadataHeader(headers, "x-codex-credits-balance", event.credits.balance);
+    const balance = typeof event.credits.balance === "string"
+      ? normalizeSafeResponseHeader("x-codex-credits-balance", event.credits.balance) : undefined;
+    if (balance !== undefined) setMetadataHeader(headers, "x-codex-credits-balance", balance);
   }
   return headers;
 }
@@ -97,7 +99,11 @@ function responseHeaders(value: unknown): Headers {
   for (const [name, field] of Object.entries(value)) {
     if (!isSafeResponseHeader(name)) continue;
     if (typeof field !== "string" && typeof field !== "number" && typeof field !== "boolean") continue;
-    setMetadataHeader(headers, name, String(field));
+    const raw = String(field);
+    // The byte budget applies to what the upstream sent; then only a value that fits its contract stays.
+    if (Buffer.byteLength(raw) > CODEX_WS_METADATA_MAX_VALUE_BYTES) throw new Error("codex websocket metadata value exceeds the size limit");
+    const normalized = normalizeSafeResponseHeader(name, raw);
+    if (normalized !== undefined) setMetadataHeader(headers, name, normalized);
   }
   return headers;
 }

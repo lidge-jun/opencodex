@@ -1,5 +1,5 @@
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
-import { recordLocalFailureDetail } from "./request-log-failure-detail";
+import { recordLocalFailureDetail, type FailureDetail } from "./request-log-failure-detail";
 /**
  * Anthropic Messages inbound (/v1/messages + /v1/messages/count_tokens) for Claude Code.
  *
@@ -337,9 +337,10 @@ async function anthropicNativePassthrough(
   const finalize = createFinalRequestLog(logIds, logCtx).finish;
   // Locally generated diagnostics are fixed text plus validated guard limits. Runtime
   // fetch errors retain their existing client response but use a fixed stored reason.
-  const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string, storedReason = message) => {
+  const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string,
+    detail: FailureDetail, storedReason = message) => {
     const safeMessage = redactSecretString(message);
-    recordLocalFailureDetail(logCtx, storedReason);
+    recordLocalFailureDetail(logCtx, storedReason, detail);
     finalize(status, { closeReason });
     return anthropicErrorResponse(status, safeMessage, type);
   };
@@ -371,11 +372,11 @@ async function anthropicNativePassthrough(
     req.signal,
   );
   if (result.kind === "timeout") {
-    return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error");
+    return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error", { code: "header_timeout" });
   }
   if (result.kind === "error") {
     const err = result.error;
-    return fail(502, "non_stream", `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error", "anthropic passthrough failed: upstream connection error");
+    return fail(502, "non_stream", `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error", { code: "connect_failed" }, "anthropic passthrough failed: upstream connection error");
   }
   const upstream = result.upstream;
 
@@ -400,13 +401,15 @@ async function anthropicNativePassthrough(
   // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
   const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
   if (bodyResult.kind === "client_cancel") {
-    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error");
+    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error", { code: "client_closed" });
   }
   if (bodyResult.kind === "stall") {
-    return fail(504, "body_stall", `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error");
+    return fail(504, "body_stall", `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error",
+      { code: "body_stall", value: bodyGuard.stallMs });
   }
   if (bodyResult.kind === "overflow") {
-    return fail(502, "body_overflow", `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error");
+    return fail(502, "body_overflow", `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error",
+      { code: "body_overflow", value: bodyGuard.maxBytes });
   }
   const text = bodyResult.text;
   if (upstream.ok) {
@@ -418,14 +421,16 @@ async function anthropicNativePassthrough(
     // Upstream text is untrusted: retain only a closed type vocabulary in history.
     // Bound parsing work independently of the larger response-relay body limit.
     const statusReason = `Provider error ${upstream.status}`;
-    recordLocalFailureDetail(logCtx, statusReason, { upstreamEvidence: true });
+    recordLocalFailureDetail(logCtx, statusReason, { code: "provider_error" }, { upstreamEvidence: true });
     if (text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS) {
       try {
         const parsed: unknown = JSON.parse(text);
         if (isRec(parsed) && parsed.type === "error" && isRec(parsed.error)) {
           const upstreamType = parsed.error.type;
           const knownType = PASSTHROUGH_ERROR_TYPES.find(type => type === upstreamType);
-          if (knownType) recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`, { upstreamEvidence: true });
+          if (knownType) {
+            recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`, { code: "provider_error", type: knownType }, { upstreamEvidence: true });
+          }
         }
       } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
     }

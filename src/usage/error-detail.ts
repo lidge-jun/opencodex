@@ -6,7 +6,10 @@
  * tokens are read here once to derive those facts and are never retained.
  */
 import { classifyUpstreamCondition, isUpstreamCondition, type UpstreamCondition } from "../lib/upstream-condition";
-import { sanitizeLogMetadataString } from "../lib/redact";
+import { boundedFailureDetail, type FailureDetail, type FailureDetailCode } from "../lib/failure-detail";
+import { boundedServiceTier } from "../lib/response-service-tier";
+
+export { boundedServiceTier };
 
 /**
  * Every error code a row may carry. Codes outside this set (an upstream-supplied code that reached a
@@ -95,31 +98,28 @@ export interface ErrorDetail {
   errorCode?: string;
   upstreamCondition?: UpstreamCondition;
   rateLimitResetAt?: number;
-  failureDetail?: string;
+  failureDetail?: FailureDetail;
 }
 
 const str = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 
 // Sentences this proxy writes into a relayed error body (web-search and image-bridge loops, body
-// inactivity guard). The request log only sees them as captured error text, so a match is rebuilt
-// from the parsed number; the number is bounded so no credential-length value can fit.
-const PROXY_SENTENCES: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
-  [/^Provider response-header timeout after (\d{1,7})ms during (web-search|image-bridge)$/,
-    match => `Provider response-header timeout after ${Number(match[1])}ms during ${match[2]}`],
-  [/^Upstream response body stalled for (\d{1,7})ms$/, match => `Upstream response body stalled for ${Number(match[1])}ms`],
-  [/^Routed model generation timeout after (\d{1,7})ms without response bytes during web-search$/,
-    match => `Routed model generation timeout after ${Number(match[1])}ms without response bytes during web-search`],
-  [/^runTurn inactivity timeout after (\d{1,7})ms during image-bridge$/,
-    match => `runTurn inactivity timeout after ${Number(match[1])}ms during image-bridge`],
-  [/^Provider connect timeout after (\d{1,7})ms$/, match => `Provider connect timeout after ${Number(match[1])}ms`],
-  [/^client closed request during web-search$/, () => "client closed request during web-search"],
+// inactivity guard). The request log only sees them as captured error text, so a match becomes a
+// closed code with the parsed number; the number is bounded so no credential-length value can fit.
+const PROXY_SENTENCES: ReadonlyArray<readonly [RegExp, FailureDetailCode]> = [
+  [/^Provider response-header timeout after (\d{1,7})ms during (?:web-search|image-bridge)$/, "header_timeout"],
+  [/^Upstream response body stalled for (\d{1,7})ms$/, "body_stall"],
+  [/^Routed model generation timeout after (\d{1,7})ms without response bytes during web-search$/, "generation_timeout"],
+  [/^runTurn inactivity timeout after (\d{1,7})ms during image-bridge$/, "turn_inactivity"],
+  [/^Provider connect timeout after (\d{1,7})ms$/, "connect_timeout"],
+  [/^client closed request during web-search$/, "client_closed"],
 ];
 
-function proxySentence(text: string | undefined): string | undefined {
+function proxySentenceDetail(text: string | undefined): FailureDetail | undefined {
   if (text === undefined) return undefined;
-  for (const [pattern, rebuild] of PROXY_SENTENCES) {
+  for (const [pattern, code] of PROXY_SENTENCES) {
     const match = pattern.exec(text);
-    if (match) return rebuild(match);
+    if (match) return match[1] === undefined ? { code } : { code, value: Number(match[1]) };
   }
   return undefined;
 }
@@ -151,8 +151,8 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
   }
   const rateLimitResetAt = boundedRateLimitResetAt(entry.rateLimitResetAt, entry.timestamp)
     ?? deriveRateLimitResetAt({ ...entry, errorCode });
-  // Proxy-authored text (request-log-failure-detail.ts); single-line and bounded here as well.
-  const failureDetail = sanitizeLogMetadataString(entry.failureDetail, 500) ?? proxySentence(str(entry.upstreamError));
+  // A closed code with bounded parameters; free text (a legacy or edited row) is dropped.
+  const failureDetail = boundedFailureDetail(entry.failureDetail) ?? proxySentenceDetail(str(entry.upstreamError));
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(upstreamCondition ? { upstreamCondition } : {}),
@@ -164,7 +164,19 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
 /** Upstream-authored fields that never leave the request context. */
 export const UPSTREAM_TEXT_FIELDS = ["upstreamError", "upstreamErrorCode", "upstreamErrorType", "upstreamRequestId"] as const;
 
-type ProjectableEntry = ErrorDetailSource & { attempts?: unknown; attemptNormalizationDropped?: unknown };
+type ProjectableEntry = ErrorDetailSource & {
+  attempts?: unknown; attemptNormalizationDropped?: unknown; responseServiceTier?: unknown; tierOutcome?: unknown;
+};
+
+/** A tier outcome whose recorded response tier is a closed member (or absent); same object when unchanged. */
+function boundedTierOutcome(outcome: unknown): unknown {
+  if (!outcome || typeof outcome !== "object" || !("responseServiceTier" in outcome)) return outcome;
+  const record = outcome as Record<string, unknown>;
+  const tier = boundedServiceTier(record.responseServiceTier);
+  if (tier === record.responseServiceTier) return outcome;
+  const { responseServiceTier: _dropped, ...rest } = record;
+  return tier === undefined ? rest : { ...rest, responseServiceTier: tier };
+}
 
 /**
  * The live-row form of {@link errorDetailFor}: attach the proxy-owned facts and remove upstream text.
@@ -178,6 +190,7 @@ export function projectErrorDetail<T extends ProjectableEntry>(entry: T): T {
       if (!attempt || typeof attempt !== "object") continue;
       const record = attempt as Record<string, unknown>;
       for (const field of UPSTREAM_TEXT_FIELDS) if (field in record) delete record[field];
+      if ("tierOutcome" in record) record.tierOutcome = boundedTierOutcome(record.tierOutcome);
       if (typeof record.errorCode !== "string") continue;
       const code = normalizeLogErrorCode(record.errorCode, typeof record.status === "number" ? record.status : undefined);
       if (code !== record.errorCode) {
@@ -187,7 +200,10 @@ export function projectErrorDetail<T extends ProjectableEntry>(entry: T): T {
     }
   }
   const detail = errorDetailFor(entry);
+  const responseServiceTier = boundedServiceTier(entry.responseServiceTier);
+  const tierOutcome = boundedTierOutcome(entry.tierOutcome);
   const unchanged = UPSTREAM_TEXT_FIELDS.every(field => entry[field as keyof ErrorDetailSource] === undefined)
+    && entry.responseServiceTier === responseServiceTier && entry.tierOutcome === tierOutcome
     && entry.errorCode === detail.errorCode
     && entry.upstreamCondition === detail.upstreamCondition
     && entry.rateLimitResetAt === detail.rateLimitResetAt
@@ -197,6 +213,10 @@ export function projectErrorDetail<T extends ProjectableEntry>(entry: T): T {
   // A non-enumerable marker does not survive a spread; carry it explicitly.
   if (entry.attemptNormalizationDropped === true) out.attemptNormalizationDropped = true;
   for (const field of UPSTREAM_TEXT_FIELDS) delete out[field];
+  if (responseServiceTier === undefined) delete out.responseServiceTier;
+  else out.responseServiceTier = responseServiceTier;
+  if (tierOutcome === undefined) delete out.tierOutcome;
+  else out.tierOutcome = tierOutcome;
   for (const field of ["errorCode", "upstreamCondition", "rateLimitResetAt", "failureDetail"] as const) {
     if (detail[field] === undefined) delete out[field];
     else out[field] = detail[field];

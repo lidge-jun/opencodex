@@ -5,5 +5,7 @@
   "upstream-condition.test.ts": "lib",
   "client-retry-after.test.ts": "lib",
   "client-retry-after-sites.test.ts": "server",
-  "upstream-error-detail-boundaries.test.ts": "server"
+  "upstream-error-detail-boundaries.test.ts": "server",
+  "request-log-identity-bounds.test.ts": "usage",
+  "safe-response-headers.test.ts": "server"
 }

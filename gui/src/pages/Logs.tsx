@@ -23,7 +23,7 @@ import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydo
 import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
-import { failureAttributionLabels, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
+import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -194,7 +194,7 @@ export interface LogEntry extends LogFailureAttribution {
   errorCode?: string;
   /** Classified upstream condition (closed enum) and proxy-authored failure text; never upstream text. */
   upstreamCondition?: string;
-  failureDetail?: string;
+  failureDetail?: unknown;
   /**
    * Semantic terminal facts. `/api/logs` has always carried these -- `requestLogDto` spreads the
    * whole durable entry -- but this page declared neither, so it classified every request by its
@@ -1116,7 +1116,7 @@ function LogDetailDialog({
             )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {upstreamConditionLabel(detail.upstreamCondition, t) && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span>{upstreamConditionLabel(detail.upstreamCondition, t)}</span></>)}
-            {detail.failureDetail && (<><span className="muted">{t("logs.col.failureDetail")}</span><span className="mono log-detail-break">{detail.failureDetail}</span></>)}
+            {failureDetailLabel(detail.failureDetail, t) && (<><span className="muted">{t("logs.col.failureDetail")}</span><span>{failureDetailLabel(detail.failureDetail, t)}</span></>)}
           </div>
         </section>
 

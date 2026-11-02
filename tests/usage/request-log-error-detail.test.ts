@@ -100,19 +100,32 @@ describe("errorDetailFor", () => {
 
   test("only closed proxy sentences become failure detail, rebuilt from their bounded number", () => {
     expect(errorDetailFor({ status: 504, upstreamError: "Provider response-header timeout after 0300ms during web-search" }).failureDetail)
-      .toBe("Provider response-header timeout after 300ms during web-search");
+      .toEqual({ code: "header_timeout", value: 300 });
     expect(errorDetailFor({ status: 502, upstreamError: "Provider connect timeout after 15000ms" }).failureDetail)
-      .toBe("Provider connect timeout after 15000ms");
+      .toEqual({ code: "connect_timeout", value: 15000 });
+    expect(errorDetailFor({ status: 499, upstreamError: "client closed request during web-search" }).failureDetail)
+      .toEqual({ code: "client_closed" });
     for (const text of ["Provider connect timeout after " + NUMERIC_KEY + "ms", "x Provider connect timeout after 1ms",
       "Provider connect timeout after 1ms " + PROVIDER_KEY, "invalid key " + PROVIDER_KEY]) {
       expect(errorDetailFor({ status: 502, upstreamError: text }).failureDetail).toBeUndefined();
     }
   });
 
-  test("failure detail is single-line and bounded", () => {
-    const detail = errorDetailFor({ status: 504, failureDetail: "anthropic passthrough timed out\nforged line" + "x".repeat(600) });
-    expect(detail.failureDetail!.length).toBeLessThanOrEqual(500);
-    expect(detail.failureDetail).not.toContain("\n");
+  test("failure detail is a closed code with bounded parameters; free text never survives", () => {
+    expect(errorDetailFor({ status: 504, failureDetail: "anthropic passthrough timed out " + PROVIDER_KEY }).failureDetail).toBeUndefined();
+    expect(errorDetailFor({ status: 504, failureDetail: { code: PROVIDER_KEY } }).failureDetail).toBeUndefined();
+    expect(errorDetailFor({ status: 504, failureDetail: { code: "constructor" } }).failureDetail).toBeUndefined();
+    expect(errorDetailFor({ status: 504, failureDetail: { code: "body_stall", value: 1000 } }).failureDetail)
+      .toEqual({ code: "body_stall", value: 1000 });
+    // Extra keys, unsafe numbers and unknown types are dropped from an otherwise valid detail.
+    expect(errorDetailFor({ status: 502, failureDetail: { code: "body_overflow", value: Number(NUMERIC_KEY), note: PROVIDER_KEY } }).failureDetail)
+      .toEqual({ code: "body_overflow" });
+    expect(errorDetailFor({ status: 400, failureDetail: { code: "provider_error", type: PROVIDER_KEY } }).failureDetail)
+      .toEqual({ code: "provider_error" });
+    expect(errorDetailFor({ status: 400, failureDetail: { code: "provider_error", type: "permission_error" } }).failureDetail)
+      .toEqual({ code: "provider_error", type: "permission_error" });
+    expect(errorDetailFor({ status: 400, failureDetail: { code: "client_closed", value: 5 } }).failureDetail)
+      .toEqual({ code: "client_closed" });
   });
 });
 
@@ -218,11 +231,13 @@ describe("request-log rows keep only proxy-owned error facts", () => {
       addFinalRequestLog("local-" + status, Date.now(), ctx, status, { closeReason: "non_stream" }, row => rows.push(row));
       return rows[0]!;
     };
-    const timeout = final(ctx => recordLocalFailureDetail(ctx, "anthropic passthrough timed out waiting for response headers"), 504);
-    expect(timeout.failureDetail).toBe("anthropic passthrough timed out waiting for response headers");
+    const timeout = final(ctx => recordLocalFailureDetail(ctx, "anthropic passthrough timed out waiting for response headers",
+      { code: "header_timeout" }), 504);
+    expect(timeout.failureDetail).toEqual({ code: "header_timeout" });
     expect(timeout.upstreamCondition).toBeUndefined();
-    const restated = final(ctx => recordLocalFailureDetail(ctx, "Provider error 429: rate_limit_error", { upstreamEvidence: true }), 429);
-    expect(restated.failureDetail).toBe("Provider error 429: rate_limit_error");
+    const restated = final(ctx => recordLocalFailureDetail(ctx, "Provider error 429: rate_limit_error",
+      { code: "provider_error", type: "rate_limit_error" }, { upstreamEvidence: true }), 429);
+    expect(restated.failureDetail).toEqual({ code: "provider_error", type: "rate_limit_error" });
     expect(restated.upstreamCondition).toBe("rate_limited");
   });
 
