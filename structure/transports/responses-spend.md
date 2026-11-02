@@ -384,7 +384,8 @@ directory entry that is a link -- including one whose target does not exist -- i
 of followed. The owner database `spend-ledger-owner.sqlite` and its SQLite sidecars pass the same
 `src/lib/private-sqlite-path.ts` check before the file is created and before SQLite opens it: a link, any
 Windows reparse point, a directory or a hard link there fails acquisition with
-`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. A separate process may use a separate directory. SQLite crash release permits the
+`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. On Windows ARM64, whose Bun build
+cannot run the native attribute query, only the links and junctions `lstat` reports are refused. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
 Every file check admits a ledger file only when it is a regular file, not a link, with exactly

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   assertPrivateSqliteSidecars,
   isWindowsReparsePoint,
+  nativeReparseProbeApplies,
   preparePrivateSqliteDatabase,
   setSqlitePathReparseProbeForTests,
   UnsafeSqlitePathError,
@@ -94,7 +95,14 @@ test("a probe that cannot answer fails closed, and the spend-ledger owner report
   expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
 });
 
-test.skipIf(process.platform !== "win32")("the native Windows probe reports links and junctions, not regular files", () => {
+test("the native attribute query runs on Windows except ARM64, whose Bun build cannot load FFI", () => {
+  expect(nativeReparseProbeApplies("win32", "x64")).toBe(true);
+  expect(nativeReparseProbeApplies("win32", "arm64")).toBe(false);
+  expect(nativeReparseProbeApplies("darwin", "arm64")).toBe(false);
+  expect(nativeReparseProbeApplies("linux", "x64")).toBe(false);
+});
+
+test.skipIf(process.platform !== "win32" || process.arch === "arm64")("the native Windows probe reports links and junctions, not regular files", () => {
   writeFileSync(database, "db");
   const fileLink = join(root, "file-link");
   symlinkSync(database, fileLink, "file");

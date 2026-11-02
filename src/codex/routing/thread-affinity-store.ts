@@ -4,11 +4,11 @@ import {
   chmodSync,
   lstatSync,
   realpathSync,
-  type Stats,
 } from "node:fs";
 import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { initializeConfigOwnership, recordOwnedConfigPath } from "../../lib/config-ownership";
+import { sameFileIdentity, type FileIdentity } from "../../lib/file-identity";
 import { isPassiveRead } from "../../lib/passive-read";
 import { assertPrivateSqliteEntryOrMissing, assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "../../lib/private-sqlite-path";
 import {
@@ -67,7 +67,7 @@ type Scope = {
   token: SpendLedgerStorage;
   db?: Database;
   /** The database file the handle was opened on; every write transaction re-checks the path against it. */
-  file?: Stats;
+  file?: FileIdentity;
   secret?: Uint8Array;
   disabled: boolean;
   poisoned: boolean;
@@ -136,13 +136,15 @@ function retire(): void {
     warning();
   }
 }
-function checkFile(path: string): Stats {
-  const stat = lstatSync(path);
+// BigInt stats: NTFS file IDs exceed Number.MAX_SAFE_INTEGER, and a rounded identity can match a
+// different file.
+function checkFile(path: string) {
+  const stat = lstatSync(path, { bigint: true });
   if (
     !stat.isFile() ||
     stat.isSymbolicLink() ||
-    stat.nlink !== 1 ||
-    (process.platform !== "win32" && stat.uid !== process.getuid!())
+    stat.nlink !== 1n ||
+    (process.platform !== "win32" && stat.uid !== BigInt(process.getuid!()))
   )
     throw new Error("unsafe file");
   return stat;
@@ -163,7 +165,7 @@ function open(s: Scope): void {
     // Windows creates a new file through a link at its name.
     preparePrivateSqliteDatabase(path);
     const before = checkFile(path);
-    if (before.size > 8 * 1024 * 1024) throw new Error("oversized");
+    if (before.size > 8n * 1024n * 1024n) throw new Error("oversized");
     if (process.platform !== "win32") chmodSync(path, 0o600);
     if (!hardenSecretPath(path, { required: true }).ok) throw new Error("acl");
     checkFile(path);
@@ -254,7 +256,7 @@ function open(s: Scope): void {
     ).value;
     db.exec("COMMIT");
     const after = checkFile(path);
-    if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("replaced");
+    if (!sameFileIdentity(before, after)) throw new Error("replaced");
     s.db = db;
     s.file = after;
     s.secret = secret;
@@ -290,7 +292,7 @@ function assertWritable(s: Scope): void {
   assertPrivateSqliteSidecars(path);
   if (!assertPrivateSqliteEntryOrMissing(path)) throw new Error("missing");
   const now = checkFile(path);
-  if (!s.file || now.dev !== s.file.dev || now.ino !== s.file.ino) throw new Error("replaced");
+  if (!s.file || !sameFileIdentity(now, s.file)) throw new Error("replaced");
 }
 function resolvedHome(acquiredHome?: string): string {
   let home = resolve(acquiredHome ?? getConfigDir());

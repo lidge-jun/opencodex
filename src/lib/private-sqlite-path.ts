@@ -17,10 +17,17 @@ type ReparseProbe = (path: string) => boolean;
 let nativeAttributes: ((path: string) => number) | undefined;
 let probeForTests: ReparseProbe | null = null;
 /**
- * The operating system this process runs on, read once at load. Tests replace `process.platform` to
- * drive Windows-only branches on POSIX; the native attribute query must follow the real system.
+ * Whether the native attribute query runs: on Windows, except ARM64, whose Bun build cannot execute
+ * `bun:ffi` (the limitation src/lib/windows-user-principal.ts works around). There `lstat` still
+ * reports symbolic links, junctions and app execution aliases as links; other reparse tags are not
+ * visible without native code.
  */
-const NATIVE_WINDOWS = process.platform === "win32";
+export function nativeReparseProbeApplies(platform: string, arch: string): boolean {
+  return platform === "win32" && arch !== "arm64";
+}
+// Read once at load: tests replace `process.platform` to drive Windows-only branches on POSIX, and
+// the native query must follow the system the process actually runs on.
+const NATIVE_ATTRIBUTES = nativeReparseProbeApplies(process.platform, process.arch);
 
 function errorCode(error: unknown): unknown {
   return error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -55,7 +62,7 @@ export function setSqlitePathReparseProbeForTests(probe: ReparseProbe | null): v
 
 function isReparsePoint(path: string): boolean {
   if (probeForTests) return probeForTests(path);
-  return NATIVE_WINDOWS && isWindowsReparsePoint(path);
+  return NATIVE_ATTRIBUTES && isWindowsReparsePoint(path);
 }
 
 /**
