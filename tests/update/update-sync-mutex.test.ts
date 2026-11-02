@@ -78,6 +78,8 @@ test("a live overrun marker remains in flight and malformed markers are uncertai
   expect(isUpdateInFlight(root, deps)).toBe(false);
   writeFileSync(path, JSON.stringify({ pid: process.pid, phase: "overrun", startedAt: 1 }));
   expect(isUpdateInFlight(root, deps)).toBe(true);
+  writeFileSync(path, JSON.stringify({ pid: process.pid, phase: "installed" }));
+  expect(isUpdateInFlight(root, deps)).toBe(true);
   writeFileSync(path, "{");
   expect(isUpdateInFlight(root, deps)).toBe(true);
 });

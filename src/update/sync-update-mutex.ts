@@ -74,7 +74,8 @@ export function inspectUpdateMarker(home: string): Observation {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object") return "unknown";
     const marker = value as Record<string, unknown>;
-    if (!Number.isSafeInteger(marker.pid) || Number(marker.pid) <= 0 || typeof marker.phase !== "string") return "unknown";
+    if (!Number.isSafeInteger(marker.pid) || Number(marker.pid) <= 0 || typeof marker.phase !== "string"
+      || !Number.isSafeInteger(marker.startedAt) || Number(marker.startedAt) <= 0) return "unknown";
     if (["installed", "failed", "refused"].includes(marker.phase)) return "free";
     if (!["preflight", "mutating", "overrun"].includes(marker.phase)) return "unknown";
     try { process.kill(Number(marker.pid), 0); return "active"; }
