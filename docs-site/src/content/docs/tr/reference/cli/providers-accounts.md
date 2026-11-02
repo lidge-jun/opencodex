@@ -243,10 +243,8 @@ yine de 0 ile çıkar. `--json` şunu döndürür:
 `auto` elle yapılan seçimi temizler; havuz işi yeniden kendi stratejisiyle yerleştirir — ancak id'si `auto` olan bir Codex hesabı varsa tam id eşleşmesi kazanır ve `ocx account clear <provider>` her zaman otomatik seçimi geri yükler. Bir Codex hesabı, id yerine `ocx account alias` ile verilen takma adla da belirtilebilir; bu `priority`, `pause`, `resume`, `clear-cooldown`, `remove` ve `alias` için de geçerlidir. Codex hesaplarında `auto`, `main` ve `__main__` büyük/küçük harf fark etmeksizin ayrılmış sözcüklerdir ve takma ad olarak atanamaz. OAuth hesaplarının ve API anahtarlarının görünen adları için mevcut kurallar geçerlidir.
 
 Mevcut bir Codex hesabını, OAuth hesabını veya API anahtarını seçer. `openai`
-için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi süreç içi yerel
-bağlılığı temizler ve mevcut görünür bir görevden gelen istekler de dahil olmak
-üzere bir sonraki isteğe uygulanır; proxy yeniden başlatması veya bağlılık
-çıkarma işlemi de bir görevi bağımsız bırakabilirken devam eden istekler
+için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi bağlılığı temizler ve mevcut görünür bir görevden gelen istekler de dahil olmak
+üzere bir sonraki isteğe uygulanır. Uygun bağlar, proxy düzgün yeniden başlatıldığında 24 saate kadar boşta kalma süresiyle korunur; çıkarma, hesap silme, yeniden giriş, çökme veya bağlılık sıfırlaması bir görevi bağımsız bırakabilirken devam eden istekler
 yakaladıkları hesabı tutar. Bu yalnızca Havuz yönlendirmesini denetler; Direct
 modu arayana ait/yerel ana kimlik bilgisini kullanmaya devam eder. Kullanıma
 dayalı proaktif geçiş, 401/403 yeniden kimlik doğrulaması, 429/retry-after
