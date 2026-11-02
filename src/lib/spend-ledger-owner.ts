@@ -47,6 +47,12 @@ let boundLedgerHome: string | null = null;
  */
 let ownerGeneration = 0;
 const releaseHooks: Array<() => void> = [];
+const acquiredHooks: Array<(home: string) => void> = [];
+
+/** Run once after each new ownership generation is acquired. */
+export function onSpendLedgerOwnerAcquired(hook: (home: string) => void): void {
+  acquiredHooks.push(hook);
+}
 const releasingHooks: Array<() => void> = [];
 let releasing = false;
 
@@ -209,7 +215,11 @@ export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedger
 
   activeOwner = { home: prepared.home, database, references: 1 };
   ownerGeneration += 1;
-  return leaseFor(activeOwner);
+  const owner = activeOwner;
+  for (const hook of acquiredHooks) {
+    try { hook(owner.home); } catch { /* one hook must not prevent acquisition */ }
+  }
+  return leaseFor(owner);
 }
 
 function leaseFor(owner: ActiveOwner): SpendLedgerOwnerLease {

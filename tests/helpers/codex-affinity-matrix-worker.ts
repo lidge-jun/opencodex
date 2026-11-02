@@ -31,8 +31,9 @@ if (action === "passive") {
     peekConversationStateIssuer(passiveKey);
     clearThreadAccountMap();
   });
+  const unchanged = before.equals(readFileSync(file));
   lease.release();
-  console.log(JSON.stringify({ unchanged: before.equals(readFileSync(file)) }));
+  console.log(JSON.stringify({ unchanged }));
   process.exit(0);
 }
 const key = codexPoolAffinityKey(new Headers({ "session-id": "restart-session", "thread-id": "restart-thread" }))!;

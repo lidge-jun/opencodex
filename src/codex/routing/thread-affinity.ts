@@ -6,7 +6,7 @@ import type { CodexThreadLineage } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeLease } from "../../routing/probe-lease";
 import { clearPoolRecoveryState } from "../../routing/probe-lease";
-import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
+import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordThreadAccountDeleted, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
 export { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "./thread-affinity-store";
 
 export type ThreadAffinityEntry = {
@@ -393,12 +393,12 @@ function getThreadAffinityForScope(
 ): ThreadAffinityEntry | undefined {
   if (!admissibleAffinityComponent(threadId)) return undefined;
   recordThreadTouch(threadId, scope);
-  if (!threadAccountMap.get(threadId)?.get(scope)) adoptThreadAffinities(threadId, Date.now());
+  if (!threadAccountMap.get(threadId)?.get(scope)) adoptThreadAffinities(threadId, Date.now(), scope);
   return threadAccountMap.get(threadId)?.get(scope);
 }
 
-function adoptThreadAffinities(threadId: string, now: number): void {
-  for (const row of adoptStoredThreadRows(threadId, now)) {
+function adoptThreadAffinities(threadId: string, now: number, scopeName?: ThreadAffinityScope): void {
+  for (const row of adoptStoredThreadRows(threadId, now, scopeName)) {
     const record = readCodexAccountRecord(row.accountId);
     if (!record?.credential || record.deletedAt != null || identityFence(record.quotaHistoryIdentity) !== row.fence) continue;
     const scope = row.scope as ThreadAffinityScope;
@@ -451,7 +451,7 @@ export function deleteModelDetourAffinity(
 /** Remove only the matching failed account's affinities for one thread. */
 export function deleteThreadAffinitiesForAccount(threadId: string, accountId: string): void {
   if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
-  adoptThreadAffinities(threadId, Date.now());
+  recordThreadAccountDeleted(threadId, accountId);
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   for (const [scope, entry] of affinities) {

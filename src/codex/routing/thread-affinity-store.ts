@@ -16,6 +16,7 @@ import {
   assertStorageOwned,
   currentSpendLedgerOwnerGeneration,
   mintSpendLedgerStorage,
+  onSpendLedgerOwnerAcquired,
   onSpendLedgerOwnerReleased,
   onSpendLedgerOwnerReleasing,
   spendLedgerStoragePath,
@@ -236,7 +237,10 @@ function open(s: Scope): void {
     s.db = db;
     s.secret = secret;
     s.pruneTimer = setInterval(() => {
-      if (current === s && !isPassiveRead()) flush(s, false);
+      if (current === s) {
+        if (s.poisoned || isPassiveRead()) pruneOnly(s);
+        else flush(s, false);
+      }
     }, 60 * 60_000);
     s.pruneTimer.unref();
   } catch {
@@ -254,9 +258,9 @@ function open(s: Scope): void {
     warning();
   }
 }
-function scope(): Scope | undefined {
-  if (isPassiveRead()) return undefined;
-  let home = resolve(getConfigDir());
+function scope(acquiredHome?: string): Scope | undefined {
+  if (!acquiredHome && isPassiveRead()) return undefined;
+  let home = resolve(acquiredHome ?? getConfigDir());
   try {
     home = realpathSync.native(home);
   } catch {
@@ -416,15 +420,31 @@ function prune(db: Database, now: number): void {
   db.query("DELETE FROM threads WHERE created_at > ?").run(now);
   db.exec("DELETE FROM threads WHERE rowid IN (SELECT rowid FROM threads ORDER BY (scope LIKE 'model-detour:%') ASC, last_used_at DESC, row_key, scope LIMIT -1 OFFSET 2048); DELETE FROM issuers WHERE rowid IN (SELECT rowid FROM issuers ORDER BY last_used_at DESC, row_key LIMIT -1 OFFSET 2048)");
 }
+function pruneOnly(s: Scope): boolean {
+  if (!s.db || s.disabled) return false;
+  try {
+    assertStorageOwned(s.token);
+    s.db.exec("BEGIN IMMEDIATE");
+    prune(s.db, Date.now());
+    s.db.exec("COMMIT");
+    return true;
+  } catch {
+    try { s.db.exec("ROLLBACK"); } catch { /* no transaction */ }
+    warning();
+    return false;
+  }
+}
 function flush(s: Scope, clean: boolean): boolean {
   if (!s.db || s.disabled || s.poisoned || isPassiveRead()) return false;
   const db = s.db;
-  try {
+  for (let attempt = 0; attempt < 2; attempt++) try {
     assertStorageOwned(s.token);
     db.exec("BEGIN IMMEDIATE");
-    for (const op of s.log) {
+    for (let i = 0; i < s.log.length; i++) {
+      const op = s.log[i]!;
       if (op.args.length) db.query(op.sql).run(...op.args);
       else db.exec(op.sql);
+      if ((i + 1) % 256 === 0) prune(db, Date.now());
     }
     // Read touches at flush time, after callers have updated the live entries.
     for (const t of s.threads.values()) {
@@ -455,17 +475,20 @@ function flush(s: Scope, clean: boolean): boolean {
     s.issuers.clear();
     s.failures = 0;
     return true;
-  } catch {
+  } catch (error) {
     try {
       db.exec("ROLLBACK");
     } catch {
       /* preserve failure */
     }
+    if (attempt === 0 && error instanceof Error && "code" in error && error.code === "SQLITE_FULL" && pruneOnly(s)) continue;
     if (++s.failures >= 3) poison(s);
     else warning();
     return false;
   }
+  return false;
 }
+onSpendLedgerOwnerAcquired((home) => { scope(home); });
 // Commit clean before closing; a later close failure cannot undo that commit.
 onSpendLedgerOwnerReleasing(() => {
   const s = current;
@@ -503,17 +526,20 @@ function validScope(value: string): boolean {
 export function adoptStoredThreadRows(
   key: string,
   now: number,
+  scopeName?: string,
 ): StoredThreadRow[] {
   const s = usable();
   if (!s) return [];
   const rk = rowKey(s, key, "conversation");
-  if (!rk || pending(s, rk, false) || s.consulted.has(`t:${rk}`)) return [];
+  if (!rk || pending(s, rk, false) || (scopeName !== undefined && s.consulted.has(`t:${rk}:${scopeName}`))) return [];
   try {
     const rows = s
       .db!.query(
-        "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? ORDER BY last_used_at DESC, scope LIMIT 64",
+        scopeName === undefined
+          ? "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? ORDER BY last_used_at DESC, scope LIMIT 64"
+          : "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? AND scope=? LIMIT 1",
       )
-      .all(rk) as {
+      .all(...(scopeName === undefined ? [rk] : [rk, scopeName])) as {
       scope: string;
       account_id: string;
       fence: string;
@@ -528,7 +554,8 @@ export function adoptStoredThreadRows(
             op.kind === "deleteScope" && op.key === rk && op.scope === r.scope,
         ) ||
         s.log.some(
-          (op) => op.kind === "deleteAccount" && op.args[0] === r.account_id,
+          (op) => (op.kind === "deleteAccount" && op.args[0] === r.account_id) ||
+            (op.kind === "deleteKeyAccount" && op.key === rk && op.args[1] === r.account_id),
         )
       )
         continue;
@@ -561,7 +588,8 @@ export function adoptStoredThreadRows(
         lastUsedAt: r.last_used_at,
       });
     }
-    consulted(s, `t:${rk}`);
+    for (const row of rows) consulted(s, `t:${rk}:${row.scope}`);
+    if (scopeName !== undefined) consulted(s, `t:${rk}:${scopeName}`);
     return result;
   } catch {
     warning();
@@ -675,6 +703,18 @@ export function recordThreadDelete(key: string, scopeName?: string): void {
           args: [rk, scopeName],
         },
   );
+}
+export function recordThreadAccountDeleted(key: string, id: string): void {
+  const s = usable();
+  if (!s) return;
+  const rk = rowKey(s, key, "conversation");
+  if (!rk) return;
+  const known = s.threadKeys.get(key);
+  if (known) {
+    for (const [scopeName, account] of known.scopes) if (account === id) known.scopes.delete(scopeName);
+    if (!known.scopes.size) s.threadKeys.delete(key);
+  }
+  enqueue(s, { kind: "deleteKeyAccount", key: rk, sql: "DELETE FROM threads WHERE row_key=? AND account_id=?", args: [rk, id] });
 }
 export function recordAccountPinsCleared(id: string): void {
   const s = usable();

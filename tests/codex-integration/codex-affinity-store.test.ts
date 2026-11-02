@@ -31,11 +31,12 @@ beforeEach(() => {
 });
 afterEach(() => { lease?.release(); lease = undefined; resetCodexAffinityStoreForTests(); registerThreadAffinityLiveState(); if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior; removeTreeWithRetry(home); });
 
-test("inactive and passive operations do not create a database", async () => {
+test("inactive operations do not open and passive operations do not change the database", async () => {
   key(); expect(existsSync(path())).toBe(false);
   lease = acquireSpendLedgerOwner();
+  const before = readFileSync(path());
   await runPassiveRead(async () => { key(); recordAllCleared(); });
-  expect(existsSync(path())).toBe(false);
+  expect(readFileSync(path()).equals(before)).toBe(true);
 });
 test("bind survives release and touch reads the live timestamp at flush", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence); const newer = Date.now();
@@ -205,4 +206,72 @@ test("adopted rows retain delete keys after anchor eviction", () => {
   recordThreadDelete(adopted, "legacy"); recordIssuerDelete(adopted); lease.release();
   lease = acquireSpendLedgerOwner(); expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
   expect(adoptStoredIssuer(key(), Date.now())).toBeUndefined();
+});
+
+test("large worst-case batch flushes and restores newest rows", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); const now = Date.now();
+  for (let i = 0; i < 7000; i++) {
+    const k = codexConversationKeyFor(`batch-${i}`, `batch-${i}`);
+    const scope = `model-detour:shared:${String(i).padStart(4, "0")}${"é".repeat(254)}`;
+    recordThreadBind(k, scope, { scope, accountId: "account-a", fence, createdAt: now, lastUsedAt: now - 7000 + i });
+  }
+  flushCodexAffinityStoreForTests(); lease.release(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(codexConversationKeyFor("batch-6999", "batch-6999"), Date.now())).toHaveLength(1);
+  const db = new Database(path()); expect(db.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 2048 }); db.close();
+});
+
+test("scoped lookup and account delete reach rows beyond the adoption limit", async () => {
+  const affinity = await import("../../src/codex/routing/thread-affinity");
+  registerThreadAffinityLiveState(); lease = acquireSpendLedgerOwner(); const fence = seed(); const k = key(); const now = Date.now();
+  recordThreadBind(k, "shared", { scope: "shared", accountId: "account-a", fence, createdAt: now - 100, lastUsedAt: now - 100 });
+  for (let i = 0; i < 70; i++) { const scope = `model-detour:shared:model-${i}`; recordThreadBind(k, scope, { scope, accountId: "account-a", fence, createdAt: now, lastUsedAt: now }); }
+  lease.release(); lease = acquireSpendLedgerOwner(); const restored = key();
+  affinity.getThreadAffinityScopes(restored);
+  expect(affinity.getThreadAffinity(restored, "shared")?.accountId).toBe("account-a");
+  affinity.deleteThreadAffinitiesForAccount(restored, "account-a"); lease.release(); lease = acquireSpendLedgerOwner(); key();
+  const db = new Database(path()); expect(db.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 0 }); db.close();
+});
+
+test("lease acquisition prunes expired rows without affinity access", () => {
+  lease = acquireSpendLedgerOwner(); bind(seed()); lease.release();
+  const db = new Database(path()); db.query("UPDATE threads SET last_used_at=?").run(Date.now() - 25 * 60 * 60_000); db.close();
+  lease = acquireSpendLedgerOwner();
+  const check = new Database(path()); expect(check.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 0 }); check.close();
+});
+
+test("poisoned store prunes on its hourly timer", () => {
+  const originalInterval = globalThis.setInterval; let tick: (() => void) | undefined;
+  globalThis.setInterval = ((fn: () => void, ms: number) => { if (ms === 3600000) tick = fn; return originalInterval(fn, ms); }) as typeof setInterval;
+  try {
+    lease = acquireSpendLedgerOwner(); bind(seed()); flushCodexAffinityStoreForTests();
+    const warn = console.warn; console.warn = () => {};
+    try { for (let i = 0; i < 16385; i++) recordAccountPinsCleared("other-account"); } finally { console.warn = warn; }
+    expect(tick).toBeDefined(); const realNow = Date.now; Date.now = () => realNow() + 25 * 60 * 60_000;
+    try { tick!(); } finally { Date.now = realNow; }
+    const check = new Database(path()); expect(check.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 0 }); expect(check.query("SELECT value FROM meta WHERE name='clean'").get()).toEqual({ value: 0 }); check.close();
+  } finally { globalThis.setInterval = originalInterval; }
+});
+
+test("account deletion removes unadopted scopes and blocks pending adoption", async () => {
+  const affinity = await import("../../src/codex/routing/thread-affinity");
+  registerThreadAffinityLiveState(); lease = acquireSpendLedgerOwner(); const fence = seed(); const k = key(); const now = Date.now();
+  for (let i = 0; i < 70; i++) { const scope = `model-detour:shared:delete-${i}`; recordThreadBind(k, scope, { scope, accountId: "account-a", fence, createdAt: now, lastUsedAt: now }); }
+  lease.release(); lease = acquireSpendLedgerOwner(); const restored = key();
+  affinity.deleteThreadAffinitiesForAccount(restored, "account-a");
+  expect(affinity.getModelDetourAffinity(restored, "delete-69", "shared")).toBeUndefined();
+  lease.release(); lease = acquireSpendLedgerOwner();
+  const db = new Database(path()); expect(db.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 0 }); db.close();
+});
+
+test("SQLITE_FULL triggers one prune-only transaction before retrying the flush", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence);
+  const original = Database.prototype.exec; let begins = 0;
+  Database.prototype.exec = function (sql: string) {
+    if (sql === "BEGIN IMMEDIATE" && ++begins === 1) throw Object.assign(new Error("injected full"), { code: "SQLITE_FULL" });
+    return original.call(this, sql);
+  };
+  try { flushCodexAffinityStoreForTests(); } finally { Database.prototype.exec = original; }
+  expect(begins).toBe(3);
+  lease.release(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1); expect(k).toBeDefined();
 });

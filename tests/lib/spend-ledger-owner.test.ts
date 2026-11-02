@@ -8,6 +8,7 @@ import {
   SPEND_LEDGER_OWNER_FILENAME,
   mintSpendLedgerStorage,
   onSpendLedgerOwnerReleasing,
+  onSpendLedgerOwnerAcquired,
   assertStorageOwned,
   SPEND_LEDGER_RESTART_PARENT_ENV,
   SpendLedgerOwnerError,
@@ -239,6 +240,15 @@ describe("in-process references and privacy", () => {
   let leases: SpendLedgerOwnerLease[] = [];
   afterEach(() => {
     for (const lease of leases.splice(0).reverse()) lease.release();
+  });
+
+  test("acquired hooks run once per new owner and isolate failures", () => {
+    let enabled = true; let calls = 0; let later = 0;
+    onSpendLedgerOwnerAcquired(() => { if (enabled) { calls++; throw new Error("failure"); } });
+    onSpendLedgerOwnerAcquired(() => { if (enabled) later++; });
+    const first = acquireSpendLedgerOwner(); const second = acquireSpendLedgerOwner();
+    expect([calls, later]).toEqual([1, 1]); first.release(); second.release();
+    const third = acquireSpendLedgerOwner(); expect([calls, later]).toEqual([2, 2]); third.release(); enabled = false;
   });
 
   test("final release runs isolated hooks with existing storage but refuses new ownership", () => {
