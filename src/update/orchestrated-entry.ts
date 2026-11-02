@@ -21,6 +21,7 @@ import { encodeOrchestratedExpect, type OrchestratedExpect } from "./orchestrate
 import { waitForOrchestratedChild } from "./orchestrated-child.mjs";
 import { classifyOrchestratedOutcome, type Outcome } from "./orchestrated-outcome.mjs";
 import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
+import { decideOrchestratedApply } from "./orchestrated-admission.mjs";
 import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { proxyIdentityAt } from "../server/proxy-liveness";
@@ -122,17 +123,7 @@ export async function observeOrchestratedPlan(request: Request, deps: Orchestrat
   return unavailable ? { ...plan, canApply: false, reason: "plan-unavailable" as const } : plan;
 }
 
-/** Resolve decisions that require no mutation before starting an update worker. */
-export function decideOrchestratedApply(plan: Awaited<ReturnType<typeof observeOrchestratedPlan>>, request: Request, now: number) {
-  const result = { schema: "ocx.update.result/1" as const, applied: false, fromVersion: plan.currentVersion,
-    toVersion: plan.targetVersion, installer: plan.installer, restarted: false, healthy: false, rolledBack: false };
-  const refuse = (error: string) => ({ kind: "done" as const, exitCode: 10, result: { ...result, error } });
-  if (request.expectPlan && request.expectPlan !== plan.planToken) return refuse("plan-changed");
-  if (request.notAfter !== undefined && now > request.notAfter) return refuse("deadline-passed");
-  if (plan.reason === "up-to-date") return { kind: "done" as const, exitCode: 0, result };
-  if (!plan.canApply) return refuse(plan.reason ?? "plan-unavailable");
-  return { kind: "proceed" as const };
-}
+export { decideOrchestratedApply } from "./orchestrated-admission.mjs";
 
 type Plan = Awaited<ReturnType<typeof observeOrchestratedPlan>>;
 type BunDriverDeps = {

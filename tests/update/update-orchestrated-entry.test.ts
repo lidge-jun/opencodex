@@ -8,8 +8,10 @@ import { assertNotRealHomeUnderTest } from "../../src/lib/test-home-guard";
 import { encodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
 import { createUpdatePlanToken } from "../../src/update/orchestrated-token.mjs";
 import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
+import { isUpdateInFlight } from "../../src/update/sync-update-mutex";
+import { watch } from "node:fs";
 
-test.skipIf(process.platform === "win32")("npm child fences identity, deadline and sync before mutation and installs the pinned version", () => {
+test.skipIf(process.platform === "win32")("npm child fences identity, deadline and sync before mutation and installs the pinned version", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-node-pin-")));
   const home = join(root, "home"), pkg = join(root, "lib/node_modules/@bitkyc08/opencodex"), path = join(root, "path");
   const result = join(root, "result.json"), log = join(root, "npm.log"), cache = join(root, "cache");
@@ -17,6 +19,30 @@ test.skipIf(process.platform === "win32")("npm child fences identity, deadline a
   try {
     cpSync(repoPath("src"), join(pkg, "src"), { recursive: true });
     cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
+    const launcher = join(pkg, "bin/ocx.mjs");
+    const originalLauncher = readFileSync(launcher, "utf8");
+    writeFileSync(launcher, originalLauncher.replace("#!/usr/bin/env node\n", `#!/usr/bin/env node\nif (process.env.OCX_UPDATE_ORCHESTRATED_CHILD === '1' && process.env.OCX_FIXTURE_EXIT_EFFECT) {\n  const once = process.once.bind(process);\n  process.once = function(event, listener) {\n    const result = once(event, listener);\n    if (event === 'exit') once('exit', () => {\n      const fs = requireFixtureFs;\n      const output = process.argv[process.argv.indexOf('--orchestrated-result') + 1];\n      if (process.env.OCX_FIXTURE_EXIT_EFFECT === 'missing') fs.unlinkSync(output);\n      if (process.env.OCX_FIXTURE_EXIT_EFFECT === 'damage') fs.unlinkSync(process.env.OCX_FIXTURE_PKG + '/src/cli/index.ts');\n    });\n    return result;\n  };\n}\nimport * as requireFixtureFs from 'node:fs';\n`));
+    const timedLauncher = readFileSync(launcher, "utf8").replace("import * as requireFixtureFs from 'node:fs';", `import * as requireFixtureFs from 'node:fs';
+if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
+  const start = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms < 800000) return start(fn, ms, ...args);
+    const state = { watcher: null, timer: null };
+    state.watcher = requireFixtureFs.watch(process.env.OPENCODEX_HOME, () => {
+      try {
+        const marker = JSON.parse(requireFixtureFs.readFileSync(process.env.OPENCODEX_HOME + '/update-orchestrated.json'));
+        if (marker.phase === 'mutating') { state.watcher.close(); clear(state.timer); fn(...args); }
+      } catch {}
+    });
+    state.timer = start(() => { state.watcher.close(); fn(...args); }, 15000);
+    return state;
+  };
+  globalThis.clearTimeout = handle => {
+    if (handle && handle.watcher) { handle.watcher.close(); clear(handle.timer); }
+    else clear(handle);
+  };
+}`);
+    writeFileSync(launcher, timedLauncher);
     const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
@@ -24,7 +50,7 @@ test.skipIf(process.platform === "win32")("npm child fences identity, deadline a
     const executable = Bun.which("node"); if (!executable) throw new Error("Node required");
     const node = spawnSync(executable, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
     if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
-    writeFileSync(join(path, "npm"), `#!${node}\nconst fs=require('node:fs'), p=require('node:path'), a=process.argv.slice(2);\nfs.appendFileSync(process.env.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(process.env.OCX_FIXTURE_RESULT))})+'\\n');\nif(a[0]==='config') console.log(process.env.OCX_FIXTURE_CACHE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');\nelse if(a[0]==='install'){const s=a[a.indexOf('--prefix')+1],d=p.join(s,'lib/node_modules/@bitkyc08/opencodex');fs.cpSync(process.env.OCX_FIXTURE_PKG,d,{recursive:true});const m=JSON.parse(fs.readFileSync(p.join(d,'package.json')));m.version='2.1.0';fs.writeFileSync(p.join(d,'package.json'),JSON.stringify(m));if(process.env.OCX_FIXTURE_ROLLBACK==='1'){const l=p.join(d,'bin/ocx.mjs'),t=p.join(s,'temporary-launcher');fs.copyFileSync(l,t);fs.unlinkSync(l);fs.symlinkSync(p.relative(p.dirname(l),t),l);}}\nelse process.exit(90);\n`);
+    writeFileSync(join(path, "npm"), `#!${node}\nconst fs=require('node:fs'), p=require('node:path'), a=process.argv.slice(2);\nfs.appendFileSync(process.env.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(process.env.OCX_FIXTURE_RESULT))})+'\\n');\nif(a[0]==='config') console.log(process.env.OCX_FIXTURE_CACHE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':(process.env.OCX_FIXTURE_MOVED==='1' && a.some(x=>x.endsWith('@2.1.0'))?'2.2.0':'2.1.0'));\nelse if(a[0]==='install'){const s=a[a.indexOf('--prefix')+1],d=p.join(s,'lib/node_modules/@bitkyc08/opencodex');fs.cpSync(process.env.OCX_FIXTURE_PKG,d,{recursive:true});const m=JSON.parse(fs.readFileSync(p.join(d,'package.json')));m.version='2.1.0';fs.writeFileSync(p.join(d,'package.json'),JSON.stringify(m));if(process.env.OCX_FIXTURE_ROLLBACK==='1'){const l=p.join(d,'bin/ocx.mjs'),t=p.join(s,'temporary-launcher');fs.copyFileSync(l,t);fs.unlinkSync(l);fs.symlinkSync(p.relative(p.dirname(l),t),l);}}\nelse process.exit(90);\n`);
     chmodSync(join(path, "npm"), 0o755);
     const token = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", cliRoot: pkg, servingRoot: null, runtimeOwner: "none", runtime: null });
     const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
@@ -72,6 +98,51 @@ test.skipIf(process.platform === "win32")("npm child fences identity, deadline a
     expect({ status: current.status, stderr: current.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
     expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "install")).toHaveLength(installs);
+    const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
+    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
+    const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
+    const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
+    const sync = tryAcquireUpdateSyncMutex(home, "sync");
+    expect(sync.kind).toBe("acquired");
+    try { const blocked = parent(); expect(blocked.status).toBe(10); expect(JSON.parse(blocked.stdout).error).toBe("sync-in-progress"); }
+    finally { if (sync.kind === "acquired") sync.release(); }
+    const parentRollback = parent({ OCX_FIXTURE_ROLLBACK: "1" });
+    expect({ status: parentRollback.status, stderr: parentRollback.stderr }).toMatchObject({ status: 11 });
+    expect(JSON.parse(parentRollback.stdout)).toMatchObject({ rolledBack: true, applied: false });
+    const parentApplied = parent({ OCX_FIXTURE_MOVED: "1" });
+    expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
+    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
+    const resetVersion = () => {
+      const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
+      writeFileSync(join(pkg, "package.json"), JSON.stringify(m));
+    };
+    resetVersion();
+    const overrun = spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, OCX_FIXTURE_OVERRUN: "1" },
+      encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "ignore"] });
+    expect(overrun.status).toBe(12);
+    expect(JSON.parse(overrun.stdout).error).toBe("overrun");
+    const marker = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
+    expect(marker.phase).toBe("mutating");
+    expect(() => process.kill(marker.pid, 0)).not.toThrow();
+    expect(isUpdateInFlight(home)).toBe(true);
+    await new Promise<void>((resolveDone, rejectDone) => {
+      const timer = setTimeout(() => { observer.close(); rejectDone(new Error("fixture child did not finish")); }, 30000);
+      const check = () => {
+        if (!isUpdateInFlight(home)) { clearTimeout(timer); observer.close(); resolveDone(); }
+      };
+      const observer = watch(home, check);
+      check();
+    });
+    resetVersion();
+    const missing = parent({ OCX_FIXTURE_EXIT_EFFECT: "missing" });
+    expect({ status: missing.status, stderr: missing.stderr }).toMatchObject({ status: 12 });
+    expect(JSON.parse(missing.stdout).error).toBe("outcome-unverified");
+    resetVersion();
+    const damaged = parent({ OCX_FIXTURE_EXIT_EFFECT: "damage" });
+    expect({ status: damaged.status, stderr: damaged.stderr }).toMatchObject({ status: 12 });
+    expect(JSON.parse(damaged.stdout)).toMatchObject({ error: "install-unverified", applied: false });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 90000);
 
@@ -110,6 +181,17 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     expect(calls.find(call => call.args[0] === "add")).toMatchObject({ outcome: { phase: "mutating" }, mutex: true });
     expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
     expect(calls.find(call => call.args[0] === "add").args).toContain("@bitkyc08/opencodex@2.1.0");
+    const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
+    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
+    const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
+    const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
+    const unchanged = parent({ OCX_FIXTURE_FAIL: "1" });
+    expect({ status: unchanged.status, stderr: unchanged.stderr }).toMatchObject({ status: 11 });
+    expect(JSON.parse(unchanged.stdout)).toMatchObject({ rolledBack: false, applied: false });
+    const parentApplied = parent();
+    expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 90000);
 
@@ -275,27 +357,47 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
     if (name !== "bun") symlinkSync(repoPath("node_modules", name), join(pkg, "node_modules", name));
   }
   symlinkSync(repoPath("node_modules", "bun"), join(pkg, "node_modules", "bun"));
-  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\n[ "$1" = view ] || exit 1\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
   const nodeCommand = Bun.which("node"); if (!nodeCommand) throw Error("Node required");
   const node = spawnSync(nodeCommand, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
   if (!node) throw Error("Node executable could not be resolved");
   const env = { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome, CODEX_HOME: join(home, ".codex"),
-    CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: path, OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" };
-  const launch = async () => {
-    const child = Bun.spawn([node, join(pkg, "bin", "ocx.mjs"), "update", "--plan", "--json", "--version", "99.0.0"], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: path, OPENCODEX_BUN_PATH: "", OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" };
+  const launch = async (args = ["--plan", "--json", "--version", "99.0.0"]) => {
+    const child = Bun.spawn([node, join(pkg, "bin", "ocx.mjs"), "update", ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     return { stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text(), code: await child.exited };
   };
   try {
     const first = await launch();
-    expect(first.code).toBe(0);
+    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
     expect({ stderr: first.stderr, npmLog: existsSync(npmLog) ? readFileSync(npmLog, "utf8") : "missing" }).toMatchObject({ npmLog: expect.stringContaining("@bitkyc08/opencodex@99.0.0") });
     expect(first.stderr).not.toContain("auto-restore");
     expect(JSON.parse(first.stdout)).toMatchObject({ installer: "npm", targetVersion: "99.0.0", canApply: true });
+    const mismatch = await launch(["--yes", "--json", "--version", "99.0.0", "--expect-plan", "a".repeat(43)]);
+    expect(mismatch.code).toBe(10);
+    expect(JSON.parse(mismatch.stdout)).toMatchObject({ error: "plan-changed" });
+    const deadline = await launch(["--yes", "--json", "--version", "99.0.0", "--not-after", "1"]);
+    expect(deadline.code).toBe(10);
+    expect(JSON.parse(deadline.stdout)).toMatchObject({ error: "deadline-passed" });
+    const apply = await launch(["--yes", "--json", "--version", "99.0.0"]);
+    expect(apply.stderr).toContain("opencodex v");
+    expect(JSON.parse(apply.stdout).error).not.toBe("plan-unavailable");
     expect(readFileSync(npmLog, "utf8")).toContain("@bitkyc08/opencodex@99.0.0");
+    const entry = join(pkg, "src/cli/index.ts"), originalEntry = readFileSync(entry, "utf8");
+    for (const invalidPlan of ["console.log('not json')", "process.stdout.write('x'.repeat(65537))", "process.exit(1)"]) {
+      writeFileSync(entry, invalidPlan);
+      const invalid = await launch(["--yes", "--json", "--version", "99.0.0"]);
+      expect(invalid.code).toBe(10);
+      expect(JSON.parse(invalid.stdout)).toMatchObject({ error: "plan-unavailable", applied: false });
+    }
+    writeFileSync(entry, originalEntry);
     rmSync(join(pkg, "node_modules", "bun"));
     const missing = await launch();
     expect(missing.code).toBe(0);
     expect(JSON.parse(missing.stdout)).toMatchObject({ installer: "npm", reason: "plan-unavailable", canApply: false });
+    const missingApply = await launch(["--yes", "--json", "--version", "99.0.0"]);
+    expect(missingApply.code).toBe(10);
+    expect(JSON.parse(missingApply.stdout)).toMatchObject({ error: "plan-unavailable", applied: false });
     expect(readFileSync(join(backup, "keep"), "utf8")).toBe("backup");
     expect(missing.stderr).not.toContain("auto-restore");
   } finally { rmSync(root, { recursive: true, force: true }); }

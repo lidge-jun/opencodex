@@ -49,6 +49,7 @@ import { detectInstallOwnershipFromPath } from "../src/update/install-detection.
 import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";
 import { createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";
 import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";
+import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";
 import {
   pnpmOwnerInvocation,
   resolvePnpmGlobalOwner,
@@ -1305,6 +1306,36 @@ if (orchestratedArgs && !orchestratedArgs.ok) {
 }
 if (childArgs?.ok && isNodeModulesInstall() && !isBunGlobalInstall() && (installMethod === "npm" || installMethod === "pnpm")) {
   await runPackageManagerSelfUpdate(installMethod, childArgs);
+}
+if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX_UPDATE_ORCHESTRATED_CHILD !== "1"
+  && isNodeModulesInstall() && !isBunGlobalInstall() && (installMethod === "npm" || installMethod === "pnpm")) {
+  const result = await applyNodeOrchestratedUpdate(orchestratedArgs, {
+    installer: installMethod, currentVersion: String(currentPackageVersion()), cliRoot: resolve(here, ".."),
+    home: configDir(), launcher: fileURLToPath(import.meta.url), resolveBun: () => resolveBun({ allowInstall: false, allowMissing: true }),
+    plan: (bun, version) => probeSpawnSync(bun.path, ["--no-env-file", cliPath, "update", "--plan", "--json",
+      ...(version ? ["--version", version] : [])], { encoding: "utf8", maxBuffer: 65536, timeout: 60000, windowsHide: true,
+      stdio: ["ignore", "pipe", 2], env: process.env }),
+    identity: bun => {
+      const probe = probeSpawnSync(bun.path, ["--no-env-file", join(here, "../src/update/orchestrated-identity-probe-entry.ts"), "__update-orchestrated-identity"], {
+        encoding: "utf8", maxBuffer: 8192, timeout: 8000, windowsHide: true, stdio: ["ignore", "pipe", 2],
+        env: { ...updateHomeProbeEnvironment(process.env, { codexHome: process.env.CODEX_HOME ?? "", opencodexHome: configDir() }),
+          OCX_IDENTITY_CLI_ROOT: resolve(here, ".."), OCX_IDENTITY_INSTALLER: "", OCX_IDENTITY_TARGET: "" },
+      });
+      if (probe.status !== 0 || probe.error || probe.signal) throw Error("identity unavailable");
+      return JSON.parse(probe.stdout);
+    },
+    pnpmCommands: resolvePnpmCommands(), runningShimPath: runningPnpmShimPath(),
+    runPnpm: (commandPath, args, capture = false) => {
+      const invocation = pnpmInvocationForPath(commandPath, args);
+      if (!invocation) return { status: 1 };
+      return probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
+        timeout: 20000, windowsHide: true, cwd: PNPM_READ_CWD,
+        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options });
+    },
+    spawn: probeSpawn,
+  });
+  await new Promise(resolveOutput => process.stdout.write(`${JSON.stringify(result.result)}\n`, resolveOutput));
+  process.exit(result.exitCode);
 }
 const passiveCapabilities = process.argv[2] === "capabilities";
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
