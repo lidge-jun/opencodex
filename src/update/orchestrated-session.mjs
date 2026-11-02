@@ -84,6 +84,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
         try { if (await verifyIdentity() !== true) error = "plan-changed"; }
         catch { error = "plan-changed"; }
       }
+      if (!error && notAfter !== undefined && now() > notAfter) error = "deadline-passed";
       if (error) {
         marker("refused");
         atomicJson(resultPath, { phase: "refused", error });

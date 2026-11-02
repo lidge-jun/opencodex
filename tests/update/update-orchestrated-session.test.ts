@@ -57,6 +57,16 @@ test("deadline check sees update in flight before refusing and releases the lock
   expect(isUpdateInFlight(f.home)).toBe(false);
 });
 
+test("deadline is rechecked after asynchronous identity verification", async () => {
+  const f = fixture(); let clock = 99;
+  const session = createOrchestratedChildSession({ ...f, notAfter: 100, now: () => clock,
+    verifyIdentity: async () => { clock = 101; return true; } });
+  expect(session.start()).toEqual({ ok: true });
+  expect(await session.enterMutation()).toEqual({ ok: false, error: "deadline-passed" });
+  expect(read(f.resultPath)).toEqual({ phase: "refused", error: "deadline-passed" });
+  expect(isUpdateInFlight(f.home)).toBe(false);
+});
+
 test.each([false, "throw"] as const)("identity %s refuses after publishing in-flight", async value => {
   const f = fixture(); let observed = false;
   const session = createOrchestratedChildSession({ ...f, verifyIdentity: async () => {
