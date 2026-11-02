@@ -244,7 +244,8 @@ for (const metric of ["terminal", "buffered", "collector", "bytes"]) for (const 
       expect(flat).toEqual({ message: "The provider failed to complete the request.", type: "server_error", param: null, code: null });
       expect(result.text).toContain("data: [DONE]");
       expect(result.text).not.toContain(KEY);
-      expect(result.text).not.toContain("event:");
+      const flatBlock = result.text.split(/\r?\n\r?\n/).find(block => block.includes(`data: ${JSON.stringify(flat)}`));
+      expect(flatBlock).toBe(`${event === "error" ? "event: error\n" : ""}data: ${JSON.stringify(flat)}`);
     }
   });
 }
@@ -264,7 +265,7 @@ test("translated errors select condition wording despite an upstream local-refus
   } finally { await upstream.stop(true); }
 });
 
-async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false) {
+async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false, withMetadata = false) {
   const { clearComboTargetCooldowns, clearComboSelectionState } = await import("../../src/combos");
   const { clearKeyCooldowns } = await import("../../src/providers/key-failover");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
@@ -273,7 +274,7 @@ async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boole
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     const body = await req.json() as { model: string }; sends.push(body.model);
     if (body.model === "backup") return Response.json({ id: "fixture-backup", object: "chat.completion", created: 1, model: "backup", choices: [{ index: 0, message: { role: "assistant", content: "backup" }, finish_reason: "stop" }] });
-    return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning" }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: withMetadata ? KEY : "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, ...(withMetadata ? { error: { message: KEY, type: KEY, code: KEY, param: KEY } } : {}) }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning" }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   try {
     const row = { adapter: "openai-chat", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key" as const, apiKey: KEY, transientRetryOn5xx: { attempts: 1 } };
@@ -288,7 +289,7 @@ async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boole
     const log = rows[0]!;
     return { status: response.status, text, sends, facts: {
       upstreamError: ctx.upstreamError, upstreamErrorType: ctx.upstreamErrorType, upstreamErrorCode: ctx.upstreamErrorCode,
-      status: log.status, errorCode: log.errorCode, upstreamCondition: log.upstreamCondition, terminalStatus: log.terminalStatus,
+      status: log.status, errorCode: log.errorCode, upstreamCondition: log.upstreamCondition, terminalStatus: log.terminalStatus, usage: log.usage,
       closeReason: log.closeReason, attempts: log.attempts?.map(attempt => ({ status: attempt.status, errorCode: attempt.errorCode, sendCount: attempt.sendCount })),
     } };
   } finally { await upstream.stop(true); clearComboTargetCooldowns(); clearComboSelectionState(); clearKeyCooldowns(); }
@@ -328,4 +329,94 @@ for (const combo of [false, true]) test(`flat native buffered data matches legac
   expect(completionFacts(body)).toEqual(completionFacts(baselineBody));
   expect(current.facts).toEqual(legacy.facts); expect(current.sends).toEqual(["first"]);
   expect(current.text).not.toContain(KEY);
+});
+
+async function collectFlatMetadata(chunk: Record<string, unknown>) {
+  const { ChatCompletionsCollectorSource, collectChatCompletion } = await import("../../src/chat/outbound");
+  const budget = createTestTranslatorBudget();
+  const source = new ChatCompletionsCollectorSource(budget);
+  const payload = { message: "The provider failed to complete the request.", type: "server_error", code: null, param: null };
+  source.retain(JSON.stringify(payload), chunk);
+  return await collectChatCompletion(bytes(frame(payload) + "data: [DONE]\n\n"), "fixture", budget, undefined, source);
+}
+const numericFlatUsage = {
+  prompt_tokens: 11, completion_tokens: 5, total_tokens: 16,
+  prompt_tokens_details: { cached_tokens: 3, audio_tokens: 2 },
+  completion_tokens_details: { reasoning_tokens: 1, audio_tokens: 2, accepted_prediction_tokens: 3, rejected_prediction_tokens: 4 },
+};
+test("flat collector usage keeps numeric values and removes additional fields", async () => {
+  const raw = { ...numericFlatUsage, error: { message: KEY, type: KEY, code: KEY, param: KEY }, [KEY]: 7,
+    prompt_tokens_details: { ...numericFlatUsage.prompt_tokens_details, error: { message: KEY } },
+    completion_tokens_details: { ...numericFlatUsage.completion_tokens_details, metadata: KEY } };
+  const body = await collectFlatMetadata({ usage: raw, service_tier: "default" });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  const usage = body.usage as Record<string, unknown>;
+  expect(usage.prompt_tokens).toBe(11); expect(usage.completion_tokens).toBe(5); expect(usage.total_tokens).toBe(16);
+  expect(usage).toEqual(numericFlatUsage);
+  expect(raw.error.message).toBe(KEY);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+test("flat collector usage accepts only finite non-negative counters", async () => {
+  const body = await collectFlatMetadata({ usage: { prompt_tokens: -1, completion_tokens: Infinity, total_tokens: "16",
+    prompt_tokens_details: { cached_tokens: null, audio_tokens: NaN },
+    completion_tokens_details: { reasoning_tokens: { message: KEY }, audio_tokens: 0, accepted_prediction_tokens: 2.5, rejected_prediction_tokens: -4 } } });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  expect(body.usage).toEqual({ completion_tokens_details: { audio_tokens: 0, accepted_prediction_tokens: 2.5 } });
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+for (const [tier, expected] of [[KEY, undefined], [" Priority ", "priority"], ["default", "default"]] as const) test(`flat collector bounds service tier ${tier}`, async () => {
+  const body = await collectFlatMetadata({ usage: numericFlatUsage, service_tier: tier });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1); expect(body.usage).toEqual(numericFlatUsage);
+  expect(body.service_tier).toBe(expected);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+test("flat collector restores completion content with closed metadata", async () => {
+  const body = await collectFlatMetadata({ usage: numericFlatUsage, choices: [{ index: 0, finish_reason: KEY, error: { message: KEY },
+    delta: { content: "visible", refusal: "declined", reasoning_content: "thinking", metadata: KEY,
+      reasoning_details: [{ type: "reasoning.text", text: "summary", index: 0, format: KEY, error: { message: KEY } }, { type: KEY, message: KEY }],
+      tool_calls: [{ index: 0, id: "fixture-call", type: "function", metadata: KEY, function: { name: "lookup", arguments: "{}", error: { message: KEY } } }] } }] });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  const choice = (body.choices as Array<Record<string, unknown>>)[0]!;
+  const message = choice.message as Record<string, unknown>;
+  expect(message.content).toBe("visible"); expect(message.refusal).toBe("declined"); expect(message.reasoning_content).toBe("thinking");
+  expect(choice.finish_reason).toBe("error");
+  expect(message.reasoning_details).toEqual([{ type: "reasoning.text", text: "summary", index: 0 }]);
+  expect(message.tool_calls).toEqual([{ id: "fixture-call", type: "function", function: { name: "lookup", arguments: "{}" } }]);
+  expect(JSON.stringify(body)).not.toContain(KEY);
+});
+test("buffered flat metadata projection preserves numeric log facts", async () => {
+  const legacy = await flatEndpointExchange(false, false, false, true);
+  const current = await flatEndpointExchange(false, false, true, true, true);
+  expect(legacy.status).toBe(200); expect(current.status).toBe(200);
+  const baselineBody = JSON.parse(legacy.text); const body = JSON.parse(current.text);
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  expect(body.usage.prompt_tokens).toBe(3); expect(body.usage.completion_tokens).toBe(2); expect(body.usage.total_tokens).toBe(5);
+  expect(body.usage).toEqual(baselineBody.usage); expect(body.service_tier).toBeUndefined();
+  expect(current.facts).toEqual(legacy.facts); expect(current.sends).toEqual(["first"]);
+  expect(current.text).not.toContain(KEY);
+});
+for (const event of ["error", KEY]) test(`flat event framing uses only the fixed error name: ${event}`, async () => {
+  const sink: import("../../src/chat/failure-verdict").FailureVerdictSink = {};
+  const terminals: number[] = [];
+  const payload = { type: "error", message: KEY, code: KEY, param: KEY };
+  const text = await new Response(nativeChatSse(bytes(`event: ${event}\nid: ${KEY}\nretry: ${KEY}\n: ${KEY}\n${frame(payload)}data: [DONE]\n\n`), {
+    requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(), signal: new AbortController().signal, failureVerdictSink: sink,
+    onUsage() {}, onTerminal(status) { terminals.push(status); },
+  })).text();
+  const flat = { message: "The provider failed to complete the request.", type: "server_error", param: null, code: null };
+  expect(terminals).toEqual([200]); expect(sink.verdict).toBeUndefined();
+  const data = text.split("\n").find(line => line.startsWith("data: {")); expect(data).toBeDefined(); expect(JSON.parse(data!.slice(6))).toEqual(flat);
+  expect(text).toBe(`${event === "error" ? "event: error\n" : ""}${frame(flat)}data: [DONE]\n\n`);
+  expect(text).not.toContain(KEY);
+});
+test("flat collector reasoning entries retain content without additional metadata", async () => {
+  const body = await collectFlatMetadata({ choices: [{ finish_reason: "stop", delta: { content: "visible", reasoning_details: [
+    { type: "reasoning.text", text: "summary", data: KEY, index: 0, format: KEY, metadata: { error: { message: KEY, type: KEY, code: KEY, param: KEY } } },
+    { type: KEY, text: KEY },
+  ] } }] });
+  expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+  const message = (body.choices as Array<{ message: Record<string, unknown> }>)[0]!.message;
+  expect(message.content).toBe("visible");
+  expect(message.reasoning_details).toEqual([{ type: "reasoning.text", text: "summary", index: 0 }]);
+  expect(JSON.stringify(body)).not.toContain(KEY);
 });

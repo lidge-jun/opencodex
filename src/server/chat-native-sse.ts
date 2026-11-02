@@ -439,7 +439,7 @@ export function nativeChatSse(
       const payload = ownedChatErrorPayload({ status, type: flat.type, code: flat.code,
         evidence: { ...flat, status, code: flat.code ?? undefined } }).error;
       options.collectorSource?.retain(JSON.stringify(payload), parsed);
-      relay(controller, canonicalSseErrorBlock(payload));
+      relay(controller, (eventName === "error" ? "event: error\n" : "") + canonicalSseErrorBlock(payload));
     } else {
       const normalized = normalizedChunk(parsed, options.requestedModel);
       const choiceError = choices.some(choice => isRec(choice) && Object.hasOwn(choice, "error"));

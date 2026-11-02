@@ -1,3 +1,5 @@
+import { boundedServiceTier } from "../lib/response-service-tier";
+import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, type ClientErrorContract } from "../lib/client-error-body";
 import { legacyFailureVerdict, legacyStreamErrorStatus as streamErrorStatus, type FailureVerdictSink } from "./failure-verdict";
 /**
@@ -27,7 +29,7 @@ import {
 import { redactSecretString } from "../lib/redact";
 import { truncationReasonFor } from "../responses/truncated-stop-reason";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
-import { reasoningDetailEntriesForItem } from "./reasoning-details";
+import { ANTHROPIC_REASONING_DETAIL_FORMAT, reasoningDetailEntriesForItem } from "./reasoning-details";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -1016,22 +1018,85 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   };
 }
 
-/** Original ordinary-chunk fields needed only by a buffered native collector. */
+function flatNumericFields(value: unknown, fields: readonly string[]): Rec {
+  const out: Rec = {};
+  if (isRec(value)) for (const field of fields) {
+    const number = value[field];
+    if (typeof number === "number" && Number.isFinite(number) && number >= 0) out[field] = number;
+  }
+  return out;
+}
+function flatCollectorUsage(value: unknown): Rec | undefined {
+  if (!isRec(value)) return undefined;
+  const out = flatNumericFields(value, ["prompt_tokens", "completion_tokens", "total_tokens"]);
+  for (const [field, counters] of [
+    ["prompt_tokens_details", ["cached_tokens", "audio_tokens"]],
+    ["completion_tokens_details", ["reasoning_tokens", "audio_tokens", "accepted_prediction_tokens", "rejected_prediction_tokens"]],
+  ] as const) {
+    const details = flatNumericFields(value[field], counters);
+    if (Object.keys(details).length > 0) out[field] = details;
+  }
+  return out;
+}
+const FLAT_FINISH_REASONS: ReadonlyMap<string, string> = new Map([
+  ["stop", "stop"], ["length", "length"], ["tool_calls", "tool_calls"], ["content_filter", "content_filter"],
+  ["function_call", "function_call"], ["error", "error"],
+]);
+function flatCollectorChoices(value: unknown): Rec[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const first = value[0];
+  if (!isRec(first)) return [];
+  const choice: Rec = {};
+  if (typeof first.finish_reason === "string") choice.finish_reason = FLAT_FINISH_REASONS.get(first.finish_reason) ?? "error";
+  if (!isRec(first.delta)) return [choice];
+  const original = first.delta;
+  const delta: Rec = {};
+  for (const field of ["content", "reasoning_content"]) if (typeof original[field] === "string") delta[field] = original[field];
+  if (original.refusal !== undefined) {
+    // Preserve the collector's invalid-refusal verdict without retaining an invalid object.
+    delta.refusal = typeof original.refusal === "string" || original.refusal === null ? original.refusal : false;
+  }
+  if (Array.isArray(original.reasoning_details)) delta.reasoning_details = original.reasoning_details.filter(isRec).flatMap(detail => {
+    const type = detail.type === "reasoning.text" ? "reasoning.text" : detail.type === "reasoning.encrypted" ? "reasoning.encrypted" : undefined;
+    if (!type) return [];
+    const entry: Rec = { type };
+    if (type === "reasoning.text") {
+      if (typeof detail.text === "string") entry.text = detail.text;
+      if (typeof detail.signature === "string" && isLikelyRealAnthropicThinkingSignature(detail.signature)) entry.signature = detail.signature;
+    } else if (typeof detail.data === "string") entry.data = detail.data;
+    if (detail.format === ANTHROPIC_REASONING_DETAIL_FORMAT) entry.format = ANTHROPIC_REASONING_DETAIL_FORMAT;
+    if (typeof detail.index === "number" && Number.isSafeInteger(detail.index) && detail.index >= 0) entry.index = detail.index;
+    return [entry];
+  });
+  if (Array.isArray(original.tool_calls)) delta.tool_calls = original.tool_calls.filter(isRec).map(tool => {
+    const call: Rec = {};
+    if (typeof tool.index === "number" && Number.isSafeInteger(tool.index) && tool.index >= 0) call.index = tool.index;
+    if (typeof tool.id === "string") call.id = tool.id;
+    const fn: Rec = {};
+    if (isRec(tool.function)) for (const field of ["name", "arguments"]) if (typeof tool.function[field] === "string") fn[field] = tool.function[field];
+    call.function = fn;
+    return call;
+  });
+  choice.delta = delta;
+  return [choice];
+}
+
+/** Client fields from ordinary chunks needed only by a buffered native collector. */
 export class ChatCompletionsCollectorSource {
-  private pending: Array<{ wire: string; original: string; bytes: number }> = [];
+  private pending: Array<{ wire: string; fields: string; bytes: number }> = [];
   constructor(private readonly budget: TranslatorBudget) {}
   retain(wire: string, chunk: Rec): void {
-    const original = JSON.stringify({ usage: chunk.usage, service_tier: chunk.service_tier, choices: chunk.choices });
-    const bytes = Buffer.byteLength(wire) + Buffer.byteLength(original) + 64;
+    const fields = JSON.stringify({ usage: flatCollectorUsage(chunk.usage), service_tier: boundedServiceTier(chunk.service_tier), choices: flatCollectorChoices(chunk.choices) });
+    const bytes = Buffer.byteLength(wire) + Buffer.byteLength(fields) + 64;
     this.budget.chargeRetained(bytes, { kind: "retained_collectors" });
-    this.pending.push({ wire, original, bytes });
+    this.pending.push({ wire, fields, bytes });
   }
   take(wire: string): Rec | undefined {
     const next = this.pending[0];
     if (!next || next.wire !== wire) return undefined;
     this.pending.shift();
     this.budget.releaseRetained(next.bytes, { kind: "retained_collectors" });
-    return JSON.parse(next.original) as Rec;
+    return JSON.parse(next.fields) as Rec;
   }
   clear(): void {
     for (const entry of this.pending) this.budget.releaseRetained(entry.bytes, { kind: "retained_collectors" });
