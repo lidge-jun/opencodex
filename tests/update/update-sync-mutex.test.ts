@@ -14,6 +14,30 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function home() { const root = mkdtempSync(join(tmpdir(), "ocx-update-sync-")); roots.push(root); return root; }
 
+test.each(["malformed", "absent", "different-sync"] as const)("delegated sync refuses %s lease in plain and JSON mode", kind => {
+  const root = home(), ran = join(root, "ran");
+  const lock = kind === "different-sync" ? tryAcquireUpdateSyncMutex(root, "sync") : null;
+  if (lock && lock.kind !== "acquired") throw Error("fixture lock");
+  if (kind === "malformed") {
+    const path = join(root, "sync-update.mutation.lock"); mkdirSync(path);
+    writeFileSync(join(path, "malformed.json"), "{");
+  }
+  const exit = kind === "different-sync" ? 1 : 7;
+  const reason = exit === 1 ? "sync-in-progress" : "update-in-flight";
+  const script = `import {writeFileSync} from 'node:fs'; import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => { writeFileSync(${JSON.stringify(ran)}, 'ran'); return 0; }, ${JSON.stringify(["--json"])}));`;
+  try {
+    for (const json of [false, true]) {
+      const source = json ? script : script.replace('["--json"]', '[]');
+      const result = spawnSync(process.execPath, ["--no-env-file", "-e", source], { env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: join(root, "codex"), OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: String(process.pid + 1) }, encoding: "utf8", timeout: 12000 });
+      expect(result.status).toBe(exit);
+      expect(result.stderr.trim()).toBe(reason);
+      if (json) expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit }, fanout: { state: "not-applicable", reason }, children: [] });
+      else expect(result.stdout).toBe("");
+      expect(() => statSync(ran)).toThrow();
+    }
+  } finally { if (lock?.kind === "acquired") lock.release(); }
+}, 30000);
+
 test("a sync child refuses a parent lease without its delegate pid", () => {
   const root = home(), lock = tryAcquireUpdateSyncMutex(root, "sync");
   if (lock.kind !== "acquired") throw Error("fixture lock");

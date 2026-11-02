@@ -249,6 +249,20 @@ posixTest("sync Desktop handoff refuses an update before executing the target", 
   } finally { lock.release(); }
 }, 15000);
 
+posixTest("sync Desktop handoff refuses a malformed lease before executing the target", () => {
+  const fixture = packageFixture(), ran = join(fixture.home, "ran");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ran > '${ran}'\n`); chmodSync(fixture.target, 0o700);
+  const lock = join(fixture.env.OPENCODEX_HOME!, "sync-update.mutation.lock");
+  mkdirSync(lock); writeFileSync(join(lock, "malformed.json"), "{");
+  for (const json of [false, true]) {
+    const result = spawnSync("node", [launcher, "sync", ...(json ? ["--json"] : [])], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect(result.status).toBe(7); expect(result.stderr.trim()).toBe("update-in-flight");
+    if (json) expect(JSON.parse(result.stdout)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: 7 }, fanout: { state: "not-applicable", reason: "update-in-flight" }, children: [] });
+    else expect(result.stdout).toBe("");
+    expect(lstatExists(ran)).toBe(false);
+  }
+}, 15000);
+
 function lstatExists(path: string) { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
 
 posixTest("old Desktop sync stays under launcher mutex until it exits", async () => {

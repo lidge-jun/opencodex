@@ -7,7 +7,7 @@ export async function withSyncUpdateGuard(run: () => Promise<number>, args: read
   if (process.env.OCX_SYNC_MUTEX_HELD_BY) {
     const deadline = Date.now() + 2_000;
     while (!parentHoldsSyncMutex(home) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-    if (!parentHoldsSyncMutex(home)) return refuseSync(inspectUpdateSyncMutex(home) === "update" ? "update-in-flight" : "sync-in-progress", args);
+    if (!parentHoldsSyncMutex(home)) return refuseSync(inspectUpdateSyncMutex(home) === "sync" ? "sync-in-progress" : "update-in-flight", args);
   }
   if (parentHoldsSyncMutex(home)) return inspectUpdateMarker(home) === "free" ? await run() : refuseSync("update-in-flight", args);
   const lease = acquireSyncGuard(home, args);
