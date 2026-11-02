@@ -175,10 +175,18 @@ test.skipIf(process.platform === "win32")("a version writer ignoring signals is 
   mkdirSync(desktop, { recursive: true });
   writeFileSync(join(desktop, "ocx"), '#!/bin/sh\nprintf "%s" $$ > "$HOME/writer.pid"\ntrap "" PIPE XFSZ\nwhile :; do printf "01234567890123456789"; done\n', { mode: 0o755 });
   writeFileSync(join(bin, "ocx"), '#!/bin/sh\nif [ "$1" = --version ]; then echo 2.93.0; else echo synced; fi\n', { mode: 0o755 });
-  const child = Bun.spawn(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
+  // The kill path is the subject here, not the ten-second budget: run the same script with a one-second
+  // watchdog, and keep the shipped budget pinned so a shortened production deadline still fails.
+  const argv = isolatedArgv();
+  expect(argv[2]!.split("( sleep 10 & timer=$!;").length).toBe(2);
+  argv[2] = argv[2]!.replace("( sleep 10 & timer=$!;", "( sleep 1 & timer=$!;");
+  const started = Date.now();
+  const child = Bun.spawn(argv, { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stderr }).toEqual({ code: 0, stderr: "ocx-fanout:selected:2.93.0\n" });
   expect(stdout).toBe("ocx-fanout:stdout-begin\nsynced\n");
+  // The writer was stopped by the watchdog, not by finishing early.
+  expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
   const pid = Number(readFileSync(join(home, "writer.pid"), "utf8"));
   expect(() => process.kill(pid, 0)).toThrow();
   expect(readdirSync(home).filter(name => name.startsWith("ocx-fanout."))).toEqual([]);
