@@ -598,3 +598,5 @@ context it returns. `_rawBody` is not touched, so native passthrough stays byte-
 `src/responses/citation-markers.ts` is separate and never removes these spans (#6040).
 `tests/responses/visualization-directives.test.ts` pins the payload rules, the linear-time scan and
 the parser and Anthropic request paths.
+
+Exact upstream IDs in a provider’s `arkKimiResponsesModels` opt in to the Ark Kimi Responses projection. Drop only `output.encrypted_content` from includes. Drop only the cipher on an unreferenced empty-summary reasoning item immediately before a user message when preceded by a user or matching function call/result pair. Preserve meaningful or unknown fields, and leave forward auth and other models untouched.

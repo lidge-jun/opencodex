@@ -23,6 +23,34 @@ export function stripUnsupportedOutputInclude(body: unknown): unknown {
   return { ...body, include };
 }
 
+/** Drop only the opaque field of an unreferenced, otherwise empty reasoning item before a user message. */
+export function stripArkKimiOrphanCipher(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const isUser = (item: unknown) => isPlainObject(item) && item.role === "user"
+    && (item.type === undefined || item.type === "message");
+  const referenced = new Set(input.filter(item => isPlainObject(item) && item.type === "item_reference").map(item => item.id));
+  let changed = false;
+  const next = input.map((item, i) => {
+    // A matching call/result pair is the other confirmed boundary before an orphan.
+    const call = input[i - 2], result = input[i - 1];
+    const afterTool = isPlainObject(call) && call.type === "function_call"
+      && isPlainObject(result) && result.type === "function_call_output"
+      && typeof call.call_id === "string" && call.call_id.length > 0 && result.call_id === call.call_id;
+    if ((!isUser(result) && !afterTool) || !isUser(input[i + 1]) || !isPlainObject(item)
+      || item.type !== "reasoning" || !Array.isArray(item.summary) || item.summary.length
+      || typeof item.encrypted_content !== "string" || !item.encrypted_content
+      || (item.id !== undefined && referenced.has(item.id))
+      // Codex can explicitly serialize the absent content channel as null.
+      || !Object.keys(item).every(key => ["type", "id", "status", "summary", "encrypted_content"].includes(key)
+        || (key === "content" && item.content === null))) return item;
+    const { encrypted_content: _cipher, ...rest } = item;
+    changed = true;
+    return rest;
+  });
+  return changed ? { ...body, input: next } : body;
+}
+
 /**
  * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
  * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.

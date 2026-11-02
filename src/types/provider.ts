@@ -488,6 +488,8 @@ export interface OcxProviderConfig {
    * reasoning output items when they are sent back on a continuation.
    */
   dropResponsesReasoningItems?: boolean;
+  /** Exact Ark Kimi endpoint IDs requiring the narrow stateless Responses replay projection. */
+  arkKimiResponsesModels?: string[];
   /**
    * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.

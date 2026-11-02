@@ -172,3 +172,43 @@ describe("Reflection/Stealth placeholder replay keeps tool pairs intact (#7574 r
     expect(messages.some(m => m.role === "assistant" && typeof m.reasoning_content === "string")).toBe(true);
   });
 });
+
+describe("Ark Kimi Responses replay (exact configured model)", () => {
+  const model = "ep-fixture", cipher = "synthetic-opaque";
+  const orphan = { type: "reasoning", id: "rs_fixture", content: null, summary: [], encrypted_content: cipher };
+  const call = { type: "function_call", name: "marker", call_id: "call_a", arguments: "{}" };
+  const result = { type: "function_call_output", call_id: "call_a", output: "ok" };
+  function wire(input: unknown[], models: string[] = [model]) {
+    const raw = { model, store: true, input, include: ["output.encrypted_content", "reasoning.encrypted_content"] };
+    const before = JSON.stringify(raw);
+    const budget = createTranslatorBudget();
+    try {
+      const adapter = createResponsesPassthroughAdapter({ adapter: "openai-responses",
+        baseUrl: "https://ark.example.invalid/api/v3", responsesPath: "/responses",
+        apiKey: "test-credential", arkKimiResponsesModels: models });
+      const request = adapter.buildRequest(parseRequest(raw), { headers: new Headers(), translatorBudget: budget });
+      request.releaseBodyObservation?.();
+      expect(JSON.stringify(raw)).toBe(before);
+      return JSON.parse(request.body);
+    } finally { budget.dispose(); }
+  }
+  test("projects both orphan boundaries without losing adjacent tools or the reasoning include", () => {
+    for (const prefix of [[user], [user, call, result]]) {
+      const body = wire([...prefix, orphan, user]);
+      expect(body.include).toEqual(["reasoning.encrypted_content"]);
+      expect(body.input).toHaveLength(prefix.length + 2);
+      expect(body.input.slice(0, prefix.length)).toEqual(prefix);
+      expect(body.input[prefix.length].encrypted_content).toBeUndefined();
+    }
+  });
+  test("preserves other models, referenced reasoning, unknown fields, mismatches and tool-adjacent reasoning", () => {
+    const other = wire([user, orphan, user], ["other"]);
+    expect(other.include).toContain("output.encrypted_content");
+    expect(other.input[1].encrypted_content).toBe(cipher);
+    for (const input of [[user, orphan, user, { type: "item_reference", id: orphan.id }],
+      [user, { ...orphan, future_field: true }, user], [call, { ...result, call_id: "different" }, orphan, user],
+      [user, orphan, call, result], [user, { ...orphan, summary: [{ type: "summary_text", text: "keep" }] }, user]]) {
+      expect(wire(input).input.find((x: { type: string }) => x.type === "reasoning").encrypted_content).toBe(cipher);
+    }
+  });
+});

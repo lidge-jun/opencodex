@@ -366,6 +366,7 @@ export const providerConfigSchema = z.object({
   preserveResponsesMessageMetadata: z.boolean().optional(),
   projectResponsesLiteHostedSearchHistory: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
+  arkKimiResponsesModels: z.array(z.string().min(1)).optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   supportsNativeCompactionTrigger: z.boolean().optional(),

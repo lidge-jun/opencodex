@@ -1963,3 +1963,5 @@ log line without account identifiers or upstream error text.
 the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
 reason and allow selection again. On an API-key row, clicking Resume also activates the key.
 This policy never resumes an account automatically.
+
+For a custom Ark Kimi Responses provider, set `arkKimiResponsesModels` to an array of exact upstream model or endpoint IDs that reject encrypted-output includes and orphan reasoning replay. It is unset by default; use the upstream ID, not the display alias.
