@@ -305,7 +305,7 @@ test("launcher source anchors preserve exceptions before handoff and handoff bef
   const source = readFileSync(launcher, "utf8");
   const hook = source.indexOf("const desktopPlan =");
   expect(hook).toBeGreaterThan(source.indexOf("const codexCliUpdateInspection ="));
-  expect(hook).toBeLessThan(source.indexOf('if (process.argv[2] === "update" && installMethod === "mise")'));
+  expect(hook).toBeLessThan(source.indexOf('process.argv[2] === "update" && installMethod === "mise"'));
   expect(hook).toBeLessThan(source.indexOf("const probe = bootRestoreProbe("));
   expect(hook).toBeLessThan(source.indexOf("const bunRuntime = resolveBun("));
   expect(source).toContain("const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();");

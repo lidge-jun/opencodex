@@ -166,7 +166,7 @@ const RECLAIM_HINT = `stale leases are reclaimed after ${STALE_MS / 1_000}s once
 
 /** The recorded lease owner for `statePaths`, identity unverified, or null if free. Reads only; never reclaims. */
 export function inspectOwnershipMutationLease(statePaths, options = {}) {
-  return leaseHolder(leasePath(statePaths), options.now ?? Date.now, options.processAlive ?? processAlive,
+  return leaseHolder(options.lockPath ?? leasePath(statePaths), options.now ?? Date.now, options.processAlive ?? processAlive,
     options.processImage ?? processImage);
 }
 
@@ -213,7 +213,7 @@ export function acquireOwnershipMutationLease(
   statePaths,
   options = {},
 ) {
-  const path = leasePath(statePaths);
+  const path = options.lockPath ?? leasePath(statePaths);
   const nested = held.get(path);
   if (nested) {
     if (options.isolated) {

@@ -8,6 +8,12 @@ type Holder = "sync" | "update" | "free" | "unknown";
 type Acquisition = { kind: "acquired"; release(): void } | { kind: "busy"; holder: Exclude<Holder, "free"> };
 
 function paths(home: string): string[] { return [join(home, "sync-update")]; }
+function mutexPath(home: string): string {
+  const canonicalHome = realpathSync.native(home);
+  try { lstatSync(join(canonicalHome, "sync-update")); throw new Error("mutex authority path is occupied"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return join(canonicalHome, "sync-update.mutation.lock");
+}
 function holderKind(holder: { alive: boolean | null; holderKind: unknown } | null): Exclude<Holder, "free"> {
   return holder?.alive === true && (holder.holderKind === "sync" || holder.holderKind === "update")
     ? holder.holderKind : "unknown";
@@ -17,7 +23,7 @@ function holderKind(holder: { alive: boolean | null; holderKind: unknown } | nul
 export function tryAcquireUpdateSyncMutex(home: string, kind: "sync" | "update", deps: { now?: () => number; processAlive?: (pid: number) => boolean } = {}): Acquisition {
   assertNotRealHomeUnderTest(home);
   try {
-    const lease = acquireOwnershipMutationLease(paths(home), { ...deps, waitMs: 0, isolated: true, holderKind: kind, processImage: () => null });
+    const lease = acquireOwnershipMutationLease(paths(home), { ...deps, waitMs: 0, isolated: true, holderKind: kind, processImage: () => null, lockPath: mutexPath(home) });
     return { kind: "acquired", release: () => lease.release() };
   } catch (error) {
     if (error && typeof error === "object" && "holder" in error) {
@@ -31,11 +37,11 @@ export function tryAcquireUpdateSyncMutex(home: string, kind: "sync" | "update",
 export function inspectUpdateSyncMutex(home: string): Holder {
   assertNotRealHomeUnderTest(home);
   try {
-    const lock = join(realpathSync(home), "sync-update.mutation.lock");
+    const lock = mutexPath(home);
     try { lstatSync(lock); } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ENOENT" ? "free" : "unknown";
     }
-    return holderKind(inspectOwnershipMutationLease(paths(home), { processImage: () => null }));
+    return holderKind(inspectOwnershipMutationLease(paths(home), { processImage: () => null, lockPath: lock }));
   } catch { return "unknown"; }
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectUpdateMarker, inspectUpdateSyncMutex, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
@@ -26,6 +26,16 @@ test("sync and update holders exclude one another and identify their kind", () =
     expect(tryAcquireUpdateSyncMutex(root, "sync")).toEqual({ kind: "busy", holder: "update" });
   } finally { update.release(); }
   expect(inspectUpdateSyncMutex(root)).toBe("free");
+});
+
+test("an occupied mutex authority path is uncertain and cannot acquire a lease", () => {
+  const root = home();
+  const target = join(root, "other-name");
+  mkdirSync(target);
+  symlinkSync(target, join(root, "sync-update"), process.platform === "win32" ? "junction" : "dir");
+  expect(inspectUpdateSyncMutex(root)).toBe("unknown");
+  expect(isUpdateInFlight(root)).toBe(true);
+  expect(tryAcquireUpdateSyncMutex(root, "update")).toEqual({ kind: "busy", holder: "unknown" });
 });
 
 test("sync refuses before its work while an update holds the mutex", async () => {

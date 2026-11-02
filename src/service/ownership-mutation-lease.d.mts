@@ -10,6 +10,8 @@ export interface OwnershipMutationLeaseOptions {
   /** Isolated locks cannot re-enter or inherit ownership delegation. */
   readonly isolated?: boolean;
   readonly holderKind?: "sync" | "update";
+  /** Explicit canonical lock path for isolated callers with no state-file authority. */
+  readonly lockPath?: string;
 }
 
 /** The recorded lease owner, identity unverified, read for diagnostics; never used to reclaim it. */
@@ -54,7 +56,7 @@ export declare function withOwnershipMutationLease<T>(
 
 export declare function inspectOwnershipMutationLease(
   statePaths: readonly string[],
-  options?: Pick<OwnershipMutationLeaseOptions, "now" | "processAlive" | "processImage">,
+  options?: Pick<OwnershipMutationLeaseOptions, "now" | "processAlive" | "processImage" | "lockPath">,
 ): OwnershipMutationLeaseHolder | null;
 
 export declare function ownershipMutationLeaseStatusLine(

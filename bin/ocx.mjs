@@ -46,6 +46,8 @@ import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { runNpmInstall } from "../src/update/npm-install.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
+import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs } from "../src/update/orchestrated-arguments.mjs";
+import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";
 import {
   pnpmOwnerInvocation,
   resolvePnpmGlobalOwner,
@@ -1218,7 +1220,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
 // intercepts `update` before the Bun CLI starts, so the help short-circuit must live
 // here too — otherwise --help runs the real self-update, stops the proxy, and drops
 // in-flight routed streams (issue #168).
-const updateHelpRequested = process.argv[2] === "update" &&
+const updateHelpRequested = process.argv[2] === "update" && !isOrchestratedUpdateArgv(process.argv.slice(3)) &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
   console.log("Usage: ocx update [--tag latest|preview]\n\nUpdate opencodex. Preview installs stay on the preview tag unless overridden.");
@@ -1238,6 +1240,14 @@ if (process.argv[2] === "__update-home-probe") {
   process.exit(0);
 }
 
+const orchestratedUpdate = process.argv[2] === "update" && isOrchestratedUpdateArgv(process.argv.slice(3));
+const orchestratedArgs = orchestratedUpdate ? parseOrchestratedUpdateArgs(process.argv.slice(3)) : null;
+if (orchestratedArgs && !orchestratedArgs.ok) {
+  console.log(JSON.stringify({ error: "usage" }));
+  console.error("Usage: ocx update (--plan | --yes) --json [--tag latest|preview | --version <version>]");
+  process.exit(64);
+}
+const passiveCapabilities = process.argv[2] === "capabilities";
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
 // Windows inspection currently refuses before candidate I/O, so a long-lived
 // Windows server does not duplicate PATH into its inherited environment block.
@@ -1278,7 +1288,7 @@ if (desktopPlan.kind === "handoff") {
   // Only confirmed target ENOENT reaches the ordinary package path below.
 }
 
-if (process.argv[2] === "update" && installMethod === "mise") {
+if (!orchestratedUpdate && process.argv[2] === "update" && installMethod === "mise") {
   if (installOwnership.owner) {
     console.error(
       `opencodex: this installation is externally managed by mise; update it with: mise upgrade ${installOwnership.owner.tool}`,
@@ -1291,7 +1301,7 @@ if (process.argv[2] === "update" && installMethod === "mise") {
   process.exit(1);
 }
 
-if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (!orchestratedUpdate && process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   if (installMethod === "npm") await runNpmSelfUpdate();
   if (installMethod === "pnpm") await runPnpmSelfUpdate();
 }
@@ -1299,7 +1309,7 @@ if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstal
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (!codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (!orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {
@@ -1310,7 +1320,20 @@ if (!codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall
   } catch { /* the probe must never block launch */ }
 }
 
-const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });
+const bunRuntime = resolveBun({ allowInstall: !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate });
+if (!bunRuntime && orchestratedArgs?.ok) {
+  const currentVersion = String(currentPackageVersion()), cliRoot = resolve(here, "..");
+  if (orchestratedArgs.mode === "plan") {
+    const identity = { currentVersion, targetVersion: null, installer: installMethod, cliRoot, servingRoot: null, runtimeOwner: "unknown", runtime: null };
+    console.log(JSON.stringify({ schema: "ocx.update.plan/1", currentVersion, targetVersion: null, installer: installMethod,
+      runtimeOwner: "unknown", servingPath: null, cliPath: cliRoot, canApply: false, reason: "plan-unavailable", restartRequired: false,
+      planToken: createUpdatePlanToken(identity), updateInFlight: true, mutationBoundMs: 900000 }));
+    process.exit(0);
+  }
+  console.log(JSON.stringify({ schema: "ocx.update.result/1", applied: false, fromVersion: currentVersion, toVersion: null,
+    installer: installMethod, restarted: false, healthy: false, rolledBack: false, error: "plan-unavailable" }));
+  process.exit(10);
+}
 const bun = bunRuntime.path;
 
 // Run the Bun child asynchronously and FORWARD termination signals to it, then wait
