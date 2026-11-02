@@ -87,8 +87,10 @@ describe("deferred non-stream request log integration", () => {
     const { result, entries } = tracked(new Response(payload, { status: 502, headers: { "content-type": "text/plain" } }));
     expect(await result.text()).toBe(payload);
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.upstreamError?.startsWith("synthetic provider failed:")).toBe(true);
-    expect(entries[0]?.upstreamError?.length).toBeLessThanOrEqual(500);
+    // The parser path still classifies the text; the row keeps the closed condition only.
+    expect(entries[0]?.upstreamError).toBeUndefined();
+    expect(entries[0]?.upstreamCondition).toBe("upstream_failed");
+    expect(JSON.stringify(entries[0])).not.toContain("synthetic provider failed");
   });
 
   test("cancellation follows the existing 499 convention without changing wire status", async () => {

@@ -26,7 +26,10 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
 - `failureDetail`, proxy-authored transport text (fixed sentences, numeric guard limits, closed provider
   type names) set through `recordLocalFailureDetail` in `src/server/request-log-failure-detail.ts`, or the
   fixed label for a known `incomplete_details.reason` (`max_output_tokens`, `upstream_stall_timeout`,
-  `adapter_eof`); single line and at most 500 characters. An unknown reason stays on the context only.
+  `adapter_eof`); single line and at most 500 characters. An unknown reason stays on the context only. A
+  relayed error that exactly matches one of the proxy's own timeout or client-close sentences
+  (`PROXY_SENTENCES`: response-header, connect, body-stall, routed-generation and image-bridge
+  inactivity timeouts, web-search client close) is rebuilt from its number, bounded to seven digits.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the

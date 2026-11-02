@@ -233,7 +233,7 @@ describe("web-search timeout runtime contracts", () => {
       status: 504,
       errorCode: "upstream_server_error",
       closeReason: "non_stream",
-      upstreamError: message,
+      failureDetail: message,
     });
     expect(entries[0].terminalStatus).toBeUndefined();
   }, 1_000);
@@ -278,7 +278,7 @@ describe("web-search timeout runtime contracts", () => {
       errorCode: "upstream_server_error",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: message,
+      failureDetail: message,
     });
   }, 1_000);
 
@@ -331,7 +331,7 @@ describe("web-search timeout runtime contracts", () => {
       status: 504,
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: message,
+      failureDetail: message,
     });
   }, 1_000);
 

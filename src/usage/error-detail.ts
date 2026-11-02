@@ -100,6 +100,30 @@ export interface ErrorDetail {
 
 const str = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 
+// Sentences this proxy writes into a relayed error body (web-search and image-bridge loops, body
+// inactivity guard). The request log only sees them as captured error text, so a match is rebuilt
+// from the parsed number; the number is bounded so no credential-length value can fit.
+const PROXY_SENTENCES: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
+  [/^Provider response-header timeout after (\d{1,7})ms during (web-search|image-bridge)$/,
+    match => `Provider response-header timeout after ${Number(match[1])}ms during ${match[2]}`],
+  [/^Upstream response body stalled for (\d{1,7})ms$/, match => `Upstream response body stalled for ${Number(match[1])}ms`],
+  [/^Routed model generation timeout after (\d{1,7})ms without response bytes during web-search$/,
+    match => `Routed model generation timeout after ${Number(match[1])}ms without response bytes during web-search`],
+  [/^runTurn inactivity timeout after (\d{1,7})ms during image-bridge$/,
+    match => `runTurn inactivity timeout after ${Number(match[1])}ms during image-bridge`],
+  [/^Provider connect timeout after (\d{1,7})ms$/, match => `Provider connect timeout after ${Number(match[1])}ms`],
+  [/^client closed request during web-search$/, () => "client closed request during web-search"],
+];
+
+function proxySentence(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  for (const [pattern, rebuild] of PROXY_SENTENCES) {
+    const match = pattern.exec(text);
+    if (match) return rebuild(match);
+  }
+  return undefined;
+}
+
 /**
  * Derive the proxy-owned error facts for one row. An existing condition or reset time is kept only
  * when valid; otherwise both are derived from upstream evidence, which the caller then drops.
@@ -126,7 +150,7 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
   const rateLimitResetAt = boundedRateLimitResetAt(entry.rateLimitResetAt, entry.timestamp)
     ?? deriveRateLimitResetAt({ ...entry, errorCode });
   // Proxy-authored text (request-log-failure-detail.ts); single-line and bounded here as well.
-  const failureDetail = sanitizeLogMetadataString(entry.failureDetail, 500);
+  const failureDetail = sanitizeLogMetadataString(entry.failureDetail, 500) ?? proxySentence(str(entry.upstreamError));
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(upstreamCondition ? { upstreamCondition } : {}),

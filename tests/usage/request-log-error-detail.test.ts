@@ -91,6 +91,17 @@ describe("errorDetailFor", () => {
     expect(errorDetailFor({ status: 429, upstreamCondition: "constructor", upstreamError: "x" }).upstreamCondition).toBe("rate_limited");
   });
 
+  test("only closed proxy sentences become failure detail, rebuilt from their bounded number", () => {
+    expect(errorDetailFor({ status: 504, upstreamError: "Provider response-header timeout after 0300ms during web-search" }).failureDetail)
+      .toBe("Provider response-header timeout after 300ms during web-search");
+    expect(errorDetailFor({ status: 502, upstreamError: "Provider connect timeout after 15000ms" }).failureDetail)
+      .toBe("Provider connect timeout after 15000ms");
+    for (const text of ["Provider connect timeout after " + NUMERIC_KEY + "ms", "x Provider connect timeout after 1ms",
+      "Provider connect timeout after 1ms " + PROVIDER_KEY, "invalid key " + PROVIDER_KEY]) {
+      expect(errorDetailFor({ status: 502, upstreamError: text }).failureDetail).toBeUndefined();
+    }
+  });
+
   test("failure detail is single-line and bounded", () => {
     const detail = errorDetailFor({ status: 504, failureDetail: "anthropic passthrough timed out\nforged line" + "x".repeat(600) });
     expect(detail.failureDetail!.length).toBeLessThanOrEqual(500);
