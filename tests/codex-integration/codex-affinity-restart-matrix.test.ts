@@ -183,12 +183,12 @@ test("home switching drops pending writes and does not carry recorded anchors ac
 for (const mutation of ["bind", "delete", "issuer"] as const) {
   test(`late ${mutation} after release is what a reacquired lease persists`, () => inHome(home => {
     seed(home);
-    // Memory wins when a later lease opens the database: the change made while no lease was held is
-    // what this process routes with, and a restart must restore exactly that, never the older row.
+    // Live memory keeps the change made while no lease was held. The database could not record it,
+    // so the next lease clears it: a restart restores nothing rather than the replaced row.
     const expected = {
-      bind: { pin: "b", issuer: "a", restoredPin: "b", restoredIssuer: "a" },
-      delete: { pin: undefined, issuer: "a", restoredPin: undefined, restoredIssuer: "a" },
-      issuer: { pin: "a", issuer: "b", restoredPin: "a", restoredIssuer: "__unknown_codex_conversation_state_issuer__" },
+      bind: { pin: "b", issuer: "a", restoredPin: undefined, restoredIssuer: undefined },
+      delete: { pin: undefined, issuer: "a", restoredPin: undefined, restoredIssuer: undefined },
+      issuer: { pin: "a", issuer: "b", restoredPin: undefined, restoredIssuer: undefined },
     }[mutation];
     expect(matrix(home, `late-${mutation}`)).toEqual({ pin: expected.pin, issuer: expected.issuer });
     const restored = matrix(home, "read");

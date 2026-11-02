@@ -321,3 +321,17 @@ test("a pin bound and touched in the same pending batch survives a chunk prune",
   flushCodexAffinityStoreForTests(); lease.release(); lease = acquireSpendLedgerOwner();
   expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
 });
+
+test("row keys carried across a lease change still let a delete reach its row after anchor eviction", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence);
+  recordIssuerSet(k, "account-a", fence, Date.now()); lease.release();
+  lease = acquireSpendLedgerOwner(); const adopted = key();
+  expect(adoptStoredThreadRows(adopted, Date.now())).toHaveLength(1);
+  expect(adoptStoredIssuer(adopted, Date.now())?.issuer).toBe("account-a");
+  lease.release(); lease = acquireSpendLedgerOwner();
+  for (let i = 0; i < 4096; i++) codexConversationKeyFor(`carry-family-${i}`, `carry-thread-${i}`);
+  recordThreadDelete(adopted, "legacy"); recordIssuerDelete(adopted); lease.release();
+  resetCodexAffinityStoreForTests(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
+  expect(adoptStoredIssuer(key(), Date.now())).toBeUndefined();
+});

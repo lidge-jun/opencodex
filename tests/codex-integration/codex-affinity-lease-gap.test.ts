@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import { requestOwnedAffinityKey } from "../../src/codex/request-owned-affinity";
-import { bindThreadAffinity, clearThreadAccountMap, getThreadAffinity, rememberConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
+import { bindThreadAffinity, clearThreadAccountMap, deleteThreadAffinity, getThreadAffinity, rememberConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import { adoptStoredIssuer, adoptStoredThreadRows, resetCodexAffinityStoreForTests } from "../../src/codex/routing/thread-affinity-store";
 import { acquireSpendLedgerOwner, type SpendLedgerOwnerLease } from "../../src/lib/spend-ledger-owner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -34,7 +34,7 @@ afterEach(() => {
   homes = [];
 });
 
-test("a change made between leases keeps rows for conversations this process never loaded", () => {
+test("a change made between leases makes the next lease clear stale rows instead of reviving them", () => {
   useHome(newHome());
   lease = acquireSpendLedgerOwner(); seedAccounts();
   for (const id of ["one", "two"]) {
@@ -53,9 +53,11 @@ test("a change made between leases keeps rows for conversations this process nev
   bindThreadAffinity(requestOwnedAffinityKey(conversation("one"))!, "b", Date.now());
   lease = acquireSpendLedgerOwner();
   freshProcess(); lease = acquireSpendLedgerOwner();
-  expect(storedPin("one")).toBe("b");
-  expect(storedPin("two")).toBe("a");
-  expect(storedIssuer("two")).toBe("a");
+  // The replaced pin must not come back as "a". Rows the process never loaded are cleared too:
+  // the database could not record the change, so it is treated as stale as a whole (fail closed).
+  expect(storedPin("one")).toBeUndefined();
+  expect(storedPin("two")).toBeUndefined();
+  expect(storedIssuer("two")).toBeUndefined();
 });
 
 test("a change made between leases in one home never touches another home's database", () => {
@@ -75,4 +77,23 @@ test("a change made between leases in one home never touches another home's data
   lease = acquireSpendLedgerOwner();
   freshProcess(); useHome(homeB); lease = acquireSpendLedgerOwner();
   expect(storedPin("b-only")).toBe("a");
+});
+
+test("a change made while the store could not open is still honoured by the next successful open", () => {
+  const home = newHome();
+  useHome(home);
+  lease = acquireSpendLedgerOwner(); seedAccounts();
+  const key = codexPoolAffinityKey(conversation("failed-open"))!;
+  bindThreadAffinity(key, "a", Date.now());
+  lease.release(); lease = undefined;
+  // The next lease cannot open the database (a directory sits at its path); delete during it.
+  const file = join(home, "codex-affinity.sqlite");
+  renameSync(file, `${file}.aside`); mkdirSync(file);
+  lease = acquireSpendLedgerOwner();
+  deleteThreadAffinity(key);
+  lease.release(); lease = undefined;
+  removeTreeWithRetry(file); renameSync(`${file}.aside`, file);
+  lease = acquireSpendLedgerOwner();
+  freshProcess(); lease = acquireSpendLedgerOwner();
+  expect(storedPin("failed-open")).toBeUndefined();
 });
