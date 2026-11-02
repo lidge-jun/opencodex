@@ -1,3 +1,5 @@
+import { formatClientRetryAfter } from "../lib/client-retry-after";
+
 const SAFE_RESPONSE_HEADER_EXACT = new Set([
   "retry-after", "x-request-id", "openai-request-id", "x-codex-turn-state",
   "openai-model", "x-models-etag", "x-reasoning-included",
@@ -17,7 +19,12 @@ export function isSafeResponseHeader(name: string): boolean {
 export function safeResponseHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of headers) {
-    if (isSafeResponseHeader(name)) out[name.toLowerCase()] = value;
+    if (!isSafeResponseHeader(name)) continue;
+    if (name.toLowerCase() === "retry-after") {
+      // Retry advice leaves as an integer this proxy formats, never the upstream bytes.
+      const advice = formatClientRetryAfter(value);
+      if (advice !== undefined) out["retry-after"] = advice;
+    } else out[name.toLowerCase()] = value;
   }
   return out;
 }

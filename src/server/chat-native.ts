@@ -27,7 +27,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
-import { resolveClientRetryAfter } from "../lib/retry-after";
+import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -777,7 +777,7 @@ export async function runNativeChatAttempt(
       status,
       headers: {
         "Content-Type": "application/json",
-        ...(retryAfter ? { "Retry-After": retryAfter } : {}),
+        ...(formatClientRetryAfter(retryAfter) ? { "Retry-After": formatClientRetryAfter(retryAfter)! } : {}),
         ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });

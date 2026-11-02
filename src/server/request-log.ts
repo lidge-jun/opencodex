@@ -30,6 +30,8 @@ import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+import type { UpstreamCondition } from "../lib/upstream-condition";
+import { projectErrorDetail } from "../usage/error-detail";
 import {
   appendUsageEntry,
   classifyCacheTelemetryProvenance,
@@ -243,6 +245,7 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
+  failureDetail?: string; // proxy-authored failure text only (request-log-failure-detail.ts)
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -353,8 +356,11 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   errorCode?: string;
   terminalStatus?: ResponsesTerminalStatus;
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
-  /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
+  /** Input only: addRequestLog derives the two fields below from it, then removes it. */
   upstreamError?: string;
+  upstreamCondition?: UpstreamCondition; // closed enum, src/lib/upstream-condition.ts
+  failureDetail?: string; // proxy-authored, see request-log-failure-detail.ts
+  rateLimitResetAt?: number; // provider quota window end, epoch ms, bounded
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -512,7 +518,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(terminalStatus ? { terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(entry.upstreamCondition ? { upstreamCondition: entry.upstreamCondition } : {}), ...(entry.failureDetail ? { failureDetail: entry.failureDetail } : {}),
+    ...(entry.rateLimitResetAt !== undefined ? { rateLimitResetAt: entry.rateLimitResetAt } : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
@@ -613,6 +620,9 @@ export function rehydrateRequestLogsAfterLedgerReplacement(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
+  // Rows keep proxy-owned error facts only; upstream error text and tokens stop here (both the
+  // retained ring row and the usage.jsonl projection below read the projected entry).
+  entry = projectErrorDetail(entry);
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
   // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable
@@ -658,7 +668,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
         ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
         ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
-        ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+        ...(entry.upstreamCondition ? { upstreamCondition: entry.upstreamCondition } : {}), ...(entry.failureDetail ? { failureDetail: entry.failureDetail } : {}),
+        ...(entry.rateLimitResetAt !== undefined ? { rateLimitResetAt: entry.rateLimitResetAt } : {}),
       }
       : {};
     appendUsageEntry({
@@ -1593,7 +1604,7 @@ function writeFinalRequestLog(
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
     ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),

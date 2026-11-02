@@ -1,5 +1,8 @@
 import { parseRetryAfterMs } from "../combos";
 import { classifyError, parseRetryAfterFromMessage } from "./errors";
+import { formatClientRetryAfter } from "./client-retry-after";
+
+export { formatClientRetryAfter, MAX_CLIENT_RETRY_AFTER_SECONDS } from "./client-retry-after";
 
 /** Small default when a retryable 429 has no upstream Retry-After (#507). */
 export const DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC = "2";

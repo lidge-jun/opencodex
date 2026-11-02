@@ -1,5 +1,6 @@
 import type { TFn } from "../i18n/shared";
 import type { RequestFailureCause, RequestFailureStage, ResendPermission, RequestSpendTotals } from "../../../src/usage/telemetry-contract";
+import type { UpstreamCondition } from "../../../src/lib/upstream-condition";
 
 interface LogFailureAttribution {
   failureCause?: RequestFailureCause;
@@ -100,4 +101,26 @@ export function failureSummary(
     result.retries = Math.max(0, spend.sends - 1);
   }
   return result;
+}
+
+/** i18n key for each upstream condition the server classified; total over the closed enum. */
+const UPSTREAM_CONDITION_KEYS = {
+  auth_failed: "logs.detail.condition.authFailed",
+  access_denied: "logs.detail.condition.accessDenied",
+  context_overflow: "logs.detail.condition.contextOverflow",
+  location_unsupported: "logs.detail.condition.locationUnsupported",
+  account_verification_required: "logs.detail.condition.accountVerificationRequired",
+  billing_exhausted: "logs.detail.condition.billingExhausted",
+  model_unavailable: "logs.detail.condition.modelUnavailable",
+  rate_limited: "logs.detail.condition.rateLimited",
+  upstream_unavailable: "logs.detail.condition.upstreamUnavailable",
+  upstream_failed: "logs.detail.condition.upstreamFailed",
+  request_rejected: "logs.detail.condition.requestRejected",
+} as const satisfies Record<UpstreamCondition, string>;
+
+/** Localized label for a row's classified upstream condition; unknown values (newer servers) get none. */
+export function upstreamConditionLabel(condition: unknown, t: TFn): string | undefined {
+  return typeof condition === "string" && Object.hasOwn(UPSTREAM_CONDITION_KEYS, condition)
+    ? t(UPSTREAM_CONDITION_KEYS[condition as UpstreamCondition])
+    : undefined;
 }

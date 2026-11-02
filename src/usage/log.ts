@@ -23,6 +23,8 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
+import type { UpstreamCondition } from "../lib/upstream-condition";
+import { errorDetailFor, normalizeLogErrorCode } from "./error-detail";
 import type { CodexWsStageRecord, CodexWsTerminalEvent } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
@@ -370,8 +372,17 @@ export interface PersistedUsageEntry {
    */
   terminalStatus?: RequestTerminalStatus;
   closeReason?: RequestCloseReason;
-  /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
+  /**
+   * Legacy input only: older rows carried upstream error text here. It is read once on load to
+   * derive upstreamCondition / rateLimitResetAt and is never written or returned.
+   */
   upstreamError?: string;
+  /** Proxy-classified upstream condition (src/lib/upstream-condition.ts); a closed enum. */
+  upstreamCondition?: UpstreamCondition;
+  /** Provider quota window end in epoch ms, derived server-side and bounded (src/usage/error-detail.ts). */
+  rateLimitResetAt?: number;
+  /** Proxy-authored failure text (src/server/request-log-failure-detail.ts), never upstream text. */
+  failureDetail?: string;
   /** Where the terminal/failure was observed; absent on historic rows. */
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   /** Whether the terminal came from upstream or a proxy-generated tail. */
@@ -750,6 +761,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         && ATTEMPT_RECOVERY_WITHHELD.has(value as AttemptRecoveryWithheld),
     ))]
     : [];
+  const attemptErrorCode = normalizeLogErrorCode(attempt.errorCode, attempt.status as number);
   return {
     ordinal: attempt.ordinal as number,
     provider: attempt.provider,
@@ -781,7 +793,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(isNonNegativeFiniteNumber(attempt.totalTokens)
       ? { totalTokens: attempt.totalTokens }
       : {}),
-    ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(attemptErrorCode ? { errorCode: attemptErrorCode } : {}),
     ...(isKnownCacheTelemetryProvenance(attempt.cacheProvenance)
       ? { cacheProvenance: attempt.cacheProvenance }
       : {}),
@@ -1086,13 +1098,13 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
-    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    // Closed code, classified condition and numeric reset only; upstream text is never kept.
+    ...errorDetailFor(entry),
     // Validated rather than copied on truthiness, like the inbound protocol and transport phase
     // above. Harmless while these were only rendered; not harmless once the terminal status is
     // a grouping-key slot, because the string is assembled from an upstream frame.
     ...(isRequestTerminalStatus(entry.terminalStatus) ? { terminalStatus: entry.terminalStatus } : {}),
     ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
-    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),

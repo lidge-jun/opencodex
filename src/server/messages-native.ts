@@ -44,7 +44,7 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
 import { redactSecretString } from "../lib/redact";
-import { resolveClientRetryAfter } from "../lib/retry-after";
+import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import {
@@ -380,7 +380,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const response = fail(429, error.message, "rate_limit_error");
-      if (error.retryAfterSeconds !== null) response.headers.set("retry-after", String(error.retryAfterSeconds));
+      const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
+      if (advice !== undefined) response.headers.set("retry-after", advice);
       return response;
     }
     if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
@@ -1085,7 +1086,8 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
       ?? (upstreamRetryAfter?.trim() === "0" ? "0" : undefined);
   finishLog(response.status, safeMessage);
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (retryAfter) headers.set("Retry-After", retryAfter);
+  const clientRetryAfter = formatClientRetryAfter(retryAfter);
+  if (clientRetryAfter) headers.set("Retry-After", clientRetryAfter);
   else if (transient) headers.set("Retry-After", "2");
   if (replayRefusal) applyReplayRefusalClientHeaders(headers);
   // The native envelope keeps its shape (no added code); only an overflow's wording changes, so

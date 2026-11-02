@@ -9,7 +9,7 @@
  */
 import { OllamaCodecError, consumeOllamaChatChunk, createOllamaStreamState, ollamaBufferedResponse, ollamaStreamTerminal, ollamaToChat, type OllamaKind } from "../protocols/codecs/ollama";
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
-import { parseRetryAfterMs } from "../combos";
+import { formatClientRetryAfter, MAX_CLIENT_RETRY_AFTER_SECONDS } from "../lib/client-retry-after";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import type { OcxConfig } from "../types";
 import type { DataPlaneAdmission } from "./auth-cors";
@@ -28,18 +28,15 @@ const SHOW_BODY_LIMIT_BYTES = 64 * 1024;
 // ceiling read these from the request Chat sees. Never authorization, cookies or admission keys.
 const IDENTITY_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id", "x-codex-parent-thread-id"] as const;
 
-/** Upper bound for the retry advice this surface passes on. */
-export const OLLAMA_MAX_RETRY_AFTER_SECONDS = 3600;
+/** Upper bound for the retry advice this surface passes on (shared with every client surface). */
+export const OLLAMA_MAX_RETRY_AFTER_SECONDS = MAX_CLIENT_RETRY_AFTER_SECONDS;
 
 /**
  * Retry-After as an integer we format ourselves. The incoming value may come from an upstream,
  * so only the parsed delay crosses this boundary, never its bytes; unparseable values are dropped.
  */
 export function ollamaRetryAfter(value: string | null | undefined, now = Date.now()): string | undefined {
-  if (value?.trim() === "0") return "0";
-  const ms = parseRetryAfterMs(value, now);
-  if (ms === undefined) return undefined;
-  return String(Math.min(OLLAMA_MAX_RETRY_AFTER_SECONDS, Math.max(0, Math.ceil(ms / 1000))));
+  return formatClientRetryAfter(value, now);
 }
 
 /**

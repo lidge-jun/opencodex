@@ -6,6 +6,7 @@ import {
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
 } from "../lib/upstream-retry";
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -93,7 +94,8 @@ export function formatErrorResponse(
     : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503
       : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
   const headers = new Headers({ "Content-Type": "application/json" });
-  const retryAfter = options?.retryAfter?.trim();
+  // Re-emitted as an integer this proxy formats; the incoming text is never echoed.
+  const retryAfter = formatClientRetryAfter(options?.retryAfter);
   if (error.code !== CYBER_POLICY_ERROR_CODE
     && !replayBlocked
     && retryAfter
