@@ -1,3 +1,4 @@
+import { classifyUpstreamCondition } from "../lib/upstream-condition";
 import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { recordLocalFailureDetail, type FailureDetail } from "./request-log-failure-detail";
 /**
@@ -431,6 +432,9 @@ async function anthropicNativePassthrough(
           if (knownType) {
             recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`, { code: "provider_error", type: knownType }, { upstreamEvidence: true });
           }
+          // The condition is classified here from the upstream message; only the closed member is kept.
+          const upstreamMessage = typeof parsed.error.message === "string" ? parsed.error.message : undefined;
+          logCtx.upstreamCondition = classifyUpstreamCondition({ status: upstream.status, type: knownType, message: upstreamMessage });
         }
       } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
     }

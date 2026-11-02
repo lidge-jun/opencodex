@@ -61,9 +61,11 @@ async function exchange(path: string, body: Record<string, unknown>, headers: Re
   for (const name of ["warn", "error", "log", "info"] as const) {
     console[name] = (...args: unknown[]) => { printed.push(args.map(String).join(" ")); };
   }
-  const server = startServer(0);
-  const earlier = new Set(getRequestLogEntries().map(entry => entry.requestId));
+  let server: ReturnType<typeof startServer> | undefined;
   try {
+    // Started inside the try, so the console is restored even if startup throws.
+    server = startServer(0);
+    const earlier = new Set(getRequestLogEntries().map(entry => entry.requestId));
     const res = await fetch(new URL(path, server.url), {
       method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
     });
@@ -73,8 +75,7 @@ async function exchange(path: string, body: Record<string, unknown>, headers: Re
     const rows = getRequestLogEntries().filter(entry => !earlier.has(entry.requestId));
     return { status: res.status, responseHeaders, rows, printed };
   } finally {
-    await server.stop(true);
-    Object.assign(console, originals);
+    try { await server?.stop(true); } finally { Object.assign(console, originals); }
   }
 }
 

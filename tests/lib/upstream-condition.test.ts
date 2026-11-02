@@ -19,11 +19,28 @@ describe("classifyUpstreamCondition", () => {
   });
 
   test("keyword evidence classifies 4xx failures", () => {
-    expect(classifyUpstreamCondition({ status: 400, message: "This prompt is too long for the model" })).toBe("context_overflow");
+    expect(classifyUpstreamCondition({ status: 400, message: "prompt is too long: 210000 tokens > 200000 maximum" })).toBe("context_overflow");
+    expect(classifyUpstreamCondition({ status: 400, message: "This model's maximum context length is 8192 tokens." })).toBe("context_overflow");
     expect(classifyUpstreamCondition({ status: 400, message: "User location is not supported for the API use." })).toBe("location_unsupported");
     expect(classifyUpstreamCondition({ status: 403, message: "Your organization must be verified to stream this model." })).toBe("account_verification_required");
     expect(classifyUpstreamCondition({ status: 400, message: "Your credit balance is too low" })).toBe("billing_exhausted");
     expect(classifyUpstreamCondition({ status: 400, message: "The model does not exist" })).toBe("model_unavailable");
+  });
+
+  test("context overflow from text needs the combo router's definite verdict", () => {
+    // A validation error that quotes the caller's own value is not an overflow.
+    const sdkValidation = "Error code: 400 - {'error': {'message': \"Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern.\", 'type': 'invalid_request_error', 'param': 'tools[0].function.name', 'code': 'invalid_value'}}";
+    expect(classifyUpstreamCondition({ status: 400, message: sdkValidation })).toBe("request_rejected");
+    expect(classifyUpstreamCondition({ status: 400, message: "Invalid tool name: prompt is too long" })).toBe("request_rejected");
+    expect(classifyUpstreamCondition({ status: 400, message: "This prompt is too long for the model" })).toBe("request_rejected");
+    // 401/403 bodies that quote context prose speak about the credential.
+    expect(classifyUpstreamCondition({ status: 403, message: "maximum context length reached for this key" })).toBe("access_denied");
+  });
+
+  test("account usage-limit codes are billing exhaustion whatever the message says", () => {
+    expect(classifyUpstreamCondition({ status: 400, code: "1308", message: "Bad request" })).toBe("billing_exhausted");
+    expect(classifyUpstreamCondition({ status: 400, code: "usage_limit_exceeded", message: "Bad request" })).toBe("billing_exhausted");
+    expect(classifyUpstreamCondition({ status: 429, type: "usage_limit_exceeded" })).toBe("billing_exhausted");
   });
 
   test("conflicting evidence follows the documented precedence", () => {

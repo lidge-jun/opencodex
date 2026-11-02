@@ -247,6 +247,7 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
   failureDetail?: FailureDetail; // closed code + bounded params (src/lib/failure-detail.ts)
+  upstreamCondition?: UpstreamCondition; // classified at capture where the evidence is not kept on the context
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -480,7 +481,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  // projectErrorDetail bounds the tier fields (top-level and per attempt) itself, so this stays safe
+  // for a row that did not come through the disk reader; attempts are copied before it edits them.
+  const attempts = Array.isArray(entry.attempts) ? entry.attempts.map(attempt => ({ ...attempt })) : entry.attempts;
+  return projectErrorDetail({
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
@@ -523,7 +527,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-    ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(attempts !== undefined ? { attempts } : {}),
     ...(entry.attemptNormalizationDropped === true
       ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
@@ -541,7 +545,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       : {}),
     ...normalizeRequestFailureAttribution(entry),
     ...(protocolTrace ? { protocolTrace } : {}),
-  };
+  });
 }
 
 /**
@@ -1591,6 +1595,7 @@ function writeFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError && !upstreamErrorIsLocal(logCtx) ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
+    ...(logCtx.upstreamCondition ? { upstreamCondition: logCtx.upstreamCondition } : {}),
     ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),

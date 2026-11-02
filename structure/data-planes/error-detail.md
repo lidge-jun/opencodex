@@ -4,7 +4,9 @@ Request-log rows carry only error facts this proxy owns. `projectErrorDetail` in
 `src/usage/error-detail.ts` runs on the final row in `addFinalRequestLog` before any writer (an
 injected one included) and again first in `addRequestLog`, so the live ring, `/api/logs` and the
 `usage.jsonl` projection read one projected entry; `normalizeUsageEntry` applies `errorDetailFor` to every
-append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A row keeps:
+append and read, and `requestLogEntryFromPersistedUsage` runs `projectErrorDetail` on hydration (on a copy
+of the attempts), so it bounds tiers and drops upstream fields itself even for a row that did not come
+through the disk reader. A row keeps:
 
 - `errorCode` from the literal `LOG_ERROR_CODES` vocabulary or a proxy-formatted `http_NNN`; any other
   value (an upstream code that reached a writer) collapses to the status fallback (`invalid_request_error`,
@@ -16,8 +18,14 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
   none, and a stored condition is kept only under the same rules. Text set through
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
-  it out of the final row's evidence. `classifyUpstreamCondition` reads status, bounded structured tokens and,
-  for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next, a 429 that
+  it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
+  upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
+  overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
+  tokens and, for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next
+  (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
+  from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
+  `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
+  `src/combos/failover.ts`), so a validation error that quotes "prompt is too long" stays rejected, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
@@ -67,11 +75,15 @@ same check. `tests/usage/request-log-identity-bounds.test.ts` covers capture, li
 
 `src/server/safe-response-headers.ts` lists each upstream response header a client may receive as
 response metadata (WebSocket metadata frames, the WS-to-HTTP projection, the HTTP-to-WS error bridge) by
-exact name, and `normalizeSafeResponseHeader` validates or rebuilds each value against its contract:
+exact name in a `Map`, so a header named after an `Object.prototype` member (`constructor`, `__proto__`,
+`toString`) never resolves, and `normalizeSafeResponseHeader` returns only primitive strings, validating or
+rebuilding each value against its contract:
 retry advice through `formatClientRetryAfter`; request ids `[A-Za-z0-9_-]` up to 128; models through
-`boundedModelIdentity`; booleans, rate-limit counts, credit balances and quota percentages, windows and
-reset times as numbers this proxy formats; rate-limit resets as Go-style durations it rebuilds; turn state
-and etags by token grammar. Codex quota windows may name a limit family
+`boundedModelIdentity`; rate-limit counts as non-negative integers (fractions round down, clamped to
+10^12); rate-limit resets as integer seconds (rounded up, clamped to eight days) or Go-style durations
+rebuilt from whole seconds (whole milliseconds below one second); booleans, credit balances and quota
+percentages, windows and reset times as numbers this proxy formats; turn state and etags by token
+grammar. Codex quota windows may name a limit family
 (`x-codex-<family>-primary-used-percent`), whose name segment follows the native frame's bounded grammar.
 Free-text headers such as the promo message are not relayed. `codex-ws-metadata.ts` checks the raw byte
 budget first, then keeps only normalized values. `tests/server/safe-response-headers.test.ts` covers the
@@ -80,8 +92,9 @@ allowlist and each contract.
 ## Client retry advice
 
 Client `Retry-After` advice is a string this proxy formats: `formatClientRetryAfter` in
-`src/lib/client-retry-after.ts` turns delay seconds (fractions round up) or an IMF HTTP date into an integer
-of seconds clamped to 0..691200 (eight days, so a weekly usage-window reset such as a local Codex account
+`src/lib/client-retry-after.ts` turns delay seconds (fractions round up) or an HTTP date in any RFC 9110
+form (IMF-fixdate, RFC 850, asctime, all read as GMT field by field) into
+an integer of seconds clamped to 0..691200 (eight days, so a weekly usage-window reset such as a local Codex account
 cooldown still reaches the client), and yields nothing for any other input. The Ollama surface keeps its
 own smaller bound (`ollamaRetryAfter`). Every other client boundary uses `formatClientRetryAfter`
 (translated errors, native Chat and Messages including pacing refusals, Messages passthrough, the Responses

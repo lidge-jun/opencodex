@@ -1448,7 +1448,7 @@ export async function executeComboResponses(
     // A bare status made a revoked credential read as a provider outage. Log the classified
     // condition (a closed member), never upstream-authored code or message text.
     const failureReason = classifyUpstreamCondition({
-      status: failure.response.status, code: failure.upstreamCode, message: failure.upstreamMessage,
+      status: failure.response.status, code: failure.upstreamCode, type: failure.upstreamType, message: failure.upstreamMessage,
     });
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`

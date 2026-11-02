@@ -34,6 +34,18 @@ describe("formatClientRetryAfter", () => {
     expect(formatClientRetryAfter("Mon, 30 Nov 2026 00:00:00 GMT", now)).toBe("691200");
   });
 
+  test("obsolete RFC 850 and asctime dates are read as GMT", () => {
+    expect(formatClientRetryAfter("Monday, 02-Nov-26 00:00:30 GMT", now)).toBe("30");
+    expect(formatClientRetryAfter("Sunday, 01-Nov-26 23:00:00 GMT", now)).toBe("0");
+    // A two-digit year far in the future is the previous century, so it is already past.
+    expect(formatClientRetryAfter("Friday, 02-Nov-99 00:00:30 GMT", now)).toBe("0");
+    expect(formatClientRetryAfter("Mon Nov  2 00:00:30 2026", now)).toBe("30");
+    expect(formatClientRetryAfter("Tue Nov 03 00:00:00 2026", now)).toBe("86400");
+    expect(formatClientRetryAfter("Mon Feb 30 00:00:00 2026", now)).toBeUndefined();
+    expect(formatClientRetryAfter("Monday, 02-Xyz-26 00:00:30 GMT", now)).toBeUndefined();
+    expect(formatClientRetryAfter("Mon, 02 Nov 2026 25:00:00 GMT", now)).toBeUndefined();
+  });
+
   test("anything else yields no advice", () => {
     for (const value of ["", "  ", "-1", "1e3", "Infinity", "NaN", "15s", "0x10", "must-not-echo",
       "2026-11-02T00:00:30Z", "Mon, 02 Nov 2026 00:00:30 GMT extra", "9".repeat(200), null, undefined,

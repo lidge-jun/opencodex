@@ -391,6 +391,20 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     } finally { warn.mockRestore(); }
   });
 
+  test("the hop warning classifies from the structured error type", async () => {
+    globalThis.fetch = (async () => Response.json(
+      { error: { type: "insufficient_quota", message: "generic" } },
+      { status: 429 },
+    )) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 429 after \d+ms: billing_exhausted$/);
+      expect(line).not.toContain("generic");
+    } finally { warn.mockRestore(); }
+  });
+
   test("the hop warning never logs an unparsed upstream body", async () => {
     globalThis.fetch = (async () => new Response("upstream said: session=abc123 private detail", { status: 502 })) as unknown as typeof fetch;
     const warn = spyOn(console, "warn").mockImplementation(() => {});

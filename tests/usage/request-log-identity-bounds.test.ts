@@ -67,6 +67,22 @@ describe("response service tier is a closed member", () => {
     const hydrated = requestLogEntryFromPersistedUsage(readUsageEntries().find(entry => entry.requestId === "tier-canary")!);
     expect(JSON.stringify(hydrated)).not.toContain(PROVIDER_KEY);
   }));
+
+  test("the hydration projection bounds tiers itself, without relying on the disk reader", () => {
+    const outcome = { fastOutcome: "not-requested", confirmation: "unknown", responseServiceTier: PROVIDER_KEY };
+    const attempt = { ordinal: 1, provider: "openai", model: "m", adapter: "openai-responses", status: 200, durationMs: 1,
+      sendCount: 1, recoveryKinds: [], usageStatus: "unreported", tierOutcome: { ...outcome } };
+    const raw = { requestId: "raw-tier", timestamp: 1, model: "m", provider: "openai", status: 200, durationMs: 1,
+      usageStatus: "unreported", responseServiceTier: PROVIDER_KEY, tierOutcome: { ...outcome }, attempts: [attempt] };
+    const hydrated = requestLogEntryFromPersistedUsage(raw as unknown as Parameters<typeof requestLogEntryFromPersistedUsage>[0]);
+    expect(JSON.stringify(hydrated)).not.toContain(PROVIDER_KEY);
+    expect(hydrated.responseServiceTier).toBeUndefined();
+    expect(hydrated.tierOutcome).toEqual({ fastOutcome: "not-requested", confirmation: "unknown" });
+    // The caller's row is not edited in place.
+    expect(attempt.tierOutcome.responseServiceTier).toBe(PROVIDER_KEY);
+    const known = requestLogEntryFromPersistedUsage({ ...raw, responseServiceTier: "Priority", attempts: [] } as unknown as Parameters<typeof requestLogEntryFromPersistedUsage>[0]);
+    expect(known.responseServiceTier).toBe("priority");
+  });
 });
 
 describe("model identity fields share one bound", () => {

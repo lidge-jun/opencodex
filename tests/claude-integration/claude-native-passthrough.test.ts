@@ -1018,7 +1018,7 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
       body: JSON.stringify({ ...claudeBody(), stream: false, ...requestBody }),
     });
     const text = await res.text();
-    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; failureDetail?: unknown; errorCode?: string }>(
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; failureDetail?: unknown; errorCode?: string; upstreamCondition?: string }>(
       await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
     );
     expect(logs).toHaveLength(1);
@@ -1028,8 +1028,11 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
   }
 }
 
-test("an upstream error response is relayed verbatim and its reason reaches the request log and usage.jsonl", async () => {
-  const errorBody = { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 213000 tokens > 200000 maximum" }, request_id: "req_fixture" };
+test.each([
+  "prompt is too long: 213000 tokens > 200000 maximum",
+  "This model's maximum context length is 200000 tokens",
+])("an upstream error response is relayed verbatim and its reason reaches the request log and usage.jsonl (%s)", async message => {
+  const errorBody = { type: "error", error: { type: "invalid_request_error", message }, request_id: "req_fixture" };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
   try {
     const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
@@ -1037,8 +1040,14 @@ test("an upstream error response is relayed verbatim and its reason reaches the 
     expect(JSON.parse(text)).toEqual(errorBody);
     expect(row.status).toBe(400);
     expect(row.failureDetail).toEqual({ code: "provider_error", type: "invalid_request_error" });
+    // The condition is classified from the message where it is read; only the closed member is kept.
+    expect(row.upstreamCondition).toBe("context_overflow");
+    const persisted = readRecentUsageEntries(1)[0];
     // usage.jsonl carries failure diagnostics for >= 400 rows; this row used to persist none.
-    expect(readRecentUsageEntries(1)[0]?.failureDetail).toEqual(row.failureDetail);
+    expect(persisted?.failureDetail).toEqual(row.failureDetail);
+    expect(persisted?.upstreamCondition).toBe("context_overflow");
+    expect(JSON.stringify(row)).not.toContain(message);
+    expect(JSON.stringify(persisted)).not.toContain(message);
   } finally {
     upstream.stop(true);
   }

@@ -8,6 +8,8 @@
  * this module must not feed them.
  */
 
+import { isDefiniteContextOverflow } from "./context-overflow-verdict";
+
 export const UPSTREAM_CONDITIONS = [
   "auth_failed",
   "access_denied",
@@ -47,14 +49,15 @@ const STRUCTURED: ReadonlyArray<readonly [UpstreamCondition, ReadonlySet<string>
   ["context_overflow", new Set(["context_length_exceeded", "string_above_max_length", "context_window_exceeded", "prompt_too_long"])],
   ["location_unsupported", new Set(["location_not_supported", "unsupported_country_region_territory", "unsupported_country", "user_location_is_not_supported"])],
   ["account_verification_required", new Set(["validation_required", "verification_required", "organization_verification_required"])],
-  ["billing_exhausted", new Set(["insufficient_quota", "billing_hard_limit_reached", "usage_limit_reached", "monthly_request_count", "overage_request_limit_exceeded", "payment_required", "insufficient_balance", "credit_balance_too_low"])],
+  ["billing_exhausted", new Set(["insufficient_quota", "billing_hard_limit_reached", "usage_limit_reached", "usage_limit_exceeded", "1308", "monthly_request_count", "overage_request_limit_exceeded", "payment_required", "insufficient_balance", "credit_balance_too_low"])],
   ["model_unavailable", new Set(["model_not_found", "unsupported_model", "model_not_available", "model_not_supported", "deployment_not_found"])],
   ["rate_limited", new Set(["rate_limit_exceeded", "rate_limit_error", "too_many_requests", "throttling", "throttled", "rate_limited"])],
   ["upstream_unavailable", new Set(["server_is_overloaded", "overloaded_error", "service_unavailable", "unavailable"])],
 ];
 
-const KEYWORDS: Readonly<Record<"context_overflow" | "location_unsupported" | "account_verification_required" | "billing_exhausted" | "model_unavailable" | "rate_limited", readonly string[]>> = {
-  context_overflow: ["context window", "context length", "maximum context", "too many tokens", "prompt is too long", "input is too long", "exceeds the context"],
+// Context overflow from message text uses the same verdict the combo router trusts, so a validation
+// error that merely quotes "prompt is too long" (an invalid tool name, for example) is not an overflow.
+const KEYWORDS: Readonly<Record<"location_unsupported" | "account_verification_required" | "billing_exhausted" | "model_unavailable" | "rate_limited", readonly string[]>> = {
   location_unsupported: ["location is not supported", "unsupported location", "not supported in your region", "region is not supported", "country, region, or territory", "not available in your country", "not available in your region"],
   account_verification_required: ["verify your organization", "organization must be verified", "verification required", "verify your account", "account verification"],
   billing_exhausted: ["insufficient quota", "quota exceeded", "quota exhausted", "exceeded your current quota", "run out of credits", "out of credits", "insufficient credits", "credit balance", "insufficient balance", "billing", "payment required"],
@@ -104,7 +107,7 @@ export function classifyUpstreamCondition(evidence: UpstreamConditionEvidence): 
   if (structured) return structured;
   const message = typeof evidence.message === "string" ? evidence.message.slice(0, MAX_MESSAGE_SCAN).toLowerCase() : "";
   if (message && status >= 400 && status < 500) {
-    if (mentions(message, "context_overflow")) return "context_overflow";
+    if (isDefiniteContextOverflow(status, evidence.message!.slice(0, MAX_MESSAGE_SCAN))) return "context_overflow";
     if (mentions(message, "location_unsupported")) return "location_unsupported";
     if (mentions(message, "account_verification_required")) return "account_verification_required";
     // A 429 that names a rate limit is a rate limit even when it also mentions quota.
