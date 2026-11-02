@@ -13,6 +13,7 @@ import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
 import { parseSyncExpectation, SYNC_EXPECTATION_USAGE_EXIT } from "./sync-expectation";
+import { parseSyncFanoutFlags } from "./sync-flags";
 import { maybeAutoRestoreCodexShimAsync } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
@@ -147,6 +148,11 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       }
       // #7694: a malformed pinned sync is refused before any preflight reads or repairs anything.
       if (head.command === "sync") {
+        const flags = parseSyncFanoutFlags(head.args.slice(1));
+        if (!flags.ok) {
+          console.error(flags.message);
+          process.exit(SYNC_EXPECTATION_USAGE_EXIT);
+        }
         const pinned = parseSyncExpectation(head.args.slice(1));
         if (!pinned.ok) {
           console.error(pinned.message);

@@ -221,6 +221,7 @@ export const CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [
       { name: "--json", value: "boolean", summary: "Emit the full capability table as JSON." },
+      { name: "--contracts", value: "boolean", summary: "List supported versioned contracts." },
       { name: "--mutating-only", value: "boolean", summary: "Restrict output to capabilities that mutate state." },
       { name: "--route", value: "string", summary: "Show which capabilities drive a management route." },
     ],
@@ -752,6 +753,8 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Synchronize client catalogs, including Aside profiles through the running server's mutation owner.",
     routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }],
     flags: [
+      { name: "--local-only", value: "boolean", summary: "Do not fan out the Home sync to linked Children." },
+      { name: "--json", value: "boolean", summary: "Emit the sync fan-out result as JSON." },
       { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows." },
       { name: "--restart-app-server-only", value: "boolean", summary: "Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given." },
       { name: "--restart-desktop-app", value: "boolean", summary: "Deprecated alias of --restart-codex." },
@@ -759,12 +762,13 @@ export const CAPABILITIES: readonly Capability[] = [
       { name: "--expect-hub-key", value: "string", summary: "Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed." },
     ],
     mutates: true,
-    json: "none",
+    json: "payload",
     details: [
       "The Aside refresh uses the live server; other catalog synchronization also performs local work.",
+      "A current Home catalog fans out to linked Children. Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex there. Applying changed Home settings may restart the Child's own OpenCodex client runtime.",
       "--expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.",
     ],
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
   },
   {
     command: ["agent","subagents","force"],
