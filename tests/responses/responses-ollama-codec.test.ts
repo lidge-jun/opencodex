@@ -27,6 +27,19 @@ describe("Ollama codec", () => {
     expect(() => ollamaToChat("chat", { model: "m", messages: [messages[0], messages[2]] })).toThrow(OllamaCodecError);
     expect(() => ollamaToChat("chat", { model: "m", messages: [...messages, messages[1]] })).toThrow(OllamaCodecError);
   });
+  test("a replayed response tool call keeps its returned id through the result", () => {
+    const replay = [
+      { role: "assistant", content: "", tool_calls: [{ id: "id1", function: { name: "f", arguments: { x: 1 } } }, { id: "id2", function: { name: "f", arguments: {} } }] },
+      { role: "tool", content: "x", tool_call_id: "id2" },
+      { role: "tool", content: "y", tool_name: "f" },
+    ];
+    const out = ollamaToChat("chat", { model: "m", messages: replay }).messages as { tool_calls?: { id: string }[]; tool_call_id?: string }[];
+    expect(out[0]!.tool_calls!.map(call => call.id)).toEqual(["id1", "id2"]);
+    expect(out.slice(1).map(m => m.tool_call_id)).toEqual(["id2", "id1"]);
+    const duplicate = [{ role: "assistant", content: "", tool_calls: [{ id: "same", function: { name: "f", arguments: {} } }, { id: "same", function: { name: "g", arguments: {} } }] }];
+    expect(() => ollamaToChat("chat", { model: "m", messages: duplicate })).toThrow(OllamaCodecError);
+    expect(() => ollamaToChat("chat", { model: "m", messages: [{ role: "assistant", content: "", tool_calls: [{ id: 7, function: { name: "f", arguments: {} } }] }] })).toThrow(OllamaCodecError);
+  });
   test("rejects unsupported and malformed shapes with bounded errors", () => {
     for (const body of [
       { model: "m", prompt: "x", suffix: "y" }, { model: "m", prompt: "x", think: false },

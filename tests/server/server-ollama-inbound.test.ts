@@ -243,6 +243,17 @@ describe("Ollama-compatible inbound routes", () => {
       const lines = await ndjson(await post(base, "/api/chat", { model: "fx/m1", messages: [{ role: "user", content: "hi" }], tools }));
       expect(lines.at(-1)).toMatchObject({ done: true, done_reason: "tool_calls" });
       expect(lines.some(line => JSON.stringify(line).includes("lookup"))).toBe(true);
+      // A client that echoes the assistant message back unchanged continues the same call.
+      const first = await (await post(base, "/api/chat", { model: "fx/m1", messages: [{ role: "user", content: "hi" }], tools, stream: false })).json() as { message: Record<string, unknown> };
+      seen = [];
+      const followUp = await post(base, "/api/chat", { model: "fx/m1", tools, stream: false, messages: [
+        { role: "user", content: "hi" }, first.message, { role: "tool", tool_name: "lookup", content: "found" },
+      ] });
+      expect(followUp.status).toBe(200);
+      await followUp.text();
+      const sent = seen[0]!.body.messages as { tool_calls?: { id: string }[]; tool_call_id?: string }[];
+      expect(sent[1]!.tool_calls![0]!.id).toBe("call_fixture");
+      expect(sent[2]!.tool_call_id).toBe("call_fixture");
     });
   });
 

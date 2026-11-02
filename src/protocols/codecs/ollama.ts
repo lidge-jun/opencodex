@@ -62,7 +62,7 @@ export function ollamaToChat(kind: OllamaKind, input: unknown): Obj {
     messages.push({ role: "user", content: content(body.prompt, body.images) });
   } else {
     if (!Array.isArray(body.messages)) fail("Invalid messages");
-    const pending: { id: string; name: string; matched: boolean }[] = [];
+    const pending: { id: string; name: string; message: number; matched: boolean }[] = [];
     body.messages.forEach((raw, mi) => {
       const msg = object(raw, "message");
       const role = string(msg.role, "role");
@@ -72,10 +72,13 @@ export function ollamaToChat(kind: OllamaKind, input: unknown): Obj {
       if (role === "assistant" && msg.tool_calls !== undefined) {
         if (!Array.isArray(msg.tool_calls)) fail("Invalid tool calls");
         projected.tool_calls = msg.tool_calls.map((rawCall, ci) => {
-          const call = object(rawCall, "tool call"); keys(call, ["function"], "tool call");
+          // A replayed response call keeps the id this proxy returned for it; older clients send none.
+          const call = object(rawCall, "tool call"); keys(call, ["id", "function"], "tool call");
           const fn = object(call.function, "tool call function"); keys(fn, ["name", "arguments"], "tool call function");
           const name = string(fn.name, "tool name", true); const args = object(fn.arguments, "tool arguments");
-          const id = `call_ollama_${mi}_${ci}`; pending.push({ id, name, matched: false });
+          const id = call.id === undefined ? `call_ollama_${mi}_${ci}` : string(call.id, "tool call id", true);
+          if (pending.some(p => p.id === id)) fail("Duplicate tool call id");
+          pending.push({ id, name, message: mi, matched: false });
           return { id, type: "function", function: { name, arguments: JSON.stringify(args) } };
         });
       }
@@ -84,8 +87,8 @@ export function ollamaToChat(kind: OllamaKind, input: unknown): Obj {
         const name = msg.tool_name === undefined ? undefined : string(msg.tool_name, "tool name", true);
         const candidates = pending.filter(p => !p.matched && (id ? p.id === id && (!name || p.name === name) : name && p.name === name));
         if (!id && name && candidates.length) {
-          const latestMessage = candidates[candidates.length - 1]!.id.split("_")[2];
-          const latest = candidates.filter(p => p.id.split("_")[2] === latestMessage);
+          const latestMessage = candidates[candidates.length - 1]!.message;
+          const latest = candidates.filter(p => p.message === latestMessage);
           if (latest.length !== 1) fail("Ambiguous tool result");
           latest[0]!.matched = true; projected.tool_call_id = latest[0]!.id;
         } else {
