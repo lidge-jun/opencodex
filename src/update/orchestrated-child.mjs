@@ -1,5 +1,10 @@
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
+/** Keep a worker alive until its synchronous installer and recovery finish. */
+export function protectOrchestratedWorkerSignals() {
+  for (const signal of process.platform === "win32" ? SIGNALS.slice(0, 2) : SIGNALS) process.on(signal, () => {});
+}
+
 /** Forward catchable signals and require a close event within 60 seconds after interruption. */
 export function waitForOrchestratedChild(child, options = {}) {
   const signals = options.signals ?? process;

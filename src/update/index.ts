@@ -44,6 +44,7 @@ import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
 import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 import {
@@ -427,6 +428,7 @@ export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: tru
       session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, expect, notAfter: child.notAfter,
         verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) });
       if (!session.start().ok) { process.exitCode = 10; return; }
+      protectOrchestratedWorkerSignals();
     } catch (error) {
       console.error(`Orchestrated update preflight failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;

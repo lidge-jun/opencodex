@@ -120,3 +120,33 @@ test("plain Node performs the session lifecycle", () => {
   expect(read(join(f.home, "update-orchestrated.json")).phase).toBe("failed");
   expect(isUpdateInFlight(f.home)).toBe(false);
 });
+
+test.skipIf(process.platform === "win32")("Bun worker retains its mutex through a signalled synchronous installer", async () => {
+  const f = fixture();
+  const childModule = pathToFileURL(repoPath("src/update/orchestrated-child.mjs")).href;
+  const sessionModule = pathToFileURL(repoPath("src/update/orchestrated-session.mjs")).href;
+  const ready = join(f.home, "ready"), release = join(f.home, "release");
+  const installer = `const fs=require('fs'); fs.writeFileSync(${JSON.stringify(ready)},'ready'); const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t)}},10);`;
+  const script = `import { protectOrchestratedWorkerSignals } from ${JSON.stringify(childModule)};
+    import { createOrchestratedChildSession } from ${JSON.stringify(sessionModule)};
+    import { spawnSync } from 'node:child_process';
+    const s=createOrchestratedChildSession({...${JSON.stringify(f)},verifyIdentity:()=>true});
+    if(!s.start().ok || !(await s.enterMutation()).ok) process.exit(2);
+    protectOrchestratedWorkerSignals();
+    const r=spawnSync(process.execPath,['-e',${JSON.stringify(installer)}]);
+    s.finish({phase:'installed',activeRoot:${JSON.stringify(f.home)}}); if(r.status!==0) process.exitCode=3;`;
+  const worker = Bun.spawn([process.execPath, "-e", script], { stdout: "ignore", stderr: "pipe" });
+  try {
+    const deadline = Date.now() + 10000;
+    while (!existsSync(ready) && Date.now() < deadline && worker.exitCode === null) await Bun.sleep(10);
+    expect(existsSync(ready)).toBe(true);
+    worker.kill("SIGTERM");
+    await Bun.sleep(150);
+    expect(worker.exitCode).toBeNull();
+    expect(tryAcquireUpdateSyncMutex(f.home, "sync")).toMatchObject({ kind: "busy", holder: "update" });
+    writeFileSync(release, "release");
+    expect(await worker.exited).toBe(0);
+    expect(read(f.resultPath)).toEqual({ phase: "installed", activeRoot: f.home });
+    expect(isUpdateInFlight(f.home)).toBe(false);
+  } finally { writeFileSync(release, "release"); if (worker.exitCode === null) { worker.kill("SIGKILL"); await worker.exited; } }
+}, 20000);
