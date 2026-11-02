@@ -473,6 +473,18 @@ test.skipIf(process.platform === "win32")("npm-shaped launcher plans without rep
     return { stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text(), code: await child.exited };
   };
   try {
+    for (const [executable, entry] of [[node, join(pkg, "bin/ocx.mjs")], [process.execPath, join(pkg, "src/cli/index.ts")]]) {
+      for (const args of [["--plan=true"], ["--plan=true", "--json=true"], ["--yes=1", "--json"], ["--json=false"]]) {
+        const child = Bun.spawn([executable!, entry!, "update", ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+        const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+        expect({ args, code }).toEqual({ args, code: 64 });
+        expect(JSON.parse(stdout)).toEqual({ error: "usage" });
+        expect(existsSync(npmLog)).toBe(false);
+        expect(readFileSync(join(backup, "keep"), "utf8")).toBe("backup");
+        expect(existsSync(join(ocxHome, "update-orchestrated.json"))).toBe(false);
+        expect(existsSync(join(ocxHome, "codex-shim.json"))).toBe(true);
+      }
+    }
     const first = await launch();
     const [cache, logs, logsMax, notifier, pnpmCache, bunCache] = readFileSync(envLog, "utf8").trim().split("|");
     expect(cache).toBeTruthy(); expect(cache!.startsWith(home)).toBe(false);
