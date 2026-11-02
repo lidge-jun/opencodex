@@ -30,11 +30,13 @@ import {
   CODEX_LINEAGE_MAX_ENTRIES,
   CODEX_LINEAGE_MAX_SCOPES,
   clearCodexThreadLineageForTests,
+  codexConversationKeyFor,
   codexLineageRootForRequest,
   codexLineageScopeKey,
   codexLineageWorkflowLane,
   codexThreadLineageLookup,
   recordCodexThreadLineage,
+  setCodexConversationAnchorObserver,
 } from "../../src/codex/lineage";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -51,6 +53,23 @@ let previousCodexHome: string | undefined;
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const ACCOUNT_IDS = ["a", "b", "c"] as const;
 const NOW = 1_700_000_000_000;
+
+test("lineage observer receives the derived key and cohort anchor", () => {
+  const seen: Array<[string, string, string]> = [];
+  setCodexConversationAnchorObserver((key, family, thread) => seen.push([key, family, thread]));
+  try {
+    const key = codexConversationKeyFor("cohort", "cohort");
+    expect(seen).toEqual([[key, "cohort", "cohort"]]);
+    expect(codexConversationKeyFor("cohort", "cohort")).toBe(key);
+    expect(seen).toHaveLength(2);
+    const other = codexConversationKeyFor("family", "thread");
+    expect(seen[2]).toEqual([other, "family", "thread"]);
+  } finally {
+    setCodexConversationAnchorObserver();
+  }
+  codexConversationKeyFor("cohort", "cohort");
+  expect(seen).toHaveLength(3);
+});
 
 function installScratchHome(): void {
   previousOpencodexHome = process.env.OPENCODEX_HOME;

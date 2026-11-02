@@ -66,7 +66,7 @@ import {
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { WorkflowSpendDenialDetail } from "../lib/workflow-budget";
-import { attributeFinalRequest, attributeSealedAttempt } from "./request-log-failure-attribution";
+import { attributeFinalRequest, attributePhysicalAttempt, attributeSealedAttempt } from "./request-log-failure-attribution";
 import { debugAttemptDeliverySummary } from "../lib/debug";
 import {
   appendUsageDebug,
@@ -1235,13 +1235,13 @@ export function httpStatusForRequestLogTerminal(
  * `unresolved` rather than quietly inflating `settled`.
  */
 export function requestSpendRecord(
-  logCtx: Pick<RequestLogContext, "executionBudget" | "affinityMoveReasons" | "affinityReason">,
+  logCtx: Pick<RequestLogContext, "executionBudget" | "affinityMoveReasons" | "affinityReason" | "affinity">,
   attempts: readonly PersistedUsageAttempt[] | undefined,
 ): PersistedRequestSpend | undefined {
   const rows = attempts ?? [];
   const budget = logCtx.executionBudget;
   const reasons = [...new Set(
-    (logCtx.affinityMoveReasons ?? (logCtx.affinityReason ? [logCtx.affinityReason] : []))
+    (logCtx.affinityMoveReasons ?? (logCtx.affinity !== "unbound" && logCtx.affinityReason ? [logCtx.affinityReason] : []))
       .filter(isKnownAffinityReason),
   )];
   if (rows.length === 0 && !budget && reasons.length === 0) return undefined;
@@ -1277,11 +1277,11 @@ export function noteAffinityMove(
 
 /**
  * Copy the selection's own affinity decision onto the request log. Both Pool-served kinds carry
- * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A move
- * then reads as an event with its cause instead of something inferred from account labels.
+ * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A keyed
+ * caller-owned main can also carry one. A move reads as an event with its cause.
  */
 export function noteCodexSelectionAffinity(logCtx: RequestLogContext, authCtx: CodexAuthContext): void {
-  const decision = authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.affinityDecision : undefined;
+  const decision = authCtx.affinityDecision;
   if (!decision) return;
   logCtx.affinity = decision.move;
   logCtx.affinityReason = decision.reason;
@@ -1387,6 +1387,22 @@ export function recordKeyWireAttemptUsage(logCtx: RequestLogContext, usage: OcxU
   return true;
 }
 
+type FinalRequestLogMetaArg = Pick<RequestLogEntry, "terminalStatus" | "closeReason">;
+const finalRequestLogInterceptors = new WeakMap<RequestLogContext, (status: number, meta?: FinalRequestLogMetaArg) => void>();
+
+/** Route inner final-log requests to an outer owner (native ingress) instead of writing them. */
+export function interceptFinalRequestLog(logCtx: RequestLogContext, onRequest: (status: number, meta?: FinalRequestLogMetaArg) => void): void {
+  finalRequestLogInterceptors.set(logCtx, onRequest);
+}
+
+/** The outer owner's write: request-level status from the outer outcome, the physical attempt's from the inner one. */
+export function commitInterceptedFinalRequestLog(
+  requestId: string, start: number, logCtx: RequestLogContext, status: number, meta: FinalRequestLogMetaArg | undefined,
+  attemptStatus: number, addLog: (entry: RequestLogEntry) => void = addRequestLog,
+): void {
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog, attemptStatus);
+}
+
 export function addFinalRequestLog(
   requestId: string,
   start: number,
@@ -1395,9 +1411,24 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
+  const intercept = finalRequestLogInterceptors.get(logCtx);
+  if (intercept) { intercept(status, meta); return; }
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
+}
+
+function writeFinalRequestLog(
+  requestId: string,
+  start: number,
+  logCtx: RequestLogContext,
+  status: number,
+  meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+  addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  attemptStatus?: number,
+): void {
   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
-  const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
+  // A coordinated (attemptStatus) write carries an authoritative outer outcome; skip the heuristic.
+  const effectiveStatus = attemptStatus === undefined && status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
   // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
@@ -1415,7 +1446,7 @@ export function addFinalRequestLog(
   if (logCtx.activeAttempt) {
     finishRequestAttempt(
       logCtx.activeAttempt,
-      effectiveStatus,
+      attemptStatus ?? effectiveStatus,
       Date.now() - (logCtx.activeAttemptStartedAt ?? start),
       keyUsageOwners.has(logCtx.activeAttempt)
         ? logCtx.activeAttempt.usage
@@ -1423,7 +1454,9 @@ export function addFinalRequestLog(
     );
     // The final row and its active physical attempt describe the same terminal. Preserve the
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
-    if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
+    const attemptErrorCode = attemptStatus === undefined ? errorCode : attemptStatus < 400 ? undefined
+      : logCtx.errorCode ?? requestLogErrorCode(attemptStatus, logCtx.upstreamError, logCtx.terminalErrorCode, false);
+    if (attemptErrorCode) logCtx.activeAttempt.errorCode = attemptErrorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
   // Derived and stamped in a sibling module, before the attempt snapshot below. Every input is
@@ -1437,8 +1470,10 @@ export function addFinalRequestLog(
     outputObserved: logCtx.firstOutputMs !== undefined,
     ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
-    ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
+    // A coordinated write derives the request pair from a copy and re-derives the attempt's own.
+    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
   });
+  if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.

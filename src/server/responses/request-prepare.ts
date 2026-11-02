@@ -1,3 +1,4 @@
+import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
@@ -53,6 +54,7 @@ import {
 } from "./encrypted-payload";
 import {
   codexPoolAffinityKey,
+  codexRequestAffinityKey,
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
   releaseCodexAuthContextProbeLease,
@@ -951,17 +953,17 @@ export async function prepareResponsesRequest(
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
-  const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
+  const poolAffinityKey = codexPoolAffinityKey(completeClaudeBridgePoolIdentity(req.headers, options)) ?? null;
   // Preview has to see the same lineage resolve does. Without it, a child's first turn is
   // previewed as a cold pick and resolved onto the family account, and the subagent fallback
   // then decides model eligibility against an account the request will never use.
   //
   // "The same" means both halves of the question the final resolution asks. The Authorization
   // it will be given, because the lineage scope is an HMAC of exactly that header; and its own
-  // Pool-state predicate, because a fixed account selector and a request-owned credential
-  // deliberately create no affinity at all -- previewing a family binding for one of those would
-  // hand model fallback an account this request can never authenticate as. Read-only: the record
-  // is written by the resolution that binds, never by a preview that may own no Pool state.
+  // Pool-state predicate: fixed selectors and request-owned credentials never use stored-credential
+  // lineage. An opt-in request-owned key has its own namespace; previewing a stored family binding
+  // would hand model fallback an account this request will not use. Preview is read-only: only
+  // eligible stored-credential resolutions record lineage.
   const poolLineage = previewCodexPoolLineage(previewAuthHeaders, options.codexAuthPolicy ?? config, {
     accountId: route.codexAccountId,
     modelId: route.modelId,
@@ -1000,7 +1002,7 @@ export async function prepareResponsesRequest(
     });
     const fallbackNow = Date.now();
     subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-      poolAffinityKey,
+      codexRequestAffinityKey(previewAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: previewRequestScopedMainCredential }) ?? null,
       config,
       previewNow,
       codexQuotaScopeForModel(modelId),
@@ -1218,7 +1220,7 @@ export async function prepareResponsesRequest(
               // and then fail closed at final auth — the same class of stale-selection bug as
               // the quota scope, one layer over.
               subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-                poolAffinityKey,
+                codexRequestAffinityKey(recoveryAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }) ?? null,
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),
@@ -1238,7 +1240,7 @@ export async function prepareResponsesRequest(
                   }),
                 },
                 modelId,
-                poolLineage,
+                previewCodexPoolLineage(recoveryAuthHeaders, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }),
               );
               const recoveryPreviewAccountId = subagentFallbackAccountPreview(
                 parsed.modelId,
