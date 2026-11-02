@@ -17,6 +17,9 @@ npm resolver. The resolver replaces all ambient aliases with the captured entrie
 project dotenv cannot supply missing settings or change the captured precedence.
 An older snapshot without a transport map conveys no transport settings, with no
 ambient fallback. Snapshot values are internal inputs, never report or diagnostic fields.
+For orchestrated OpenCodex updates the launcher intercepts plan/apply before desktop
+handoff and boot restoration, resolves Bun without installation, and delegates npm/pnpm
+apply to the Node driver. The [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction) owns admission and verification.
 Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
 Plan identity also binds a bounded content observation (installContentDigest): a versioned file set
 fixed by the supported npm-global layout — the package manifest, its declared bin/codex.js
