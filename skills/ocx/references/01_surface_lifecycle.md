@@ -106,6 +106,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--expect-hub-key` | string | Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed. |
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
+- An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.
 - A current Home catalog fans out to linked Children. Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex there. Applying changed Home settings may restart the Child's own OpenCodex client runtime.
 - --expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.
 

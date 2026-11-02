@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
@@ -611,7 +612,12 @@ function compactResponseHeaders(upstream: Response): Headers {
   const headers = new Headers({ "Content-Type": upstream.headers.get("content-type") ?? "application/json" });
   for (const name of COMPACT_PASSTHROUGH_HEADERS) {
     const value = upstream.headers.get(name);
-    if (value !== null) headers.set(name, value);
+    if (value === null) continue;
+    if (name === "retry-after") {
+      // Retry advice leaves as an integer this proxy formats, never the upstream bytes.
+      const advice = formatClientRetryAfter(value);
+      if (advice !== undefined) headers.set(name, advice);
+    } else headers.set(name, value);
   }
   return headers;
 }

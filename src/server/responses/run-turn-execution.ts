@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -196,7 +197,7 @@ export async function executeResponsesRunTurn(
       } }), {
         status: 429,
         headers: { "Content-Type": "application/json",
-          ...(usage.resetAt ? { "Retry-After": String(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000))) } : {}),
+          ...(usage.resetAt ? { "Retry-After": formatClientRetryAfter(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000)))! } : {}),
         },
       });
       markResponseNonReplayable(refusal);

@@ -2333,8 +2333,10 @@ test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy"
       errorCode: "cyber_policy",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
     });
+    // The row keeps the classified condition only, never the provider's words.
+    expect(entry?.upstreamError).toBeUndefined();
   } finally {
     await server.stop(true);
     await upstream.stop(true);

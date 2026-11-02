@@ -770,7 +770,7 @@ kimlik/ad içermeyen `tool_use`; ad içermeyen adlandırılmış `tool_choice`.
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409
 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504
 `timeout_error`, 529 `overloaded_error`, diğer 5xx `api_error`. `Retry-After`
-korunur.
+tam saniye olarak gönderilir (HTTP tarihi kalan saniyeye çevrilir) ve en fazla sekiz gündür.
 
 ## İstem önbellekleme ve token kullanımı
 

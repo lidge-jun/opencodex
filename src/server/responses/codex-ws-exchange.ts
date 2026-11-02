@@ -4,7 +4,7 @@ import { mergeSteeringContinuation } from "./native-steering-settings";
 import { markNativeControlResponse } from "./native-response-control";
 import type { NativeResponseControl } from "./native-response-control";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
-import { isSafeResponseHeader } from "../safe-response-headers";
+import { isSafeResponseHeader, type ResponseMetadataContext } from "../safe-response-headers";
 import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-ws-request";
 import { CodexWsCorrelation } from "./codex-ws-correlation";
@@ -39,6 +39,8 @@ interface ExchangeOptions {
    * control exchanges and on transports without the metadata channel.
    */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
+  /** Turn-state binding and known models for the metadata this exchange relays. */
+  metadataContext?: ResponseMetadataContext;
 }
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]+$/i;
@@ -48,7 +50,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /** Rebuild only permitted metadata: upstream framing describes a different body. */
-function rejectionHeaders(source: Record<string, unknown>, prelude: Headers): Headers {
+function rejectionHeaders(source: Record<string, unknown>, prelude: Headers, context: ResponseMetadataContext): Headers {
   const connectionHeaders = new Set<string>();
   for (const [name, value] of Object.entries(source)) {
     if (name.toLowerCase() !== "connection" || typeof value !== "string") continue;
@@ -60,7 +62,7 @@ function rejectionHeaders(source: Record<string, unknown>, prelude: Headers): He
   // Reuse the metadata owner's count/value/family budgets and window freshness
   // rules, without publishing quota twice. Pool bookkeeping consumes the HTTP
   // projection; plain-main publication belongs only to the WS observer.
-  const projected = new CodexWsMetadata();
+  const projected = new CodexWsMetadata(undefined, context);
   try {
     for (const values of [Object.fromEntries(prelude), source]) {
       const headers = Object.fromEntries(Object.entries(values).filter(([name, value]) => {
@@ -91,7 +93,7 @@ function rejectionHeaders(source: Record<string, unknown>, prelude: Headers): He
  * The one 5xx exception is the opt-in pre-output refusal below (#6969): a structured upstream
  * refusal with nothing relayed but empty lifecycle frames, which the caller may replay.
  */
-function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Headers): Response | null {
+function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Headers, context: ResponseMetadataContext): Response | null {
   if (payload.type !== "error" || payload.stream_id !== undefined) return null;
   // The native typed wrapper has one aliased field, not two competing statuses.
   if (Object.hasOwn(payload, "status_code") && Object.hasOwn(payload, "status")) return null;
@@ -101,7 +103,7 @@ function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Hea
   if (error != null && (!record(error)
     || [error.code, error.message].some(value => value != null && typeof value !== "string"))) return null;
   if (payload.headers != null && !record(payload.headers)) return null;
-  const headers = rejectionHeaders(record(payload.headers) ? payload.headers : {}, prelude);
+  const headers = rejectionHeaders(record(payload.headers) ? payload.headers : {}, prelude, context);
   return new Response(JSON.stringify({
     error: error ?? { type: "upstream_error", message: "Upstream rejected the request" },
   }), { status, headers });
@@ -121,6 +123,7 @@ function refusalErrorBody(source: unknown): Record<string, string> {
 export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
   const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, bunVersion, nativeControl, beforeContinuation,
     preOutputRefusalHold } = options;
+  const metadataContext = options.metadataContext ?? {};
   const { headers } = prepared;
   let frameText = prepared.frameText;
   let incrementalPlan = options.incrementalPlan;
@@ -154,7 +157,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     let terminalErrorStatus: number | null = null;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     const encoder = new TextEncoder();
-    const metadata = url === CODEX_RESPONSES_HTTP_URL ? new CodexWsMetadata(onQuota) : null;
+    const metadata = url === CODEX_RESPONSES_HTTP_URL ? new CodexWsMetadata(onQuota, metadataContext) : null;
     const correlation = session.retainable ? new CodexWsCorrelation(session.reused, id => session.hasCompleted(id)) : null;
     let detachOwner = () => {};
     let detachSteering = () => {};
@@ -702,7 +705,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               session.dispose();
               try { controller.close(); } catch { /* unused stream already closed */ }
               const rejection = wrappedRejectionResponse({ type: "error", status: cacheMissStatus ?? 400,
-                error: normalized.payload.error, headers: normalized.payload.headers }, metadata?.snapshot() ?? new Headers());
+                error: normalized.payload.error, headers: normalized.payload.headers }, metadata?.snapshot() ?? new Headers(), metadataContext);
               if (!rejection) throw new Error("Invalid cache-miss refusal");
               markCodexWsPreludeProjection(rejection);
               resolve(rejection);
@@ -719,7 +722,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // in-body delivery, so a held 429 can never become a quota rotation it was not before.
         if (metadata && sent && !responseCommitted && !deferredCommit && type === "error") {
           let rejection: Response | null;
-          try { rejection = wrappedRejectionResponse(normalized.payload, metadata.snapshot()); }
+          try { rejection = wrappedRejectionResponse(normalized.payload, metadata.snapshot(), metadataContext); }
           catch (error) { failStream(error); return; }
           if (rejection) {
             terminal = true;
@@ -740,7 +743,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             try {
               refusalPrelude = heldHeaders ?? metadata?.snapshot() ?? new Headers();
               const declared = normalized.payload.headers;
-              refusalHeaders = rejectionHeaders(record(declared) ? declared : {}, refusalPrelude);
+              refusalHeaders = rejectionHeaders(record(declared) ? declared : {}, refusalPrelude, metadataContext);
             } catch {
               refusalStatus = undefined;
             }

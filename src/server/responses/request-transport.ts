@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
 import { isRec } from "../../claude/inbound-records";
@@ -348,7 +349,8 @@ export async function prepareResponsesTransport(
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message);
-    if (error.retryAfter) response.headers.set("retry-after", error.retryAfter);
+    const advice = formatClientRetryAfter(error.retryAfter);
+    if (advice !== undefined) response.headers.set("retry-after", advice);
     return response;
   };
   let copilotSessionExpiresAt = Infinity;
