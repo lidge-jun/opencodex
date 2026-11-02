@@ -1,0 +1,27 @@
+/** Classify only independently observed state after confirmed child termination. */
+export function classifyOrchestratedOutcome(input) {
+  const result = {
+    schema: "ocx.update.result/1", applied: false, fromVersion: input.fromVersion,
+    toVersion: input.toVersion, installer: input.installer, restarted: false,
+    healthy: false, rolledBack: false,
+  };
+  const done = (exitCode, error) => ({ exitCode, result: error ? { ...result, error } : result });
+  if (!input.childExited || !input.outcome || input.outcome.phase === "overrun") return done(12, "outcome-unverified");
+  if (input.outcome.phase === "refused" && input.childExitCode !== 0) return done(10, input.outcome.error || "runtime-ownership-refused");
+  if (input.outcome.phase === "installed" && input.childExitCode === 0) {
+    result.applied = input.targetVerified;
+    result.restarted = input.restarted;
+    result.healthy = input.targetVerified && input.runtimeHealthy;
+    if (!input.targetVerified) return done(12, "install-unverified");
+    if (!input.runtimeHealthy) return done(12, "runtime-unhealthy");
+    return done(0);
+  }
+  if (["preflight", "mutating", "failed"].includes(input.outcome.phase) && input.childExitCode !== 0
+    && input.previousVerified && input.runtimeHealthy) {
+    result.healthy = true;
+    result.restarted = input.restarted;
+    result.rolledBack = input.outcome.phase === "failed" && input.outcome.rollbackPerformed === true;
+    return done(11, input.outcome.error || "update-failed");
+  }
+  return done(12, "outcome-unverified");
+}
