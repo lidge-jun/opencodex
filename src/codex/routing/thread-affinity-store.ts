@@ -335,9 +335,12 @@ function scope(acquiredHome?: string): Scope | undefined {
     consulted: new Set(),
     scheduled: false,
   };
+  const prior = carried;
   carried = undefined;
   current = s;
   open(s);
+  // A scope that could not open never touched the carried maps; keep them for the next one.
+  if (!s.db && prior?.home === home) carried = prior;
   if (s.db) {
     if (needsClear && persistedHome === home) recordAllCleared();
     needsClear = false;

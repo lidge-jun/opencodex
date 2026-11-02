@@ -1,7 +1,7 @@
 import { registerThreadAffinityLiveState } from "../../src/codex/routing/thread-affinity";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -334,4 +334,20 @@ test("row keys carried across a lease change still let a delete reach its row af
   resetCodexAffinityStoreForTests(); lease = acquireSpendLedgerOwner();
   expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
   expect(adoptStoredIssuer(key(), Date.now())).toBeUndefined();
+});
+
+test("row keys survive a failed reopen, so a later delete still reaches its row after anchor eviction", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); bind(fence); lease.release();
+  lease = acquireSpendLedgerOwner(); const adopted = key();
+  expect(adoptStoredThreadRows(adopted, Date.now())).toHaveLength(1);
+  lease.release();
+  // One reacquisition cannot open the database (a directory sits at its path).
+  renameSync(path(), `${path()}.aside`); mkdirSync(path());
+  lease = acquireSpendLedgerOwner(); lease.release();
+  removeTreeWithRetry(path()); renameSync(`${path()}.aside`, path());
+  lease = acquireSpendLedgerOwner();
+  for (let i = 0; i < 4096; i++) codexConversationKeyFor(`reopen-family-${i}`, `reopen-thread-${i}`);
+  recordThreadDelete(adopted, "legacy"); lease.release();
+  resetCodexAffinityStoreForTests(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
 });
