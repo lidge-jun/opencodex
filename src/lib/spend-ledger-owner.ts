@@ -1,9 +1,10 @@
 /** Process-lifetime single-writer ownership for the shared spend journal. */
 import { Database } from "bun:sqlite";
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, realpathSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { recordOwnedConfigPath } from "./config-ownership";
+import { assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "./private-sqlite-path";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "./windows-secret-acl";
 
@@ -115,8 +116,9 @@ function prepareOwnerPath(configDir: string): { home: string; path: string } {
   // its sidecars were left behind by a later uninstall because nothing recorded them.
   recordOwnedConfigPath(home, path);
   for (const suffix of OWNER_SIDECARS) recordOwnedConfigPath(home, `${path}${suffix}`);
-  try { closeSync(openSync(path, "wx", 0o600)); }
-  catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
+  // Refuses a link or reparse point at the database or a sidecar before anything is created:
+  // Windows creates a new file through a link at its name.
+  preparePrivateSqliteDatabase(path);
   assertPrivateFile(path);
   if (process.platform !== "win32") chmodSync(path, 0o600);
   hardenSecretPath(path, { required: true });
@@ -196,6 +198,7 @@ export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedger
 
   let database: Database | undefined;
   try {
+    assertPrivateSqliteSidecars(prepared.path);
     database = new Database(prepared.path, { create: true });
     database.exec(`PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = ${busyTimeout}; BEGIN IMMEDIATE`);
   } catch (cause) {

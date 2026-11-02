@@ -389,7 +389,11 @@ proves that exact identity on every accounting read and change, so a handle kept
 and a reacquire of the same directory is refused rather than resuming over writes another owner
 may have made. File-backed journal and salt writers are owner-bound at construction, and a
 directory entry that is a link -- including one whose target does not exist -- is refused instead
-of followed. A separate process may use a separate directory. SQLite crash release permits the
+of followed. The owner database `spend-ledger-owner.sqlite` and its SQLite sidecars pass the same
+`src/lib/private-sqlite-path.ts` check before the file is created and before SQLite opens it: a link, any
+Windows reparse point, a directory or a hard link there fails acquisition with
+`SPEND_LEDGER_OWNER_UNAVAILABLE` without creating what it names. On Windows ARM64, whose Bun build
+cannot run the native attribute query, only the links and junctions `lstat` reports are refused. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
 Every file check admits a ledger file only when it is a regular file, not a link, with exactly

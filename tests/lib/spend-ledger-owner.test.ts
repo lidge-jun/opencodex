@@ -545,6 +545,37 @@ describe("backing file identity", () => {
     expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
   });
 
+  test("a dangling link at the owner database is refused without creating its target", () => {
+    const linkedHome = join(root, "owner-dangling");
+    mkdirSync(linkedHome, { recursive: true });
+    const target = join(root, "owner-dangling-target");
+    symlinkSync(target, join(linkedHome, SPEND_LEDGER_OWNER_FILENAME));
+    // A fresh process, so the preload can make other platforms create through the link as Windows
+    // does before the owner module binds its file functions.
+    const preload = process.platform === "win32" ? [] : ["--preload", helperPath("windows-link-create-preload.ts")];
+    const result = Bun.spawnSync([process.execPath, ...preload, helperPath("spend-ledger-owner-link-worker.ts"), linkedHome], {
+      env: { ...process.env, OPENCODEX_HOME: linkedHome }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({ code: "SPEND_LEDGER_OWNER_UNAVAILABLE" });
+    expect(existsSync(target)).toBe(false);
+  });
+
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    test(`a link at the owner database ${suffix} is refused before the database is created`, () => {
+      const linkedHome = join(root, `owner-sidecar${suffix}`);
+      mkdirSync(linkedHome, { recursive: true });
+      const target = join(root, `owner-sidecar-target${suffix}`);
+      symlinkSync(target, join(linkedHome, `${SPEND_LEDGER_OWNER_FILENAME}${suffix}`));
+      let failure: unknown;
+      try { acquireSpendLedgerOwner(linkedHome).release(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+      expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+      expect(existsSync(join(linkedHome, SPEND_LEDGER_OWNER_FILENAME))).toBe(false);
+      expect(existsSync(target)).toBe(false);
+    });
+  }
+
   test("invalid or unusable owner databases fail closed", () => {
     const invalidHome = join(root, "owner-invalid");
     mkdirSync(invalidHome, { recursive: true });

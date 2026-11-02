@@ -1,10 +1,14 @@
-import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath } from "../helpers/repo-root";
 import { Database } from "bun:sqlite";
+import { removeOwnedConfigState } from "../../src/lib/config-ownership";
+import { copySeededAffinityHome, removeSeededAffinityTemplates } from "../helpers/codex-affinity-seed";
+
+afterAll(removeSeededAffinityTemplates);
 
 function run(home: string, mode: string) {
   const result = Bun.spawnSync([process.execPath, helperPath("codex-affinity-restart-worker.ts"), mode], {
@@ -83,12 +87,24 @@ function matrix(home: string, action: string) {
 function withSeededHome(body: (home: string) => void) {
   const home = mkdtempSync(join(tmpdir(), "ocx-affinity-matrix-"));
   try {
-    const seed = run(home, "write");
-    expect(seed.exit, seed.stderr).toBe(0);
-    expect(JSON.parse(seed.stdout).account).toBe("a");
+    expect(copySeededAffinityHome("write", home).account).toBe("a");
     body(home);
   } finally { removeTreeWithRetry(home); }
 }
+
+test("a copied seed home keeps its ownership and restores like a seeded one", () => {
+  const homeA = mkdtempSync(join(tmpdir(), "ocx-affinity-copy-"));
+  const homeB = mkdtempSync(join(tmpdir(), "ocx-affinity-copy-"));
+  try {
+    copySeededAffinityHome("write", homeA);
+    for (const name of [".opencodex-owner.json", ".opencodex-uninstall.json"]) {
+      expect(JSON.parse(readFileSync(join(homeA, name), "utf8")).root).toBe(realpathSync.native(homeA));
+    }
+    expect(matrix(homeA, "read").before).toBe("a");
+    copySeededAffinityHome("write", homeB);
+    expect(removeOwnedConfigState(homeB).status).toBe("removed");
+  } finally { removeTreeWithRetry(homeA); removeTreeWithRetry(homeB); }
+});
 
 for (const action of ["delete", "delete-account", "clear-account", "clear"] as const) {
   test(`${action} reconciles a restored pin before its first lookup`, () => withSeededHome(home => {
