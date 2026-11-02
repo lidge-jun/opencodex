@@ -389,6 +389,23 @@ canonical Go transport, including combo selection and failover. No Go-only repla
 reaches non-Go destinations. Shared system cache keys never become conversation identity.
 The request-scoped fallback is stable across retries and distinct across client requests.
 
+The Messages bridge carries a separate private Codex pool identity without changing replay headers.
+It requires admission and excludes spawn markers, any ingress parent or thread header (even empty)
+and a replay with a complete pool key. Explicit session_id then session-id aliases win; conflicting,
+empty-only or invalid aliases block derivation. Otherwise the metadata session (the uuid form of the
+metadata-derived prompt_cache_key), then the Claude session header, supplies the value; a system-derived
+cohort key never does. Every value, aliases included, is HMAC-keyed with a process-local secret over its
+admission scope (loopback, or the principal a remote caller must have), so no caller can name another
+scope's pool key, not even as a complete pair. A caller-supplied complete pair stays unscoped.
+
+The identity is selection-only: session-id and thread-id are completed for Codex account selection
+(final and alternate-account), selection previews, recovery and the route-independent pool key used
+as state-binding fallback. Every upstream header set (first send, 401 refresh, alternate-account retry)
+is built from the uncompleted headers, so the wire is unchanged and no synthesized pair or digest is
+forwarded. Non-Codex routes, Anthropic passthrough, request logs, reasoning replay, Go lanes and adapter
+fingerprints are unchanged. claude-bridge-pool-session.test.ts and claude-bridge-pool-dispatch.test.ts
+cover the rules, the wire contract, 401 refresh and alternate-account failover.
+
 Claude metadata also supplies a private native-session value. Only the final canonical ChatGPT
 attempt receives it, in copied forwarding headers; an explicit underscore session, hyphenated
 session or thread header suppresses synthesis. Refresh and alternate-account retries retain

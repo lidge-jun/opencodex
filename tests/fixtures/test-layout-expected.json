@@ -508,6 +508,7 @@
   "messages-native-decline-trace.test.ts": "claude-integration", "messages-native-oauth.test.ts": "claude-integration",
   "messages-native-opaque-state.test.ts": "claude-integration", "messages-surface-matrix.test.ts": "claude-integration",
   "claude-model-info.test.ts": "claude-integration", "claude-models-discovery.test.ts": "claude-integration",
+  "claude-bridge-pool-session.test.ts": "claude-integration", "claude-bridge-pool-dispatch.test.ts": "claude-integration",
   "claude-native-affinity.test.ts": "claude-integration", "claude-native-passthrough.test.ts": "claude-integration",
   "messages-shared-sse.test.ts": "claude-integration",
   "claude-native-rate-limit-headers.test.ts": "claude-integration", "claude-outbound.test.ts": "claude-integration",
