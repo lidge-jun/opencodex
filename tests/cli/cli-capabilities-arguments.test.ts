@@ -63,4 +63,11 @@ describe("capabilities argument validation", () => {
       expect(JSON.parse(String(out.mock.calls[0]![0])).capabilities).toEqual([]);
     } finally { out.mockRestore(); }
   });
+  test("invalid capability arguments advertise contracts", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await runCapabilities(["--invalid"])).toBe(64);
+      expect(String(err.mock.calls[0]![0])).toContain("--contracts");
+    } finally { err.mockRestore(); }
+  });
 });

@@ -736,7 +736,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "capabilities",
-    usage: "ocx capabilities [--json] [--mutating-only | --route <path> | --contracts]",
+    usage: "ocx capabilities [--json] [--mutating-only] [--route <path>] | [--json] --contracts",
     summary: "List the declared CLI capabilities and the management routes they drive.",
     details: [
       "The machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.",
