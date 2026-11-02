@@ -3,26 +3,40 @@ import { inspectOrchestratedServingIdentity } from "../../src/update/orchestrate
 import { inspectLiveOrchestratedIdentity } from "../../src/update/orchestrated-live-identity";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
 
-const command = ["/fixture/bun", "/fixture/install/src/cli/index.ts"];
-const record = JSON.stringify({ pid: 22, port: 10101, hostname: "127.0.0.1", attestationSecret: "a".repeat(43), command });
+// Absolute on the running platform: a POSIX-only fixture is not absolute-and-native on Windows.
+const fixtureRoot = process.platform === "win32" ? "C:\\fixture" : "/fixture";
+const command = [join(fixtureRoot, "bun"), join(fixtureRoot, "install", "src", "cli", "index.ts")];
+const recordFor = (parts: readonly string[]) => JSON.stringify({ pid: 22, port: 10101, hostname: "127.0.0.1", attestationSecret: "a".repeat(43), command: parts });
+const record = recordFor(command);
 const base = {
   readRecord: () => ({ kind: "record" as const, raw: record }),
   prove: async () => "proven" as const,
   probeConfigured: async () => "dead" as const,
   realpath: (path: string) => path,
 };
+const withCommand = (parts: readonly string[]) => ({ ...base, readRecord: () => ({ kind: "record" as const, raw: recordFor(parts) }) });
 
 test("identity requires a stable, attested runtime record", async () => {
-  expect(await inspectOrchestratedServingIdentity(base)).toMatchObject({ kind: "live", servingRoot: "/fixture/install", runtime: { pid: 22, command } });
+  expect(await inspectOrchestratedServingIdentity(base)).toMatchObject({ kind: "live", servingRoot: join(fixtureRoot, "install"), runtime: { pid: 22, command } });
   for (const proof of ["refuted", "indeterminate"] as const) {
     expect(await inspectOrchestratedServingIdentity({ ...base, prove: async () => proof })).toEqual({ kind: "unknown" });
   }
   let count = 0;
   expect(await inspectOrchestratedServingIdentity({ ...base, readRecord: () => ({ kind: "record", raw: ++count === 1 ? record : record + " " }) })).toEqual({ kind: "unknown" });
   expect(await inspectOrchestratedServingIdentity({ ...base, readRecord: () => ({ kind: "record", raw: JSON.stringify({ pid: 22, port: 10101, hostname: "127.0.0.1", command }) }) })).toEqual({ kind: "unknown" });
+  // The source must be exactly <root>/src/cli/index.ts; a dotted form is concatenated so join cannot collapse it.
+  const dotted = [fixtureRoot, "install", "src", "x", "..", "cli", "index.ts"].join(sep);
+  for (const source of [join(fixtureRoot, "install", "src", "cli", "other.ts"), dotted]) {
+    expect(await inspectOrchestratedServingIdentity(withCommand([command[0], source]))).toEqual({ kind: "unknown" });
+  }
+  if (process.platform === "win32") {
+    // Windows accepts both separators, so a launcher-reported "C:/..." entry is the same install.
+    expect(await inspectOrchestratedServingIdentity(withCommand([command[0], command[1].replaceAll("\\", "/")])))
+      .toMatchObject({ kind: "live", servingRoot: "C:/fixture/install", runtime: { pid: 22 } });
+  }
 });
 
 test("only a missing record plus a dead configured listener proves absence", async () => {

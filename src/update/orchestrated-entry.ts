@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn as spawnProcess, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { packageVersion } from "../lib/package-version";
 import { getConfigDir } from "../config/paths";
@@ -25,7 +25,7 @@ import { decideOrchestratedApply } from "./orchestrated-admission.mjs";
 import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { proxyIdentityAt } from "../server/proxy-liveness";
-import { probeSpawnSync } from "./mutation-guard.mjs";
+import { probeSpawn, probeSpawnSync } from "./mutation-guard.mjs";
 
 type Request = Extract<OrchestratedUpdateArgs, { ok: true }>;
 type DetectedInstaller = PlanInputs["installer"] | "standalone";
@@ -226,7 +226,7 @@ export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   }
   if (plan.installer === "bun") {
     const result = await applyOrchestratedBun(plan, parsed, { home: getConfigDir(), identity: defaultDeps.identity,
-      now: Date.now, spawn: (exe, args, options) => spawnProcess(exe, args, options) });
+      now: Date.now, spawn: (exe, args, options) => probeSpawn(exe, args, options) });
     console.log(JSON.stringify(result.result));
     return result.exitCode;
   }
