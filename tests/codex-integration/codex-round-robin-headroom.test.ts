@@ -228,6 +228,7 @@ describe("round-robin new placement prefers accounts under their threshold", () 
     expect(resolveCodexAccountForThread(null, config, NOW, "reserve")).toBe("a");
     // A shared success spends only the shared one-shot; Reserve keeps its own until it is used there.
     recordCodexUpstreamOutcome(config, "a", 200, { now: NOW + 1 });
+    expect(newPlacements(config, 3, "reserve")).toContain("a");
     recordCodexUpstreamOutcome(config, "a", 200, { now: NOW + 2, modelId: "gpt-reserve" });
     expect(newPlacements(config, 4, "reserve")).not.toContain("a");
   });
