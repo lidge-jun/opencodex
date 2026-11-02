@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { repoPath } from "../helpers/repo-root";
 import { inspectUpdateMarker, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
 import { createOrchestratedChildSession, encodeOrchestratedExpect, decodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
+import { runOwnedPnpm } from "../../src/update/index";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -15,6 +16,33 @@ function fixture() {
   return { home, resultPath: join(home, "result.json"), expect: { home, cliRoot: join(home, "cli"), servingRoot: null, runtimePid: null, planToken: "a".repeat(43) } };
 }
 function read(path: string) { return JSON.parse(readFileSync(path, "utf8")); }
+
+test.skipIf(process.platform === "win32")("Bun pnpm timeout retains the finalized fence while a descendant survives; normal exit clears it", async () => {
+  for (const timed of [true, false]) {
+    const f = fixture(), descendant = join(f.home, "descendant"), pnpm = join(f.home, "pnpm");
+    writeFileSync(pnpm, `#!/bin/sh\n${timed ? `sleep 10 </dev/null >/dev/null 2>&1 &\necho $! > '${descendant}'\nwait` : "exit 0"}\n`, { mode: 0o700 });
+    const owner = { commandPath: pnpm, packagePath: f.home, globalDir: f.home, globalRoot: f.home, globalBinDir: f.home };
+    const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+    try {
+      expect(session.start()).toEqual({ ok: true }); await session.enterMutation();
+      const spawnShort = ((file, args, options) => spawnSync(file, args, { ...options, timeout: 2000 })) as typeof spawnSync;
+      const result = runOwnedPnpm(owner, ["add", "-g", "fixture@1"], true, "pipe", spawnShort, () => true, session);
+      session.finish({ phase: "failed" });
+      const marker = read(join(f.home, "update-orchestrated.json"));
+      if (timed) {
+        expect({ exists: existsSync(descendant), stderr: result.stderr }).toMatchObject({ exists: true });
+        expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).not.toThrow();
+        expect(marker.fenceUntil).toBeGreaterThan(Date.now());
+        expect(isUpdateInFlight(f.home)).toBe(true);
+      } else expect(marker.fenceUntil).toBeUndefined();
+    } finally {
+      if (existsSync(descendant)) {
+        try { process.kill(Number(readFileSync(descendant, "utf8")), "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      }
+    }
+  }
+}, 10000);
 
 test.each([
   { pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid },

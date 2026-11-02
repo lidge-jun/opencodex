@@ -166,10 +166,13 @@ export function runOwnedPnpm(
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
+  session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence">,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
   const target = ownerPnpmTarget(owner, args);
   if (!target) return { status: 1 };
-  return withPnpmCommandCwd(args, cwd => authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
+  const mutating = ["add", "install", "update", "remove", "uninstall"].includes(args[0] ?? "");
+  try { return withPnpmCommandCwd(args, cwd => {
+    const result = authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
     stdio,
     encoding: "utf8",
     timeout: 180_000,
@@ -179,7 +182,10 @@ export function runOwnedPnpm(
     cwd,
     env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env)),
     ...target.options,
-  }, probeSpawn) : { status: 1 });
+    }, probeSpawn) : { status: 1, signal: null };
+    if (mutating && (!Number.isInteger(result.status) || result.signal)) session?.retainInstallerFence();
+    return result;
+  }); } catch (error) { if (mutating) session?.retainInstallerFence(); throw error; }
 }
 
 /** Re-read the owning group's active package and return its verified launcher. */
@@ -929,7 +935,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
           args,
           capture,
           capture ? "pipe" : installStdio,
-          probeSpawnSync, homePolicy.authorizeMutation,
+          probeSpawnSync, homePolicy.authorizeMutation, session,
         ) : { status: 1, stdout: "", stderr: "" },
         log: line => console.log(line),
       });
