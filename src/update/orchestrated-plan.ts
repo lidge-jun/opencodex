@@ -1,5 +1,5 @@
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
-import { createUpdatePlanToken } from "./orchestrated-token";
+import { createUpdatePlanToken } from "./orchestrated-token.mjs";
 import type { ServingIdentity } from "./orchestrated-identity";
 
 export const ORCHESTRATED_MUTATION_BOUND_MS = 900_000;

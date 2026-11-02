@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createUpdatePlanToken } from "../../src/update/orchestrated-token";
+import { createUpdatePlanToken } from "../../src/update/orchestrated-token.mjs";
 
 test("plan token binds canonical install and runtime fields without the attestation secret", () => {
   const input = {
