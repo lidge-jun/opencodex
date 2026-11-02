@@ -53,11 +53,6 @@ type LiveReader = {
   issuer(
     key: string,
   ): { accountId: string; fence?: string; lastUsedAt: number } | undefined;
-  /** Every live pin and issuer, for re-persisting memory into a newly opened database. */
-  forEach(
-    thread: (key: string, scope: string, entry: { accountId: string; identityFence?: string; createdAt: number; lastUsedAt: number }) => void,
-    issuer: (key: string, entry: { accountId: string; fence?: string; lastUsedAt: number }) => void,
-  ): void;
   clearLive(): void;
 };
 type Op = {
@@ -101,10 +96,14 @@ const BASE_SCOPES_EXHAUSTIVE: Exclude<
 void BASE_SCOPES_EXHAUSTIVE;
 let current: Scope | undefined;
 let observedHome: string | undefined;
-/** Whether an earlier scope in this process actually opened (and so may have persisted) the database. */
-let hadPersistentScope = false;
-/** Pins or issuers changed while no lease was held; the next scope re-persists memory. */
-let changedWithoutLease = false;
+/**
+ * Structural changes made while no lease was held, after a scope of the same home had persisted.
+ * The next scope of that home replays them against its database in order. Bounded; an overflow
+ * makes the next scope clear the database instead, which loses pins but never revives one.
+ */
+let gapOps: Array<() => void> = [];
+let gapOverflow = false;
+const MAX_GAP_OPS = 4096;
 /** Anchors of the last retired scope, handed to the next scope of the same home. */
 let carried: { home: string; anchors: Scope["anchors"] } | undefined;
 let reader: LiveReader | undefined;
@@ -276,19 +275,24 @@ function open(s: Scope): void {
     warning();
   }
 }
-function scope(acquiredHome?: string): Scope | undefined {
-  if (!acquiredHome && isPassiveRead()) return undefined;
+function resolvedHome(acquiredHome?: string): string {
   let home = resolve(acquiredHome ?? getConfigDir());
   try {
     home = realpathSync.native(home);
   } catch {
     /* ownership check below refuses it */
   }
-  if (process.platform === "win32") home = home.toLowerCase();
+  return process.platform === "win32" ? home.toLowerCase() : home;
+}
+function scope(acquiredHome?: string): Scope | undefined {
+  if (!acquiredHome && isPassiveRead()) return undefined;
+  const home = resolvedHome(acquiredHome);
   // A lease ends a store scope; only a change of home invalidates live maps.
   if (observedHome !== undefined && observedHome !== home) {
     retire();
     carried = undefined;
+    gapOps = [];
+    gapOverflow = false;
     reader?.clearLive();
   }
   observedHome = home;
@@ -330,41 +334,33 @@ function scope(acquiredHome?: string): Scope | undefined {
   carried = undefined;
   current = s;
   open(s);
-  if (s.db) {
-    if (hadPersistentScope && changedWithoutLease) persistLiveState(s);
-    changedWithoutLease = false;
-    hadPersistentScope = true;
-  }
+  replayGapOps(s);
   return s;
 }
 /**
- * The scope for a change to which pins or issuers exist. With no scope open after an earlier one
- * persisted, the change happened while no lease was held, so the next scope must re-persist memory.
+ * The scope for a change to which pins or issuers exist. With no lease held after a scope of this
+ * home persisted, the change is queued for the next scope instead of being lost: live memory keeps
+ * routing with it, so the database must learn it too, without disturbing rows nobody touched.
  */
-function structuralScope(): Scope | undefined {
+function gapOrScope(replay: () => void): Scope | undefined {
   const s = usable();
-  if (!s && !current && hadPersistentScope && !isPassiveRead()) changedWithoutLease = true;
-  return s;
+  if (s || current || !carried || isPassiveRead() || carried.home !== resolvedHome()) return s;
+  if (gapOps.length >= MAX_GAP_OPS) gapOverflow = true;
+  else gapOps.push(replay);
+  return undefined;
 }
-/**
- * A later scope in the same process makes the database equal to memory when memory changed while
- * no lease was held (a late bind, delete or issuer write after a
- * release). Memory is what this process routes with, so it wins: every stored row is dropped and
- * every live pin and issuer with a known anchor is written again. A pin deleted during the gap is
- * therefore not revived by a later restart, and a pin rebound during the gap is saved as rebound.
- * Live entries without a known anchor stay memory-only, like every other unanchored key.
- */
-function persistLiveState(s: Scope): void {
-  s.threadKeys.clear();
-  s.issuerKeys.clear();
-  enqueue(s, { kind: "clearAll", sql: "DELETE FROM threads; DELETE FROM issuers", args: [] });
-  reader?.forEach(
-    (key, scopeName, entry) => {
-      if (!entry.identityFence || entry.accountId === "__main__") return;
-      recordThreadBind(key, scopeName, { scope: scopeName, accountId: entry.accountId, fence: entry.identityFence, createdAt: entry.createdAt, lastUsedAt: entry.lastUsedAt });
-    },
-    (key, entry) => recordIssuerSet(key, entry.accountId, entry.fence ?? null, entry.lastUsedAt),
-  );
+/** Apply the changes queued while no lease was held, in order, to the newly opened database. */
+function replayGapOps(s: Scope): void {
+  const ops = gapOps;
+  const overflow = gapOverflow;
+  gapOps = [];
+  gapOverflow = false;
+  if (!s.db) return;
+  if (overflow) {
+    recordAllCleared();
+    return;
+  }
+  for (const op of ops) op();
 }
 function usable(): Scope | undefined {
   const s = scope();
@@ -735,7 +731,8 @@ export function recordThreadBind(
   scopeName: string,
   row: StoredThreadRow,
 ): void {
-  const s = structuralScope();
+  if (isRequestOwnedAffinityKey(key)) return;
+  const s = gapOrScope(() => recordThreadBind(key, scopeName, row));
   if (!s || row.accountId === "__main__" || !row.fence) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -765,7 +762,8 @@ export function recordThreadTouch(key: string, scopeName: string): void {
   scheduleTouch(s);
 }
 export function recordThreadDelete(key: string, scopeName?: string): void {
-  const s = structuralScope();
+  if (isRequestOwnedAffinityKey(key)) return;
+  const s = gapOrScope(() => recordThreadDelete(key, scopeName));
   if (!s) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -791,7 +789,8 @@ export function recordThreadDelete(key: string, scopeName?: string): void {
   );
 }
 export function recordThreadAccountDeleted(key: string, id: string): void {
-  const s = structuralScope();
+  if (isRequestOwnedAffinityKey(key)) return;
+  const s = gapOrScope(() => recordThreadAccountDeleted(key, id));
   if (!s) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -803,7 +802,7 @@ export function recordThreadAccountDeleted(key: string, id: string): void {
   enqueue(s, { kind: "deleteKeyAccount", key: rk, sql: "DELETE FROM threads WHERE row_key=? AND account_id=?", args: [rk, id] });
 }
 export function recordAccountPinsCleared(id: string): void {
-  const s = structuralScope();
+  const s = gapOrScope(() => recordAccountPinsCleared(id));
   if (s) {
     for (const [key, entry] of s.threadKeys) {
       for (const [scopeName, account] of entry.scopes) if (account === id) entry.scopes.delete(scopeName);
@@ -817,7 +816,7 @@ export function recordAccountPinsCleared(id: string): void {
   }
 }
 export function recordAllCleared(): void {
-  const s = structuralScope();
+  const s = gapOrScope(() => recordAllCleared());
   if (s) {
     s.threadKeys.clear(); s.issuerKeys.clear();
     enqueue(s, {
@@ -829,7 +828,7 @@ export function recordAllCleared(): void {
 }
 /** A manual account switch clears pins but keeps the issuers of carried state. */
 export function recordThreadsCleared(): void {
-  const s = structuralScope();
+  const s = gapOrScope(() => recordThreadsCleared());
   if (s) {
     s.threadKeys.clear();
     enqueue(s, { kind: "clearThreads", sql: "DELETE FROM threads", args: [] });
@@ -845,7 +844,8 @@ export function recordIssuerSet(
   fence: string | null,
   lastUsedAt: number,
 ): void {
-  const s = structuralScope();
+  if (isRequestOwnedAffinityKey(key)) return;
+  const s = gapOrScope(() => recordIssuerSet(key, id, fence, lastUsedAt));
   if (!s || id === "__main__") return;
   const rk = rowKey(s, key, "issuer");
   if (!rk) return;
@@ -867,7 +867,8 @@ export function recordIssuerTouch(key: string): void {
   scheduleTouch(s);
 }
 export function recordIssuerDelete(key: string): void {
-  const s = structuralScope();
+  if (isRequestOwnedAffinityKey(key)) return;
+  const s = gapOrScope(() => recordIssuerDelete(key));
   if (!s) return;
   const rk = rowKey(s, key, "issuer");
   if (rk) {
@@ -881,7 +882,7 @@ export function recordIssuerDelete(key: string): void {
   }
 }
 export function recordIssuersCleared(): void {
-  const s = structuralScope();
+  const s = gapOrScope(() => recordIssuersCleared());
   if (s) {
     s.issuerKeys.clear();
     enqueue(s, { kind: "clearIssuers", sql: "DELETE FROM issuers", args: [] });
@@ -895,8 +896,8 @@ export function resetCodexAffinityStoreForTests(): void {
     flush(current, false);
     retire();
   }
-  // Model a fresh process: no earlier persisted scope, no change pending from a lease gap.
-  hadPersistentScope = false;
-  changedWithoutLease = false;
+  // Model a fresh process: nothing carried from an earlier scope, no change pending from a lease gap.
   carried = undefined;
+  gapOps = [];
+  gapOverflow = false;
 }

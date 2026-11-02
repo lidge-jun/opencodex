@@ -244,7 +244,7 @@ yine de 0 ile çıkar. `--json` şunu döndürür:
 
 Mevcut bir Codex hesabını, OAuth hesabını veya API anahtarını seçer. `openai`
 için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi bağlılığı temizler ve mevcut görünür bir görevden gelen istekler de dahil olmak
-üzere bir sonraki isteğe uygulanır. Oturum kimliği taşıyan isteklerin (normal Codex CLI ve App turları ile alt ajanlar dahil) veya doğrudan üst öğesine bağlanan oturumsuz isteklerin bağları, proxy düzgün yeniden başlatıldığında 24 saate kadar boşta kalma süresiyle korunur. Daha derin oturumsuz zincirler ve Codex App ana girişine ait bağlar yalnızca bellekte kalır ve yeniden başlatmadan sonra yeniden atanır; çıkarma, hesap silme, yeniden giriş, çökme veya bağlılık sıfırlaması bir görevi bağımsız bırakabilirken devam eden istekler
+üzere bir sonraki isteğe uygulanır. Oturum kimliği taşıyan isteklerin (normal Codex CLI ve App turları ile alt ajanlar dahil) veya doğrudan üst öğesine bağlanan oturumsuz isteklerin bağları, kapatma sırasında son bağlılık kaydı başarılı olursa proxy düzgün yeniden başlatıldığında 24 saate kadar boşta kalma süresiyle korunabilir. Daha derin oturumsuz zincirler ve Codex App ana girişine ait bağlar yalnızca bellekte kalır ve yeniden başlatmadan sonra yeniden atanır; çıkarma, hesap silme, yeniden giriş, çökme veya bağlılık sıfırlaması bir görevi bağımsız bırakabilirken devam eden istekler
 yakaladıkları hesabı tutar. Bu yalnızca Havuz yönlendirmesini denetler; Direct
 modu arayana ait/yerel ana kimlik bilgisini kullanmaya devam eder. Kullanıma
 dayalı proaktif geçiş, 401/403 yeniden kimlik doğrulaması, 429/retry-after

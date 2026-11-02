@@ -221,12 +221,6 @@ registerCodexAffinityLiveState({
     const entry = conversationStateIssuerMap.get(key);
     return entry && { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt };
   },
-  forEach: (thread, issuer) => {
-    for (const [key, affinities] of threadAccountMap) for (const [scope, entry] of affinities) thread(key, scope, entry);
-    for (const [key, entry] of conversationStateIssuerMap) {
-      issuer(key, { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt });
-    }
-  },
   clearLive: () => { threadAccountMap.clear(); threadAffinityEntryTotal = 0; conversationStateIssuerMap.clear(); },
 });
 }
