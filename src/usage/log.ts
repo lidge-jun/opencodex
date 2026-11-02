@@ -507,10 +507,10 @@ export function isKnownTerminalSource(value: unknown): value is NonNullable<Pers
  * call site and it never reached disk for exactly that reason.
  */
 const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]>>([
-  "reused", "held", "detour", "rebound", "new_bind", "cleared",
+  "reused", "held", "detour", "rebound", "new_bind", "cleared", "unbound",
 ]);
 const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
-  "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
+  "healthy", "no_conversation", "request_owned", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
   "unusable", "paused", "plan_excluded", "credits_off", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
 ]);

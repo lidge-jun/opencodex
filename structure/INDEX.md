@@ -70,6 +70,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
+| [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) | Opt-in conversation affinity for a caller's own ChatGPT bearer in Pool mode, honest selection-time affinity labels, and the persistence exclusion contract. |
 | [`fallback-policy.md`](fallback-policy.md) | OCX-11 fallback off: what is a model or provider fallback (and what intra-pool rotation is not), scope precedence, the guarded hop sites, the fallback_refused and home_unreachable contracts, and the ocx.fallback/1 state. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
 | [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery. |
@@ -260,7 +261,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/auth-api/pool-mode-gate.ts` | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) |
 | `src/codex/auth-context-provider.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
-| `src/codex/auth-context.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/codex/auth-context.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md)<br>[`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
@@ -290,6 +291,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/installation-id.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
+| `src/codex/request-owned-affinity.ts` | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
+| `src/codex/request-owned-main-pin.ts` | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
 | `src/codex/routing/selection.ts` | [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/shim.ts` | [`codex-cli-update.md`](codex-cli-update.md) |

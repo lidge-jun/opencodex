@@ -251,3 +251,52 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
     }
   });
 }
+
+test("caller-owned retry from Pool to main scrubs continuation and main issuer scrubs on return", async () => {
+  const { rememberServingConversationStateIssuer, conversationStateBindingFromAuth, applyAccountChangeConversationStateScrub } = await import("../../src/server/responses/account-change-state");
+  const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
+  const bearer = fakeChatGptJwt("fixture-caller", { exp: 4_000_000_000 });
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "session-id": "session", "thread-id": "thread" });
+  config.codexPool = { requestOwnedAffinity: true };
+  config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const turn = tryAdmitTurn();
+  expect(turn).not.toBeNull();
+  const controller = new AbortController();
+  try {
+    const authOptions = { modelId: "gpt-5.5", requestScopedMainCredential: true, primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    const reused = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    expect(first.affinityDecision?.move).toBe("new_bind");
+    expect(reused.affinityDecision?.move).toBe("reused");
+    expect(first.kind).toBe("pool");
+    if (first.kind !== "pool") throw new Error("expected pool fixture");
+    rememberServingConversationStateIssuer(first);
+    config.pausedCodexAccountIds = [];
+    let sentBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return completedInference();
+    }) as typeof fetch;
+    const parsed = parseRequest({ model: "gpt-5.5", previous_response_id: "opaque-previous", input: "hello", stream: false });
+    const result = await retryCodexPoolOnAlternateAccount({
+      callerAuthHeaders: headers, config, firstAuthCtx: first, firstResponse: quotaRefusal(), outcomeStatus: 429,
+      route: { providerName: "openai", modelId: "gpt-5.5", provider: config.providers.openai! },
+      parsed, logCtx: { model: "", provider: "" },
+      options: { abortSignal: controller.signal, translatorBudget: createTranslatorBudget(), turnAdmissionLease: turn! },
+      upstream: controller, connectMs: 10_000, stream: false, httpOnly: true,
+    });
+    expect(result.kind).toBe("retried");
+    if (result.kind !== "retried") throw new Error("expected alternate retry");
+    expect(result.authCtx.kind).toBe("main");
+    expect(sentBody?.previous_response_id).toBeUndefined();
+    rememberServingConversationStateIssuer(result.authCtx, first.affinityKey);
+    expect(peekConversationStateIssuer(first.affinityKey!)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+    clearCodexUpstreamHealth();
+    const next = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    const binding = conversationStateBindingFromAuth(next)!;
+    const body = { previous_response_id: "opaque-main-response" };
+    expect(applyAccountChangeConversationStateScrub({ body, bindingKey: binding.bindingKey, servingAccountId: binding.accountId })).toBe(true);
+    expect(body).not.toHaveProperty("previous_response_id");
+  } finally { turn?.release(); }
+});

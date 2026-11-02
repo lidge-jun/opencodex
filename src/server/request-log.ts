@@ -1235,13 +1235,13 @@ export function httpStatusForRequestLogTerminal(
  * `unresolved` rather than quietly inflating `settled`.
  */
 export function requestSpendRecord(
-  logCtx: Pick<RequestLogContext, "executionBudget" | "affinityMoveReasons" | "affinityReason">,
+  logCtx: Pick<RequestLogContext, "executionBudget" | "affinityMoveReasons" | "affinityReason" | "affinity">,
   attempts: readonly PersistedUsageAttempt[] | undefined,
 ): PersistedRequestSpend | undefined {
   const rows = attempts ?? [];
   const budget = logCtx.executionBudget;
   const reasons = [...new Set(
-    (logCtx.affinityMoveReasons ?? (logCtx.affinityReason ? [logCtx.affinityReason] : []))
+    (logCtx.affinityMoveReasons ?? (logCtx.affinity !== "unbound" && logCtx.affinityReason ? [logCtx.affinityReason] : []))
       .filter(isKnownAffinityReason),
   )];
   if (rows.length === 0 && !budget && reasons.length === 0) return undefined;
@@ -1277,11 +1277,11 @@ export function noteAffinityMove(
 
 /**
  * Copy the selection's own affinity decision onto the request log. Both Pool-served kinds carry
- * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A move
- * then reads as an event with its cause instead of something inferred from account labels.
+ * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A keyed
+ * caller-owned main can also carry one. A move reads as an event with its cause.
  */
 export function noteCodexSelectionAffinity(logCtx: RequestLogContext, authCtx: CodexAuthContext): void {
-  const decision = authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.affinityDecision : undefined;
+  const decision = authCtx.affinityDecision;
   if (!decision) return;
   logCtx.affinity = decision.move;
   logCtx.affinityReason = decision.reason;

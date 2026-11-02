@@ -53,6 +53,7 @@ import {
 } from "./encrypted-payload";
 import {
   codexPoolAffinityKey,
+  codexRequestAffinityKey,
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
   releaseCodexAuthContextProbeLease,
@@ -1000,7 +1001,7 @@ export async function prepareResponsesRequest(
     });
     const fallbackNow = Date.now();
     subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-      poolAffinityKey,
+      codexRequestAffinityKey(previewAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId: route.modelId, admission: options.admission, requestScopedMainCredential: previewRequestScopedMainCredential }) ?? null,
       config,
       previewNow,
       codexQuotaScopeForModel(modelId),
@@ -1218,7 +1219,7 @@ export async function prepareResponsesRequest(
               // and then fail closed at final auth — the same class of stale-selection bug as
               // the quota scope, one layer over.
               subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-                poolAffinityKey,
+                codexRequestAffinityKey(recoveryAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId: route.modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }) ?? null,
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),

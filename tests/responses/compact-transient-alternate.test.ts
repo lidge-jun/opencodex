@@ -301,3 +301,47 @@ describe("native compact moves a surviving transient 5xx to one alternate accoun
     expect(failures(WORK)).toBe(1);
   });
 });
+
+test("caller-owned compact Pool-to-main retry scrubs continuation and records issuer", async () => {
+  const { fakeChatGptJwt } = await import("../helpers/agent-task-recovery");
+  const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
+  const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
+  const bearer = fakeChatGptJwt("caller-test");
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "test-session", "thread-id": "test-thread" });
+  const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }], pausedCodexAccountIds: ["__main__"], codexPool: { requestOwnedAffinity: true } });
+  const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+  const first = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  const second = await authContext.resolveCodexAuthContext(headers, config, "pool", options);
+  expect(first.affinityDecision?.move).toBe("new_bind");
+  expect(second.affinityDecision?.move).toBe("reused");
+  expect(first.kind).toBe("pool");
+  rememberServingConversationStateIssuer(second);
+  config.pausedCodexAccountIds = [];
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sends.push(new Headers(init?.headers).get("authorization"));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return sends.length === 1 ? overloadedOnce() : compacted();
+  }) as typeof fetch;
+  const makeRequest = () => new Request("http://localhost/v1/responses/compact", {
+    method: "POST", headers,
+    body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque-previous", input: [{ role: "user", content: "continue" }] }),
+  });
+  const response = await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" });
+  expect(sends.length).toBe(2);
+  expect(response.status).toBe(200);
+  expect(sends).toEqual(["Bearer work-access", `Bearer ${bearer}`]);
+  expect(bodies[1]?.previous_response_id).toBeUndefined();
+  expect(peekConversationStateIssuer(first.affinityKey!)).toBe("__main__");
+  config.pausedCodexAccountIds = ["__main__"];
+  sends = []; bodies.length = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sends.push(new Headers(init?.headers).get("authorization"));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return compacted();
+  }) as typeof fetch;
+  const next = await handleResponsesCompact(makeRequest(), config, { model: "", provider: "" });
+  expect(next.status).toBe(200);
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(bodies[0]?.previous_response_id).toBeUndefined();
+});

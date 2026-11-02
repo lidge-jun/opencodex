@@ -1314,6 +1314,18 @@ When an account leaves pool selection, the reason travels with the decision inst
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
 
+### Request-owned conversation affinity
+
+`codexPool.requestOwnedAffinity` is an optional boolean, defaulting to `false`. Set it to `true`
+to keep a conversation carrying its own ChatGPT bearer on one eligible account within each quota
+scope. Releases and model detours can still move it. The binding is process-local; restarting the
+proxy or rotating the bearer starts a new binding. Session-less multi-generation subagent chains
+may bind per thread.
+
+Affinity labels describe the binding when selection returns. `unbound` means no binding was stored;
+`request_owned` means the caller-owned credential did not opt in, and `no_conversation` means no
+conversation key was available. A later eligibility change can release a binding after selection.
+
 ### Optional idle-window steering
 
 `codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new

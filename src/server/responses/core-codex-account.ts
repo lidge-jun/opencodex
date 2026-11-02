@@ -1,3 +1,4 @@
+import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
@@ -912,9 +913,7 @@ export async function retryCodexPoolOnAlternateAccount(
   {
     const binding = conversationStateBindingFromAuth(
       retryAuthCtx,
-      firstAuthCtx.kind === "pool" || firstAuthCtx.kind === "main-pool"
-        ? firstAuthCtx.affinityKey
-        : undefined,
+      firstAuthCtx.affinityKey,
     );
     if (binding) {
       applyAccountChangeConversationStateScrub({
@@ -925,7 +924,7 @@ export async function retryCodexPoolOnAlternateAccount(
           && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
-        priorAccountId: firstAuthCtx.accountId,
+        priorAccountId: conversationStateAccountId(firstAuthCtx),
         logCtx,
       });
     }

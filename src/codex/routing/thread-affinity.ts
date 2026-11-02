@@ -86,7 +86,9 @@ export type CodexAffinityMove =
   /** There was no live binding; this request established one. */
   | "new_bind"
   /** The binding was released without a replacement on this request. */
-  | "cleared";
+  | "cleared"
+  /** No binding was established for this selection. */
+  | "unbound";
 
 /**
  * Why. A move is the expensive event -- it discards the prompt-cache prefix warmed on the old
@@ -95,6 +97,10 @@ export type CodexAffinityMove =
  */
 export type CodexAffinityReason =
   | "healthy"
+  /** The request had no usable conversation key. */
+  | "no_conversation"
+  /** A caller-owned credential did not opt into affinity. */
+  | "request_owned"
   | "quota_headroom"
   | "quota_refusal"
   | "transient"
