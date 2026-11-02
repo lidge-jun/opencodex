@@ -1411,9 +1411,11 @@ if (desktopPlan.kind === "error") {
   process.exit(1);
 }
 let releaseSyncLease = () => {};
+let addSyncDelegate = () => {};
 if (process.argv[2] === "sync") {
   const syncLease = acquireSyncGuard(configDir(), process.argv.slice(2));
   if (syncLease.kind === "refused") process.exit(syncLease.exit);
+  addSyncDelegate = pid => syncLease.addDelegate(pid);
   inheritedEnv.OCX_SYNC_MUTEX_HELD_BY = String(process.pid);
   let released = false;
   releaseSyncLease = () => {
@@ -1424,7 +1426,7 @@ if (process.argv[2] === "sync") {
 }
 if (desktopPlan.kind === "handoff") {
   const result = await runDesktopCliHandoff(desktopPlan, {
-    argv: process.argv.slice(2), env: inheritedEnv, proof: launchProof, context: launchContext,
+    argv: process.argv.slice(2), env: inheritedEnv, proof: launchProof, context: launchContext, onSpawn: addSyncDelegate,
   });
   if (result.kind === "error") {
     console.error(`opencodex: Desktop CLI handoff failed (${result.issue}). Repair the terminal command in OpenCodex Desktop, or run with OCX_NO_DESKTOP_HANDOFF=1.`);
@@ -1618,6 +1620,15 @@ const child = probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProo
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
   },
 });
+let delegateError = false;
+if (child.pid) {
+  try { addSyncDelegate(child.pid); }
+  catch (error) {
+    delegateError = true;
+    console.error(`opencodex: sync mutex delegate publication failed: ${error.message}`);
+    try { child.kill(); } catch (killError) { console.error(`opencodex: failed to stop sync child: ${killError.message}`); }
+  }
+}
 
 // Windows has no real POSIX signals (no SIGHUP); forwarding is best-effort there.
 const FORWARDED = process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -1645,6 +1656,7 @@ child.on("error", err => {
 child.on("exit", (code, signal) => {
   clearHandlers();
   releaseSyncLease();
+  if (delegateError) process.exit(1);
   // Mirror the child's terminating signal/exit code so this launcher's status matches.
   if (signal) {
     relayOwnSignal(signal);

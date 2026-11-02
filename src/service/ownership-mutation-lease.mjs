@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
@@ -141,10 +142,13 @@ function leaseHolder(path, now, alive, image) {
   if (!observed && !incomplete && !existsSync(path)) return null;
   const pid = observed?.record.pid ?? incomplete?.pid ?? null;
   const since = observed ? Math.max(observed.record.createdAt, observed.mtimeMs) : incomplete?.mtimeMs ?? null;
-  const live = pid === null ? null : alive(pid);
+  const delegate = observed?.record.delegatePid;
+  const delegateValid = delegate === undefined || (Number.isSafeInteger(delegate) && delegate > 0);
+  const live = !delegateValid ? null : pid === null ? null : alive(pid) || (delegate !== undefined && alive(delegate));
   return {
     path,
     pid,
+    delegatePid: delegateValid ? delegate ?? null : null,
     alive: live,
     holderKind: observed?.record.holderKind ?? null,
     image: live ? image(pid) : null,
@@ -182,6 +186,22 @@ function createLeaseHandle(path, generation, token, options) {
   let released = false;
   return {
     token,
+    addDelegate: pid => {
+      if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("invalid mutation lease delegate pid");
+      const current = held.get(path);
+      const observed = readOwner(path);
+      if (released || !current || current.generation !== generation || current.delegated || !observed || !sameOwner(current.snapshot, observed)) throw new Error("mutation lease is no longer held");
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        writeFileSync(temporary, `${JSON.stringify({ ...observed.record, delegatePid: pid })}\n`, { flag: "wx", mode: 0o600 });
+        renameSync(temporary, observed.ownerPath);
+        const updated = readOwner(path);
+        if (!updated || updated.record.token !== token || updated.record.delegatePid !== pid) throw new Error("mutation lease delegate could not be verified");
+        current.snapshot = updated;
+      } finally {
+        try { unlinkSync(temporary); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+      }
+    },
     release: () => {
       if (released) return;
       released = true;
@@ -196,6 +216,8 @@ function reclaim(path, now, alive) {
   if (!observed && !incomplete) return false;
   const createdAt = observed ? Math.max(observed.record.createdAt, observed.mtimeMs) : incomplete.mtimeMs;
   const pid = observed?.record.pid ?? incomplete.pid;
+  const delegate = observed?.record.delegatePid;
+  if (delegate !== undefined && (!Number.isSafeInteger(delegate) || delegate <= 0 || alive(delegate))) return false;
   if (now() - createdAt <= STALE_MS || (pid !== null && alive(pid))) return false;
   if (observed) {
     const current = readOwner(path);

@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { repoPath } from "../helpers/repo-root";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,14 +14,49 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function home() { const root = mkdtempSync(join(tmpdir(), "ocx-update-sync-")); roots.push(root); return root; }
 
-test("sync child accepts only a matching parent-held mutex", () => {
+test("a sync child refuses a parent lease without its delegate pid", () => {
+  const root = home(), lock = tryAcquireUpdateSyncMutex(root, "sync");
+  if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const script = `import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => 0));`;
+    const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], { env: { ...process.env, OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: String(process.pid), npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 1, stderr: expect.stringContaining("sync-in-progress") });
+  } finally { lock.release(); }
+}, 15000);
+
+test("a stale sync lease remains held by its live delegate", () => {
+  const root = home(), lock = join(root, "sync-update.mutation.lock");
+  const instance = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", token = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  mkdirSync(lock);
+  const owner = join(lock, `v1-2147483647-${instance}-${token}.json`);
+  writeFileSync(owner, JSON.stringify({ version: 1, pid: 2147483647, delegatePid: process.pid, processInstance: instance, token, createdAt: 1000, holderKind: "sync" }));
+  utimesSync(owner, 1, 1);
+  const lease = tryAcquireUpdateSyncMutex(root, "update", { now: () => 100_000, processAlive: pid => pid === process.pid });
+  expect(lease).toEqual({ kind: "busy", holder: "sync" });
+  if (lease.kind === "acquired") lease.release();
+});
+
+test("an invalid delegate pid prevents stale lease reclamation", () => {
+  const root = home(), lock = join(root, "sync-update.mutation.lock");
+  const instance = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", token = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  mkdirSync(lock);
+  const owner = join(lock, `v1-2147483647-${instance}-${token}.json`);
+  writeFileSync(owner, JSON.stringify({ version: 1, pid: 2147483647, delegatePid: "unreadable", processInstance: instance, token, createdAt: 1000, holderKind: "sync" }));
+  utimesSync(owner, 1, 1);
+  expect(tryAcquireUpdateSyncMutex(root, "update", { now: () => 100_000, processAlive: () => false })).toEqual({ kind: "busy", holder: "unknown" });
+});
+
+test("sync child accepts only a matching parent-held mutex", async () => {
   const root = home(), lock = tryAcquireUpdateSyncMutex(root, "sync");
   if (lock.kind !== "acquired") throw Error("fixture lock");
   try {
     const script = `import {withSyncUpdateGuard} from ${JSON.stringify(repoPath("src/cli/sync-update-guard.ts"))}; process.exit(await withSyncUpdateGuard(async () => 0));`;
     for (const [heldBy, expected] of [[String(process.pid), 0], [String(process.pid + 1), 1], ["", 1]] as const) {
-      const result = spawnSync(process.execPath, ["--no-env-file", "-e", script], { env: { ...process.env, OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: heldBy, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, encoding: "utf8", timeout: 12000 });
-      expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: expected });
+      const child = spawn(process.execPath, ["--no-env-file", "-e", script], { env: { ...process.env, OPENCODEX_HOME: root, OCX_TEST_HOME_GUARD: "1", OCX_SYNC_MUTEX_HELD_BY: heldBy, npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: "ignore" });
+      if (!child.pid) throw Error("child did not start");
+      if (expected === 0) lock.addDelegate(child.pid);
+      const status = await new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
+      expect(status).toBe(expected);
     }
   } finally { lock.release(); }
 }, 45000);

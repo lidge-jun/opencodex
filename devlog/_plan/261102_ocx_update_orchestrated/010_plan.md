@@ -318,3 +318,6 @@ G3 Fail-closed fence by time bound: publish the mutating marker with fenceUntil 
    Windows Job Object confirmed empty clears the fence on finalization. A POSIX descendant that escapes the group can
    outlive a normally exiting installer and mutate after the fence clears; this residual is accepted. Windows uses the
    Job Object supervisor. A timed-out escaped POSIX descendant can also outlive the 15-minute bound.
+
+## Review r8 resolution
+The sync launcher atomically publishes the spawned child PID in its lease. Reclamation requires both holder and delegate to be dead; a new Bun child verifies its own PID before mutation. An older Desktop CLI cannot verify it, so launcher SIGKILL between spawn and delegate publication leaves a residual window in which that child can outlive the stale lease.

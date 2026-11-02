@@ -265,6 +265,38 @@ posixTest("old Desktop sync stays under launcher mutex until it exits", async ()
     expect(await exited).toBe(0);
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); }
 }, 15000);
+posixTest("a killed launcher leaves the live Desktop delegate fenced past the stale interval", async () => {
+  const fixture = packageFixture(), home = fixture.env.OPENCODEX_HOME!;
+  const stop = join(fixture.home, "stop-delegate");
+  writeFileSync(fixture.target, `#!/bin/sh\necho ready\nwhile [ ! -f '${stop}' ]; do sleep 0.1; done\n`); chmodSync(fixture.target, 0o700);
+  const launcherChild = spawn("node", [launcher, "sync"], { env: { ...fixture.env, OCX_TEST_HOME_GUARD: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" }, stdio: ["pipe", "pipe", "pipe"] });
+  let delegate = 0;
+  try {
+    await new Promise<void>((resolve, reject) => { launcherChild.stdout!.once("data", () => resolve()); launcherChild.once("error", reject); launcherChild.once("exit", () => reject(Error("launcher exited early"))); });
+    const lockPath = join(home, "sync-update.mutation.lock");
+    const deadline = Date.now() + 3000;
+    while (!delegate && Date.now() < deadline) {
+      const entries = readdirSync(lockPath);
+      if (entries.length === 1) delegate = JSON.parse(readFileSync(join(lockPath, entries[0]!), "utf8")).delegatePid ?? 0;
+      if (!delegate) await Bun.sleep(10);
+    }
+    expect(delegate).toBeGreaterThan(0);
+    const exited = new Promise<void>(resolve => launcherChild.once("exit", () => resolve()));
+    launcherChild.kill("SIGKILL"); await exited;
+    const future = () => Date.now() + 31_000;
+    expect(tryAcquireUpdateSyncMutex(home, "update", { now: future })).toEqual({ kind: "busy", holder: "sync" });
+    expect(createLegacyUpdateSession({ home }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+    writeFileSync(stop, "stop");
+    const end = Date.now() + 3000;
+    let lease = tryAcquireUpdateSyncMutex(home, "update", { now: future });
+    while (lease.kind !== "acquired" && Date.now() < end) { await Bun.sleep(10); lease = tryAcquireUpdateSyncMutex(home, "update", { now: future }); }
+    expect(lease.kind).toBe("acquired");
+    if (lease.kind === "acquired") lease.release();
+  } finally {
+    if (launcherChild.exitCode === null && launcherChild.signalCode === null) launcherChild.kill("SIGKILL");
+    if (delegate) { try { process.kill(delegate, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+  }
+}, 15000);
 posixTest("sync launcher releases its mutex after forwarding a signal and waiting for Desktop", async () => {
   const fixture = packageFixture();
   writeFileSync(fixture.target, "#!/bin/sh\ntrap 'exit 29' TERM\necho ready\nwhile :; do sleep 1; done\n"); chmodSync(fixture.target, 0o700);

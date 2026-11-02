@@ -19,6 +19,7 @@ export interface OwnershipMutationLeaseHolder {
   readonly path: string;
   /** The recorded PID; null when the directory holds no parseable owner. */
   readonly pid: number | null;
+  readonly delegatePid: number | null;
   /** Liveness of the current process at the recorded PID; identity is not verified. */
   readonly alive: boolean | null;
   readonly holderKind: "sync" | "update" | null;
@@ -29,7 +30,7 @@ export interface OwnershipMutationLeaseHolder {
   readonly record: "complete" | "incomplete" | "empty" | "unreadable";
 }
 
-export interface OwnershipMutationLease { readonly token: string; release(): void }
+export interface OwnershipMutationLease { readonly token: string; addDelegate(pid: number): void; release(): void }
 
 export declare const OWNERSHIP_MUTATION_LEASE_TOKEN_ENV: "OCX_OWNERSHIP_MUTATION_LEASE_TOKEN";
 export declare function ownershipMutationLeasePath(statePaths: readonly string[]): string;

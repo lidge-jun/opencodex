@@ -49,7 +49,7 @@ export function tryAcquireUpdateSyncMutex(home, kind, deps = {}) {
   try {
     ensureHome(home);
     const lease = acquireOwnershipMutationLease(paths(home), { ...deps, waitMs: 0, isolated: true, holderKind: kind, processImage: () => null, lockPath: mutexPath(home) });
-    return { kind: "acquired", release: () => lease.release() };
+    return { kind: "acquired", addDelegate: pid => lease.addDelegate(pid), release: () => lease.release() };
   } catch (error) {
     if (error && typeof error === "object" && "holder" in error) {
       return { kind: "busy", holder: holderKind(error.holder) };
@@ -73,10 +73,10 @@ export function inspectUpdateSyncMutex(home) {
 
 /** A delegated child may reuse only its live parent's sync lease. */
 export function parentHoldsSyncMutex(home, claimedPid = process.env.OCX_SYNC_MUTEX_HELD_BY) {
-  if (claimedPid !== String(process.ppid)) return false;
+  if (!claimedPid) return false;
   try {
     const holder = inspectOwnershipMutationLease(paths(home), { processImage: () => null, lockPath: mutexPath(home) });
-    return holder?.alive === true && holder.record === "complete" && holder.holderKind === "sync" && holder.pid === process.ppid;
+    return holder?.alive === true && holder.record === "complete" && holder.holderKind === "sync" && String(holder.pid) === claimedPid && holder.delegatePid === process.pid;
   } catch { return false; }
 }
 
