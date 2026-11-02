@@ -84,6 +84,28 @@ describe("native final request log", () => {
     expect(await waiting).toBe(true);
   });
 
+  test("upstream evidence informs the final row and never reaches it", async () => {
+    const credential = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+    const timestamp = Date.now();
+    const resetAt = Math.floor((timestamp + 3_600_000) / 1000) * 1000;
+    const sentence = "Subscription quota exhausted. Your usage window resets at " + new Date(resetAt).toISOString().replace(/\.\d{3}Z$/, "Z") + ".";
+    for (const [status, upstreamError, provider, expected] of [
+      [429, sentence, "meta-muse", { errorCode: "rate_limit_exceeded", upstreamCondition: "billing_exhausted", rateLimitResetAt: resetAt }],
+      [400, "This model's maximum context length is 8192 tokens; key " + credential, "fixture", { errorCode: "invalid_request_error", upstreamCondition: "context_overflow" }],
+    ] as const) {
+      const logCtx = { ...context(), provider, upstreamError, upstreamErrorCode: credential, upstreamRequestId: credential };
+      const rows: RequestLogEntry[] = [];
+      const owner = createNativeFinalLog("evidence", timestamp, logCtx, { addLog: row => rows.push(row) });
+      addFinalRequestLog("evidence", timestamp, logCtx, status, { terminalStatus: "failed", closeReason: "terminal" });
+      await owner.waitForInner();
+      owner.commit({ status, terminalStatus: "failed", closeReason: "terminal" });
+      expect(rows[0]).toMatchObject({ status, ...expected });
+      const serialized = JSON.stringify(rows[0]);
+      expect(serialized).not.toContain(credential);
+      expect(serialized).not.toContain("Subscription quota exhausted");
+    }
+  });
+
   test("ordinary request logging is unchanged without an owner", () => {
     const rows: RequestLogEntry[] = [];
     const logCtx = { ...context(), upstreamError: "client closed request" };

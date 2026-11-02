@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import { requestOwnedAffinityKey, honestAffinityDecision, callerOwnedFallbackAffinityDecision, captureRequestOwnedAffinityBindings, type RequestOwnedBindingSnapshot } from "./request-owned-affinity";
 import { requestOwnedMainPinState, mainCreditsHoldResetAt, callerMatchesObservedMain } from "./request-owned-main-pin";
 export { requestOwnedMainPinState } from "./request-owned-main-pin";
@@ -925,7 +926,8 @@ export function cooldownErrorResponse(
   const res = formatErrorResponse(429, "rate_limit_error", cooldownErrorMessage(err, accountSelector));
   const headers = new Headers(res.headers);
   if (!(err instanceof CodexReserveUnavailableError)) {
-    headers.set("Retry-After", String(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000))));
+    const advice = formatClientRetryAfter(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000)));
+    if (advice !== undefined) headers.set("Retry-After", advice);
   }
   return new Response(res.body, { status: res.status, headers });
 }

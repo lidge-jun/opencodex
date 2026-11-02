@@ -62,8 +62,9 @@ known, the row drops partial usage (so the send settles as unresolved), records
 `observation_barrier_timeout`, and never reports success. Inner Chat runs with
 `suppressProtocolTrace`, so a native row persists no Chat protocol identity (see
 [Protocol Paths](protocol-paths.md#observed-trace)).
-The commit also drops upstream-authored text (`upstreamError`, `upstreamErrorCode`,
-`upstreamErrorType`, `upstreamRequestId`) from the row; status, derived codes and attribution stay.
+Upstream evidence stays on the context through the final write, so the condition and quota reset are
+derived from it; the [row projection](error-detail.md) then drops the upstream-authored text
+(`upstreamError`, `upstreamErrorCode`, `upstreamErrorType`, `upstreamRequestId`) before any writer.
 
 ## Protocol trace
 

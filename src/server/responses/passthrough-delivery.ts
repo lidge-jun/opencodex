@@ -1,6 +1,8 @@
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
+import { routeKnownModels } from "../../usage/log";
+import type { OcxProviderConfig } from "../../types";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
@@ -484,9 +486,16 @@ export async function deliverPassthroughResponse(
     });
   }
 
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    // Every relayed header set below goes through this filter with the route's known models, so a
+    // reported model (row and header) is only ever a model id this route or a catalog already names.
+    const passthroughHeaderOptions = {
+      ...codexSafetyBufferingOptions,
+      knownModels: [...routeKnownModels(logCtx), ...providerKnownModels(route.provider)],
+      provider: logCtx.provider,
+    };
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions);
     if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
-    const resolvedModel = headers.get("openai-model")?.trim();
+    const resolvedModel = headers.get("openai-model") ?? undefined;
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
@@ -616,7 +625,7 @@ export async function deliverPassthroughResponse(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions),
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions),
       });
     }
     if (!upstreamResponse.ok) {
@@ -1161,7 +1170,7 @@ export async function deliverPassthroughResponse(
           rememberPassthroughResponseChecked(client.terminal.response);
         }
 
-        const jsonHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+        const jsonHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
         jsonHeaders.set("content-type", "application/json");
         return markPreinspectedJsonResponse(new Response(clientJson, {
           status: upstreamResponse.status,
@@ -1503,7 +1512,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {
@@ -1550,4 +1559,17 @@ export async function deliverPassthroughResponse(
       status: upstreamResponse.status,
       headers,
     });
+}
+
+/**
+ * Model ids the user configured for the selected provider: its models and retention lists and
+ * default. A provider-owned model hint that names one of them is relayed as the proxy's copy.
+ * Live-discovered ids are not trusted here, because the upstream's own /models answer chose them;
+ * neither is the selection list, which a model preset fills from that same discovered catalog.
+ */
+function providerKnownModels(provider: OcxProviderConfig): string[] {
+  return [
+    ...(provider.models ?? []), ...(provider.retainModels ?? []),
+    ...(provider.defaultModel ? [provider.defaultModel] : []),
+  ];
 }

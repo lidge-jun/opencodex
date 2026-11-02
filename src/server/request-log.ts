@@ -30,6 +30,9 @@ import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+import type { UpstreamCondition } from "../lib/upstream-condition";
+import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
+import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
 import {
   appendUsageEntry,
   classifyCacheTelemetryProvenance,
@@ -243,6 +246,8 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
+  failureDetail?: FailureDetail; // closed code + bounded params (src/lib/failure-detail.ts)
+  upstreamCondition?: UpstreamCondition; // classified at capture where the evidence is not kept on the context
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -353,8 +358,11 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   errorCode?: string;
   terminalStatus?: ResponsesTerminalStatus;
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
-  /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
+  /** Input only: addRequestLog derives the two fields below from it, then removes it. */
   upstreamError?: string;
+  upstreamCondition?: UpstreamCondition; // closed enum, src/lib/upstream-condition.ts
+  failureDetail?: FailureDetail; // closed code + bounded params, see request-log-failure-detail.ts
+  rateLimitResetAt?: number; // provider quota window end, epoch ms, bounded
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -473,7 +481,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  // projectErrorDetail bounds the tier fields (top-level and per attempt) itself, so this stays safe
+  // for a row that did not come through the disk reader; attempts are copied before it edits them.
+  const attempts = Array.isArray(entry.attempts) ? entry.attempts.map(attempt => ({ ...attempt })) : entry.attempts;
+  return projectErrorDetail({
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
@@ -509,14 +520,14 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...modelIdentityLogFields(entry),
     status: entry.status,
     durationMs: entry.durationMs,
-    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    // Closed code, condition, failure detail and quota reset; legacy upstream text is read once and dropped.
+    ...errorDetailFor(entry),
     ...(terminalStatus ? { terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-    ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(attempts !== undefined ? { attempts } : {}),
     ...(entry.attemptNormalizationDropped === true
       ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
@@ -534,7 +545,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       : {}),
     ...normalizeRequestFailureAttribution(entry),
     ...(protocolTrace ? { protocolTrace } : {}),
-  };
+  });
 }
 
 /**
@@ -613,6 +624,9 @@ export function rehydrateRequestLogsAfterLedgerReplacement(
 }
 
 export function addRequestLog(entry: RequestLogEntry) {
+  // Rows keep proxy-owned error facts only; upstream error text and tokens stop here (both the
+  // retained ring row and the usage.jsonl projection below read the projected entry).
+  entry = projectErrorDetail(entry);
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
   // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable
@@ -622,13 +636,13 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
-  const servedModel = modelIdentityLogFields(entry).servedModel;
+  const identity = modelIdentityLogFields(entry), servedModel = identity.servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const attempts = normalizedAttempts(entry.attempts);
   const attemptsDropped = Array.isArray(entry.attempts) && attempts.length < entry.attempts.length;
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
-    && servedModel === entry.servedModel
+    && servedModel === entry.servedModel && identity.resolvedModel === entry.resolvedModel
     && entry.claudeCompatibility === undefined
     && entry.jevDecision === undefined
     && !attemptsDropped
@@ -636,10 +650,7 @@ export function addRequestLog(entry: RequestLogEntry) {
     : { ...entry, ...(entry.attemptNormalizationDropped === true || attemptsDropped ? { attemptNormalizationDropped: true } : {}),
       ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
-  if (!servedModel && retained !== entry) {
-    delete retained.servedModel;
-    if (retained.resolvedModel === entry.servedModel) delete retained.resolvedModel;
-  }
+  if (retained !== entry) { if (!servedModel) delete retained.servedModel; if (!identity.resolvedModel) delete retained.resolvedModel; }
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else if (retained !== entry) delete retained.claudeCompatibility;
   if (jevDecision) retained.jevDecision = jevDecision;
@@ -658,7 +669,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
         ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
         ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
-        ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+        ...(entry.upstreamCondition ? { upstreamCondition: entry.upstreamCondition } : {}), ...(entry.failureDetail ? { failureDetail: entry.failureDetail } : {}),
+        ...(entry.rateLimitResetAt !== undefined ? { rateLimitResetAt: entry.rateLimitResetAt } : {}),
       }
       : {};
     appendUsageEntry({
@@ -972,7 +984,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   recordObservedServedModel(logCtx, (source as { model?: unknown }).model);
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) {
-    const sanitized = sanitizeLogMetadataString(serviceTier);
+    const sanitized = boundedServiceTier(serviceTier);
     if (sanitized) logCtx.responseServiceTier = sanitized;
     logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
   } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
@@ -1157,7 +1169,9 @@ function captureUpstreamErrorParsed(
     // reader-facing label so a generic 502 in /api/logs explains WHY the turn ended, not just the
     // mapped HTTP code.
     if (typeof reason === "string" && reason.trim()) {
-      logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
+      const incomplete = incompleteReasonDetail(reason.trim()); // A known reason also gets a closed row detail.
+      logCtx.upstreamError = redactSecretString(incomplete.text).slice(0, 500);
+      if (incomplete.detail) logCtx.failureDetail = incomplete.detail;
     }
     return;
   }
@@ -1165,20 +1179,6 @@ function captureUpstreamErrorParsed(
   const trimmed = text.trim();
   if (trimmed) {
     logCtx.upstreamError = redactSecretString(trimmed).slice(0, 500);
-  }
-}
-
-/** Map a raw `incomplete_details.reason` (emitted by the bridge) to a reader-facing label. */
-function incompleteReasonLabel(reason: string): string {
-  switch (reason) {
-    case "max_output_tokens":
-      return `Output reached the requested token limit (${reason})`;
-    case "upstream_stall_timeout":
-      return `Upstream stalled: no data for the stall-timeout window (${reason})`;
-    case "adapter_eof":
-      return `Upstream stream ended unexpectedly without a terminal event (${reason})`;
-    default:
-      return `Upstream incomplete: ${reason}`;
   }
 }
 
@@ -1551,7 +1551,8 @@ function writeFinalRequestLog(
   const jevDecision = normalizePersistedJevDecision(logCtx.jevDecision);
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
-  addLog({
+  // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
+  addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
     timestamp: start,
@@ -1593,7 +1594,8 @@ function writeFinalRequestLog(
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...(logCtx.upstreamError && !upstreamErrorIsLocal(logCtx) ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
+    ...(logCtx.upstreamCondition ? { upstreamCondition: logCtx.upstreamCondition } : {}),
     ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
@@ -1616,7 +1618,7 @@ function writeFinalRequestLog(
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
     ...attribution,
-  });
+  }));
   // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
   for (const attempt of attempts ?? []) debugAttemptDeliverySummary(requestId, attempt);
   if (isUsageDebugEnabled()) {

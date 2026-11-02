@@ -534,6 +534,22 @@
       ]
     },
     {
+      "path": "data-planes/error-detail.md",
+      "tier": 3,
+      "title": "Proxy-Owned Error Detail",
+      "scope": "Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format.",
+      "documents": [
+        "src/usage/error-detail.ts",
+        "src/lib/upstream-condition.ts",
+        "src/lib/client-retry-after.ts",
+        "src/lib/failure-detail.ts",
+        "src/lib/response-service-tier.ts",
+        "src/lib/model-identity.ts",
+        "src/server/safe-response-headers.ts",
+        "src/server/request-log-failure-detail.ts"
+      ]
+    },
+    {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
       "title": "Anthropic Thinking Signatures on the Chat Wire",

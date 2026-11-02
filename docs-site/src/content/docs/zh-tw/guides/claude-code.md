@@ -588,7 +588,7 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **錯誤分類：**400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
-其他 5xx 為 `api_error`。`Retry-After` 會保留。
+其他 5xx 為 `api_error`。`Retry-After` 以整數秒傳送（HTTP 日期會換算為剩餘秒數），上限為 8 天。
 
 ## 提示快取與 token 用量
 
