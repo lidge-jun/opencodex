@@ -1,4 +1,5 @@
 import { formatErrorResponse } from "../bridge";
+import type { CodexAuthContext } from "../codex/auth-context";
 import type { AdmissionLease } from "../lib/admission";
 import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
@@ -47,6 +48,7 @@ export function createDictationFrameValidator(): (frame: string | Buffer) => boo
 }
 
 export interface AudioSocketTarget {
+  authContext?: CodexAuthContext;
   headers: Record<string, string>;
   upstreamWsUrl: string;
   protocols?: string[];
@@ -82,6 +84,7 @@ export async function resolveDictationSocket(
   }
   headers.delete("authorization");
   return {
+    authContext: relay.authContext,
     upstreamWsUrl: "wss://chatgpt.com/backend-api/dictation/stream",
     headers: Object.fromEntries(headers),
     protocols: ["chatgpt-dictation", `openai-bearer.${token}`, "codex-desktop"],

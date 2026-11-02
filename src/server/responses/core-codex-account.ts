@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
 import type { CodexAuthContext, CodexAuthPolicyConfig } from "../../codex/auth-context";
@@ -886,7 +887,7 @@ export async function retryCodexPoolOnAlternateAccount(
     retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
     retryProvider = applyCodexAuthContextToProvider(stripCodexRuntimeProviderFields(route.provider), retryAuthCtx, "pool");
   } catch (error) {
-    if (!(error instanceof CodexPoolAccountCreditsOffError)) throw error;
+    if (!(error instanceof CodexPoolAccountCreditsOffError) && !(error instanceof CodexInstallationIdUnavailableError)) throw error;
     // Body/entitlement reads above can outlive credit consent. No alternate will send:
     // release its reservation and probes, then let the owner map the policy refusal.
     accountMovePermit?.release();
@@ -929,11 +930,21 @@ export async function retryCodexPoolOnAlternateAccount(
       });
     }
   }
-  const request = await retryAdapter.buildRequest(parsed, {
-    headers: retryHeaders,
-    providerName: route.providerName,
-    translatorBudget: options.translatorBudget,
-  });
+  let request;
+  try {
+    request = await retryAdapter.buildRequest(parsed, {
+      headers: retryHeaders,
+      providerName: route.providerName,
+      translatorBudget: options.translatorBudget,
+    });
+  } catch (error) {
+    if (!(error instanceof CodexInstallationIdUnavailableError)) throw error;
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(firstAuthCtx);
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
+    await firstResponse.body?.cancel().catch(() => undefined);
+    return { kind: "transport", error, authCtx: retryAuthCtx };
+  }
   recordAdapterReasoning(logCtx, request);
   recordAdapterTier(logCtx, request);
 

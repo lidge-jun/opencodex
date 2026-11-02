@@ -1838,6 +1838,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             ...(audioClient?.protocol ? { headers: { "sec-websocket-protocol": audioClient.protocol } } : {}),
             data: {
               kind: "live-sideband",
+              authContext: resolved.authContext,
               liveUpstream: upstreamHandshake.socket,
               liveUpstreamUrl: resolved.upstreamWsUrl,
               liveUpstreamHeaders: resolved.headers,

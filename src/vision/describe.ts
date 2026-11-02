@@ -1,6 +1,6 @@
 import type { OcxProviderConfig } from "../types";
 import type { VisionReasoningEffort } from "../reasoning-effort";
-import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -69,12 +69,9 @@ export async function describeImage(
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (forwardProvider.headers) Object.assign(headers, forwardProvider.headers);
-  for (const h of FORWARD_HEADERS) {
-    const v = selectedForwardHeaders.get(h);
-    if (v) headers[h] = v;
-  }
+  const headers = Object.fromEntries(mergeCodexSelectedHeaders(
+    { "Content-Type": "application/json", ...forwardProvider.headers }, selectedForwardHeaders,
+  ));
   const content: unknown[] = [];
   if (contextText) content.push({ type: "input_text", text: `The user's request about this image: ${contextText}` });
   content.push({ type: "input_image", image_url: imageUrl, detail: detail ?? "high" });
