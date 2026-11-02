@@ -1399,7 +1399,6 @@
     "port-reclaim.test.ts": "server",
     "ports.test.ts": "server",
     "pr-readiness-reattest.test.ts": "ci-workflows",
-    "private-sqlite-path.test.ts": "lib",
     "privacy-mask-account.test.ts": "lib",
     "privacy-scan-asset-names.test.ts": "ci-workflows",
     "privacy-scan-meta-key.test.ts": "ci-workflows",
