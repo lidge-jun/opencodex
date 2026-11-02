@@ -74,6 +74,21 @@ const defaultDeps: OrchestratedPlanDeps = {
   inFlight: () => isUpdateInFlight(getConfigDir()),
 };
 
+/** Passive identity and plan-bound fields for a Node update child. */
+export async function inspectNodeOrchestratedIdentity(cliRoot: string, targetVersion?: string, installer?: "npm" | "pnpm") {
+  const root = realpathSync.native(cliRoot);
+  const identity = await defaultDeps.identity();
+  if (!targetVersion || !installer) return { ...identity, cliRoot: root };
+  const ownership = defaultDeps.ownership(identity);
+  const live = identity.kind === "live" ? identity : null;
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string") throw new Error("invalid package version");
+  return { ...identity, cliRoot: root, permits: ownership.permits, planToken: createUpdatePlanToken({
+    currentVersion: manifest.version, targetVersion, installer, cliRoot: root,
+    servingRoot: live?.servingRoot ?? null, runtimeOwner: ownership.runtimeOwner, runtime: live?.runtime ?? null,
+  }) };
+}
+
 export async function verifyOrchestratedChildIdentity(expected: OrchestratedExpect, targetVersion: string): Promise<boolean> {
   if (getConfigDir() !== expected.home) return false;
   const install = defaultDeps.install();
