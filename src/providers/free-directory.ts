@@ -10,7 +10,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
   "recurring-or-keyless": [
     "agy", "aihorde", "api-airforce", "arcee-ai", "bazaarlink", "blackbox", "bluesminds", "cerebras",
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
-    "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
+    "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7", "llmtr",
     "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
     "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
   ],
@@ -111,6 +111,13 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   // WebSocket protocol and does not describe this endpoint.
   iflytek: openAi("https://spark-api-open.xf-yun.com/v1", "https://console.xfyun.cn", { verification: "official", documentationUrl: "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html" }),
   liquid: openAi("https://inference.liquid.ai/v1", "https://playground.liquid.ai", { modelsUrl: "https://inference.liquid.ai/v1/models" }),
+  // Checked 2026-11-01. Endpoint: https://llmtr.com/docs/gateway/chat-completions/ (POST /v1/chat/completions,
+  // Authorization: Bearer llmtr-...). Operator: Knowhy Ileri Teknoloji Ticaret Ltd. Sti., Istanbul
+  // (https://llmtr.com/terms). GET /v1/models is public and returned 378 rows; six chat ids carry a zero list
+  // price with no end date (three with a daily quota). Other zero-price rows are dated promotions or
+  // bring-your-own-key routes. Pricing: https://llmtr.com/pricing. Discovery is hybrid: the six free ids are
+  // seeded, and live discovery still lists the full, mostly paid catalog.
+  llmtr: openAi("https://llmtr.com/v1", "https://llmtr.com/dashboard/api-keys", { verification: "official", documentationUrl: "https://llmtr.com/docs/gateway/chat-completions/", modelsUrl: "https://llmtr.com/v1/models", lastVerified: "2026-11-01", discovery: "hybrid", models: ["qwen/qwen3.8-27b-free", "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-free", "openai/gpt-oss-safeguard-20b", "agnes/agnes-2.5-flash", "agnes/agnes-3.0-flash"], note: "Only the six listed chat models are free, with no end date; qwen/qwen3.8-27b-free and both Nemotron models have a daily quota. An API key is still required. Other zero-price rows are dated promotions or bring-your-own-key routes; every other discovered model is paid. Pricing: https://llmtr.com/pricing" }),
   mistral: openAi("https://api.mistral.ai/v1", "https://console.mistral.ai/api-keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.mistral.ai/api/endpoint/models" }),
   morph: openAi("https://api.morphllm.com/v1", "https://morphllm.com", { verification: "official", documentationUrl: "https://docs.morphllm.com/api-reference/introduction" }),
   "ollama-cloud": openAi("https://ollama.com/v1", "https://ollama.com/settings/keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.ollama.com/cloud", modelsUrl: "https://ollama.com/api/tags" }),
@@ -202,7 +209,7 @@ const LABELS: Record<string, string> = {
   bazaarlink: "BazaarLink", blackbox: "Blackbox", bluesminds: "Bluesminds", "cloudflare-ai": "Cloudflare AI",
   coze: "Coze", "duckduckgo-web": "DuckDuckGo Web", "felo-web": "Felo Web", friendliai: "FriendliAI",
   gemini: "Google Gemini", "github-models": "GitHub Models", huggingchat: "HuggingChat", huggingface: "Hugging Face",
-  iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", "muse-spark-web": "Muse Spark Web",
+  iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", llmtr: "LLMTR", "muse-spark-web": "Muse Spark Web",
   nlpcloud: "NLP Cloud", "ollama-cloud": "Ollama Cloud", ovhcloud: "OVHcloud", "qwen-web": "Qwen Web",
   "t3-web": "T3 Web", uncloseai: "UncloseAI", ainative: "AI Native", baidu: "Baidu Qianfan",
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
