@@ -65,4 +65,5 @@ test("a recorded CLI claim is service ownership only when a service is installed
   expect(classifyPlanRuntimeOwner(identity, owner, { kind: "none" }, false)).toMatchObject({ runtimeOwner: "unmanaged", permits: true });
   expect(classifyPlanRuntimeOwner(identity, owner, { kind: "none" }, true)).toMatchObject({ runtimeOwner: "service", permits: true });
   expect(classifyPlanRuntimeOwner(identity, owner, { kind: "unknown", reason: "fixture", desktopSeen: false }, true)).toMatchObject({ runtimeOwner: "unknown", permits: false });
+  expect(classifyPlanRuntimeOwner({ kind: "unknown" }, { kind: "none", revision: 1 }, { kind: "none" }, false)).toMatchObject({ runtimeOwner: "unknown", permits: false });
 });

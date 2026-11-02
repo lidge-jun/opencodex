@@ -31,10 +31,12 @@ export function classifyPlanRuntimeOwner(identity: ServingIdentity, owner: Servi
   supervision: SupervisionEvidence, serviceInstalled: boolean | null): { runtimeOwner: PlanInputs["runtimeOwner"]; permits: boolean } {
   const policy = planUpdateRuntimeHandling({ ownership: owner.kind === "owned" ? owner.ownership : null,
     ownershipUnknown: owner.kind === "unknown", serviceInstalled: serviceInstalled === true, supervision });
+  const desktop = supervision.kind === "desktop" || (owner.kind === "owned" && owner.ownership.owner !== "cli");
   const uncertain = owner.kind === "unknown" || supervision.kind === "unknown" || supervision.kind === "unsupported" || serviceInstalled === null;
-  const runtimeOwner = uncertain ? "unknown" : supervision.kind === "desktop" || (owner.kind === "owned" && owner.ownership.owner !== "cli")
-    ? "desktop-app" : identity.kind === "absent" ? "none" : serviceInstalled && owner.kind === "owned" && owner.ownership.owner === "cli" ? "service" : "unmanaged";
-  return { runtimeOwner, permits: !uncertain && policy.mayReplacePackage };
+  const identityUnknown = identity.kind !== "live" && identity.kind !== "absent";
+  const runtimeOwner = uncertain ? "unknown" : desktop ? "desktop-app" : identityUnknown ? "unknown" : identity.kind === "absent" ? "none"
+    : serviceInstalled && owner.kind === "owned" && owner.ownership.owner === "cli" ? "service" : "unmanaged";
+  return { runtimeOwner, permits: !uncertain && !identityUnknown && policy.mayReplacePackage };
 }
 
 const defaultDeps: OrchestratedPlanDeps = {
