@@ -7,6 +7,8 @@ import {
   acquireSpendLedgerOwner,
   SPEND_LEDGER_OWNER_FILENAME,
   mintSpendLedgerStorage,
+  onSpendLedgerOwnerReleasing,
+  assertStorageOwned,
   SPEND_LEDGER_RESTART_PARENT_ENV,
   SpendLedgerOwnerError,
   spendLedgerRestartEnvironment,
@@ -239,6 +241,38 @@ describe("in-process references and privacy", () => {
     for (const lease of leases.splice(0).reverse()) lease.release();
   });
 
+  test("final release runs isolated hooks with existing storage but refuses new ownership", () => {
+    const first = acquireSpendLedgerOwner();
+    const second = acquireSpendLedgerOwner();
+    const token = mintSpendLedgerStorage("hook-test.sqlite");
+    let calls = 0;
+    let enabled = true;
+    let tokenAccepted = false;
+    const refusalCodes: unknown[] = [];
+    onSpendLedgerOwnerReleasing(() => {
+      if (!enabled) return;
+      calls++;
+      try { assertStorageOwned(token); tokenAccepted = true; } catch { /* checked below */ }
+      for (const action of [() => acquireSpendLedgerOwner(), () => mintSpendLedgerStorage("new.sqlite")]) {
+        try { action(); refusalCodes.push("accepted"); }
+        catch (error) { refusalCodes.push((error as SpendLedgerOwnerError).code); }
+      }
+      throw new Error("hook failure");
+    });
+    let subsequent = 0;
+    onSpendLedgerOwnerReleasing(() => { if (enabled) subsequent++; });
+    first.release();
+    expect(calls).toBe(0);
+    second.release();
+    second.release();
+    expect(calls).toBe(1);
+    expect(subsequent).toBe(1);
+    expect(tokenAccepted).toBe(true);
+    expect(refusalCodes).toEqual(["SPEND_LEDGER_OWNER_NOT_HELD", "SPEND_LEDGER_OWNER_NOT_HELD"]);
+    expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+    enabled = false;
+  });
+
   test("two leases share ownership and one release does not free it", async () => {
     const first = acquireSpendLedgerOwner();
     const second = acquireSpendLedgerOwner();
@@ -435,6 +469,9 @@ describe("backing file identity", () => {
       readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8"),
     ) as { paths: string[] };
     expect(manifest.paths).toContain(SPEND_LEDGER_OWNER_FILENAME);
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+      expect(manifest.paths).toContain(`codex-affinity.sqlite${suffix}`);
+    }
     for (const sidecar of ["-journal", "-wal", "-shm"]) {
       expect(manifest.paths).toContain(`${SPEND_LEDGER_OWNER_FILENAME}${sidecar}`);
     }

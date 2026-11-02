@@ -368,7 +368,11 @@ identically with and without configured ceilings: observe-only still appends, se
 Two servers in one process and one directory share a reference-counted lease; that process cannot
 hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
 releasing the final reference discards the singleton, so a later directory replays its own
-journal instead of inheriting figures. A ledger records the ownership it was built under and
+journal instead of inheriting figures.
+Final-release hooks run before that discard while existing storage tokens remain valid; each hook
+is isolated from errors in the others. Acquiring another lease or minting storage during these
+hooks is refused. Releasing a non-final reference or releasing the same lease twice runs no hooks.
+The ledger records the ownership it was built under and
 proves that exact identity on every accounting read and change, so a handle kept across a release
 and a reacquire of the same directory is refused rather than resuming over writes another owner
 may have made. File-backed journal and salt writers are owner-bound at construction, and a
