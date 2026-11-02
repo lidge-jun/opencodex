@@ -5,6 +5,7 @@ import { manualUpdateFailureGuidance } from "./update-failure-guidance.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
 import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
+import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -521,7 +522,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   }
 
   const { serviceStatePaths } = await import("../service");
-  let mutationStarted = false, completed = false;
+  let mutationStarted = false, completed = false, installedRoot: string | undefined;
   let updateExitCode: number | undefined;
   try {
   updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
@@ -971,6 +972,10 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     return 1;
   }
   if (!r) throw new Error("update replacement returned no result");
+  if (session && r.status === 0 && latest) {
+    const root = realpathSync.native(packageRoot());
+    if (verifyOrchestratedInstall(root, latest, "bun")) installedRoot = root;
+  }
   const postInstallPlan = planUpdateRuntimeHandling({
     ...(await resolvedRuntimeOwnership()),
     serviceInstalled: serviceWasInstalled,
@@ -1234,8 +1239,8 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   });
   completed = true;
   } finally {
-    if (session && mutationStarted) session.finish(completed && !updateExitCode
-      ? { phase: "installed", activeRoot: realpathSync.native(packageRoot()) }
+    if (session && mutationStarted) session.finish(installedRoot
+      ? { phase: "installed", activeRoot: installedRoot, ...(!completed || updateExitCode ? { recoveryFailed: true, error: "runtime-unhealthy" } : {}) }
       : { phase: "failed", error: "update-failed" });
   }
   if (updateExitCode) {

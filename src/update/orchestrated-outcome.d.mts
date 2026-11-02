@@ -1,5 +1,5 @@
 export type Outcome = { phase: "preflight" | "mutating" | "overrun" }
-  | { phase: "installed"; activeRoot: string }
+  | { phase: "installed"; activeRoot: string; recoveryFailed?: boolean; error?: string }
   | { phase: "refused"; error?: string }
   | { phase: "failed"; error?: string; rollbackPerformed?: boolean };
 export interface OutcomeInput {

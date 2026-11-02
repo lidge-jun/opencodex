@@ -329,6 +329,23 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8").match(/@latest version/g)).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
+    const reset = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); reset.version = "2.0.0";
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
+    rmSync(join(pkg, "tag-queried"));
+    const updateSource = join(pkg, "src/update/index.ts");
+    const source = readFileSync(updateSource, "utf8");
+    const point = '  if (r.status === 0) {\n    if (homePolicy.packageOnly)';
+    if (!source.includes(point)) throw new Error("recovery injection point missing");
+    writeFileSync(updateSource, source.replace(point, '  if (r.status === 0) {\n    throw new Error("fixture recovery failure");\n    if (homePolicy.packageOnly)'));
+    const failed = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json"], {
+      cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
+        CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
+        OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
+    });
+    const [failedOut, failedErr, failedCode] = await Promise.all([new Response(failed.stdout).text(), new Response(failed.stderr).text(), failed.exited]);
+    expect({ code: failedCode, stderr: failedErr }).toMatchObject({ code: 12 });
+    expect(JSON.parse(failedOut)).toMatchObject({ applied: true, healthy: false, error: "runtime-unhealthy" });
+    expect(JSON.parse(readFileSync(join(ocxHome, "update-orchestrated.json"), "utf8")).phase).toBe("installed");
   } finally {
     if (proc.exitCode === null) {
       writeFileSync(join(pkg, "installer-release"), "release");
