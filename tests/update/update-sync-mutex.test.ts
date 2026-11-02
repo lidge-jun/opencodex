@@ -46,6 +46,23 @@ test("sync refuses before its work while an update holds the mutex", async () =>
   }
 });
 
+test("sync refuses a live update marker even if its mutex is unexpectedly absent", async () => {
+  const root = home(), previous = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = root;
+  writeFileSync(join(root, "update-orchestrated.json"), JSON.stringify({ pid: process.pid, phase: "mutating", startedAt: 1 }));
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  const shim = spyOn(await import("../../src/cli/codex-shim-autorestore"), "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+  try {
+    const args = ["sync"];
+    const deps = { args, findLiveProxy: async () => { throw new Error("sync work reached"); } } as unknown as CliDispatchDeps;
+    expect(await dispatchCommand({ kind: "command", command: "sync", args }, deps)).toBe(7);
+    expect(shim).not.toHaveBeenCalled();
+  } finally {
+    shim.mockRestore(); err.mockRestore();
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+  }
+});
+
 test("a stale, proven-dead holder is recovered without waiting", () => {
   const root = home();
   const lock = join(root, "sync-update.mutation.lock");

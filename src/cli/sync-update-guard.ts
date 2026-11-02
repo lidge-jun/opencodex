@@ -1,5 +1,5 @@
 import { getConfigDir } from "../config/paths";
-import { tryAcquireUpdateSyncMutex } from "../update/sync-update-mutex";
+import { inspectUpdateMarker, tryAcquireUpdateSyncMutex } from "../update/sync-update-mutex";
 
 /** Hold the home-scoped update/sync mutex until the complete sync operation settles. */
 export async function withSyncUpdateGuard(run: () => Promise<number>): Promise<number> {
@@ -8,5 +8,11 @@ export async function withSyncUpdateGuard(run: () => Promise<number>): Promise<n
     console.error("update-in-flight");
     return 7;
   }
-  try { return await run(); } finally { lease.release(); }
+  try {
+    if (inspectUpdateMarker(getConfigDir()) !== "free") {
+      console.error("update-in-flight");
+      return 7;
+    }
+    return await run();
+  } finally { lease.release(); }
 }
