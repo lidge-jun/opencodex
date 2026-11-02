@@ -12,7 +12,7 @@ import { buildNativeClaudeEnv } from "../../src/cli/claude";
 import { observeManagingClis } from "../../src/service/managing-cli";
 import { repoPath } from "../helpers/repo-root";
 import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
-import { createLegacyUpdateSession } from "../../src/update/orchestrated-session.mjs";
+import { createLegacyUpdateSession, createOrchestratedChildSession } from "../../src/update/orchestrated-session.mjs";
 
 // Explicit private fixtures; only temp paths are written by this helper.
 function writeFileSync(path: string, data: Parameters<typeof writeFile>[1]): void {
@@ -283,9 +283,14 @@ posixTest("a killed launcher leaves the live Desktop delegate fenced past the st
     expect(delegate).toBeGreaterThan(0);
     const exited = new Promise<void>(resolve => launcherChild.once("exit", () => resolve()));
     launcherChild.kill("SIGKILL"); await exited;
-    const future = () => Date.now() + 31_000;
+    const futureTime = Date.now() + 31_000, future = () => futureTime;
     expect(tryAcquireUpdateSyncMutex(home, "update", { now: future })).toEqual({ kind: "busy", holder: "sync" });
-    expect(createLegacyUpdateSession({ home }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+    const realNow = Date.now;
+    try {
+      Date.now = future;
+      expect(createLegacyUpdateSession({ home }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+      expect(createOrchestratedChildSession({ home, verifyIdentity: () => true }).start()).toEqual({ ok: false, error: "sync-in-progress" });
+    } finally { Date.now = realNow; }
     writeFileSync(stop, "stop");
     const end = Date.now() + 3000;
     let lease = tryAcquireUpdateSyncMutex(home, "update", { now: future });
