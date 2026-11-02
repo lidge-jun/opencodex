@@ -133,7 +133,7 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
   await settle();
 
   expect(container.textContent).toContain("Checking startup protection");
-  const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button.btn"))
+  const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
     .find(button => (button.textContent ?? "").includes("Refresh"));
   expect(refresh).toBeTruthy();
   expect(refresh!.disabled).toBe(true);
