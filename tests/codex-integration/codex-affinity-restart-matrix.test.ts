@@ -132,7 +132,7 @@ test("hourly timer prunes an idle open store", () => inHome(home => {
   expect(result.issuers.n).toBe(0);
 }));
 
-test("adoption loads at most 64 newest scopes for a row key", () => inHome(home => {
+test("adoption enumerates every stored scope for a row key", () => inHome(home => {
   seed(home);
   const db = new Database(join(home, names[0]!));
   const row = db.query("SELECT row_key, account_id, fence, created_at, last_used_at FROM threads LIMIT 1").get() as { row_key: string; account_id: string; fence: string; created_at: number; last_used_at: number };
@@ -140,9 +140,9 @@ test("adoption loads at most 64 newest scopes for a row key", () => inHome(home 
   for (let i = 0; i < 80; i++) insert.run(row.row_key, `model-detour:shared:model-${i}`, row.account_id, row.fence, row.created_at, row.last_used_at - i - 1);
   db.close();
   const scopes = matrix(home, "scopes").scopes;
-  expect(scopes).toHaveLength(64);
+  expect(scopes).toHaveLength(81);
   expect(scopes).toContain("model-detour:shared:model-0");
-  expect(scopes).not.toContain("model-detour:shared:model-79");
+  expect(scopes).toContain("model-detour:shared:model-79");
 }));
 
 test("restoration accepts a 512-byte model component and rejects 513 bytes", () => inHome(home => {

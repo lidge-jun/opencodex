@@ -425,6 +425,8 @@ function pruneOnly(s: Scope): boolean {
   try {
     assertStorageOwned(s.token);
     s.db.exec("BEGIN IMMEDIATE");
+    // Pending touches first, so a pin used since its last persisted timestamp is not evicted as idle.
+    if (!s.poisoned) applyTouches(s, s.db);
     prune(s.db, Date.now());
     s.db.exec("COMMIT");
     return true;
@@ -434,39 +436,50 @@ function pruneOnly(s: Scope): boolean {
     return false;
   }
 }
+/** Write the live last-used time of every touched row; UPDATE-only, so it never creates or revives a row. */
+function applyTouches(s: Scope, db: Database): void {
+  for (const t of s.threads.values()) {
+    const row = reader?.thread(t.key, t.scope);
+    if (row?.identityFence)
+      db.query(
+        "UPDATE threads SET last_used_at=max(last_used_at, ?) WHERE row_key=? AND scope=? AND account_id=? AND fence=?",
+      ).run(
+        row.lastUsedAt,
+        t.rowKey,
+        t.scope,
+        row.accountId,
+        row.identityFence,
+      );
+  }
+  for (const t of s.issuers.values()) {
+    const row = reader?.issuer(t.key);
+    if (row)
+      db.query(
+        "UPDATE issuers SET last_used_at=max(last_used_at, ?) WHERE row_key=? AND account_id=? AND fence IS ?",
+      ).run(row.lastUsedAt, t.rowKey, row.accountId, row.fence ?? null);
+  }
+}
+/**
+ * Commit the ordered log and touches. The final release flush (clean=true) commits work that was
+ * logged outside any passive read, so it runs even if the release happens inside one.
+ */
 function flush(s: Scope, clean: boolean): boolean {
-  if (!s.db || s.disabled || s.poisoned || isPassiveRead()) return false;
+  if (!s.db || s.disabled || s.poisoned || (!clean && isPassiveRead())) return false;
   const db = s.db;
   for (let attempt = 0; attempt < 2; attempt++) try {
     assertStorageOwned(s.token);
     db.exec("BEGIN IMMEDIATE");
+    // Touches go before the log as well as after it, so the pruning between chunks sees the live
+    // last-used times and cannot evict a pin that is in use but persisted with an old timestamp.
+    applyTouches(s, db);
     for (let i = 0; i < s.log.length; i++) {
       const op = s.log[i]!;
       if (op.args.length) db.query(op.sql).run(...op.args);
       else db.exec(op.sql);
       if ((i + 1) % 256 === 0) prune(db, Date.now());
     }
-    // Read touches at flush time, after callers have updated the live entries.
-    for (const t of s.threads.values()) {
-      const row = reader?.thread(t.key, t.scope);
-      if (row?.identityFence)
-        db.query(
-          "UPDATE threads SET last_used_at=max(last_used_at, ?) WHERE row_key=? AND scope=? AND account_id=? AND fence=?",
-        ).run(
-          row.lastUsedAt,
-          t.rowKey,
-          t.scope,
-          row.accountId,
-          row.identityFence,
-        );
-    }
-    for (const t of s.issuers.values()) {
-      const row = reader?.issuer(t.key);
-      if (row)
-        db.query(
-          "UPDATE issuers SET last_used_at=max(last_used_at, ?) WHERE row_key=? AND account_id=? AND fence IS ?",
-        ).run(row.lastUsedAt, t.rowKey, row.accountId, row.fence ?? null);
-    }
+    // Again after the log: rows the log just inserted take their live last-used time.
+    applyTouches(s, db);
     prune(db, Date.now());
     if (clean) db.exec("UPDATE meta SET value=1 WHERE name='clean'");
     db.exec("COMMIT");
@@ -484,11 +497,14 @@ function flush(s: Scope, clean: boolean): boolean {
     if (attempt === 0 && error instanceof Error && "code" in error && error.code === "SQLITE_FULL" && pruneOnly(s)) continue;
     if (++s.failures >= 3) poison(s);
     else warning();
+    // Deleting expired rows does not depend on the failed batch; keep the retention bound.
+    pruneOnly(s);
     return false;
   }
   return false;
 }
-onSpendLedgerOwnerAcquired((home) => { scope(home); });
+// Open eagerly so the startup prune runs without traffic; a passive read never opens the store.
+onSpendLedgerOwnerAcquired((home) => { if (!isPassiveRead()) scope(home); });
 // Commit clean before closing; a later close failure cannot undo that commit.
 onSpendLedgerOwnerReleasing(() => {
   const s = current;
@@ -533,10 +549,12 @@ export function adoptStoredThreadRows(
   const rk = rowKey(s, key, "conversation");
   if (!rk || pending(s, rk, false) || (scopeName !== undefined && s.consulted.has(`t:${rk}:${scopeName}`))) return [];
   try {
+    // Enumerating every scope matters: routing decides account-wide release from this view. The
+    // table itself is trimmed to 2048 rows at open and on every flush, which bounds the read.
     const rows = s
       .db!.query(
         scopeName === undefined
-          ? "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? ORDER BY last_used_at DESC, scope LIMIT 64"
+          ? "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? ORDER BY last_used_at DESC, scope LIMIT 2048"
           : "SELECT scope, account_id, fence, created_at, last_used_at FROM threads WHERE row_key=? AND scope=? LIMIT 1",
       )
       .all(...(scopeName === undefined ? [rk] : [rk, scopeName])) as {

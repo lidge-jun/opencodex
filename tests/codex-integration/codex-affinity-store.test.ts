@@ -275,3 +275,37 @@ test("SQLITE_FULL triggers one prune-only transaction before retrying the flush"
   lease.release(); lease = acquireSpendLedgerOwner();
   expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1); expect(k).toBeDefined();
 });
+
+test("a pin touched since its last flush survives a chunk prune at the row limit", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence); flushCodexAffinityStoreForTests();
+  const now = Date.now();
+  const db = new Database(path()); const insert = db.query("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)");
+  db.exec("BEGIN"); for (let i = 0; i < 2047; i++) insert.run(`filler-${i}`, "legacy", "account-a", fence, now - 500, now - 500); db.exec("COMMIT"); db.close();
+  recordThreadTouch(k, "legacy"); live!.lastUsedAt = now;
+  for (let i = 0; i < 256; i++) { const fresh = codexConversationKeyFor(`fresh-${i}`, `fresh-${i}`); recordThreadBind(fresh, "shared", { scope: "shared", accountId: "account-a", fence, createdAt: now, lastUsedAt: now }); }
+  flushCodexAffinityStoreForTests(); lease.release(); lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
+});
+test("a failed flush still deletes expired rows", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); bind(fence); flushCodexAffinityStoreForTests();
+  const db = new Database(path());
+  db.query("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)").run("expired-row", "legacy", "account-a", fence, Date.now() - 25 * 60 * 60_000, Date.now() - 25 * 60 * 60_000);
+  db.exec("CREATE TRIGGER fail_bind BEFORE INSERT ON threads WHEN NEW.account_id = 'boom' BEGIN SELECT RAISE(ABORT, 'injected'); END");
+  db.close();
+  recordThreadBind(codexConversationKeyFor("boom-family", "boom-family"), "legacy", { scope: "legacy", accountId: "boom", fence, createdAt: Date.now(), lastUsedAt: Date.now() });
+  flushCodexAffinityStoreForTests();
+  const check = new Database(path());
+  expect((check.query("SELECT count(*) AS n FROM threads WHERE row_key = 'expired-row'").get() as { n: number }).n).toBe(0);
+  check.exec("DROP TRIGGER fail_bind"); check.close();
+});
+test("a lease acquired inside a passive read does not open the store", async () => {
+  await runPassiveRead(async () => { lease = acquireSpendLedgerOwner(); });
+  expect(existsSync(path())).toBe(false);
+});
+test("a release inside a passive read still commits the final flush", async () => {
+  lease = acquireSpendLedgerOwner(); bind(seed());
+  await runPassiveRead(async () => { lease!.release(); });
+  lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
+});
+
