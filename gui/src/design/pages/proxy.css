@@ -65,14 +65,6 @@
    would split the row into two columns: it is a settings row like the others. */
 .pv2-section-body > .pv2-row.dash-sync-summary { display: flex; align-items: stretch; gap: 12px; }
 
-/* bridge.css paints every switch track with `--raised` in the bridge layer, which outranks the
-   legacy `.switch.on` fill, so an "on" .switch drew a dark knob on a dark track. Restore the
-   on-state on these pages (the shared rule belongs in bridge.css; see the page report). */
-:is(.dash-overview-stack, .pv2-page) .switch.on {
-  background: var(--toggle-on-bg);
-  border-color: var(--toggle-on-bg);
-}
-
 /* Row selects fill the width their row gives them. */
 .pv2-row-control .custom-select { min-width: 0; }
 
