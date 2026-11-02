@@ -20,6 +20,7 @@ export interface OwnershipMutationLeaseHolder {
   /** The recorded PID; null when the directory holds no parseable owner. */
   readonly pid: number | null;
   readonly delegatePid: number | null;
+  readonly holderAlive: boolean | null;
   /** Liveness of the current process at the recorded PID; identity is not verified. */
   readonly alive: boolean | null;
   readonly holderKind: "sync" | "update" | null;

@@ -144,14 +144,16 @@ function leaseHolder(path, now, alive, image) {
   const since = observed ? Math.max(observed.record.createdAt, observed.mtimeMs) : incomplete?.mtimeMs ?? null;
   const delegate = observed?.record.delegatePid;
   const delegateValid = delegate === undefined || (Number.isSafeInteger(delegate) && delegate > 0);
-  const live = !delegateValid ? null : pid === null ? null : alive(pid) || (delegate !== undefined && alive(delegate));
+  const holderAlive = pid === null ? null : alive(pid);
+  const live = !delegateValid ? null : holderAlive === null ? null : holderAlive || (delegate !== undefined && alive(delegate));
   return {
     path,
     pid,
     delegatePid: delegateValid ? delegate ?? null : null,
+    holderAlive,
     alive: live,
     holderKind: observed?.record.holderKind ?? null,
-    image: live ? image(pid) : null,
+    image: holderAlive ? image(pid) : null,
     ageMs: since === null ? null : Math.max(0, now() - since),
     record: observed ? "complete" : incomplete?.ownerPath ? "incomplete" : incomplete ? "empty" : "unreadable",
   };
@@ -161,12 +163,17 @@ function describeHolder(holder) {
   const age = holder.ageMs === null ? "" : `, lease age ${Math.round(holder.ageMs / 1_000)}s`;
   if (holder.record === "unreadable") return "holder unknown: the lock directory does not hold exactly one owner file";
   if (holder.record === "empty") return `no owner file written yet${age}`;
-  const state = holder.alive ? ["alive", ...(holder.image ? [holder.image] : [])].join(", ") : "not alive";
+  const state = holder.holderAlive ? ["alive", ...(holder.image ? [holder.image] : [])].join(", ") : "not alive";
   const partial = holder.record === "incomplete" ? ", owner record incomplete" : "";
-  return `recorded PID ${holder.pid} [${state}, identity unverified${partial}]${age}`;
+  const delegate = holder.delegatePid === null ? "" : `, delegate PID ${holder.delegatePid} (identity unverified)`;
+  return `recorded PID ${holder.pid} [${state}, identity unverified${partial}]${delegate}${age}`;
 }
 
 const RECLAIM_HINT = `stale leases are reclaimed after ${STALE_MS / 1_000}s once the recorded PID is no longer alive`;
+function reclaimHint(holder) {
+  return holder.delegatePid !== null || (holder.record === "complete" && holder.alive === null)
+    ? `${RECLAIM_HINT} and any delegate is known absent or no longer alive` : RECLAIM_HINT;
+}
 
 /** The recorded lease owner for `statePaths`, identity unverified, or null if free. Reads only; never reclaims. */
 export function inspectOwnershipMutationLease(statePaths, options = {}) {
@@ -179,7 +186,7 @@ export function ownershipMutationLeaseStatusLine(statePaths, options = {}) {
   const holder = inspectOwnershipMutationLease(statePaths, options);
   if (!holder) return null;
   return `Runtime mutation lease busy at ${holder.path} (${describeHolder(holder)}); `
-    + `opencodex waits for it to start or change service state, and ${RECLAIM_HINT}.`;
+    + `opencodex waits for it to start or change service state, and ${reclaimHint(holder)}.`;
 }
 
 function createLeaseHandle(path, generation, token, options) {
@@ -297,7 +304,7 @@ export function acquireOwnershipMutationLease(
       if (now() >= deadline) {
         const holder = leaseHolder(path, now, alive, options.processImage ?? processImage);
         const error = new Error(`another process owns the runtime mutation lease at ${path}`
-          + (holder ? ` (${describeHolder(holder)}; ${RECLAIM_HINT})` : ""));
+          + (holder ? ` (${describeHolder(holder)}; ${reclaimHint(holder)})` : ""));
         error.code = "OWNERSHIP_MUTATION_LEASE_BUSY";
         error.holder = holder;
         throw error;
