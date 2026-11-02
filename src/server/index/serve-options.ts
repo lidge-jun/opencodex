@@ -216,7 +216,7 @@ import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-er
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
-import { translateInboundTurnState } from "../turn-state-handles";
+import { runTurnStateCallerScope } from "../turn-state-handles";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -325,8 +325,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // `maxInboundBodyBytes` edit needs a restart, which the config doc states.
       maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
-      // A turn-state handle this proxy issued maps back to the upstream token before any route reads it.
-      translateInboundTurnState(req.headers);
       const ingress = ingressForServer(requestServer);
       // Bind management-origin trust to the actual Bun listener object resolved above.
       // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
@@ -1989,6 +1987,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   } as const;
   const routeFetch = serveOptions.fetch;
   // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
-  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
-    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
+  // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
+  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runTurnStateCallerScope(async () =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer))) } as const;
 }

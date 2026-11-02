@@ -324,16 +324,15 @@ describe("WS endpoint re-framer (120/132)", () => {
       "x-codex-secondary-primary-reset-at": "1781928000",
       "x-codex-secondary-limit-name": "Secondary",
     }));
-    // The turn-state token comes back as a proxy handle; unknown families and limit labels are dropped.
-    expect(resolveTurnStateHandle(outbound["x-codex-turn-state"]!)).toBe("state");
-    expect(outbound["x-codex-turn-state"]).toMatch(/^ocx-ts-[0-9a-f]{32}$/);
+    // Without a send binding the turn-state token is dropped; unknown families and limit labels are too.
     expect(outbound).toEqual({
       "retry-after": "2",
-      "x-codex-turn-state": outbound["x-codex-turn-state"],
       "x-codex-primary-used-percent": "100",
       "x-codex-primary-window-minutes": "15",
       "x-ratelimit-remaining": "4",
     });
+    const bound = safeResponseHeaders(new Headers({ "x-codex-turn-state": "state" }), { turnStateBinding: "send-a" });
+    expect(resolveTurnStateHandle(bound["x-codex-turn-state"]!, "send-a")).toEqual({ value: "state" });
   });
 
   test("bounded sniffing replays the full body without dropping bytes", async () => {

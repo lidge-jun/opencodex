@@ -95,17 +95,31 @@ describe("response metadata headers are allowlisted by name and rebuilt by contr
       expect(isSafeResponseHeader(name)).toBe(false);
       expect(normalizeSafeResponseHeader(name, "req_abc-123")).toBeUndefined();
     }
-    expect(normalizeSafeResponseHeader("openai-model", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
-    expect(normalizeSafeResponseHeader("openai-model", "model+" + PROVIDER_KEY)).toBeUndefined();
-    expect(normalizeSafeResponseHeader("openai-model", "sk-proj-" + PROVIDER_KEY)).toBeUndefined();
   });
 
-  test("the turn-state token is replaced by a proxy handle that maps back", () => {
-    const handle = normalizeSafeResponseHeader("x-codex-turn-state", PROVIDER_KEY)!;
+  test("a model header is kept only as a model id the proxy already knows", () => {
+    // A catalog model, and a requested model the send names, pass as the proxy's own copy.
+    expect(normalizeSafeResponseHeader("openai-model", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(normalizeSafeResponseHeader("openai-model", "custom-model-1", { knownModels: ["custom-model-1"] })).toBe("custom-model-1");
+    // A prefixless key fits the identifier grammar but names no known model, so it is dropped.
+    for (const name of ["openai-model", "x-codex-safety-buffering-faster-model"]) {
+      expect(normalizeSafeResponseHeader(name, PROVIDER_KEY)).toBeUndefined();
+      expect(normalizeSafeResponseHeader(name, PROVIDER_KEY, { knownModels: ["gpt-5.5"] })).toBeUndefined();
+      expect(normalizeSafeResponseHeader(name, "custom-model-1")).toBeUndefined();
+    }
+    expect(normalizeSafeResponseHeader("openai-model", "model+" + PROVIDER_KEY)).toBeUndefined();
+  });
+
+  test("the turn-state token is replaced by a handle bound to the send, or dropped without one", () => {
+    const handle = normalizeSafeResponseHeader("x-codex-turn-state", PROVIDER_KEY, { turnStateBinding: "send-a" })!;
     expect(handle).toMatch(/^ocx-ts-[0-9a-f]{32}$/);
     expect(handle).not.toContain(PROVIDER_KEY);
-    expect(resolveTurnStateHandle(handle)).toBe(PROVIDER_KEY);
-    expect(normalizeSafeResponseHeader("x-codex-turn-state", "bad value")).toBeUndefined();
+    expect(resolveTurnStateHandle(handle, "send-a")).toEqual({ value: PROVIDER_KEY });
+    expect(resolveTurnStateHandle(handle, "send-b")).toEqual({ dropped: "mismatch" });
+    // An already issued handle passes a second normalization; a raw token without a binding does not.
+    expect(normalizeSafeResponseHeader("x-codex-turn-state", handle)).toBe(handle);
+    expect(normalizeSafeResponseHeader("x-codex-turn-state", PROVIDER_KEY)).toBeUndefined();
+    expect(normalizeSafeResponseHeader("x-codex-turn-state", "bad value", { turnStateBinding: "send-a" })).toBeUndefined();
   });
 
   test("quota windows are relayed only for known limit families", () => {
@@ -119,17 +133,20 @@ describe("response metadata headers are allowlisted by name and rebuilt by contr
     const upstreamHeaders: Record<string, string> = {
       "x-request-id": PROVIDER_KEY, "openai-request-id": PROVIDER_KEY, "x-models-etag": PROVIDER_KEY,
       "x-codex-turn-state": PROVIDER_KEY, "x-codex-primary-limit-name": PROVIDER_KEY, "x-codex-primary-reset-at": NUMERIC_KEY,
+      "openai-model": PROVIDER_KEY, "x-codex-safety-buffering-faster-model": PROVIDER_KEY,
       [`x-codex-${PROVIDER_KEY.toLowerCase()}-primary-used-percent`]: "5", "x-ratelimit-remaining": "7",
     };
     const errorFrame = JSON.stringify(buildWsErrorFrame(429, { message: "Rate limited" }, new Headers(upstreamHeaders)));
-    const owner = new CodexWsMetadata();
+    const owner = new CodexWsMetadata(undefined, { turnStateBinding: "send-a", knownModels: ["gpt-5.5"] });
     owner.commit();
-    const metadataFrame = owner.consume({ type: "codex.response.metadata", headers: upstreamHeaders }, 600)!;
+    const metadataFrame = owner.consume({ type: "codex.response.metadata", headers: upstreamHeaders }, 700)!;
     const snapshot = JSON.stringify([...owner.snapshot()]);
-    // Non-vacuous: each output carries the allowlisted count and the turn-state handle.
+    // Non-vacuous: each output carries the allowlisted count; the bound outputs carry the handle.
+    expect(errorFrame).not.toContain("x-codex-turn-state");
     for (const text of [errorFrame, metadataFrame, snapshot]) {
       expect(text).toContain("x-ratelimit-remaining");
-      expect(text).toMatch(/ocx-ts-[0-9a-f]{32}/);
+      if (text !== errorFrame) expect(text).toMatch(/ocx-ts-[0-9a-f]{32}/);
+      expect(text).not.toContain("openai-model");
       expect(text.toLowerCase()).not.toContain(PROVIDER_KEY.toLowerCase());
       expect(text).not.toContain(NUMERIC_KEY);
     }
@@ -155,8 +172,10 @@ describe("response metadata headers are allowlisted by name and rebuilt by contr
         primary: { used_percent: 33.33, window_minutes: 300, reset_at: 1_900_000_000 },
         secondary: { used_percent: 100 },
       },
-      credits: { has_credits: true, unlimited: false, balance: "12.5" },
+      credits: { has_credits: true, unlimited: false },
     });
+    // The balance reaches clients only as the proxy-formatted header.
+    expect(owner.snapshot().get("x-codex-credits-balance")).toBe("12.5");
     expect(owner.snapshot().get("x-codex-bengalfox-secondary-used-percent")).toBe("100");
     for (const output of [text, JSON.stringify([...owner.snapshot()])]) {
       expect(output).not.toContain(PROVIDER_KEY);

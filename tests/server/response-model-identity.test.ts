@@ -37,6 +37,34 @@ function routedConfig(
   } as OcxConfig;
 }
 
+describe("a passthrough openai-model header is kept only as a known model id", () => {
+  const PROVIDER_KEY = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+  test.each([
+    [PROVIDER_KEY, undefined],
+    ["gpt-5.6-sol", "gpt-5.6-sol"],
+  ])("upstream reports %s", async (reported, expected) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    // No body model, so only the header can set the served model.
+    globalThis.fetch = (async () => new Response(JSON.stringify(responseSnapshot(undefined)), {
+      status: 200,
+      headers: { "content-type": "application/json", "openai-model": reported, "x-codex-safety-buffering-faster-model": reported },
+    })) as unknown as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-openai/gpt-5.5", input: "hi", stream: false }),
+    }), routedConfig("fixture-openai", "openai-responses", "gpt-5.5"), logCtx, {});
+    const body = await response.text();
+    // Non-vacuous: the passthrough answered and its row context was filled in.
+    expect(response.status).toBe(200);
+    expect(logCtx.provider).toBe("fixture-openai");
+    expect(response.headers.get("openai-model") ?? undefined).toBe(expected);
+    expect(response.headers.get("x-codex-safety-buffering-faster-model") ?? undefined).toBe(expected);
+    expect(logCtx.servedModel).toBe(expected);
+    expect(JSON.stringify([...response.headers, body, logCtx.servedModel, logCtx.resolvedModel])).not.toContain(PROVIDER_KEY);
+  });
+});
+
 function responseSnapshot(model: unknown): Record<string, unknown> {
   return {
     id: "resp_fixture",

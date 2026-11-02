@@ -1,15 +1,24 @@
 import { formatClientRetryAfter } from "../lib/client-retry-after";
-import { boundedModelIdentity } from "../lib/model-identity";
-import { issueTurnStateHandle } from "./turn-state-handles";
+import { knownModelIdentity } from "../lib/model-identity";
+import { isLiveTurnStateHandle, issueTurnStateHandle } from "./turn-state-handles";
 
 /**
  * Upstream response headers a client may receive as response metadata (WebSocket frames, the
  * WS-to-HTTP projection). Each name is listed explicitly and each value is validated or rebuilt
  * against its contract; a value that does not fit is dropped. No value is copied: numbers and
- * booleans are reformatted, models pass the identity bound, and the turn-state token is replaced by
- * a proxy-owned handle. Request ids, the models etag and quota limit labels are not relayed.
+ * booleans are reformatted, a model header is kept only as a model id the proxy already knows for
+ * the request, and the turn-state token is replaced by a handle bound to the request. Request ids,
+ * the models etag and quota limit labels are not relayed.
  */
-type Normalize = (value: string) => string | undefined;
+export type ResponseMetadataContext = {
+  /** Binding of the send that produced these headers; without one, a turn-state token is dropped. */
+  turnStateBinding?: string;
+  /** Model ids the request already names (requested and routed); the bundled catalog also counts. */
+  knownModels?: readonly string[];
+  /** Provider (or metadata vendor) whose bundled model catalog also counts as known. */
+  provider?: string;
+};
+type Normalize = (value: string, context: ResponseMetadataContext) => string | undefined;
 
 const OPAQUE_TOKEN = /^[A-Za-z0-9._~+/=:-]{1,8192}$/;
 const NUMBER = /^\d{1,15}(?:\.\d{1,6})?$/;
@@ -88,11 +97,13 @@ const COUNT = count(1e12);
 // "toString") can never resolve to an inherited value.
 const EXACT: ReadonlyMap<string, Normalize> = new Map<string, Normalize>([
   ["retry-after", value => formatClientRetryAfter(value)],
-  // Codex echoes the turn-state token on later requests of the turn; it receives a handle that
-  // src/server/turn-state-handles.ts maps back before the request is forwarded.
-  ["x-codex-turn-state", value => OPAQUE_TOKEN.test(value) ? issueTurnStateHandle(value) : undefined],
-  ["openai-model", boundedModelIdentity],
-  ["x-codex-safety-buffering-faster-model", boundedModelIdentity],
+  // Codex echoes the turn-state token on later requests of the turn; it receives a handle bound to
+  // this send, which src/server/turn-state-handles.ts maps back only for a send with the same binding.
+  ["x-codex-turn-state", (value, context) => !OPAQUE_TOKEN.test(value) ? undefined
+    : isLiveTurnStateHandle(value) ? value
+    : context.turnStateBinding ? issueTurnStateHandle(value, context.turnStateBinding) : undefined],
+  ["openai-model", (value, context) => knownModelIdentity(value, context.knownModels, context.provider)],
+  ["x-codex-safety-buffering-faster-model", (value, context) => knownModelIdentity(value, context.knownModels, context.provider)],
   ["x-reasoning-included", bool],
   ["x-codex-credits-has-credits", bool],
   ["x-codex-credits-unlimited", bool],
@@ -144,17 +155,17 @@ export function isSafeResponseHeader(name: string): boolean {
 }
 
 /** The value this proxy relays for an allowlisted header, rebuilt or validated; undefined drops it. */
-export function normalizeSafeResponseHeader(name: string, value: string): string | undefined {
+export function normalizeSafeResponseHeader(name: string, value: string, context: ResponseMetadataContext = {}): string | undefined {
   if (typeof name !== "string" || typeof value !== "string") return undefined;
   const normalize = normalizer(name.toLowerCase());
-  const normalized = normalize?.(value);
+  const normalized = normalize?.(value, context);
   return typeof normalized === "string" ? normalized : undefined;
 }
 
-export function safeResponseHeaders(headers: Headers): Record<string, string> {
+export function safeResponseHeaders(headers: Headers, context: ResponseMetadataContext = {}): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of headers) {
-    const normalized = normalizeSafeResponseHeader(name, value);
+    const normalized = normalizeSafeResponseHeader(name, value, context);
     if (normalized !== undefined) out[name.toLowerCase()] = normalized;
   }
   return out;

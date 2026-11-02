@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boundedServiceTier } from "../../src/lib/response-service-tier";
-import { boundedModelIdentity } from "../../src/lib/model-identity";
+import { boundedModelIdentity, knownModelIdentity } from "../../src/lib/model-identity";
 import {
   addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, inspectResponseLogJson,
   requestLogEntryFromPersistedUsage, type RequestLogContext, type RequestLogEntry,
@@ -95,21 +95,43 @@ describe("model identity fields share one bound", () => {
     }
   });
 
-  test("served and resolved models are validated independently on every surface", () => withHome(() => {
-    const bad = "model+" + PROVIDER_KEY;
-    addRequestLog(log({ requestId: "identity-canary", status: 200, servedModel: "gpt-served", resolvedModel: bad }));
-    const ctx: RequestLogContext = { model: "m", provider: "openai", servedModel: bad, resolvedModel: "gpt-resolved" };
+  test("served and resolved models are kept only as model ids the route already knows, on every surface", () => withHome(() => {
+    // A prefixless key fits the identifier grammar, so only the known-model rule can refuse it.
+    expect(boundedModelIdentity(PROVIDER_KEY)).toBe(PROVIDER_KEY);
+    expect(knownModelIdentity(PROVIDER_KEY, ["m", "gpt-5.5"])).toBeUndefined();
+    expect(knownModelIdentity("gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(knownModelIdentity("m", ["m"])).toBe("m");
+    addRequestLog(log({ requestId: "identity-canary", status: 200, servedModel: "gpt-5.6-sol", resolvedModel: PROVIDER_KEY }));
+    addRequestLog(log({ requestId: "identity-unknown", status: 200, servedModel: "gpt-served", resolvedModel: "gpt-resolved" }));
+    const ctx: RequestLogContext = { model: "m", provider: "openai", wireModel: "m-wire", servedModel: PROVIDER_KEY, resolvedModel: "m-wire" };
     const rows: RequestLogEntry[] = [];
     addFinalRequestLog("identity-final", Date.now(), ctx, 200, { closeReason: "terminal" }, row => rows.push(row));
     addRequestLog(rows[0]!);
-    for (const id of ["identity-canary", "identity-final"]) {
+    // The response-body capture path applies the same rule before anything is recorded.
+    const observed: RequestLogContext = { model: "m", provider: "openai" };
+    inspectResponseLogJson(observed, JSON.stringify({ model: PROVIDER_KEY }));
+    expect(observed.servedModel).toBeUndefined();
+    inspectResponseLogJson(observed, JSON.stringify({ model: "gpt-5.6-sol" }));
+    expect(observed.servedModel).toBe("gpt-5.6-sol");
+    for (const id of ["identity-canary", "identity-unknown", "identity-final"]) {
       const live = getRequestLogEntries().find(entry => entry.requestId === id)!;
+      expect(live).toBeDefined();
       expect(JSON.stringify(live)).not.toContain(PROVIDER_KEY);
       expect(JSON.stringify(requestLogDto(live))).not.toContain(PROVIDER_KEY);
     }
-    expect(getRequestLogEntries().find(entry => entry.requestId === "identity-canary")!.servedModel).toBe("gpt-served");
-    expect(getRequestLogEntries().find(entry => entry.requestId === "identity-final")!.resolvedModel).toBe("gpt-resolved");
+    const canary = getRequestLogEntries().find(entry => entry.requestId === "identity-canary")!;
+    expect(canary.servedModel).toBe("gpt-5.6-sol");
+    expect(canary.resolvedModel).toBeUndefined();
+    const unknown = getRequestLogEntries().find(entry => entry.requestId === "identity-unknown")!;
+    expect([unknown.servedModel, unknown.resolvedModel]).toEqual([undefined, undefined]);
+    const final = getRequestLogEntries().find(entry => entry.requestId === "identity-final")!;
+    expect([final.servedModel, final.resolvedModel]).toEqual([undefined, "m-wire"]);
     expect(readFileSync(usageLogPath(), "utf8")).not.toContain(PROVIDER_KEY);
-    for (const entry of readUsageEntries()) expect(JSON.stringify(requestLogEntryFromPersistedUsage(entry))).not.toContain(PROVIDER_KEY);
+    const persisted = readUsageEntries();
+    expect(persisted.length).toBeGreaterThanOrEqual(3);
+    for (const entry of persisted) expect(JSON.stringify(requestLogEntryFromPersistedUsage(entry))).not.toContain(PROVIDER_KEY);
+    // Hydration applies the rule itself to a row that did not come through the disk reader.
+    const hydrated = requestLogEntryFromPersistedUsage({ ...persisted[0]!, servedModel: PROVIDER_KEY, resolvedModel: PROVIDER_KEY });
+    expect(JSON.stringify(hydrated)).not.toContain(PROVIDER_KEY);
   }));
 });

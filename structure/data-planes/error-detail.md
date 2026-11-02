@@ -65,11 +65,22 @@ the live projection for the row and every nested `tierOutcome`, and in `normaliz
 confirmation still reads the raw observation, so a configured wire value outside the set confirms Fast
 without being recorded.
 
-`servedModel` and `resolvedModel` each pass `boundedModelIdentity` in `src/lib/model-identity.ts` on their
-own: `[A-Za-z0-9._:/@-]`, at most 128 characters, and unchanged by the secret redactor. `addRequestLog`,
-`normalizeUsageEntry` and hydration apply it through `modelIdentityLogFields`; relayed model headers use the
-same check. `tests/usage/request-log-identity-bounds.test.ts` covers capture, live, ledger, hydration and the
-`/api/logs` DTO.
+An upstream-reported model is kept only when it equals a model id this proxy already knows, because no
+identifier grammar can tell a prefixless credential from a model name. `knownModelIdentity` in
+`src/lib/model-identity.ts` applies `boundedModelIdentity` (`[A-Za-z0-9._:/@-]`, at most 128 characters,
+unchanged by the secret redactor) and then requires an exact match with one of: the ids the route names
+(`routeKnownModels` in `src/usage/log.ts`: the routed model and its unprefixed form, the wire model, the
+requested model and alias, and every attempt's target), the bundled Codex catalog
+(`src/codex/catalog/pinned-models.ts`), or the bundled metadata catalog for the selected provider
+(`src/generated/model-metadata.ts`). It returns the proxy's copy of the matched id. `servedModel` and
+`resolvedModel` pass it independently at capture (`recordObservedServedModel` and the passthrough
+`openai-model` header in `src/server/responses/passthrough-delivery.ts`, which also rewrites or drops the
+relayed `openai-model` and `x-codex-safety-buffering-faster-model` headers), and again in `addRequestLog`,
+`normalizeUsageEntry` and hydration through `modelIdentityLogFields`; anything else is not recorded. Relayed
+WebSocket model headers use the same rule with the requested model as the known id.
+`tests/usage/request-log-identity-bounds.test.ts`, `tests/usage/request-log-served-model.test.ts` and
+`tests/server/response-model-identity.test.ts` cover capture, live, ledger, hydration, the `/api/logs` DTO
+and the passthrough header.
 
 ## Response metadata headers
 
@@ -89,17 +100,26 @@ validator), quota limit labels and free-text headers such as the promo message a
 
 The turn-state token is the one value a client must send back: Codex replays `x-codex-turn-state` on
 later requests of the turn, and on the WebSocket upgrade, to keep the turn on one backend.
-`src/server/turn-state-handles.ts` issues a random handle (`ocx-ts-` and 32 hex digits) per token,
-holds the mapping in process memory (bounded to 4096 entries, six-hour expiry), and translates it back at
-ingress: the server's `fetch` entry rewrites the inbound header, which also covers WebSocket upgrades,
-and the WebSocket message handler rewrites `client_metadata["x-codex-turn-state"]` in each frame. An
-unknown or expired handle is removed; a value that is not a handle passes unchanged.
+`src/server/turn-state-handles.ts` issues a random handle (`ocx-ts-` and 32 hex digits) per token and
+binds it to the send that received the token: a digest of the admitted caller (configured key id,
+environment principal or loopback), the provider name and the outbound account (the ChatGPT account id,
+or the outbound credential when there is none). The mapping lives in process memory (bounded to 4096
+entries, six-hour expiry). Each request and each WebSocket `response.create` frame runs in its own caller
+scope (`runTurnStateCallerScope`, opened by the server's `fetch` wrapper and the frame handler), which
+`admissionFields` in `src/server/auth-cors.ts` fills. A handle is redeemed only at the physical send in
+`src/server/responses/fetch-helpers.ts`, after admission and routing: the outbound header and
+`client_metadata["x-codex-turn-state"]` map back to the token when the send's binding matches, and are
+removed otherwise, with the fixed service-log flag `turn_state_binding_mismatch` for a mismatch. The WS
+upstream receives the same binding on its init, and the exchange issues handles with it; without a
+binding a token is dropped. Handles, tokens and bindings are never logged; a value that is not a handle
+passes unchanged.
 
 `codex-ws-metadata.ts` checks the raw byte budget first, then keeps only normalized values. It rebuilds
 the native `codex.rate_limits` frame field by field: known limit ids (`codex`, `codex_bengalfox`), a
 closed set of plan labels, the `allowed`/`limit_reached` flags, quota windows with the percent clamped to
-100 at two decimals and integer window and reset values, and the credit flags with a reformatted balance.
-Every other field is discarded, and the windows of an unknown limit id are dropped rather than relabelled.
+100 at two decimals and integer window and reset values, and the credit flags. Every other field is
+discarded, including the credit balance, which clients receive only as the proxy-formatted
+`x-codex-credits-balance` header; the windows of an unknown limit id are dropped rather than relabelled.
 The connection-level `x-reasoning-included` seed stays present, since Codex reads it by presence, but
 carries only an exact `true`/`false` or an empty value.
 `tests/server/safe-response-headers.test.ts` covers the allowlist, each contract and both WebSocket

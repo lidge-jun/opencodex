@@ -39,11 +39,11 @@ describe("deferred non-stream request log integration", () => {
   });
 
   test("inspects complete small JSON using the existing metadata parser", async () => {
-    const payload = JSON.stringify({ model: "resolved-model", usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } });
+    const payload = JSON.stringify({ model: "gpt-5.6-sol", usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } });
     const { result, entries } = tracked(new Response(payload, { headers: { "content-type": "application/json" } }));
     expect(await result.text()).toBe(payload);
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.resolvedModel).toBe("resolved-model");
+    expect(entries[0]?.resolvedModel).toBe("gpt-5.6-sol");
     expect(entries[0]?.status).toBe(200);
   });
 
@@ -55,6 +55,7 @@ describe("deferred non-stream request log integration", () => {
     const logCtx: RequestLogContext = {
       model: "requested-model",
       provider: "fixture-provider",
+      wireModel: "already-inspected",
       resolvedModel: "already-inspected",
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
     };

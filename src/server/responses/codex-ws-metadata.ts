@@ -1,4 +1,6 @@
-import { CODEX_QUOTA_FAMILIES, isSafeResponseHeader, normalizeSafeResponseHeader, safeResponseHeaders } from "../safe-response-headers";
+import {
+  CODEX_QUOTA_FAMILIES, isSafeResponseHeader, normalizeSafeResponseHeader, safeResponseHeaders, type ResponseMetadataContext,
+} from "../safe-response-headers";
 
 export const CODEX_WS_METADATA_MAX_BYTES = 32 * 1024;
 export const CODEX_WS_METADATA_MAX_FAMILIES = 16;
@@ -95,8 +97,9 @@ function writeWindow(headers: Headers, prefix: string, window: QuotaWindow | und
 
 /**
  * The `codex.rate_limits` frame relayed to the client, rebuilt field by field: known limit ids and
- * plan labels, boolean flags, bounded quota windows and a reformatted credit balance. Every other
- * field is discarded. Windows of an unknown limit id are dropped, never relabelled as ordinary quota.
+ * plan labels, boolean flags and bounded quota windows. Every other field is discarded, including
+ * the credit balance (it is only relayed as the proxy-formatted `x-codex-credits-balance` header).
+ * Windows of an unknown limit id are dropped, never relabelled as ordinary quota.
  */
 function rateLimitsFrame(event: Record<string, unknown>): Record<string, unknown> {
   const frame: Record<string, unknown> = { type: "codex.rate_limits" };
@@ -123,9 +126,6 @@ function rateLimitsFrame(event: Record<string, unknown>): Record<string, unknown
     for (const flag of ["has_credits", "unlimited"]) {
       if (typeof event.credits[flag] === "boolean") credits[flag] = event.credits[flag];
     }
-    const balance = typeof event.credits.balance === "string"
-      ? normalizeSafeResponseHeader("x-codex-credits-balance", event.credits.balance) : undefined;
-    if (balance !== undefined) credits.balance = balance;
     frame.credits = credits;
   }
   return frame;
@@ -156,7 +156,7 @@ function setMetadataHeader(headers: Headers, name: string, value: string): void 
   try { headers.set(name, value); } catch { /* invalid provider header is not HTTP authority */ }
 }
 
-function responseHeaders(value: unknown): Headers {
+function responseHeaders(value: unknown, context: ResponseMetadataContext): Headers {
   const headers = new Headers();
   if (!record(value)) return headers;
   for (const [name, field] of Object.entries(value)) {
@@ -165,7 +165,7 @@ function responseHeaders(value: unknown): Headers {
     const raw = String(field);
     // The byte budget applies to what the upstream sent; then only a value that fits its contract stays.
     if (Buffer.byteLength(raw) > CODEX_WS_METADATA_MAX_VALUE_BYTES) throw new Error("codex websocket metadata value exceeds the size limit");
-    const normalized = normalizeSafeResponseHeader(name, raw);
+    const normalized = normalizeSafeResponseHeader(name, raw, context);
     if (normalized !== undefined) setMetadataHeader(headers, name, normalized);
   }
   return headers;
@@ -193,7 +193,7 @@ export class CodexWsMetadata {
   private preludeBytes = 0;
   private committed = false;
 
-  constructor(private observer?: CodexWsQuotaObserver) {}
+  constructor(private observer?: CodexWsQuotaObserver, private readonly context: ResponseMetadataContext = {}) {}
 
   snapshot(): Headers { return new Headers(this.headers); }
 
@@ -225,7 +225,7 @@ export class CodexWsMetadata {
     if (bytes > CODEX_WS_METADATA_MAX_BYTES) throw new Error("codex websocket metadata frame exceeds the size limit");
     if (!this.committed) this.preludeBytes += bytes;
     if (this.preludeBytes > CODEX_WS_METADATA_MAX_BYTES) throw new Error("codex websocket metadata prelude exceeds the size limit");
-    const updates = event.type === "codex.rate_limits" ? quotaHeaders(event) : responseHeaders(event.headers);
+    const updates = event.type === "codex.rate_limits" ? quotaHeaders(event) : responseHeaders(event.headers, this.context);
     const next = this.snapshot();
     for (const name of updates.keys()) {
       if (!name.endsWith("-used-percent")) continue;
@@ -240,7 +240,7 @@ export class CodexWsMetadata {
       this.publishQuota(updates);
     }
     return event.type === "codex.response.metadata"
-      ? JSON.stringify({ type: event.type, headers: safeResponseHeaders(updates) })
+      ? JSON.stringify({ type: event.type, headers: safeResponseHeaders(updates, this.context) })
       : JSON.stringify(rateLimitsFrame(event));
   }
 

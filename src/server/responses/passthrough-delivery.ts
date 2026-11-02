@@ -1,6 +1,8 @@
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
+import { knownModelIdentity } from "../../lib/model-identity";
+import { routeKnownModels } from "../../usage/log";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
@@ -486,7 +488,14 @@ export async function deliverPassthroughResponse(
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
-    const resolvedModel = headers.get("openai-model")?.trim();
+    // A reported model is kept, in the row and in the relayed header, only when it equals a model id
+    // this route already knows; the client receives the proxy's copy of that id, or no header.
+    const knownModels = routeKnownModels(logCtx);
+    const resolvedModel = knownModelIdentity(headers.get("openai-model")?.trim(), knownModels, logCtx.provider);
+    for (const name of ["openai-model", "x-codex-safety-buffering-faster-model"]) {
+      const known = name === "openai-model" ? resolvedModel : knownModelIdentity(headers.get(name)?.trim(), knownModels, logCtx.provider);
+      if (known) headers.set(name, known); else headers.delete(name);
+    }
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;

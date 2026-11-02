@@ -30,7 +30,7 @@ import {
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../../src/server/responses/ws-upstream";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
-import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
+import { resolveTurnStateHandle, TURN_STATE_BINDING_INIT } from "../../src/server/turn-state-handles";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, shouldUseCodexWsUpstream, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { installCompactionRoutingAclFixture as installRoutingAclFixture } from "../helpers/compaction-routing-fixtures";
@@ -759,14 +759,16 @@ describe("codexWsUpstreamFetch", () => {
       ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed" } }) });
     });
-    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+    const response = await codexWsUpstreamFetch(CODEX_URL, { ...streamingInit(), [TURN_STATE_BINDING_INIT]: "send-a" } as RequestInit, (() => {
       throw new Error("fallback must not run");
     }) as unknown as typeof fetch);
     expect(response.headers.get("x-codex-primary-used-percent")).toBe("31");
     expect(response.headers.get("x-codex-primary-window-minutes")).toBe("10080");
     expect(response.headers.get("x-codex-credits-balance")).toBe("12.5");
     expect(response.headers.has("x-models-etag")).toBe(false);
-    expect(resolveTurnStateHandle(response.headers.get("x-codex-turn-state")!)).toBe("turn-state");
+    // The handle is bound to the send that received it, and redeems only under that binding.
+    expect(resolveTurnStateHandle(response.headers.get("x-codex-turn-state")!, "send-a")).toEqual({ value: "turn-state" });
+    expect(resolveTurnStateHandle(response.headers.get("x-codex-turn-state")!, "send-b")).toEqual({ dropped: "mismatch" });
     expect(response.headers.has("authorization")).toBe(false);
     expect(response.headers.has("set-cookie")).toBe(false);
     const text = await response.text();
@@ -1024,8 +1026,8 @@ describe("codexWsUpstreamFetch", () => {
       const response = await receive({ ...refusal, headers });
       if (accepted) {
         expect(response.status).toBe(429);
-        // Turn state returns as a proxy handle for the same token; unknown quota families never pass.
-        for (const [name, value] of Object.entries(headers)) expect(name === "x-codex-turn-state" ? resolveTurnStateHandle(response.headers.get(name)!) : response.headers.get(name)).toBe(name === "x-codex-turn-state" ? value : null);
+        // Without a send binding the turn-state token is dropped; unknown quota families never pass.
+        for (const name of Object.keys(headers)) expect(response.headers.get(name)).toBeNull();
         expect(await response.json()).toEqual({ error: refusal.error });
       } else {
         // The overflow lands before any response event: an honest 502, never a 200 whose
