@@ -1167,7 +1167,9 @@ function captureUpstreamErrorParsed(
     // reader-facing label so a generic 502 in /api/logs explains WHY the turn ended, not just the
     // mapped HTTP code.
     if (typeof reason === "string" && reason.trim()) {
-      logCtx.upstreamError = redactSecretString(incompleteReasonLabel(reason.trim())).slice(0, 500);
+      const label = incompleteReasonLabel(reason.trim()); // A known reason's label is proxy text; the row may keep it.
+      logCtx.upstreamError = redactSecretString(label ?? `Upstream incomplete: ${reason.trim()}`).slice(0, 500);
+      if (label) logCtx.failureDetail = label;
     }
     return;
   }
@@ -1179,7 +1181,7 @@ function captureUpstreamErrorParsed(
 }
 
 /** Map a raw `incomplete_details.reason` (emitted by the bridge) to a reader-facing label. */
-function incompleteReasonLabel(reason: string): string {
+function incompleteReasonLabel(reason: string): string | undefined {
   switch (reason) {
     case "max_output_tokens":
       return `Output reached the requested token limit (${reason})`;
@@ -1188,7 +1190,7 @@ function incompleteReasonLabel(reason: string): string {
     case "adapter_eof":
       return `Upstream stream ended unexpectedly without a terminal event (${reason})`;
     default:
-      return `Upstream incomplete: ${reason}`;
+      return undefined;
   }
 }
 
@@ -1561,7 +1563,8 @@ function writeFinalRequestLog(
   const jevDecision = normalizePersistedJevDecision(logCtx.jevDecision);
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
-  addLog({
+  // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
+  addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
     timestamp: start,
@@ -1626,7 +1629,7 @@ function writeFinalRequestLog(
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
     ...attribution,
-  });
+  }));
   // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
   for (const attempt of attempts ?? []) debugAttemptDeliverySummary(requestId, attempt);
   if (isUsageDebugEnabled()) {

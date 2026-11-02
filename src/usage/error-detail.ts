@@ -109,9 +109,11 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
   const status = typeof entry.status === "number" ? entry.status : undefined;
   const errorCode = normalizeLogErrorCode(entry.errorCode, status);
   const failed = (status !== undefined && status >= 400) || (typeof entry.terminalStatus === "string" && entry.terminalStatus !== "completed");
+  // A client that closed the request is not an upstream condition.
+  const clientClosed = status === 499 || errorCode === "client_closed_request" || errorCode === "client_cancelled";
   let upstreamCondition: UpstreamCondition | undefined = isUpstreamCondition(entry.upstreamCondition) ? entry.upstreamCondition : undefined;
   const evidence = str(entry.upstreamError) ?? str(entry.upstreamErrorCode) ?? str(entry.upstreamErrorType);
-  if (!upstreamCondition && failed && evidence !== undefined && status !== undefined) {
+  if (!upstreamCondition && failed && !clientClosed && evidence !== undefined && status !== undefined) {
     upstreamCondition = classifyUpstreamCondition({
       status: status >= 400 ? status : 502,
       code: str(entry.upstreamErrorCode),
@@ -139,13 +141,15 @@ type ProjectableEntry = ErrorDetailSource & { attempts?: unknown; attemptNormali
 /**
  * The live-row form of {@link errorDetailFor}: attach the proxy-owned facts and remove upstream text.
  * Returns the same object when nothing changes, so callers that rely on identity keep it. Attempt
- * codes outside the vocabulary are corrected in place (attempts keep their identity too).
+ * codes outside the vocabulary are corrected, and upstream text fields removed, in place (attempts
+ * keep their identity too).
  */
 export function projectErrorDetail<T extends ProjectableEntry>(entry: T): T {
   if (Array.isArray(entry.attempts)) {
     for (const attempt of entry.attempts as unknown[]) {
       if (!attempt || typeof attempt !== "object") continue;
       const record = attempt as Record<string, unknown>;
+      for (const field of UPSTREAM_TEXT_FIELDS) if (field in record) delete record[field];
       if (typeof record.errorCode !== "string") continue;
       const code = normalizeLogErrorCode(record.errorCode, typeof record.status === "number" ? record.status : undefined);
       if (code !== record.errorCode) {

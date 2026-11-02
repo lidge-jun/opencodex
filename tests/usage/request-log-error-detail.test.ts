@@ -11,6 +11,7 @@ import {
   projectErrorDetail, RATE_LIMIT_RESET_MAX_MS,
 } from "../../src/usage/error-detail";
 import { museLimitReport } from "../../gui/src/muse-limit-observation";
+import { requestLogDto } from "../../src/server/management/shared";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
 
@@ -78,6 +79,9 @@ describe("errorDetailFor", () => {
   test("local refusals and successes get no condition", () => {
     expect(errorDetailFor({ status: 503, errorCode: "server_busy" })).toEqual({ errorCode: "server_busy" });
     expect(errorDetailFor({ status: 200, upstreamError: "rate limit" })).toEqual({});
+    // A client close is not an upstream condition, whatever text the context captured.
+    expect(errorDetailFor({ status: 499, upstreamError: "client closed request" })).toEqual({});
+    expect(errorDetailFor({ status: 502, errorCode: "client_closed_request", upstreamError: "x" })).toEqual({ errorCode: "client_closed_request" });
   });
 
   test("a recorded condition is kept only when it is a known member", () => {
@@ -142,7 +146,7 @@ describe("Meta Muse reset time", () => {
 describe("request-log rows keep only proxy-owned error facts", () => {
   test("direct addRequestLog drops upstream text from the live row, ledger and hydration", () => withHome(() => {
     const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat", status: 400, durationMs: 1,
-      sendCount: 1, recoveryKinds: [], usageStatus: "unreported" as const, errorCode: PROVIDER_KEY };
+      sendCount: 1, recoveryKinds: [], usageStatus: "unreported" as const, errorCode: PROVIDER_KEY, ...UPSTREAM_TEXT };
     addRequestLog(log({ requestId: "canary-direct", status: 400, errorCode: PROVIDER_KEY, attempts: [attempt], ...UPSTREAM_TEXT }));
     const live = getRequestLogEntries().find(entry => entry.requestId === "canary-direct")!;
     expect(JSON.stringify(live)).not.toContain(PROVIDER_KEY);
@@ -150,6 +154,9 @@ describe("request-log rows keep only proxy-owned error facts", () => {
     expect(live.errorCode).toBe("invalid_request_error");
     expect(live.attempts?.[0]?.errorCode).toBe("invalid_request_error");
     expect(live.upstreamCondition).toBe("request_rejected");
+    const dto = JSON.stringify(requestLogDto(live));
+    expect(dto).not.toContain(PROVIDER_KEY);
+    expect(dto).not.toContain(NUMERIC_KEY);
     for (const field of ["upstreamError", "upstreamErrorCode", "upstreamErrorType", "upstreamRequestId"]) {
       expect((live as Record<string, unknown>)[field]).toBeUndefined();
     }

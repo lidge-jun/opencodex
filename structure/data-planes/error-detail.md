@@ -1,7 +1,8 @@
 # Proxy-Owned Error Detail
 
 Request-log rows carry only error facts this proxy owns. `projectErrorDetail` in
-`src/usage/error-detail.ts` runs first in `addRequestLog`, so the live ring, `/api/logs` and the
+`src/usage/error-detail.ts` runs on the final row in `addFinalRequestLog` before any writer (an
+injected one included) and again first in `addRequestLog`, so the live ring, `/api/logs` and the
 `usage.jsonl` projection read one projected entry; `normalizeUsageEntry` applies `errorDetailFor` to every
 append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A row keeps:
 
@@ -9,9 +10,10 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
   value (an upstream code that reached a writer) collapses to the status fallback (`invalid_request_error`,
   `invalid_api_key`, `permission_denied`, `rate_limit_exceeded`, `client_closed_request`,
   `server_is_overloaded`, `upstream_server_error`, `http_NNN`, else `upstream_error`). Attempt codes are
-  normalized the same way, in place.
+  normalized the same way, and upstream text fields removed from attempts, in place.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
-  failed row with upstream evidence. `classifyUpstreamCondition` reads status, bounded structured tokens and,
+  failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
+  none. `classifyUpstreamCondition` reads status, bounded structured tokens and,
   for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
@@ -22,8 +24,9 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover
   the number on hydration.
 - `failureDetail`, proxy-authored transport text (fixed sentences, numeric guard limits, closed provider
-  type names) set through `recordLocalFailureDetail` in `src/server/request-log-failure-detail.ts`, single
-  line and at most 500 characters.
+  type names) set through `recordLocalFailureDetail` in `src/server/request-log-failure-detail.ts`, or the
+  fixed label for a known `incomplete_details.reason` (`max_output_tokens`, `upstream_stall_timeout`,
+  `adapter_eof`); single line and at most 500 characters. An unknown reason stays on the context only.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the
