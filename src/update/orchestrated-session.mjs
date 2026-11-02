@@ -32,6 +32,22 @@ const EXACT = { bigint: true };
 const sameIdentity = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const ownerOnly = stat => process.platform === "win32" || (stat.uid === BigInt(process.getuid()) && (stat.mode & 0o077n) === 0n);
 const invalidDestination = () => new Error("invalid orchestrated result destination");
+/**
+ * Path-based cleanup is safe only where no other principal can replace an ancestor between check and use: on POSIX
+ * every ancestor is owned by this user or root and not group/other-writable, unless root-owned and sticky. Windows
+ * has no cheap equivalent, so it never removes by path.
+ */
+function removableChannel(directory) {
+  if (process.platform === "win32") return false;
+  try {
+    for (let entry = dirname(directory); ; entry = dirname(entry)) {
+      const stat = lstatSync(entry, EXACT), uid = Number(stat.uid), mode = Number(stat.mode);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== process.getuid() && uid !== 0)
+        || ((mode & 0o022) !== 0 && !(uid === 0 && (mode & 0o1000) !== 0))) return false;
+      if (dirname(entry) === entry) return true;
+    }
+  } catch { return false; }
+}
 function readAll(fd, size) {
   const bytes = Buffer.alloc(size);
   let read = 0;
@@ -74,8 +90,13 @@ export function createOrchestratedResultChannel() {
       } catch { return null; }
       finally { if (readFd !== undefined) closeSync(readFd); }
     },
-    /** Remove only the recorded file and then the recorded directory if it is empty; anything else stays. */
+    /**
+     * Remove only the recorded file, then the recorded directory if it is empty; anything else stays. Path-based
+     * removal runs only on POSIX and only when no ancestor can be replaced by another principal; otherwise the
+     * channel (at most this parent's own capability or result record) is left in place.
+     */
     dispose() {
+      if (!removableChannel(directory)) return;
       try { const current = lstatSync(resultPath, EXACT); if (current.isFile() && sameIdentity(current, fileStat)) unlinkSync(resultPath); }
       catch { /* leave whatever is there */ }
       try { const current = lstatSync(directory, EXACT); if (current.isDirectory() && sameIdentity(current, directoryStat)) rmdirSync(directory); }

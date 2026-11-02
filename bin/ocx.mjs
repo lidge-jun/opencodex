@@ -1401,6 +1401,8 @@ if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
 
 const { launchProof, launchContext, inheritedEnv } = createNodeLaunchContext();
 delete inheritedEnv.OCX_SYNC_MUTEX_HELD_BY;
+// The parsed child capability was removed from process.env; only the Bun CLI handoff of this same child receives it.
+if (childArgs?.ok) inheritedEnv.OCX_UPDATE_RESULT_CAPABILITY = childArgs.resultCapability;
 const desktopPlan = planDesktopCliHandoff({ selfPaths: [fileURLToPath(import.meta.url), process.execPath] });
 if (desktopPlan.kind === "error") {
   if (desktopPlan.issue.startsWith("record-")) {

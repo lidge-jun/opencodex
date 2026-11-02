@@ -4,10 +4,14 @@ export function isOrchestratedUpdateArgv(argv) {
   return argv.some(arg => /^(--plan|--yes|--json|--expect-plan|--not-after|--orchestrated-expect|--orchestrated-result)(?:=|$)/.test(arg));
 }
 
-/** Internal child grammar is accepted only in the explicitly marked child process, with its result capability. */
+/**
+ * Internal child grammar is accepted only in the explicitly marked child process, with its result capability.
+ * The capability is taken out of env on every call, so no subprocess started afterwards inherits it.
+ */
 export function parseOrchestratedChildArgs(argv, env) {
-  if (env.OCX_UPDATE_ORCHESTRATED_CHILD !== "1") return { ok: false };
   const resultCapability = env.OCX_UPDATE_RESULT_CAPABILITY;
+  delete env.OCX_UPDATE_RESULT_CAPABILITY;
+  if (env.OCX_UPDATE_ORCHESTRATED_CHILD !== "1") return { ok: false };
   if (typeof resultCapability !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(resultCapability)) return { ok: false };
   const values = new Map();
   const allowed = new Set(["--version", "--orchestrated-expect", "--orchestrated-result", "--not-after"]);

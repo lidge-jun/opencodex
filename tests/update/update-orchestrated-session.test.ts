@@ -249,7 +249,9 @@ test("the parent reads only its recorded result and removes only what it created
   rmSync(channel.resultPath); rmSync(moved);
   const clean = createOrchestratedResultChannel();
   clean.dispose();
-  expect(existsSync(clean.directory)).toBe(false);
+  // Windows never removes by path; POSIX removes only under a non-replaceable ancestor chain.
+  expect(existsSync(clean.directory)).toBe(process.platform === "win32");
+  if (process.platform === "win32") rmSync(clean.directory, { recursive: true, force: true });
 });
 
 test("sync holder refuses without writing an orchestrated marker", async () => {
@@ -400,7 +402,47 @@ test.each(["bun", "node"] as const)("a %s child publishes through the channel a 
   const report = JSON.parse(result.stdout);
   expect(report).toMatchObject({ status: 0, stderr: "", outcome: { phase: "installed", activeRoot: home } });
   expect(report.directory.startsWith(realpathSync.native(real))).toBe(true);
-  expect(existsSync(report.directory)).toBe(false);
+  expect(existsSync(report.directory)).toBe(process.platform === "win32");
+}, 30000);
+
+test("dispose leaves the channel in place when an ancestor could be replaced or the platform is Windows", () => {
+  const previous = process.env.TMPDIR;
+  const shared = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-shared-"))); roots.push(shared);
+  try {
+    if (process.platform !== "win32") {
+      chmodSync(shared, 0o777);
+      process.env.TMPDIR = shared;
+      const exposed = createOrchestratedResultChannel();
+      process.env.TMPDIR = previous;
+      expect(exposed.directory.startsWith(shared)).toBe(true);
+      exposed.dispose();
+      expect(existsSync(exposed.resultPath)).toBe(true);
+      expect(existsSync(exposed.directory)).toBe(true);
+    }
+    const channel = createOrchestratedResultChannel(); roots.push(channel.directory);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try { channel.dispose(); } finally { Object.defineProperty(process, "platform", platform); }
+    expect(existsSync(channel.resultPath)).toBe(true);
+  } finally { if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous; }
+});
+
+test.each(["bun", "node"] as const)("a %s child refuses a destination reached through a directory link", runtime => {
+  const node = Bun.which("node");
+  if (runtime === "node" && !node) return;
+  const f = fixture(), base = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-link-"))); roots.push(base);
+  const link = join(base, "linked");
+  symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  const before = readFileSync(f.resultPath);
+  const session = pathToFileURL(repoPath("src/update/orchestrated-session.mjs")).href;
+  const script = `const { createOrchestratedChildSession } = await import(${JSON.stringify(session)});
+    try { createOrchestratedChildSession({ home: ${JSON.stringify(f.home)}, resultPath: ${JSON.stringify(join(link, "result.json"))},
+      resultCapability: ${JSON.stringify(f.resultCapability)}, verifyIdentity: () => true }); console.log("accepted"); }
+    catch (error) { console.log(error.message); }`;
+  const argv = runtime === "node" ? [node!, "--input-type=module", "-e", script] : [process.execPath, "-e", script];
+  const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 30000 });
+  expect({ stdout: result.stdout.trim(), stderr: result.stderr }).toEqual({ stdout: "invalid orchestrated result destination", stderr: "" });
+  expect(readFileSync(f.resultPath).equals(before)).toBe(true);
 }, 30000);
 
 // The compiled CLI bundles this library and gives every module the same entry URL, so the

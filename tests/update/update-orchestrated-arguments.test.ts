@@ -14,6 +14,15 @@ test("internal child flags require the parent environment and an exact pin", () 
   }
 });
 
+test("parsing takes the result capability out of the environment so no later subprocess inherits it", () => {
+  const args = ["--version", "2.1.0", "--orchestrated-expect", "encoded", "--orchestrated-result", "/tmp/result"];
+  for (const [argv, marker] of [[args, "1"], [args.slice(2), "1"], [args, "0"]] as const) {
+    const env: Record<string, string | undefined> = { OCX_UPDATE_ORCHESTRATED_CHILD: marker, OCX_UPDATE_RESULT_CAPABILITY: "c".repeat(43), PATH: "/bin" };
+    parseOrchestratedChildArgs([...argv], env);
+    expect(env).toEqual({ OCX_UPDATE_ORCHESTRATED_CHILD: marker, PATH: "/bin" });
+  }
+});
+
 test("orchestrated arguments validate selectors, deadline, and plan binding", () => {
   expect(parseOrchestratedUpdateArgs(["--plan", "--json", "--tag", "preview"])).toMatchObject({ ok: true, mode: "plan", tag: "preview" });
   expect(parseOrchestratedUpdateArgs(["--yes", "--json", "--tag", "preview"])).toMatchObject({ ok: true, mode: "apply", tag: "preview" });
