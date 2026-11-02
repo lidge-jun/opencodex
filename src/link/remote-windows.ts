@@ -160,7 +160,7 @@ foreach($x in ($c|select -Unique)){
  $a=@($m.Groups[1].Value,$m.Groups[2].Value,$m.Groups[3].Value);$b=@('2','93','0');$cmp=0
  for($i=0;$i -lt 3;$i++){if($a[$i].Length -ne $b[$i].Length){$cmp=$a[$i].Length-$b[$i].Length;break};$cmp=[string]::CompareOrdinal($a[$i],$b[$i]);if($cmp -ne 0){break}}
  if($cmp -lt 0 -or ($cmp -eq 0 -and $m.Groups[4].Success)){[Console]::Error.WriteLine('ocx-fanout:child-ocx-lacks-expect-link');exit 121}
- [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);Invoke-Native $x @($d.args)
+ [Console]::Error.WriteLine('ocx-fanout:selected:'+$v);[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)
 };exit 127
 `);
 }

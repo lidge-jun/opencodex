@@ -4,6 +4,25 @@ import { LinkStatusError } from "../../src/cli/sync-link-status";
 import type { LinkRecord } from "../../src/link/store";
 
 describe("sync fan-out child evidence", () => {
+  test("accepts startup output only outside exactly one set of framing markers", () => {
+    const marker = "ocx-fanout:selected:2.93.0+build.5";
+    const delimiter = "ocx-fanout:stdout-begin";
+    const doc = JSON.stringify({ schema: "ocx.sync.fanout/1", home: { state: "synced", exit: 0 }, fanout: { state: "not-applicable", reason: null }, children: [] });
+    const run = (stdout: string, stderr: string) => classifySyncResult({ code: 0, stdout, stderr });
+    for (const payload of [doc, "Remote Link Home catalog synchronized."]) {
+      expect(run(`shell startup warning\n${delimiter}\n${payload}\n`, `shell stderr warning\n${marker}\n`)).toEqual({ state: "synced", reason: null });
+      expect(run(`${delimiter}\n${payload}`, `${marker}\n${marker}\n`)).toEqual({ state: "failed", reason: "child-output-invalid" });
+      expect(run(payload, `${marker}\n`)).toEqual({ state: "failed", reason: "child-output-invalid" });
+      expect(run(`${delimiter}\n${delimiter}\n${payload}`, `${marker}\n`)).toEqual({ state: "failed", reason: "child-output-invalid" });
+    }
+    expect(run(`Home unavailable; retained and applied the last-known-good remote catalog (stale).\n${delimiter}\n${doc}`, `${marker}\n`)).toEqual({ state: "synced", reason: null });
+    expect(run(`Remote Link Home catalog synchronized.\n${delimiter}\nno evidence`, `${marker}\n`)).toEqual({ state: "failed", reason: "child-output-invalid" });
+    expect(run(`${delimiter}\n${doc}`, "startup\nocx-fanout:selected:2.93.0-01\n")).toEqual({ state: "failed", reason: "child-output-invalid" });
+    expect(run(`${delimiter}\n${doc}`, "ocx-fanout:selected:2.93.0 \n")).toEqual({ state: "failed", reason: "child-output-invalid" });
+    expect(classifySyncResult({ code: 5, stdout: `startup\n${delimiter}\n`, stderr: `warning\n${marker}\n{"phase":"child_link_mismatch","reason":"other_link"}\n` })).toEqual({ state: "skipped", reason: "child-link-mismatch:other_link" });
+    expect(classifySyncResult({ code: 5, stdout: "startup\n", stderr: `${marker}\n` })).toEqual({ state: "failed", reason: "child-output-invalid" });
+    expect(classifySyncResult({ code: 121, stdout: "startup\n", stderr: "warning\nocx-fanout:child-ocx-version-unknown\n" })).toEqual({ state: "skipped", reason: "child-ocx-version-unknown" });
+  });
   test.each([
     ["2.93.0+build.5", null], ["2.92.9+build", "child-ocx-lacks-expect-link"],
     ["2.93.0-preview.1", "child-ocx-lacks-expect-link"], ["garbage", "child-ocx-version-unknown"],
@@ -12,7 +31,7 @@ describe("sync fan-out child evidence", () => {
   });
 
   test("requires a valid marker and positive child output", () => {
-    const run = (code: number, stdout: string, stderr = "ocx-fanout:selected:2.93.0+build.5\n") => classifySyncResult({ code, stdout, stderr });
+    const run = (code: number, stdout: string, stderr = "ocx-fanout:selected:2.93.0+build.5\n") => classifySyncResult({ code, stdout: `ocx-fanout:stdout-begin\n${stdout}`, stderr });
     expect(run(0, "Remote Link Home catalog synchronized.")).toEqual({ state: "synced", reason: null });
     expect(run(0, "")).toEqual({ state: "failed", reason: "child-output-invalid" });
     expect(run(0, "{bad")).toEqual({ state: "failed", reason: "child-output-invalid" });

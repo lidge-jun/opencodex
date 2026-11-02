@@ -543,7 +543,8 @@ upstream status but never consumes or resumes a grant.
 On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
 Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
 the Home outcome and each Child's state; failed or timed-out Children produce exit 6. A skipped
-Child is identified by its reason. Exit 7 is reserved for an update in flight.
+Child is identified by its reason. An unreadable link store also produces exit 6 and a path-free
+error in human output. Exit 7 is reserved for an update in flight.
 
 Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or run
 `ocx sync --restart-codex` on that Child if a Codex restart is needed. The Child's pinned sync may

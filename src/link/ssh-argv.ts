@@ -255,6 +255,8 @@ try_ocx() {
   { wait "$vp"; status=$?; } 2>/dev/null
   kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; rm -f "$tmp.ready"
   [ "$status" -eq 0 ] || return
+  bytes=$(wc -c < "$tmp" 2>/dev/null) || return
+  [ "$bytes" -le 256 ] 2>/dev/null || return
   version=$(cat "$tmp"); version=\${version#opencodex }
   printf '%s\\n' "$version" | awk '
     function idlist(s,pre, n,a,i) {
@@ -279,6 +281,7 @@ try_ocx() {
   if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
   rm -f "$tmp" "$tmp.ready"; trap - EXIT HUP INT TERM
   printf 'ocx-fanout:selected:%s\\n' "$version" >&2
+  printf '%s\\n' 'ocx-fanout:stdout-begin'
   exec "$c" sync --expect-link "$1" --json
 }
 ${REMOTE_OCX_CANDIDATES}

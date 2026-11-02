@@ -91,7 +91,8 @@ covering every ssh call. All commands use `buildExecArgv` with the link known_ho
    `--version` exactly once, and that single run both decides selection and supplies the version:
    - POSIX: `( ulimit -c 0; ulimit -f 1; exec "$c" --version ) >"$tmp" 2>/dev/null &`, a watchdog
      `( sleep 10; kill -9 "$vp" ) &`, `wait "$vp"` for the real status, then the watchdog is killed and
-     reaped; the whole group's stderr goes to `/dev/null` so no shell diagnostic precedes the marker.
+     reaped; the whole group's stderr goes to `/dev/null`. After exit, the capture file itself is
+     measured before parsing; a capture over 256 bytes is skipped even if the process exited 0.
      Checked locally with `sh`: a writer that ignores SIGPIPE and SIGXFSZ and swallows its write
      errors is killed at the watchdog (status 137, file at 512 bytes, its pid gone afterwards); a
      version printing `opencodex 2.93.0` and exiting 17 returns 17; a normal one returns 0.
@@ -112,7 +113,7 @@ covering every ssh call. All commands use `buildExecArgv` with the link known_ho
      `--expect-link` (959a07a5ea is in v2.93.0, not v2.92.0); checking first matters because an older
      ocx ignores unknown flags and would run an unpinned sync.
    - Otherwise it removes the capture file, clears the trap, writes exactly
-     `ocx-fanout:selected:<version>` as its first stderr line, and execs
+     `ocx-fanout:selected:<version>` on stderr, then `ocx-fanout:stdout-begin` on stdout, and execs
      `<that path> sync --expect-link <linkId> --json`. The trap removes the file on every refusal path.
    - No `ocx` command other than `--version` runs on the Child before the pinned sync (platform
      discovery may run its fixed OS probe first), so the pinned sync's "nothing changed on mismatch"
@@ -125,10 +126,11 @@ covering every ssh call. All commands use `buildExecArgv` with the link known_ho
    `skipped` `child-platform-unsupported`; 121 with a known `ocx-fanout:` marker as the last stderr
    line -> `skipped` with that code (121 without a marker -> `failed` `child-sync-failed`). Then the
    sync result. Success needs exit 0 and positive evidence; a nonzero exit is never overridden by a
-   document. The Home requires the marker `ocx-fanout:selected:<version>` as the first stderr line (exact
-   grammar `^ocx-fanout:selected:<semver>$`; absent or malformed with any exit other than the
-   transport codes above -> `failed` `child-output-invalid`). For exit 0:
-   - stdout, trimmed, starts with `{`: the Child claims the `--json` form (this release and later).
+   document. The Home requires exactly one stderr line matching `^ocx-fanout:selected:(.+)$` with a
+   strict SemVer version, and exactly one stdout line `ocx-fanout:stdout-begin`. Missing, duplicate,
+   or malformed framing -> `failed` `child-output-invalid` after the transport cases above. Login-shell
+   output before the markers is ignored; classification uses only stdout after the delimiter. For exit 0:
+   - that stdout, trimmed, starts with `{`: the Child claims the `--json` form (this release and later).
      It must be exactly one valid `ocx.sync.fanout/1` document; `home.state "synced"` -> `synced`,
      `home.state "stale"` -> `failed` `child-catalog-stale`; malformed JSON, an unknown schema, a
      second document, an inconsistent document (any other state, or `home.exit` not 0) -> `failed`
@@ -191,7 +193,8 @@ reaches the output.
 - Exit: Home failure keeps its code (1, 5, 7, or `process.exitCode`); Home ok and every Child `synced`
   or `skipped` -> 0; any Child `failed` or `timed-out`, or `fanout.state failed` -> **6** (partial).
 - Human mode prints the existing Home lines, then one line per Child:
-  `<alias> (<linkId>): <state>[ (<reason>)]`.
+  `<alias> (<linkId>): <state>[ (<reason>)]`. An unreadable link store prints the fixed stderr line
+  `Children were not synced: the Remote Link store could not be read.`
 
 ### Capabilities
 
@@ -255,15 +258,16 @@ reaches the output.
       a fake whose `--version` writes endlessly while ignoring SIGPIPE, SIGXFSZ and its write errors is
       killed by the watchdog, skipped, and its pid is gone; a broken first candidate followed by a
       working one selects the second; a fake printing a valid version but exiting 17 is skipped,
-      never run; the capture file is gone after both a refusal and a successful exec; no stray stderr
-      line precedes the marker; `2.93.0-preview.1` -> refused; unparsable -> marker; a
+      never run; the capture file is gone after both a refusal and a successful exec; a zero-exit
+      version probe over 256 bytes is skipped; the stdout delimiter precedes the sync output;
+      `2.93.0-preview.1` -> refused; unparsable -> marker; a
       candidate set that changes between two runs still pins the version check and the exec to one
       path per run). Windows: extend the existing `windowsOcxArgv` execution tests
       (`tests/clients/link-ssh-argv*.test.ts` and any PowerShell-executing test they use) to the new
       script: selection order, fragmented output, delayed extra bytes past 256, a process that never
       writes (deadline), version refusal, the exact argv handed to `Invoke-Native` (so
       containment is kept), the marker line, and the size budget.
-    - Classification: stdout starting with `{` that is malformed, of an unknown schema, or two
+    - Classification: stdout after the delimiter starting with `{` that is malformed, of an unknown schema, or two
       documents fails `child-output-invalid`; empty stdout at exit 0 fails `child-output-invalid`; a
       legacy Child printing the success sentence is `synced` and with the stale sentence is
       `child-catalog-stale`; a document saying `synced` with exit 1 fails `child-sync-failed`;

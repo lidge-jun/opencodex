@@ -222,7 +222,12 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       },
     });
     if (flags.json) originalLog(renderFanoutJson(document));
-    else for (const line of renderFanoutHuman(document)) originalLog(line);
+    else {
+      for (const line of renderFanoutHuman(document)) originalLog(line);
+      if (document.fanout.state === "failed" && document.fanout.reason === "link-store-unreadable") {
+        console.error("Children were not synced: the Remote Link store could not be read.");
+      }
+    }
     return fanoutExitCode(document);
 }
 

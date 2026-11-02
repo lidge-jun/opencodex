@@ -3,6 +3,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remotePinnedSyncArgv } from "../../src/link/ssh-argv";
+import { inflateRawSync } from "node:zlib";
 import { POWERSHELL_ENCODED_MAX, powershellArgv, windowsScriptData, windowsScriptHelperSource } from "../../src/link/remote-windows";
 
 const dirs: string[] = [];
@@ -14,7 +15,7 @@ function isolatedArgv(): string[] {
 }
 function toolDir(home: string): string {
   const bin = join(home, "bin"); mkdirSync(bin);
-  for (const command of ["sh", "uname", "mktemp", "sleep", "cat", "awk", "rm"]) symlinkSync(`/usr/bin/${command}`, join(bin, command));
+  for (const command of ["sh", "uname", "mktemp", "sleep", "cat", "awk", "wc", "rm"]) symlinkSync(`/usr/bin/${command}`, join(bin, command));
   return bin;
 }
 function run(version: string) {
@@ -56,6 +57,34 @@ test("Windows pinned script fits the SSH budget and carries the contained argv",
   const script = Buffer.from(argv[5]!, "base64").toString("utf16le");
   expect(windowsScriptData(script)).toEqual({ args: ["sync", "--expect-link", "lnk_0123456789abcdef", "--json"] });
   expect(windowsScriptHelperSource(script)).toContain("public static string V(");
+  expect(windowsScriptHelperSource(script)).toContain("n>256?null");
+});
+
+test.skipIf(process.platform === "win32")("POSIX wrapper puts the stdout delimiter immediately before the pinned sync output", () => {
+  expect(run("2.93.0").stdout).toBe("ocx-fanout:stdout-begin\nsynced\n");
+});
+
+test("Windows wrapper emits the stdout delimiter before Invoke-Native", () => {
+  const argv = remotePinnedSyncArgv("lnk_0123456789abcdef", "windows");
+  expect(argv[5]!.length).toBeLessThanOrEqual(POWERSHELL_ENCODED_MAX);
+  const outer = Buffer.from(argv[5]!, "base64").toString("utf16le");
+  const packed = /\$ocxPacked='([^']+)'/.exec(outer)?.[1];
+  expect(packed).toBeDefined();
+  const script = inflateRawSync(Buffer.from(Array.from(packed!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+  expect(script).toContain("[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)");
+});
+
+test.skipIf(process.platform === "win32")("an overflowing version writer that exits zero falls through", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fanout-overflow-")); dirs.push(home);
+  const desktop = join(home, ".opencodex-desktop", "bin"), bin = toolDir(home); mkdirSync(desktop, { recursive: true });
+  writeFileSync(join(desktop, "ocx"), '#!/bin/sh\necho "$*" >> "$HOME/first"\nif [ "$1" = --version ]; then trap "" XFSZ; printf 2.93.0; i=0; while [ "$i" -lt 300 ]; do printf "\\n"; i=$((i+1)); done; exit 0; fi\necho wrong\n', { mode: 0o755 });
+  writeFileSync(join(bin, "ocx"), '#!/bin/sh\necho "$*" >> "$HOME/second"\nif [ "$1" = --version ]; then echo 2.93.0; else echo synced; fi\n', { mode: 0o755 });
+  const child = Bun.spawn(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(readFileSync(join(home, "first"), "utf8")).toBe("--version\n");
+  expect(readFileSync(join(home, "second"), "utf8")).toBe("--version\nsync --expect-link lnk_0123456789abcdef --json\n");
+  expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "ocx-fanout:stdout-begin\nsynced\n", stderr: "ocx-fanout:selected:2.93.0\n" });
+  expect(windowsScriptHelperSource(Buffer.from(remotePinnedSyncArgv("lnk_0123456789abcdef", "windows")[5]!, "base64").toString("utf16le"))).toContain("n>256?null");
 });
 
 test.skipIf(process.platform !== "win32")("Windows bounds version probes and runs the selected pinned command", async () => {
@@ -77,20 +106,20 @@ test.skipIf(process.platform !== "win32")("Windows bounds version probes and run
       stdout: "pipe", stderr: "pipe",
     });
     const [actual, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { actual, out: out.trim(), err: err.trim(), calls: readFileSync(log, "utf8"), elapsed: Date.now() - started };
+    return { actual, out: out.replaceAll("\r\n", "\n").trim(), err: err.trim(), calls: readFileSync(log, "utf8"), elapsed: Date.now() - started };
   };
   for (const [version, code, stderr, stdout] of [
-    ["2.93.0+build.5", 0, "ocx-fanout:selected:2.93.0+build.5", "sync|--expect-link|lnk_0123456789abcdef|--json"],
+    ["2.93.0+build.5", 0, "ocx-fanout:selected:2.93.0+build.5", "ocx-fanout:stdout-begin\nsync|--expect-link|lnk_0123456789abcdef|--json"],
     ["2.92.9+build", 121, "ocx-fanout:child-ocx-lacks-expect-link", ""],
   ] as const) {
     const { actual, out, err } = await run(version);
     expect({ actual, out, err }).toEqual({ actual: code, out: stdout, err: stderr });
   }
   const fragmented = await run("2.93.0", "fragment");
-  expect(fragmented).toMatchObject({ actual: 0, err: "ocx-fanout:selected:2.93.0", out: "sync|--expect-link|lnk_0123456789abcdef|--json" });
+  expect(fragmented).toMatchObject({ actual: 0, err: "ocx-fanout:selected:2.93.0", out: "ocx-fanout:stdout-begin\nsync|--expect-link|lnk_0123456789abcdef|--json" });
   for (const mode of ["broken", "overflow", "hang"]) {
     const result = await run("2.93.0", mode);
-    expect(result).toMatchObject({ actual: 0, err: "ocx-fanout:selected:2.93.0", out: "sync|--expect-link|lnk_0123456789abcdef|--json" });
+    expect(result).toMatchObject({ actual: 0, err: "ocx-fanout:selected:2.93.0", out: "ocx-fanout:stdout-begin\nsync|--expect-link|lnk_0123456789abcdef|--json" });
     expect(result.calls).toContain(`${executable}|--version`);
     expect(result.calls).not.toContain(`${executable}|sync`);
     expect(result.calls).toContain(`${managed}|sync|--expect-link|lnk_0123456789abcdef|--json`);
@@ -105,7 +134,7 @@ test.skipIf(process.platform === "win32")("a version command that exits nonzero 
   writeFileSync(join(bin, "ocx"), '#!/bin/sh\necho "$*" >> "$HOME/second"\nif [ "$1" = --version ]; then echo 2.93.0; else echo synced; fi\n', { mode: 0o755 });
   const child = Bun.spawn(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "synced\n", stderr: "ocx-fanout:selected:2.93.0\n" });
+  expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "ocx-fanout:stdout-begin\nsynced\n", stderr: "ocx-fanout:selected:2.93.0\n" });
   expect(readFileSync(join(home, "first"), "utf8")).toBe("--version\n");
   expect(readFileSync(join(home, "second"), "utf8")).toBe("--version\nsync --expect-link lnk_0123456789abcdef --json\n");
 });
@@ -129,7 +158,7 @@ test.skipIf(process.platform === "win32")("a version writer ignoring signals is 
   const child = Bun.spawn(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stderr }).toEqual({ code: 0, stderr: "ocx-fanout:selected:2.93.0\n" });
-  expect(stdout).toBe("synced\n");
+  expect(stdout).toBe("ocx-fanout:stdout-begin\nsynced\n");
   const pid = Number(readFileSync(join(home, "writer.pid"), "utf8"));
   expect(() => process.kill(pid, 0)).toThrow();
   expect(readdirSync(home).filter(name => name.startsWith("ocx-fanout."))).toEqual([]);

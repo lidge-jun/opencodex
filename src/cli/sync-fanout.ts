@@ -45,15 +45,18 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
   if (code === 127) return failure("child-ocx-not-found");
   if (code === 126) return failure("child-ocx-not-contained");
   if (code === 125) return skipped("child-platform-unsupported");
-  const lines = stderr.trimEnd().split(/\r?\n/);
-  const last = lines.at(-1);
+  const lines = stderr.split(/\r?\n/);
+  const last = stderr.trimEnd().split(/\r?\n/).at(-1);
   if (code === 121) {
     if (last === "ocx-fanout:child-ocx-lacks-expect-link") return skipped("child-ocx-lacks-expect-link");
     if (last === "ocx-fanout:child-ocx-version-unknown") return skipped("child-ocx-version-unknown");
     return failure("child-sync-failed");
   }
-  const marker = /^ocx-fanout:selected:(.+)$/.exec(lines[0] ?? "");
-  if (!marker || parseOcxVersion(marker[1]!) !== marker[1]) return failure("child-output-invalid");
+  const markers = lines.map(line => /^ocx-fanout:selected:(.+)$/.exec(line)).filter(match => match !== null);
+  if (markers.length !== 1 || !parseStrictSemver(markers[0]![1]!)) return failure("child-output-invalid");
+  const outputLines = stdout.split(/\r?\n/);
+  const delimiters = outputLines.flatMap((line, index) => line === "ocx-fanout:stdout-begin" ? [index] : []);
+  if (delimiters.length !== 1) return failure("child-output-invalid");
   if (code === 5) {
     try {
       const detail: unknown = JSON.parse(last ?? "");
@@ -64,7 +67,7 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
   }
   if (code === 7) return skipped("child-updating");
   if (code !== 0) return failure("child-sync-failed");
-  const text = stdout.trim();
+  const text = outputLines.slice(delimiters[0]! + 1).join("\n").trim();
   if (text.startsWith("{")) {
     try {
       const state = validDocument(JSON.parse(text));

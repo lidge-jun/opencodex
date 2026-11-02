@@ -62,6 +62,28 @@ test("local-only JSON does not invoke ssh", async () => {
   } finally { server.stop(true); rmSync(temp, { recursive: true, force: true }); }
 }, 15000);
 
+test("human sync reports a damaged link store without exposing its path", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "ocx-sync-damaged-"));
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("not ocx", { status: 404 }) });
+  try {
+    const home = join(temp, "ocx"), linkDir = join(home, "link");
+    mkdirSync(linkDir, { recursive: true });
+    mkdirSync(join(temp, "codex"));
+    writeFileSync(join(temp, "codex", "config.toml"), `model_catalog_json = ${JSON.stringify(join(temp, "missing-catalog.json"))}\n`);
+    writeFileSync(join(home, "config.json"), JSON.stringify({ port: server.port, providers: {}, defaultProvider: "openai", clientIntegrations: { codex: false } }));
+    writeFileSync(join(linkDir, "links.json"), "invalid");
+    const child = Bun.spawn([process.execPath, "run", repoPath("src/cli/index.ts"), "sync"], {
+      env: { HOME: temp, OPENCODEX_HOME: home, CODEX_HOME: join(temp, "codex"), PATH: `${temp}:/usr/bin:/bin` },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(6);
+    expect(stderr).toContain("Children were not synced: the Remote Link store could not be read.");
+    expect(stderr).not.toContain(join(linkDir, "links.json"));
+    expect(stdout).not.toContain("link-store-unreadable");
+  } finally { server.stop(true); rmSync(temp, { recursive: true, force: true }); }
+}, 15000);
+
 test("committed Home catalog fans out after the Home step; refused refresh does not", async () => {
   const temp = mkdtempSync(join(tmpdir(), "ocx-sync-gate-"));
   const previousHome = process.env.OPENCODEX_HOME, previousExit = process.exitCode;
@@ -74,7 +96,7 @@ test("committed Home catalog fans out after the Home step; refused refresh does 
   const events: string[] = [], output: string[] = [], errors: string[] = [];
   const sync = spyOn(codexSync, "syncModelsToCodex").mockImplementation(async () => { events.push("home"); return { ...base, refreshOutcome: "committed" }; });
   const status = spyOn(statusApi, "readHomeLinkStatus").mockImplementation(async () => { events.push("status"); return { role: "home", listener: { state: "listening", port: 27000 }, child: null, links: [{ ...link, state: "connected", since: link.createdAt, reason: null, lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null }] }; });
-  const child = spyOn(processApi, "runFanoutProcess").mockImplementation(async argv => { events.push("child"); expect(argv.join(" ")).not.toContain("--restart-codex"); return { code: 0, stdout: "Remote Link Home catalog synchronized.", stderr: "ocx-fanout:selected:2.93.0+build.5\n" }; });
+  const child = spyOn(processApi, "runFanoutProcess").mockImplementation(async argv => { events.push("child"); expect(argv.join(" ")).not.toContain("--restart-codex"); return { code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.", stderr: "ocx-fanout:selected:2.93.0+build.5\n" }; });
   const log = spyOn(console, "log").mockImplementation((...parts) => { output.push(parts.map(String).join(" ")); });
   const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
   const warn = spyOn(console, "warn").mockImplementation(() => {});
