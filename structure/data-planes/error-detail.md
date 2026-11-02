@@ -183,7 +183,7 @@ A translated failure with unknown provenance always receives fixed wording.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
 control flow. They do not settle the stream, populate a failure verdict, capture an upstream failure,
 cancel the reader or authorize combo fallback. Usage, progress and terminal inspection read the original
-chunk before normalization. Their client bytes are a fresh block with a flat
+chunk before normalization. For parsed flat payloads, client bytes are a fresh block with a flat
 `{message,type,param,code}` object, `param: null`, and no other upstream fields. Buffered collection keeps
 the ordinary completion outcome; a following `[DONE]` retains its success meaning. For buffered native
 requests, `ChatCompletionsCollectorSource` in `src/chat/outbound.ts` retains a client projection through
@@ -207,6 +207,11 @@ choice indices and annotations) are not newly exposed by this projection. This b
 consumes its entries and releases all retained bytes on exit.
 An original SSE event name exactly equal to `error` selects the fixed proxy line `event: error` before
 the owned flat data payload, preserving the SDK's error signal. Other upstream event names are dropped.
+The effective event name is determined before the absent-data, empty-data and `[DONE]` branches too.
+For those named error blocks, framing contains only the fixed event line and the branch's data: absent
+data adds no data line, empty data remains empty, and `[DONE]` remains `[DONE]`. Upstream id, retry,
+comment and other control lines are omitted. Settlement, reader cancellation, collection, combo and
+log decisions keep the ordinary branch behavior. Ordinary blocks retain their existing control lines.
 Collectors continue to use data-based decisions; the fixed event line does not introduce an internal
 terminal error. Existing nested terminal
 frames retain their original settlement, log evidence and collector verdict behavior.

@@ -265,7 +265,7 @@ test("translated errors select condition wording despite an upstream local-refus
   } finally { await upstream.stop(true); }
 });
 
-async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false, withMetadata = false, deltaOverride: Record<string, unknown> = {}) {
+async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boolean, withContent = false, withMetadata = false, deltaOverride: Record<string, unknown> = {}, early?: { form: EarlyErrorForm; ending: "done" | "eof" }) {
   const { clearComboTargetCooldowns, clearComboSelectionState } = await import("../../src/combos");
   const { clearKeyCooldowns } = await import("../../src/providers/key-failover");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
@@ -274,6 +274,7 @@ async function flatEndpointExchange(combo: boolean, stream: boolean, flat: boole
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     const body = await req.json() as { model: string }; sends.push(body.model);
     if (body.model === "backup") return Response.json({ id: "fixture-backup", object: "chat.completion", created: 1, model: "backup", choices: [{ index: 0, message: { role: "assistant", content: "backup" }, finish_reason: "stop" }] });
+    if (early) return new Response(earlyErrorTranscript(early.form, flat ? "error" : "message", early.ending), { headers: { "content-type": "text/event-stream" } });
     return new Response(`id: ${KEY}\nevent: ${flat ? "error" : "message"}\nretry: ${KEY}\n: ${KEY}\n${frame({ message: KEY, code: KEY, param: KEY, metadata: KEY, ...(withContent ? { service_tier: withMetadata ? KEY : "default", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, ...(withMetadata ? { error: { message: KEY, type: KEY, code: KEY, param: KEY } } : {}) }, choices: [{ index: 0, delta: { role: "assistant", content: "retained content", reasoning_content: "retained reasoning", ...deltaOverride }, finish_reason: "stop" }] } : {}) })}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   try {
@@ -488,4 +489,89 @@ test("flat native capture retains the reasoning alias while buffered content mat
   expect(completionFacts(body)).toEqual(completionFacts(legacy));
   expect((body.choices as Array<{ message: Record<string, unknown> }>)[0]!.message.reasoning_content).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain(KEY);
+});
+
+type EarlyErrorForm = "absent" | "empty" | "done";
+function earlyErrorBlock(form: EarlyErrorForm, event: string) {
+  return [`id: ${KEY}`, `event: ${event}`, `retry: ${KEY}`, `: ${KEY}`, `other: ${KEY}`,
+    ...(form === "absent" ? [] : [form === "empty" ? "data:" : "data: [DONE]"])].join("\r\n") + "\r\n\r\n";
+}
+function fixedEarlyErrorBlock(form: EarlyErrorForm) {
+  return "event: error\n" + (form === "absent" ? "" : form === "empty" ? "data: \n" : "data: [DONE]\n") + "\n";
+}
+function earlyErrorTranscript(form: EarlyErrorForm, event: string, ending: "done" | "eof") {
+  const after = form === "done" ? frame({ error: { message: `must remain unread ${KEY}` } })
+    : ending === "eof" ? ""
+    : frame({ id: "fixture-after", created: 1, choices: [{ index: 0, delta: { content: "after early block" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }) + "data: [DONE]\n\n";
+  return earlyErrorBlock(form, event) + after;
+}
+async function earlyNativeObservation(form: EarlyErrorForm, event: string, ending: "done" | "eof") {
+  const { collectChatCompletion, isChatCompletionsStreamError } = await import("../../src/chat/outbound");
+  const input = new TextEncoder().encode(earlyErrorTranscript(form, event, ending)); let offset = 0;
+  const cancelled: unknown[] = []; const terminals: Array<{ status: number; message?: string }> = [];
+  const chunks: Record<string, unknown>[] = []; const usages: unknown[] = [];
+  const sink: import("../../src/chat/failure-verdict").FailureVerdictSink = {};
+  const body = new ReadableStream<Uint8Array>({ pull(controller) {
+    if (offset >= input.length) controller.close(); else { controller.enqueue(input.slice(offset, offset + 7)); offset += 7; }
+  }, cancel(reason) { cancelled.push(reason instanceof Error ? reason.message : reason); } });
+  const [wire, buffered] = nativeChatSse(body, { requestedModel: "fixture", translatorBudget: createTestTranslatorBudget(),
+    signal: new AbortController().signal, failureVerdictSink: sink, onUsage(usage) { usages.push(usage); }, onChunk(chunk) { chunks.push(chunk); },
+    onTerminal(status, message) { terminals.push({ status, ...(message === undefined ? {} : { message }) }); },
+  }).tee();
+  const response = new Response(wire, { headers: { "content-type": "text/event-stream" } });
+  const [text, collected] = await Promise.all([response.text(), (async () => {
+    try { return { status: 200, completion: completionFacts(await collectChatCompletion(buffered, "fixture", createTestTranslatorBudget(), sink)) }; }
+    catch (error) {
+      expect(isChatCompletionsStreamError(error)).toBe(true);
+      const failure = error as import("../../src/chat/outbound").ChatCompletionsStreamError;
+      return { status: failure.status, type: failure.type, code: failure.code, message: failure.message };
+    }
+  })()]);
+  return { status: response.status, text, collected, terminals, cancelled, chunks, usages, verdict: sink.verdict };
+}
+const earlyErrorCases: Array<{ form: EarlyErrorForm; ending: "done" | "eof" }> = [
+  { form: "absent", ending: "done" }, { form: "empty", ending: "done" }, { form: "done", ending: "done" },
+  { form: "absent", ending: "eof" }, { form: "empty", ending: "eof" },
+];
+for (const { form, ending } of earlyErrorCases) test(`named early error frame preserves native control: ${form} ${ending}`, async () => {
+  const legacy = await earlyNativeObservation(form, "message", ending);
+  const current = await earlyNativeObservation(form, "error", ending);
+  expect(legacy.status).toBe(200); expect(current.status).toBe(legacy.status);
+  expect(current.terminals).toEqual(legacy.terminals); expect(current.collected).toEqual(legacy.collected);
+  expect(current.cancelled).toEqual(legacy.cancelled); expect(current.chunks).toEqual(legacy.chunks); expect(current.usages).toEqual(legacy.usages);
+  expect(current.verdict).toEqual(legacy.verdict);
+  expect(current.collected.status).toBe(ending === "eof" ? 502 : 200);
+  if (ending === "eof") {
+    expect(current.verdict).toMatchObject({ status: 502, type: "upstream_error", code: "upstream_sse_truncated" });
+  } else { expect(current.verdict).toBeUndefined(); expect(current.terminals).toEqual([{ status: 200 }]); }
+  expect(current.text.startsWith(fixedEarlyErrorBlock(form))).toBe(true);
+  expect(current.text).not.toContain(KEY);
+});
+for (const { form, ending } of earlyErrorCases) for (const stream of [false, true]) for (const combo of [false, true]) {
+  test(`named early error frame preserves handler facts: ${form} ${ending} stream=${stream} combo=${combo}`, async () => {
+    const legacy = await flatEndpointExchange(combo, stream, false, false, false, {}, { form, ending });
+    const current = await flatEndpointExchange(combo, stream, true, false, false, {}, { form, ending });
+    expect(current.status).toBe(legacy.status); expect(current.sends).toEqual(legacy.sends); expect(current.facts).toEqual(legacy.facts);
+    expect(legacy.sends).toEqual(combo && !stream && ending === "eof" ? ["first", "backup"] : ["first"]);
+    if (stream) {
+      expect(current.status).toBe(200);
+      expect(current.text.startsWith(fixedEarlyErrorBlock(form))).toBe(true);
+    } else {
+      const body = JSON.parse(current.text); const expected = JSON.parse(legacy.text);
+      if (ending === "eof" && !combo) {
+        expect(current.status).toBe(502); expect(body.error.type).toBe("upstream_error"); expect(body.error.code).toBe("upstream_sse_truncated");
+        expect(body).toEqual(expected);
+      } else {
+        expect(current.status).toBe(200); expect(body.object).toBe("chat.completion"); expect(body.choices).toHaveLength(1);
+        expect(completionFacts(body)).toEqual(completionFacts(expected));
+      }
+    }
+    expect(current.text).not.toContain(KEY);
+  });
+}
+for (const form of ["absent", "empty", "done"] as const) test(`ordinary early block retains its control lines: ${form}`, async () => {
+  const result = await earlyNativeObservation(form, "message", "done");
+  expect(result.status).toBe(200); expect(result.terminals).toEqual([{ status: 200 }]); expect(result.verdict).toBeUndefined();
+  expect(result.text).toContain(`id: ${KEY}`); expect(result.text).toContain(`retry: ${KEY}`); expect(result.text).toContain(`: ${KEY}`);
 });

@@ -68,6 +68,10 @@ export function usageFromChat(value: unknown): OcxUsage | undefined {
   };
 }
 
+function namedErrorControlBlock(data: string | null): string {
+  return "event: error\n" + (data === null ? "" : data.split("\n").map(line => `data: ${line}\n`).join("")) + "\n";
+}
+
 export function structuredError(value: unknown): {
   message: string;
   type?: string;
@@ -325,16 +329,21 @@ export function nativeChatSse(
     block: string,
     delimiter: string,
   ): void => {
+    let eventName = "";
+    for (const line of block.split(/\r\n|\r|\n/)) {
+      if (line === "event") eventName = "";
+      else if (line.startsWith("event:")) eventName = line.slice(6).replace(/^ /, "");
+    }
     const payload = sseDataPayload(block);
     if (payload === null) {
       if (performance.now() >= pullDeadline) throw stalled;
-      relay(controller, block + delimiter);
+      relay(controller, eventName === "error" ? namedErrorControlBlock(payload) : block + delimiter);
       return;
     }
     const trimmed = payload.trim();
     if (trimmed === "") {
       if (performance.now() >= pullDeadline) throw stalled;
-      relay(controller, block + delimiter);
+      relay(controller, eventName === "error" ? namedErrorControlBlock(payload) : block + delimiter);
       return;
     }
     if (trimmed === "[DONE]") {
@@ -343,7 +352,7 @@ export function nativeChatSse(
         return;
       }
       sawDone = true;
-      enqueue(controller, replaceSseDataPayload(block, "[DONE]") + delimiter);
+      enqueue(controller, eventName === "error" ? namedErrorControlBlock("[DONE]") : replaceSseDataPayload(block, "[DONE]") + delimiter);
       releaseBuffer();
       settle(200);
       try { void reader.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -360,11 +369,6 @@ export function nativeChatSse(
     if (!isRec(parsed)) {
       fail(controller, "upstream returned an invalid SSE event", "upstream_sse_invalid");
       return;
-    }
-    let eventName = "";
-    for (const line of block.split(/\r\n|\r|\n/)) {
-      if (line === "event") eventName = "";
-      else if (line.startsWith("event:")) eventName = line.slice(6).replace(/^ /, "");
     }
     const error = structuredError(parsed);
     if (error) {
