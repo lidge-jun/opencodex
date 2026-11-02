@@ -835,6 +835,14 @@ console.log(JSON.stringify({ calls }));
           message: expect.stringContaining("restart"),
         },
       });
+      // Ollama-compatible routes are fenced like /v1/*: no inference reaches a replaced tree.
+      for (const [path, method] of [["/api/version", "GET"], ["/api/tags", "GET"], ["/api/show", "POST"], ["/api/chat", "POST"], ["/api/generate", "POST"]] as const) {
+        const native = await fetch(new URL(path, server.url), {
+          method, signal, ...(method === "POST" ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "test/gpt-test", prompt: "hi" }) } : {}),
+        });
+        expect({ path, status: native.status }).toEqual({ path, status: 503 });
+        expect(await native.json()).toMatchObject({ error: { code: "package_tree_changed" } });
+      }
     }));
   });
 

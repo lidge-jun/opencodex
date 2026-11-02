@@ -4,6 +4,7 @@ import { AuxiliaryListenerBindError } from "./ports";
 import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget } from "./inbound-body-admission";
 import { createAdmittedHttpTurn } from "./admitted-http-turn";
+import { isOllamaNativePath } from "./ollama-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -447,6 +448,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     if (rawPath === "/remote-workspace/pair") return remoteWorkspaceEnabled(config) && req.method === "POST";
     if (rawPath === "/opencodex-session") return req.method === "GET" || req.method === "POST";
+    // Ollama-compatible inference paths are data plane, not management: never via Tailscale Serve.
+    if (isOllamaNativePath(rawPath)) return false;
     if (rawPath.startsWith("/api/")) return true;
     if (req.method !== "GET" && req.method !== "HEAD") return false;
     let decodedPath: string;

@@ -7,6 +7,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
 import { addFinalRequestLog, markLocalRequestLogRefusal } from "./request-log";
 import type { WorkflowRefusalLog } from "./workflow-refusal";
 import { inboundBodyBudget, bindInboundBodyLease, type InboundBodyBudget } from "./inbound-body-budget";
+import { OLLAMA_JSON_BODY_ROUTES } from "./ollama-native-paths";
 
 export { configureInboundBodyBudget, MAX_CONCURRENT_INBOUND_BODY_BYTES } from "./inbound-body-budget";
 
@@ -148,7 +149,9 @@ export async function withRaisedInboundBodyAdmission(
   options?: { budget?: InboundBodyBudget; maxWaitMs?: number; onAdmissionError?: (error: unknown) => Response },
 ): Promise<Response> {
   const maxBytes = resolveInboundBodyLimitBytes(configuredLimit);
-  if (req.method !== "POST" || !CONFIGURABLE_JSON_BODY_ROUTES.has(pathname)
+  // Native Ollama generation routes are served only on the authenticated listener, so they sit in
+  // their own set: the loopback oracle checks CONFIGURABLE_JSON_BODY_ROUTES against that allowlist.
+  if (req.method !== "POST" || !(CONFIGURABLE_JSON_BODY_ROUTES.has(pathname) || OLLAMA_JSON_BODY_ROUTES.has(pathname))
     || maxBytes <= MAX_DECOMPRESSED_BODY_BYTES || req.signal.aborted) {
     return work();
   }

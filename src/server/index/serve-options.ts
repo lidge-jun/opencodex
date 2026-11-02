@@ -203,6 +203,9 @@ import type { OcxConfig } from "../../types";
 import type { PackageTreeIntegrityGuard } from "../../lib/package-tree-integrity";
 import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
+import type { AdmittedHttpTurnOptions } from "../admitted-http-turn";
+import { isOllamaNativePath } from "../ollama-native-paths";
+import { dispatchOllamaRoute } from "./ollama-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
@@ -256,6 +259,7 @@ export interface ServeOptionsContext {
     policy: RequestPolicyView,
     work: (lease: ActiveTurnLease) => Promise<Response>,
     refusalLog?: WorkflowRefusalLog,
+    options?: AdmittedHttpTurnOptions,
   ) => Promise<Response>;
 
   config: OcxConfig;
@@ -414,6 +418,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         url.pathname === "/healthz"
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
+        || isOllamaNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -453,7 +458,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (readyzPath !== undefined) {
           return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
         }
-        const managementPreflight = url.pathname.startsWith("/api/");
+        // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
+        const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -694,6 +700,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         headers.set("Retry-After", "1");
         return new Response(resp.body, { status: 503, headers });
       }
+
+      const ollamaResponse = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+      if (ollamaResponse) return ollamaResponse;
 
       if (url.pathname.startsWith("/api/")) {
         const localManagementAuth = {
