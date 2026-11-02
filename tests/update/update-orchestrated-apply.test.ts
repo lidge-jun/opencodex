@@ -101,6 +101,14 @@ test("exit classification requires confirmed termination and independently verif
   }
 });
 
+test.each(["npm", "pnpm", "bun"] as const)("%s verified install remains applied when recovery fails", installer => {
+  const outcome = { phase: "installed" as const, activeRoot: join(tmpdir(), "fixture", "install") };
+  expect(classifyOrchestratedOutcome({ ...base, installer, outcome, childExitCode: 1, targetVerified: true, runtimeHealthy: true }))
+    .toMatchObject({ exitCode: 12, result: { applied: true, healthy: false, error: "runtime-unhealthy" } });
+  expect(classifyOrchestratedOutcome({ ...base, installer, outcome, childExitCode: 1, targetVerified: false }))
+    .toMatchObject({ exitCode: 12, result: { applied: false, healthy: false, error: "install-unverified" } });
+});
+
 test("passive install verification rejects a damaged tree and permits a retained backup", () => {
   const parent = mkdtempSync(join(tmpdir(), "ocx-update-tree-")), root = join(parent, "package");
   try {
