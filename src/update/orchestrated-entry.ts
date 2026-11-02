@@ -85,6 +85,18 @@ export async function observeOrchestratedPlan(request: Request, deps: Orchestrat
   return unavailable ? { ...plan, canApply: false, reason: "plan-unavailable" as const } : plan;
 }
 
+/** Resolve decisions that require no mutation before starting an update worker. */
+export function decideOrchestratedApply(plan: Awaited<ReturnType<typeof observeOrchestratedPlan>>, request: Request, now: number) {
+  const result = { schema: "ocx.update.result/1" as const, applied: false, fromVersion: plan.currentVersion,
+    toVersion: plan.targetVersion, installer: plan.installer, restarted: false, healthy: false, rolledBack: false };
+  const refuse = (error: string) => ({ kind: "done" as const, exitCode: 10, result: { ...result, error } });
+  if (request.expectPlan && request.expectPlan !== plan.planToken) return refuse("plan-changed");
+  if (request.notAfter !== undefined && now > request.notAfter) return refuse("deadline-passed");
+  if (plan.reason === "up-to-date") return { kind: "done" as const, exitCode: 0, result };
+  if (!plan.canApply) return refuse(plan.reason ?? "plan-unavailable");
+  return { kind: "proceed" as const };
+}
+
 export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   const parsed = parseOrchestratedUpdateArgs(argv);
   if (!parsed.ok) {
@@ -96,6 +108,11 @@ export async function runOrchestratedUpdate(argv: string[]): Promise<number> {
   if (parsed.mode === "plan") {
     console.log(JSON.stringify(plan));
     return 0;
+  }
+  const admission = decideOrchestratedApply(plan, parsed, Date.now());
+  if (admission.kind === "done") {
+    console.log(JSON.stringify(admission.result));
+    return admission.exitCode;
   }
   console.log(JSON.stringify({ schema: "ocx.update.result/1", applied: false, fromVersion: plan.currentVersion,
     toVersion: null, installer: plan.installer, restarted: false, healthy: false, rolledBack: false, error: plan.reason ?? "plan-unavailable" }));

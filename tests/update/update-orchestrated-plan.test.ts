@@ -1,11 +1,22 @@
 import { expect, test } from "bun:test";
 import { buildOrchestratedPlan, type PlanInputs } from "../../src/update/orchestrated-plan";
-import { classifyPlanRuntimeOwner, observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
+import { classifyPlanRuntimeOwner, decideOrchestratedApply, observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
 
 const base: PlanInputs = {
   currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", runtimeOwner: "none",
   cliRoot: "/fixture/ocx", identity: { kind: "absent" }, ownershipPermits: true, updateInFlight: false,
 };
+
+test("apply admission binds the observed plan and deadline before any update driver runs", () => {
+  const plan = buildOrchestratedPlan(base);
+  const request = { ok: true, mode: "apply" } as const;
+  expect(decideOrchestratedApply(plan, request, 100)).toEqual({ kind: "proceed" });
+  expect(decideOrchestratedApply(plan, { ...request, expectPlan: "different-plan-token" }, 100)).toMatchObject({ exitCode: 10, result: { error: "plan-changed", applied: false } });
+  expect(decideOrchestratedApply(plan, { ...request, notAfter: 99 }, 100)).toMatchObject({ exitCode: 10, result: { error: "deadline-passed", applied: false } });
+  expect(decideOrchestratedApply(plan, { ...request, notAfter: 100, expectPlan: plan.planToken }, 100)).toEqual({ kind: "proceed" });
+  expect(decideOrchestratedApply(buildOrchestratedPlan({ ...base, identity: { kind: "unknown" } }), request, 100)).toMatchObject({ exitCode: 10, result: { error: "serving-install-unknown" } });
+  expect(decideOrchestratedApply(buildOrchestratedPlan({ ...base, targetVersion: "2.0.0" }), request, 100)).toMatchObject({ exitCode: 0, result: { applied: false, fromVersion: "2.0.0", toVersion: "2.0.0" } });
+});
 
 test("plan decision matrix refuses unsafe installs, unknown identity and unsafe versions", () => {
   const live = { kind: "live", servingRoot: "/fixture/ocx", runtime: { pid: 3, port: 10101, hostname: "127.0.0.1", command: ["/fixture/bun", "/fixture/ocx/src/cli/index.ts"] } } as const;
