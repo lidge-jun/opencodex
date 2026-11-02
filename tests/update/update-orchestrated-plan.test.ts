@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildOrchestratedPlan, type PlanInputs } from "../../src/update/orchestrated-plan";
-import { observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
+import { classifyPlanRuntimeOwner, observeOrchestratedPlan, type OrchestratedPlanDeps } from "../../src/update/orchestrated-entry";
 
 const base: PlanInputs = {
   currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "npm", runtimeOwner: "none",
@@ -57,4 +57,12 @@ test("observed plans bind the selected registry target, serving identity, owner 
   expect((await observeOrchestratedPlan({ ok: true, mode: "plan" }, { ...deps, ownership: () => ({ runtimeOwner: "unknown", permits: false }) })).reason).toBe("runtime-ownership-refused");
   expect((await observeOrchestratedPlan({ ok: true, mode: "plan" }, { ...deps, install: () => ({ installer: "standalone", cliRoot: "/fixture/ocx", desktopPath: true }) })).reason).toBe("desktop-app-owned");
   expect((await observeOrchestratedPlan({ ok: true, mode: "plan" }, { ...deps, identity: async () => { throw Error("unavailable"); } })).reason).toBe("plan-unavailable");
+});
+
+test("a recorded CLI claim is service ownership only when a service is installed", () => {
+  const identity = { kind: "live" as const, servingRoot: "/fixture/ocx", runtime: { pid: 3, port: 10101, hostname: "127.0.0.1", command: ["/fixture/bun", "/fixture/ocx/src/cli/index.ts"] } };
+  const owner = { kind: "owned" as const, revision: 1, ownership: { owner: "cli" as const, installId: "fixture", consentGeneration: 1 } };
+  expect(classifyPlanRuntimeOwner(identity, owner, { kind: "none" }, false)).toMatchObject({ runtimeOwner: "unmanaged", permits: true });
+  expect(classifyPlanRuntimeOwner(identity, owner, { kind: "none" }, true)).toMatchObject({ runtimeOwner: "service", permits: true });
+  expect(classifyPlanRuntimeOwner(identity, owner, { kind: "unknown", reason: "fixture", desktopSeen: false }, true)).toMatchObject({ runtimeOwner: "unknown", permits: false });
 });

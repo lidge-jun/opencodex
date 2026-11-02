@@ -5,7 +5,9 @@ import { packageVersion } from "../lib/package-version";
 import { getConfigDir } from "../config/paths";
 import { readConfigDiagnostics } from "../config";
 import { resolveServiceOwnership } from "../service/state";
-import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import type { ServiceOwnershipResolution } from "../service/state";
+import { inspectDesktopSupervision, type SupervisionEvidence } from "../service/desktop-supervision.mjs";
+import { diagnoseService } from "../service/diagnostics";
 import { detectInstallOwnership, defaultUpdateTag, latestVersion } from "./index";
 import { parseOrchestratedUpdateArgs, type OrchestratedUpdateArgs } from "./orchestrated-arguments.mjs";
 import { buildOrchestratedPlan, type PlanInputs } from "./orchestrated-plan";
@@ -25,6 +27,16 @@ export interface OrchestratedPlanDeps {
   inFlight(): boolean;
 }
 
+export function classifyPlanRuntimeOwner(identity: ServingIdentity, owner: ServiceOwnershipResolution,
+  supervision: SupervisionEvidence, serviceInstalled: boolean | null): { runtimeOwner: PlanInputs["runtimeOwner"]; permits: boolean } {
+  const policy = planUpdateRuntimeHandling({ ownership: owner.kind === "owned" ? owner.ownership : null,
+    ownershipUnknown: owner.kind === "unknown", serviceInstalled: serviceInstalled === true, supervision });
+  const uncertain = owner.kind === "unknown" || supervision.kind === "unknown" || supervision.kind === "unsupported" || serviceInstalled === null;
+  const runtimeOwner = uncertain ? "unknown" : supervision.kind === "desktop" || (owner.kind === "owned" && owner.ownership.owner !== "cli")
+    ? "desktop-app" : identity.kind === "absent" ? "none" : serviceInstalled && owner.kind === "owned" && owner.ownership.owner === "cli" ? "service" : "unmanaged";
+  return { runtimeOwner, permits: !uncertain && policy.mayReplacePackage };
+}
+
 const defaultDeps: OrchestratedPlanDeps = {
   install() {
     const installer = detectInstallOwnership().installer;
@@ -40,13 +52,12 @@ const defaultDeps: OrchestratedPlanDeps = {
   ownership(identity) {
     const owner = resolveServiceOwnership();
     const supervision = identity.kind === "live" ? inspectDesktopSupervision({ targetPid: identity.runtime.pid }) : { kind: "none" as const };
-    const serviceInstalled = owner.kind === "owned" && owner.ownership.owner === "cli";
-    const policy = planUpdateRuntimeHandling({ ownership: owner.kind === "owned" ? owner.ownership : null,
-      ownershipUnknown: owner.kind === "unknown", serviceInstalled, supervision });
-    const uncertain = owner.kind === "unknown" || supervision.kind === "unknown" || supervision.kind === "unsupported";
-    const runtimeOwner = uncertain ? "unknown" : supervision.kind === "desktop" || (owner.kind === "owned" && owner.ownership.owner !== "cli")
-      ? "desktop-app" : identity.kind === "absent" ? "none" : serviceInstalled ? "service" : "unmanaged";
-    return { runtimeOwner, permits: !uncertain && policy.mayReplacePackage };
+    let serviceInstalled: boolean | null = false;
+    if (identity.kind === "live" && owner.kind === "owned" && owner.ownership.owner === "cli") {
+      const service = diagnoseService();
+      serviceInstalled = service.supported && !service.conflict ? service.installed : null;
+    }
+    return classifyPlanRuntimeOwner(identity, owner, supervision, serviceInstalled);
   },
   target: (selector, installer) => ["npm", "pnpm", "bun"].includes(installer) ? latestVersion(selector, installer as "npm" | "pnpm" | "bun") : null,
   inFlight: () => isUpdateInFlight(getConfigDir()),
