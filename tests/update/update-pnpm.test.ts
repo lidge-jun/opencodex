@@ -578,6 +578,7 @@ describe("pnpm global update", () => {
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state),
     });
     expect(result).toMatchObject({ ok: false, phase: "install", rolledBack: true, activePath: owner.packagePath });
+    expect(result).toHaveProperty("rollbackPerformed", false);
     expect(state.calls.filter(call => call.args[0] === "add")).toHaveLength(1);
   });
 
@@ -596,6 +597,7 @@ describe("pnpm global update", () => {
     expect(result).toMatchObject({
       ok: false, phase: "rollback", rolledBack: true, activePath: owner.packagePath,
     });
+    expect(result).toHaveProperty("rollbackPerformed", true);
     expect(state.calls.filter(call => call.args[0] === "add").map(call => call.args.at(-1))).toEqual([
       `${PKG}@2.0.0`, `${PKG}@1.0.0`,
     ]);
@@ -614,6 +616,7 @@ describe("pnpm global update", () => {
       runPnpm: fakePnpm(state, owner), verify: fakeVerify(state, owner), verifyShims: fakeShims(state),
     });
     expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false });
+    expect(result).toHaveProperty("rollbackPerformed", false);
     expect((result as { activePath?: string }).activePath).toBeUndefined();
   });
 });

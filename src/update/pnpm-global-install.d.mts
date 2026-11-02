@@ -119,6 +119,8 @@ export type PnpmGlobalUpdateResult =
       ok: false;
       phase: "preflight" | "install" | "rollback";
       rolledBack?: boolean;
+      /** True only when a rollback transaction restored and verified the previous version. */
+      rollbackPerformed?: boolean;
       activePath?: string;
       globalDir?: string;
       globalBinDir?: string;
