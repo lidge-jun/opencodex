@@ -555,7 +555,7 @@ Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or
 still restart its own OpenCodex client runtime after applying changed Home settings. If the Home
 times out and stops its local SSH process, a remote sync already running may continue on the Child.
 
-If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7.
+If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7. If another sync holds the mutex, it reports `sync-in-progress` and exits 1; a Home counts that Child as failed and exits 6 when its own sync succeeded.
 
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 

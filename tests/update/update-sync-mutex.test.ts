@@ -8,6 +8,7 @@ import { inspectUpdateMarker, inspectUpdateSyncMutex, isUpdateInFlight, tryAcqui
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import { withSyncUpdateGuard } from "../../src/cli/sync-update-guard";
 import { observeOrchestratedPlan } from "../../src/update/orchestrated-entry";
+import { classifySyncResult, fanoutExitCode } from "../../src/cli/sync-fanout";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -117,6 +118,29 @@ test("sync refuses before its work while an update holds the mutex", async () =>
     expect(err).toHaveBeenCalledWith("update-in-flight");
   } finally {
     err.mockRestore(); update.release();
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+  }
+});
+
+test.each(["sync", "update", "unknown"] as const)("sync guard classifies a %s mutex holder", async holder => {
+  const root = home(), previous = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = root;
+  const lock = holder === "unknown" ? null : tryAcquireUpdateSyncMutex(root, holder);
+  if (lock && lock.kind !== "acquired") throw new Error("fixture lease not acquired");
+  if (!lock) mkdirSync(join(root, "sync-update"));
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const code = await withSyncUpdateGuard(async () => { throw new Error("sync work reached"); });
+    const reason = holder === "sync" ? "sync-in-progress" : "update-in-flight";
+    expect(code).toBe(holder === "sync" ? 1 : 7);
+    expect(err).toHaveBeenCalledWith(reason);
+    const child = classifySyncResult({ code, stdout: "ocx-fanout:stdout-begin\n", stderr: `ocx-fanout:selected:2.93.0\n${reason}\n` });
+    if (holder === "sync") {
+      expect(child).toEqual({ state: "failed", reason: "child-sync-failed" });
+      expect(fanoutExitCode({ schema: "ocx.sync.fanout/1", home: { state: "synced", exit: 0 }, fanout: { state: "ran", reason: null }, children: [{ linkId: "child", alias: "host", ...child, exit: code }] })).toBe(6);
+    } else expect(child).toEqual({ state: "skipped", reason: "child-updating" });
+  } finally {
+    err.mockRestore(); if (lock?.kind === "acquired") lock.release();
     if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
   }
 });

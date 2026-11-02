@@ -5,8 +5,9 @@ import { inspectUpdateMarker, tryAcquireUpdateSyncMutex } from "../update/sync-u
 export async function withSyncUpdateGuard(run: () => Promise<number>): Promise<number> {
   const lease = tryAcquireUpdateSyncMutex(getConfigDir(), "sync");
   if (lease.kind !== "acquired") {
-    console.error("update-in-flight");
-    return 7;
+    const syncing = lease.holder === "sync";
+    console.error(syncing ? "sync-in-progress" : "update-in-flight");
+    return syncing ? 1 : 7;
   }
   try {
     if (inspectUpdateMarker(getConfigDir()) !== "free") {
