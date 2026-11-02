@@ -16,6 +16,11 @@ const INVALID_FILE_ATTRIBUTES = 0xffffffff;
 type ReparseProbe = (path: string) => boolean;
 let nativeAttributes: ((path: string) => number) | undefined;
 let probeForTests: ReparseProbe | null = null;
+/**
+ * The operating system this process runs on, read once at load. Tests replace `process.platform` to
+ * drive Windows-only branches on POSIX; the native attribute query must follow the real system.
+ */
+const NATIVE_WINDOWS = process.platform === "win32";
 
 function errorCode(error: unknown): unknown {
   return error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -50,7 +55,7 @@ export function setSqlitePathReparseProbeForTests(probe: ReparseProbe | null): v
 
 function isReparsePoint(path: string): boolean {
   if (probeForTests) return probeForTests(path);
-  return process.platform === "win32" && isWindowsReparsePoint(path);
+  return NATIVE_WINDOWS && isWindowsReparsePoint(path);
 }
 
 /**
