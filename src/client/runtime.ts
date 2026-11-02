@@ -5,6 +5,7 @@ import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
 import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
+import { currentServingCommand } from "../config/serving-runtimes";
 import { installCrashGuards } from "../lib/crash-guard";
 import { observeLocalCredentials } from "../local-credentials/runtime-observation";
 import { verifiedHomeConnection } from "./link-connection";
@@ -94,7 +95,7 @@ export function clientRuntimeRecord(
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
 ): RuntimePortState {
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField() };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, command: currentServingCommand(), ...siblingRuntimeField() };
 }
 
 export function standaloneRecycleEnv(

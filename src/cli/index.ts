@@ -606,6 +606,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
