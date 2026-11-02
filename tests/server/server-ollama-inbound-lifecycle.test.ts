@@ -7,7 +7,7 @@ import { startServer } from "../../src/server";
 import { dispatchOllamaRoute, type OllamaRouteDeps } from "../../src/server/index/ollama-routes";
 import { resetLifecycleDrainStateForTests, setDraining } from "../../src/server/lifecycle";
 import type { NativeFinalLog, NativeFinalOutcome } from "../../src/server/native-final-log";
-import { streamOllama } from "../../src/server/ollama-inbound";
+import { bufferedOllama, streamOllama } from "../../src/server/ollama-inbound";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { usageLogPath } from "../../src/usage/log";
@@ -118,6 +118,46 @@ describe("Ollama NDJSON settlement window", () => {
     await pendingTerminal.catch(() => undefined);
     await Bun.sleep(10);
     expect(commits).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  });
+
+  test("a buffered client that leaves while settlement is pending is a 499, not a success", async () => {
+    let release!: (settled: boolean) => void;
+    const commits: NativeFinalOutcome[] = [];
+    const finalLog: NativeFinalLog = {
+      innerSettled: () => false,
+      waitForInner: () => new Promise<boolean>(resolve => { release = resolve; }),
+      commit: outcome => { commits.push(outcome); return commits.length === 1; },
+    };
+    const client = new AbortController();
+    const inner = Response.json({ choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }] });
+    const pending = bufferedOllama("chat", "fx/m1", "time", inner, finalLog, client.signal);
+    await Bun.sleep(10);
+    client.abort();
+    release(true);
+    const res = await pending;
+    expect(res.status).toBe(499);
+    expect(commits).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  });
+
+  test("data after the Chat terminator fails the stream instead of reporting success", async () => {
+    const commits: NativeFinalOutcome[] = [];
+    const finalLog: NativeFinalLog = {
+      innerSettled: () => true,
+      waitForInner: async () => true,
+      commit: outcome => { commits.push(outcome); return commits.length === 1; },
+    };
+    const frame = (body: unknown) => "data: " + JSON.stringify(body) + "\n\n";
+    const inner = new Response([
+      frame({ choices: [{ index: 0, delta: { role: "assistant", content: "hi" } }] }),
+      frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
+      "data: [DONE]\n\n",
+      frame({ error: { message: "late failure" } }),
+    ].join("")).body!;
+    const text = await streamOllama("chat", "fx/m1", "time", inner, finalLog, new AbortController().signal).text();
+    const lines = text.split("\n").filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.some(line => line.done === true)).toBe(false);
+    expect(typeof lines.at(-1)!.error).toBe("string");
+    expect(commits).toEqual([{ status: 502, terminalStatus: "failed", closeReason: "terminal" }]);
   });
 });
 

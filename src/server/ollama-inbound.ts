@@ -141,14 +141,15 @@ export async function handleOllamaGeneration(
   try {
     inner = await handleChatCompletions(internal, config, logCtx, { ...ids, suppressProtocolTrace: true });
   } catch {
-    const cancelled = req.signal.aborted;
     await finalLog.waitForInner();
-    finalLog.commit({ status: cancelled ? 499 : 502, terminalStatus: "failed", closeReason: "non_stream" });
-    return ollamaError(cancelled ? 499 : 502, cancelled ? "request cancelled" : "request failed");
+    if (req.signal.aborted) return cancelledNonStream(finalLog);
+    finalLog.commit({ status: 502, terminalStatus: "failed", closeReason: "non_stream" });
+    return ollamaError(502, "request failed");
   }
   if (!inner.ok || !inner.body) {
     const message = await innerErrorMessage(inner);
     await finalLog.waitForInner();
+    if (req.signal.aborted) return cancelledNonStream(finalLog);
     finalLog.commit({ status: inner.ok ? 502 : inner.status, terminalStatus: "failed", closeReason: "non_stream" });
     const retryAfter = inner.headers.get("retry-after");
     return ollamaError(inner.ok ? 502 : inner.status, message, retryAfter ? { "Retry-After": retryAfter } : undefined);
@@ -158,17 +159,25 @@ export async function handleOllamaGeneration(
     : bufferedOllama(kind, model, createdAt, inner, finalLog, req.signal);
 }
 
-async function bufferedOllama(kind: OllamaKind, model: string, createdAt: string, inner: Response, finalLog: NativeFinalLog, signal: AbortSignal): Promise<Response> {
+/** A client that left before the outer outcome was committed owns a 499 row, whatever the inner path reported. */
+function cancelledNonStream(finalLog: NativeFinalLog): Response {
+  finalLog.commit({ status: 499, closeReason: "client_cancel" });
+  return ollamaError(499, "request cancelled");
+}
+
+/** Exported for the settlement-window cancellation test; production callers go through handleOllamaGeneration. */
+export async function bufferedOllama(kind: OllamaKind, model: string, createdAt: string, inner: Response, finalLog: NativeFinalLog, signal: AbortSignal): Promise<Response> {
   let native: Record<string, unknown>;
   try {
     native = ollamaBufferedResponse(kind, model, JSON.parse(await inner.text()), createdAt);
   } catch {
-    const cancelled = signal.aborted;
     await finalLog.waitForInner();
-    finalLog.commit({ status: cancelled ? 499 : 502, terminalStatus: "failed", closeReason: "non_stream" });
-    return ollamaError(cancelled ? 499 : 502, cancelled ? "request cancelled" : "invalid upstream response");
+    if (signal.aborted) return cancelledNonStream(finalLog);
+    finalLog.commit({ status: 502, terminalStatus: "failed", closeReason: "non_stream" });
+    return ollamaError(502, "invalid upstream response");
   }
   const settled = await finalLog.waitForInner();
+  if (signal.aborted) return cancelledNonStream(finalLog);
   if (native.done !== true || !settled) {
     finalLog.commit({ status: 502, terminalStatus: "failed", closeReason: "non_stream" });
     return ollamaError(502, typeof native.error === "string" ? native.error : "request did not complete");
@@ -222,11 +231,12 @@ export function streamOllama(kind: OllamaKind, model: string, createdAt: string,
   const consume = (controller: ReadableStreamDefaultController<Uint8Array>, block: string): number => {
     let emitted = 0;
     for (const raw of block.split("\n")) {
-      if (sawDone) return emitted;
       const text = raw.trimEnd();
       if (!text.startsWith("data:")) continue;
+      // Chat ends at [DONE]; any later data (an error frame, say) means the stream did not settle cleanly.
+      if (sawDone) throw new Error("data after the Chat stream terminator");
       const payload = text.slice(5).trim();
-      if (payload === "[DONE]") { sawDone = true; return emitted; }
+      if (payload === "[DONE]") { sawDone = true; continue; }
       for (const record of consumeOllamaChatChunk(state, JSON.parse(payload))) { controller.enqueue(line(record)); emitted++; }
     }
     return emitted;
