@@ -103,3 +103,81 @@ test("account clear followed by bind retains the later pin", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); bind(fence); recordAccountPinsCleared("account-a"); bind(fence); lease.release();
   lease = acquireSpendLedgerOwner(); expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
 });
+
+test("overflow poisons the store and the next owner discards committed rows", () => {
+  lease = acquireSpendLedgerOwner();
+  const fence = seed();
+  bind(fence);
+  flushCodexAffinityStoreForTests();
+  const db = new Database(path());
+  expect(db.query("SELECT count(*) AS count FROM threads").get()).toEqual({ count: 1 });
+  db.close();
+  const original = console.warn;
+  console.warn = () => {};
+  try {
+    for (let i = 0; i < 16385; i++) recordAccountPinsCleared("other-account");
+  } finally {
+    console.warn = original;
+  }
+  lease.release();
+  lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
+});
+
+test("a close error after final commit leaves rows clean and restorable", () => {
+  lease = acquireSpendLedgerOwner();
+  bind(seed());
+  // Throw after the real close: the final transaction has already committed.
+  const originalClose = Database.prototype.close;
+  const originalWarn = console.warn;
+  let injected = false;
+  Database.prototype.close = function (...args) {
+    originalClose.apply(this, args);
+    if (!injected) {
+      injected = true;
+      throw new Error("injected close failure");
+    }
+  };
+  console.warn = () => {};
+  try {
+    lease.release();
+  } finally {
+    Database.prototype.close = originalClose;
+    console.warn = originalWarn;
+  }
+  expect(injected).toBe(true);
+  const db = new Database(path());
+  expect(db.query("SELECT value FROM meta WHERE name='clean'").get()).toEqual({ value: 1 });
+  db.close();
+  lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
+});
+
+test("an evicted anchor makes a later bind memory-only", () => {
+  lease = acquireSpendLedgerOwner();
+  const fence = seed();
+  const evicted = key();
+  for (let i = 0; i < 4096; i++) codexConversationKeyFor(`family-${i}`, `thread-${i}`);
+  const now = Date.now();
+  recordThreadBind(evicted, "legacy", { scope: "legacy", accountId: "account-a", fence, createdAt: now, lastUsedAt: now });
+  lease.release();
+  lease = acquireSpendLedgerOwner();
+  expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
+});
+
+test("release preserves live state, while an observed home change clears it", () => {
+  lease = acquireSpendLedgerOwner();
+  bind(seed());
+  lease.release();
+  lease = undefined;
+  expect(live).toBeDefined();
+  const otherHome = mkdtempSync(join(tmpdir(), "ocx-affinity-other-"));
+  try {
+    process.env.OPENCODEX_HOME = otherHome;
+    key();
+    expect(live).toBeUndefined();
+  } finally {
+    process.env.OPENCODEX_HOME = home;
+    removeTreeWithRetry(otherHome);
+  }
+});
