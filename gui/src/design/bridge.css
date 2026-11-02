@@ -559,3 +559,16 @@ details > summary::before { flex-shrink: 0; margin-top: calc((1lh - 8px) / 2); }
   min-height: calc(var(--ocx-control-h) - 4px);
   padding-block: 0;
 }
+
+/* ---- flat canvas -------------------------------------------------------------
+   No ambient gradient wash behind the app (removed from styles.css): the page is
+   one flat --bg, and surfaces separate by a step in tone and a hairline, not by
+   colour blooms. With nothing to refract, the sidebar's glass becomes a solid
+   rail with a hairline edge. */
+body { background: var(--ocx-bg); }
+.sidebar {
+  background: var(--rail);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-right-color: var(--ocx-line);
+}
