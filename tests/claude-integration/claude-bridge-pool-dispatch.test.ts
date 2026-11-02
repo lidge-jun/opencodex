@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { clearCodexThreadLineageForTests, recordCodexThreadLineage, resolveCodex
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import * as authContext from "../../src/codex/auth-context";
 import { clearConversationStateIssuerMap, peekConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
@@ -230,7 +231,16 @@ for (const variant of ["local-metadata", "remote-alias"] as const) test(`alterna
   const send = () => variant === "local-metadata"
     ? turn("user_test_account__session_conversation-native")
     : turn(undefined, principal("fixture-principal"), { session_id: "fixture-alias" });
-  await send();
+  // Observe the alternate pick itself: its selection headers must carry the initial pool key.
+  const alternatePickKeys: Array<string | undefined> = [];
+  const resolveSpy = spyOn(authContext, "resolveCodexAuthContext");
+  try {
+    await send();
+    for (const call of resolveSpy.mock.calls) {
+      const [headers, , , options] = call as Parameters<typeof authContext.resolveCodexAuthContext>;
+      if (options?.excludeAccountId) alternatePickKeys.push(codexPoolAffinityKey(headers));
+    }
+  } finally { resolveSpy.mockRestore(); }
   expect(wires).toHaveLength(2);
   const alternate = account(wires[1]);
   expect(alternate).toBeTruthy();
@@ -239,6 +249,7 @@ for (const variant of ["local-metadata", "remote-alias"] as const) test(`alterna
     ? bridgeIdentity(local, {}, metadataUuid)
     : bridgeIdentity(principal("fixture-principal"), { session_id: "fixture-alias" });
   const key = poolKey(identity);
+  expect(alternatePickKeys).toEqual([key]);
   // The alternate account's conversation-state issuer is recorded under the initial selection key.
   expect(peekConversationStateIssuer(key)).toBe(alternate!.replace(/^account-/, ""));
   await send();
