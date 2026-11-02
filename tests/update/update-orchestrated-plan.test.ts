@@ -14,6 +14,7 @@ test("plan decision matrix refuses unsafe installs, unknown identity and unsafe 
     [{ installer: "mise" }, "mise-managed"],
     [{ installer: "unknown" }, "installer-unknown"],
     [{ identity: { kind: "unknown" } }, "serving-install-unknown"],
+    [{ identity: { kind: "mismatch" } }, "cli-not-serving-install"],
     [{ identity: { ...live, servingRoot: "/fixture/other" } }, "cli-not-serving-install"],
     [{ ownershipPermits: false }, "runtime-ownership-refused"],
     [{ runtimeOwner: "unknown" }, "runtime-ownership-refused"],

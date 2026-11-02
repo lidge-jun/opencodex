@@ -30,6 +30,7 @@ export function buildOrchestratedPlan(input: PlanInputs) {
   else if (input.installer === "mise") reason = "mise-managed";
   else if (input.installer === "unknown") reason = "installer-unknown";
   else if (input.identity.kind === "unknown") reason = "serving-install-unknown";
+  else if (input.identity.kind === "mismatch") reason = "cli-not-serving-install";
   else if (live && servingRoot !== input.cliRoot) reason = "cli-not-serving-install";
   else if (!input.ownershipPermits || input.runtimeOwner === "unknown") reason = "runtime-ownership-refused";
   else if (!current || !target) reason = "target-unresolved";

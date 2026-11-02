@@ -6,13 +6,14 @@ import type { HomeOwnershipProof } from "../server/proxy-liveness";
 type RecordRead = { kind: "record"; raw: string } | { kind: "missing" } | { kind: "unreadable" };
 type RuntimeIdentity = { pid: number; port: number; hostname: string; command: readonly string[] };
 export type ServingIdentity =
-  | { kind: "unknown" | "absent" }
+  | { kind: "unknown" | "absent" | "mismatch" }
   | { kind: "live"; servingRoot: string; runtime: RuntimeIdentity };
 
 export interface ServingIdentityDeps {
   readRecord(): RecordRead;
   prove(record: RuntimePortState): Promise<HomeOwnershipProof>;
   probeConfigured(): Promise<"live" | "dead" | "unknown">;
+  legacyExecutableDiffers?(pid: number): Promise<boolean>;
   realpath(path: string): string;
 }
 
@@ -31,6 +32,9 @@ export async function inspectOrchestratedServingIdentity(deps: ServingIdentityDe
     const after = deps.readRecord();
     if (after.kind !== "record" || after.raw !== first.raw) return { kind: "unknown" };
     const command: unknown = parsed.command;
+    if (command === undefined) {
+      return await deps.legacyExecutableDiffers?.(parsed.pid) ? { kind: "mismatch" } : { kind: "unknown" };
+    }
     if (!Array.isArray(command) || command.length < 1 || command.length > 2 || !command.every(part => typeof part === "string" && isAbsolute(part))) return { kind: "unknown" };
     let servingRoot: string;
     if (command.length === 1) servingRoot = deps.realpath(command[0]);
