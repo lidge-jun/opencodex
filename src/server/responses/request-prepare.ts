@@ -1,3 +1,4 @@
+import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
@@ -952,7 +953,7 @@ export async function prepareResponsesRequest(
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
-  const poolAffinityKey = codexPoolAffinityKey(req.headers) ?? null;
+  const poolAffinityKey = codexPoolAffinityKey(completeClaudeBridgePoolIdentity(req.headers, options)) ?? null;
   // Preview has to see the same lineage resolve does. Without it, a child's first turn is
   // previewed as a cold pick and resolved onto the family account, and the subagent fallback
   // then decides model eligibility against an account the request will never use.

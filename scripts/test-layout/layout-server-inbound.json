@@ -1,5 +1,7 @@
 {
   "config-concurrent-inbound-body.test.ts": "config",
   "inbound-body-admission.test.ts": "server",
-  "inbound-body-budget.test.ts": "server"
+  "inbound-body-budget.test.ts": "server",
+  "claude-bridge-pool-session.test.ts": "claude-integration",
+  "claude-bridge-pool-dispatch.test.ts": "claude-integration"
 }

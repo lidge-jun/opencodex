@@ -389,6 +389,23 @@ canonical Go transport, including combo selection and failover. No Go-only repla
 reaches non-Go destinations. Shared system cache keys never become conversation identity.
 The request-scoped fallback is stable across retries and distinct across client requests.
 
+The Messages bridge carries a separate private Codex pool identity without changing replay headers.
+It requires admission and excludes spawn markers on ingress or replay, any ingress parent or thread
+header (including empty), and a replay with an existing complete pool key. For synthesized identities,
+explicit session_id then session-id aliases take precedence; conflicting nonempty aliases, empty-only
+aliases and invalid aliases block derivation. Otherwise validated metadata, then the Claude session
+header, supplies the value: loopback keeps it raw, remote callers require a principal and use the
+SHA-256 digest of the caller-session domain, principal and value. Shared system cohorts and
+prompt_cache_key never supply it. Existing complete pairs retain their original behavior.
+
+Only Codex account-selection headers complete session-id and thread-id, including 401 refresh;
+the route-independent pool key uses the same completion. Loopback metadata retains its existing
+upstream session_id, remote metadata sends the scoped digest, and header-only turns gain an upstream
+session_id. Non-Codex routes, Anthropic passthrough, request logs, reasoning replay, Go lanes and
+adapter fingerprints remain unchanged. The bridge does not supply client_metadata required for
+WebSocket reuse, so this does not affect reuse. The rule matrix and real dispatch are covered by
+claude-bridge-pool-session.test.ts and claude-bridge-pool-dispatch.test.ts.
+
 Claude metadata also supplies a private native-session value. Only the final canonical ChatGPT
 attempt receives it, in copied forwarding headers; an explicit underscore session, hyphenated
 session or thread header suppresses synthesis. Refresh and alternate-account retries retain

@@ -1,3 +1,4 @@
+import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import type { OcxProviderConfig, OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -111,7 +112,7 @@ function validatedCallerDirectHeaders(
   return captureCallerDirectAuth(headers, config) ? headers : undefined;
 }
 
-export function codexRouteCredentialDomainHeaders(
+function codexRouteCredentialDomainHeadersFor(
   req: Request,
   route: RouteResult,
   options: HandleResponsesOptions,
@@ -155,6 +156,15 @@ export function codexRouteCredentialDomainHeaders(
   return req.headers;
 }
 
+
+export function codexRouteCredentialDomainHeaders(
+  req: Request, route: RouteResult, options: HandleResponsesOptions,
+  credentialDomainWasRewritten: boolean, config: OcxConfig,
+): Headers {
+  return applyClaudeBridgePoolSession(
+    codexRouteCredentialDomainHeadersFor(req, route, options, credentialDomainWasRewritten, config), route, options,
+  );
+}
 
 /**
  * Does this route substitute OUR stored main credential, and does the caller own the credential
@@ -508,7 +518,7 @@ export async function refreshPoolForwardAuth(args: {
       refreshedAuthCtx,
       route.codexAccountMode,
     );
-    const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(applyClaudeBridgePoolSession(req.headers, route, options), refreshedAuthCtx, {
       admission: options.admission,
       config: options.codexAuthPolicy ?? config,
       modelId: route.modelId,
@@ -585,7 +595,7 @@ export async function refreshNativeMainForwardAuth(args: {
       refreshedAuthCtx,
       route.codexAccountMode,
     );
-    const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(applyClaudeBridgePoolSession(req.headers, route, options), refreshedAuthCtx, {
       admission: options.admission,
       config: options.codexAuthPolicy ?? config,
       modelId: route.modelId,
