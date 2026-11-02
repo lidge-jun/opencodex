@@ -180,34 +180,43 @@ async function bufferedOllama(kind: OllamaKind, model: string, createdAt: string
 const encoder = new TextEncoder();
 const line = (record: unknown) => encoder.encode(`${JSON.stringify(record)}\n`);
 
-function streamOllama(kind: OllamaKind, model: string, createdAt: string, body: ReadableStream<Uint8Array>, finalLog: NativeFinalLog, signal: AbortSignal): Response {
+/** Exported for the settlement-window cancellation test; production callers go through handleOllamaGeneration. */
+export function streamOllama(kind: OllamaKind, model: string, createdAt: string, body: ReadableStream<Uint8Array>, finalLog: NativeFinalLog, signal: AbortSignal): Response {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const state = createOllamaStreamState(kind, model, createdAt);
   let pending = "";
+  // ended: no further reads or records. cancelled: the client went away, possibly while end() waits.
   let ended = false;
+  let cancelled = false;
   // The inner Chat path can finalize on EOF after [DONE], so keep draining to EOF before ending.
   let sawDone = false;
   const cancelInner = () => { try { void reader.cancel().catch(() => {}); } catch { /* released */ } };
+  const commitCancelled = () => finalLog.commit({ status: 499, closeReason: "client_cancel" });
   const end = async (controller: ReadableStreamDefaultController<Uint8Array>, failure?: string) => {
     if (ended) return;
     ended = true;
     if (failure !== undefined) cancelInner();
     const terminal = failure === undefined ? ollamaStreamTerminal(state) : undefined;
     const settled = await finalLog.waitForInner();
-    if (signal.aborted) {
-      finalLog.commit({ status: 499, closeReason: "client_cancel" });
+    if (cancelled || signal.aborted) {
+      commitCancelled();
       try { controller.close(); } catch { /* already cancelled by the client */ }
       return;
     }
-    if (terminal?.done === true && settled) {
-      controller.enqueue(line(terminal));
-      finalLog.commit({ status: 200, terminalStatus: "completed", closeReason: "terminal" });
-    } else {
-      controller.enqueue(line({ error: failure ?? (typeof terminal?.error === "string" ? terminal.error : "request did not complete") }));
-      finalLog.commit({ status: 502, terminalStatus: "failed", closeReason: "terminal" });
+    try {
+      if (terminal?.done === true && settled) {
+        controller.enqueue(line(terminal));
+        finalLog.commit({ status: 200, terminalStatus: "completed", closeReason: "terminal" });
+      } else {
+        controller.enqueue(line({ error: failure ?? (typeof terminal?.error === "string" ? terminal.error : "request did not complete") }));
+        finalLog.commit({ status: 502, terminalStatus: "failed", closeReason: "terminal" });
+      }
+      controller.close();
+    } catch {
+      // The client cancelled between settlement and the terminal record; the row still lands once.
+      commitCancelled();
     }
-    controller.close();
   };
   // Returns how many native records were enqueued. Finish and usage frames enqueue nothing.
   const consume = (controller: ReadableStreamDefaultController<Uint8Array>, block: string): number => {
@@ -248,11 +257,13 @@ function streamOllama(kind: OllamaKind, model: string, createdAt: string, body: 
       }
     },
     async cancel() {
+      cancelled = true;
+      // When end() is already waiting for settlement it sees the flag and writes the 499 row.
       if (ended) return;
       ended = true;
       cancelInner();
       await finalLog.waitForInner();
-      finalLog.commit({ status: 499, closeReason: "client_cancel" });
+      commitCancelled();
     },
   }, { highWaterMark: 0 }), { status: 200, headers: { "content-type": "application/x-ndjson" } });
 }

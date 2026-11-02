@@ -6,6 +6,8 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { dispatchOllamaRoute, type OllamaRouteDeps } from "../../src/server/index/ollama-routes";
 import { resetLifecycleDrainStateForTests, setDraining } from "../../src/server/lifecycle";
+import type { NativeFinalLog, NativeFinalOutcome } from "../../src/server/native-final-log";
+import { streamOllama } from "../../src/server/ollama-inbound";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { usageLogPath } from "../../src/usage/log";
@@ -91,6 +93,34 @@ describe("Ollama dispatcher arm", () => {
 });
 
 // Real HTTP lifecycle: zero-send refusals, cancellation, retries, and trace suppression.
+describe("Ollama NDJSON settlement window", () => {
+  test("a client cancel while the terminal waits for inner settlement still commits one 499", async () => {
+    let release!: (settled: boolean) => void;
+    const commits: NativeFinalOutcome[] = [];
+    const finalLog: NativeFinalLog = {
+      innerSettled: () => false,
+      waitForInner: () => new Promise<boolean>(resolve => { release = resolve; }),
+      commit: outcome => { commits.push(outcome); return commits.length === 1; },
+    };
+    const frame = (body: unknown) => "data: " + JSON.stringify(body) + "\n\n";
+    const inner = new Response([
+      frame({ choices: [{ index: 0, delta: { role: "assistant", content: "hi" } }] }),
+      frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
+      "data: [DONE]\n\n",
+    ].join("")).body!;
+    const reader = streamOllama("chat", "fx/m1", "time", inner, finalLog, new AbortController().signal).body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("\"hi\"");
+    const pendingTerminal = reader.read();
+    await Bun.sleep(10); // The pull reached EOF and is now waiting in end() for settlement.
+    expect(release).toBeDefined();
+    await reader.cancel();
+    release(true);
+    await pendingTerminal.catch(() => undefined);
+    await Bun.sleep(10);
+    expect(commits).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  });
+});
+
 const saved = process.env.OPENCODEX_HOME;
 let home = "";
 let mode: "text" | "hang" | "flaky" = "text";
