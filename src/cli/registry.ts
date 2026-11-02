@@ -183,9 +183,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
+      "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
+      "Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex on the Child. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
@@ -736,12 +738,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "capabilities",
-    usage: "ocx capabilities [--json] [--mutating-only] [--route <path>] | [--json] --contracts",
+    usage: "ocx capabilities [--json] [--contracts] [--mutating-only] [--route <path>]",
     summary: "List the declared CLI capabilities and the management routes they drive.",
     details: [
       "The machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.",
+      "--contracts lists supported versioned contracts; it cannot be combined with --route or --mutating-only.",
       "--route <path> answers the inverse question: which commands drive this management route.",
-      "--contracts lists versioned machine contracts; combine with --json for a JSON envelope.",
     ],
   },
   {

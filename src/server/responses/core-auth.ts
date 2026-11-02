@@ -1,3 +1,4 @@
+import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import type { OcxProviderConfig, OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -111,7 +112,7 @@ function validatedCallerDirectHeaders(
   return captureCallerDirectAuth(headers, config) ? headers : undefined;
 }
 
-export function codexRouteCredentialDomainHeaders(
+function codexRouteCredentialDomainHeadersFor(
   req: Request,
   route: RouteResult,
   options: HandleResponsesOptions,
@@ -155,6 +156,20 @@ export function codexRouteCredentialDomainHeaders(
   return req.headers;
 }
 
+
+/**
+ * Credential-domain headers for Codex account SELECTION (previews, recovery, final resolution).
+ * A Claude bridge pool identity is completed here only; upstream headers are always materialized
+ * from the uncompleted form, so the synthesized pair never reaches the wire.
+ */
+export function codexRouteCredentialDomainHeaders(
+  req: Request, route: RouteResult, options: HandleResponsesOptions,
+  credentialDomainWasRewritten: boolean, config: OcxConfig,
+): Headers {
+  return applyClaudeBridgePoolSession(
+    codexRouteCredentialDomainHeadersFor(req, route, options, credentialDomainWasRewritten, config), route, options,
+  );
+}
 
 /**
  * Does this route substitute OUR stored main credential, and does the caller own the credential
@@ -210,7 +225,7 @@ export async function resolveResponsesCodexAuth(
   // routed credential with it either, because that would be a silent credential swap.
   if (hasAgentAssertionAuthorization(req.headers)) return { ok: false, response: agentAssertionUnsupportedResponse() };
   try {
-    let authInputHeaders = codexRouteCredentialDomainHeaders(
+    let authInputHeaders = codexRouteCredentialDomainHeadersFor(
       req,
       route,
       options,
@@ -270,7 +285,9 @@ export async function resolveResponsesCodexAuth(
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
+      // Only selection sees the Claude bridge pool identity; materialization below keeps the
+      // uncompleted headers, so the wire matches the original request.
+      authCtx = await resolveCodexAuthContext(applyClaudeBridgePoolSession(authInputHeaders, route, options), config, route.codexAccountMode, {
         admission: options.admission,
         codexAuthPolicy: options.codexAuthPolicy,
         accountId: route.codexAccountId,

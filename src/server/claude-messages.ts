@@ -8,6 +8,7 @@ import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { resolveClaudeBridgePoolSession } from "./claude-bridge-pool-session";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
@@ -1176,6 +1177,9 @@ async function handleClaudeMessagesWithBudget(
     ?? normalizeLogConversationId(req.headers.get("x-opencode-session"))
     ?? metadataGoLane
     ?? getOrAllocateRequestSessionLane(req);
+  const claudeBridgePoolSession = resolveClaudeBridgePoolSession({
+    ingress: req.headers, replay: headers, metadataSessionId: claudeNativeSessionId, admission: logIds?.admission,
+  });
   let internalReq: Request;
   try {
     // The UTF-16 JSON string and the Request's UTF-8 body coexist until dispatch.
@@ -1239,6 +1243,7 @@ async function handleClaudeMessagesWithBudget(
       ? { tools: anthropicBody.tools, messages: anthropicBody.messages, tool_choice: anthropicBody.tool_choice } : undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
+    ...(claudeBridgePoolSession ? { claudeBridgePoolSession } : {}),
     stripClaudeMainAuthForNoncanonicalForward: true,
     ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
     // Claude's internal stored-main enrichment is not an original caller credential.

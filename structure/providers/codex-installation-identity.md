@@ -70,3 +70,5 @@ Authenticated live and frame contracts are covered by
 `tests/codex-integration/codex-installation-live-ws.test.ts`; compact empty-header and turn-size
 contracts are covered by `tests/responses/codex-installation-compact-empty.test.ts` and
 `tests/responses/codex-installation-turn-limit.test.ts`.
+
+The Claude bridge carries its private pool identity through Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).

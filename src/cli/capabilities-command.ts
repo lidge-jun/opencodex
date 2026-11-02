@@ -54,8 +54,8 @@ export async function runCapabilities(argv: string[]): Promise<number> {
   const mutatingOnly = takeFlag(args, "--mutating-only");
   const route = takeValueFlag(args, "--route");
 
-  if (args.length > 0 || (route !== undefined && route.trim().length === 0) || (contracts && (route !== undefined || mutatingOnly))) {
-    console.error("Usage: ocx capabilities [--json] [--mutating-only] [--route <path>] | [--json] --contracts");
+  if (args.length > 0 || (route !== undefined && route.trim().length === 0) || (contracts && (mutatingOnly || route !== undefined))) {
+    console.error("Usage: ocx capabilities [--json] [--contracts] [--mutating-only] [--route <path>]");
     return 64;
   }
 

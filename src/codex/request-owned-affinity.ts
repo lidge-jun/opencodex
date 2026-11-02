@@ -10,9 +10,11 @@ import { getThreadAffinity, getModelDetourAffinity, deleteThreadAffinity, delete
 import type { CodexQuotaScope } from "./routing/health-store";
 import { classifyCodexUpstreamOutcome } from "./routing/cooldown-math";
 import type { CodexAuthContext } from "./auth-context";
+import { isRequestOwnedAffinityKey, REQUEST_OWNED_AFFINITY_KEY_PREFIX } from "./request-owned-affinity-key";
+export { isRequestOwnedAffinityKey } from "./request-owned-affinity-key";
 
 const key = randomBytes(32);
-const prefix = "request-owned:v1:";
+const prefix = REQUEST_OWNED_AFFINITY_KEY_PREFIX;
 
 /** Derive the opaque key for this caller and conversation, if both exist. */
 export function requestOwnedAffinityKey(headers: Headers): string | undefined {
@@ -22,11 +24,6 @@ export function requestOwnedAffinityKey(headers: Headers): string | undefined {
   return prefix + createHmac("sha256", key)
     .update("opencodex-request-owned-affinity-v1\0").update(authorization).update("\0").update(conversation)
     .digest("base64url");
-}
-
-/** Identify namespace keys that must remain process-local. */
-export function isRequestOwnedAffinityKey(value: string): boolean {
-  return value.startsWith(prefix);
 }
 
 /** Report a bind only when the selection-time entry names the selected account. */

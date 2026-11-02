@@ -86,6 +86,7 @@ import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
+import { protocolTraceSuppressed } from "../protocols/trace";
 import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
 import { resolveMistralTransport } from "../providers/mistral-transport";
 
@@ -225,7 +226,7 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
  */
 export async function handleNativeChatCompletions(options: HandleNativeChatOptions): Promise<Response> {
   const { logCtx, logIds, route } = options;
-  logCtx.inboundProtocol = "chat";
+  if (!protocolTraceSuppressed(logCtx)) logCtx.inboundProtocol = "chat";
   const attemptHandle = beginInferenceAttempt(logCtx, {
     provider: route.providerName,
     model: route.modelId,
