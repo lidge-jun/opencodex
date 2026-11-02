@@ -555,6 +555,8 @@ Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or
 still restart its own OpenCodex client runtime after applying changed Home settings. If the Home
 times out and stops its local SSH process, a remote sync already running may continue on the Child.
 
+If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7. If another sync holds the mutex, it reports `sync-in-progress` and exits 1; a Home counts that Child as failed and exits 6 when its own sync succeeded. With `--json`, either refusal prints one result document with the Home skipped and the refusal reason in `fanout.reason`.
+
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
 On a Remote Link Child, `ocx sync` also applies the Home's Codex settings and, when the client runtime
@@ -1159,6 +1161,45 @@ with bounded, read-only provenance inspection. `ocx system codex-cli-update chec
 package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
+
+#### Orchestrated update
+
+Automation can discover support with `ocx capabilities --contracts --json`; the
+`contracts` array contains `update.orchestrated/1`. The contracts-only option
+cannot be combined with `--route` or `--mutating-only`.
+
+```bash
+ocx update --plan --json [--tag latest|preview | --version <version>]
+ocx update --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]
+```
+
+Plan emits one `ocx.update.plan/1` JSON object: `currentVersion`, `targetVersion`,
+`installer`, `runtimeOwner`, `servingPath`, `cliPath`, `canApply`, optional `reason`,
+`restartRequired`, `planToken`, `updateInFlight`, and `mutationBoundMs`. A plan is
+read-only. Reasons are `desktop-app-owned`, `source-checkout`, `mise-managed`,
+`installer-unknown`, `plan-unavailable`, `serving-install-unknown`,
+`cli-not-serving-install`, `runtime-ownership-refused`, `target-unresolved`,
+`downgrade-refused`, and `up-to-date`. `desktop-app-owned` directs updates to the
+Desktop app; uncertain serving identity refuses rather than guessing. Run `ocx start`
+or `ocx stop` to settle a stale runtime record before planning again.
+
+Apply emits one `ocx.update.result/1` object with `applied`, `fromVersion`,
+`toVersion`, `installer`, `restarted`, `healthy`, `rolledBack`, and an optional
+`error`. Pass the plan's `planToken` as `--expect-plan` to refuse with
+`plan-changed` if the selected install or runtime identity changes. `--not-after`
+is a positive safe integer Unix timestamp in milliseconds; mutation is refused with
+`deadline-passed` after that time. `mutationBoundMs` is 900000 (15 minutes): an
+overrun reports an uncertain result without killing an in-progress transaction.
+`updateInFlight` remains true while an update may still mutate, including when its
+state cannot be determined; a sync alone does not set it. A concurrent sync can
+refuse apply with `sync-in-progress`, and another update with `update-in-flight`.
+
+Orchestrated apply exits 0 when verified or already up to date, 10 on refusal,
+11 when the update failed but the previous version is verified active (including
+the runtime when required), 12 when the outcome is unverified or still running,
+and 64 for invalid usage. `rolledBack` is true only when an actual installer
+rollback and its verification succeeded. A plan command emits its plan with exit 0;
+the `canApply` and `reason` fields describe eligibility.
 
 Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
 

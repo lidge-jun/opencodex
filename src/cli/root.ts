@@ -19,6 +19,7 @@ import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 import { maybeNoticeVersionSkew } from "./version-skew-notice";
+import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -41,6 +42,7 @@ export function parseCliHead(argv: string[]): CliHead {
   const args = argv;
   // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
   if (command === "codex") return { kind: "command", command, args };
+  if (command === "update" && isOrchestratedUpdateArgv(args.slice(1))) return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }

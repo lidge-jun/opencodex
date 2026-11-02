@@ -50,8 +50,8 @@ function renderHuman(caps: readonly Capability[], includeHead: boolean): void {
 export async function runCapabilities(argv: string[]): Promise<number> {
   const args = [...argv];
   const json = takeFlag(args, "--json");
-  const mutatingOnly = takeFlag(args, "--mutating-only");
   const contracts = takeFlag(args, "--contracts");
+  const mutatingOnly = takeFlag(args, "--mutating-only");
   const route = takeValueFlag(args, "--route");
 
   if (args.length > 0 || (route !== undefined && route.trim().length === 0) || (contracts && (mutatingOnly || route !== undefined))) {

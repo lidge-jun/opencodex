@@ -216,6 +216,23 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["update"],
+    summary: "Plan or apply an OpenCodex update.",
+    routes: [],
+    flags: [
+      { name: "--plan", value: "boolean", summary: "Preview an orchestrated update with --json." },
+      { name: "--yes", value: "boolean", summary: "Apply an orchestrated update with --json." },
+      { name: "--json", value: "boolean", summary: "Emit a versioned plan or result." },
+      { name: "--tag", value: "string", summary: "Select latest or preview for the legacy update or plan." },
+      { name: "--version", value: "string", summary: "Select an exact version for a plan or apply." },
+      { name: "--expect-plan", value: "string", summary: "Require the apply plan to match this planToken." },
+      { name: "--not-after", value: "string", summary: "Refuse mutation after this Unix millisecond deadline." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: ["Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage."],
+  },
+  {
     command: ["capabilities"],
     summary: "List the declared CLI capabilities and the management routes they drive.",
     routes: [],
@@ -765,6 +782,7 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: [
       "The Aside refresh uses the live server; other catalog synchronization also performs local work.",
+      "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.",
       "A current Home catalog fans out to linked Children. Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex there. Applying changed Home settings may restart the Child's own OpenCodex client runtime.",
       "--expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.",
     ],

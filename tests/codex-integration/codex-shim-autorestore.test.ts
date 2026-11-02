@@ -53,6 +53,10 @@ describe("Codex shim CLI auto-restore policy", () => {
     expect(skipsCodexShimAutoRestore("system", ["system", "update", "check"])).toBe(false);
     // resolve is read-only inspection for embedding shells: a lookup made to populate a
     // consent surface must not trigger a shim repair side effect first.
+    for (const args of [["capabilities"], ["update", "--plan"], ["update", "--yes", "--json"], ["update", "--plan", "--bad"], ["update", "--not-after", "123"], ["sync"]]) {
+      expect(skipsCodexShimAutoRestore(args[0], args)).toBe(true);
+    }
+    expect(skipsCodexShimAutoRestore("update", ["update", "--tag", "latest"])).toBe(false);
     expect(skipsCodexShimAutoRestore("resolve", ["resolve"])).toBe(true);
     expect(skipsCodexShimAutoRestore("resolve", ["resolve", "--json"])).toBe(true);
     for (const command of ["status", "doctor"]) {
@@ -220,4 +224,18 @@ describe("Codex shim CLI auto-restore policy", () => {
       }
     });
   }, 30_000);
+
+  test("real orchestrated child entry does not repair a missing shim before admission", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, wrappers }) => {
+      rmSync(wrappers[0]);
+      const expected = Buffer.from(JSON.stringify({ home, cliRoot: home, servingRoot: null, runtimePid: null, planToken: "a".repeat(43) })).toString("base64url");
+      const result = spawnSync(process.execPath, [repoPath("src/cli/index.ts"), "update", "--version", "99.0.0",
+        "--orchestrated-expect", expected, "--orchestrated-result", join(home, "result.json")], {
+        encoding: "utf8", env: { ...process.env, USERPROFILE: home, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" },
+      });
+      expect(result.status).not.toBe(0);
+      expect(existsSync(wrappers[0])).toBe(false);
+    });
+  }, 30000);
 });
