@@ -32,7 +32,10 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
       try {
         const marker = JSON.parse(requireFixtureFs.readFileSync(process.env.OPENCODEX_HOME + '/update-orchestrated.json'));
         if (marker.phase === 'mutating') { state.watcher.close(); clear(state.timer); fn(...args); }
-      } catch {}
+      } catch (error) {
+        // The marker is published by atomic rename: only absence or a not-yet-JSON read is expected here.
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
     });
     state.timer = start(() => { state.watcher.close(); fn(...args); }, 15000);
     return state;
