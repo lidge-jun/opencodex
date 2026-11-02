@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 
 /*
  * Control sizes (design-system/foundations.md, "Control sizes"): every button, field, select
@@ -46,10 +47,13 @@ test("v2 code sizes its buttons and fields from the tokens, never h-7/h-8/h-9", 
   // select class) must not carry a Tailwind fixed height of its own: that is how a 28px chip,
   // a 32px toolbar button and a 36px field ended up side by side.
   const roots = ["src/components/ui-v2", "src/components/v2-accounts", "src/components/v2-logs",
-    "src/components/v2-models", "src/components/v2-subagents", "src/components/v2-usage"];
+    "src/components/v2-models", "src/components/v2-subagents", "src/components/v2-usage",
+    "src/components/v2-connect", "src/components/v2-startup", "src/components/v2-proxy"];
   const offenders: string[] = [];
   let scanned = 0;
   for (const root of roots) {
+    // A page folder that has not landed yet is simply skipped.
+    if (!existsSync(new URL(`../${root}`, import.meta.url))) continue;
     for await (const file of new Bun.Glob("**/*.{ts,tsx}").scan(new URL(`../${root}`, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"))) {
       scanned++;
       const src = await Bun.file(new URL(`../${root}/${file.split(String.fromCharCode(92)).join("/")}`, import.meta.url)).text();
