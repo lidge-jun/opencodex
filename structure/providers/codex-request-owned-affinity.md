@@ -40,7 +40,10 @@ stays only when the ordinary or model-detour entry for the key names the selecte
 `new_bind` becomes `unbound` and `rebound` becomes `cleared`. The `unbound` reason is `request_owned` when
 the key was withheld for a request-owned bearer, `no_conversation` when no key exists for another reason,
 and the original reason when a key existed but nothing was stored. The label describes selection time, not
-dispatch. `requestSpendRecord` does not count `unbound` as a move reason.
+dispatch. `requestSpendRecord` does not count `unbound` as a move reason. A caller-main refusal
+releases only the exact ordinary and model-detour entries captured at selection, so a delayed outcome
+cannot delete a later binding. The snapshot is opaque and process-local; only an actual release records
+a pending reason.
 
 ## Caller-owned main and carried state
 

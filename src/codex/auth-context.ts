@@ -1,4 +1,4 @@
-import { requestOwnedAffinityKey, honestAffinityDecision, callerOwnedFallbackAffinityDecision } from "./request-owned-affinity";
+import { requestOwnedAffinityKey, honestAffinityDecision, callerOwnedFallbackAffinityDecision, captureRequestOwnedAffinityBindings, type RequestOwnedBindingSnapshot } from "./request-owned-affinity";
 import { requestOwnedMainPinState, mainCreditsHoldResetAt, callerMatchesObservedMain } from "./request-owned-main-pin";
 export { requestOwnedMainPinState } from "./request-owned-main-pin";
 import type { OcxRuntimeProviderConfig } from "./auth-context-provider";
@@ -239,7 +239,7 @@ export function previewCodexPoolLineage(
 
 export type CodexAuthContext =
   | {
-      kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization; affinityKey?: string; conversationStateKey?: string; affinityDecision?: CodexAffinityDecision;
+      kind: "main"; accountId: null; reserveAuthorization?: MainReserveAuthorization; affinityKey?: string; conversationStateKey?: string; affinityDecision?: CodexAffinityDecision; affinityBindingSnapshot?: RequestOwnedBindingSnapshot;
       /** Captured for the observed main credential actually selected for upstream. */
       mainQuotaDispatch?: MainQuotaDispatch;
     }
@@ -1260,8 +1260,9 @@ async function resolveCodexAuthContextUnannotated(
     const withheld = requestScopedMainCredential && config.codexPool?.requestOwnedAffinity !== true;
     const decision = fallbackReason ? callerOwnedFallbackAffinityDecision(affinityDecision, affinityKey, quotaScope, options.modelId, withheld, fallbackReason)
       : honestAffinityDecision(affinityDecision, affinityKey, MAIN_CODEX_ACCOUNT_ID, quotaScope, options.modelId, withheld);
+    const affinityBindingSnapshot = captureRequestOwnedAffinityBindings(affinityKey, quotaScope, options.modelId);
     const context = await resolveCallerOwnedMainContext();
-    return context.kind === "main" ? { ...context, ...(affinityKey ? { affinityKey } : {}), ...(conversationStateKey ? { conversationStateKey } : {}), ...(decision ? { affinityDecision: decision } : {}) } : context;
+    return context.kind === "main" ? { ...context, ...(affinityBindingSnapshot ? { affinityBindingSnapshot } : {}), ...(affinityKey ? { affinityKey } : {}), ...(conversationStateKey ? { conversationStateKey } : {}), ...(decision ? { affinityDecision: decision } : {}) } : context;
   };
   // The half-open trial this request was granted, if it is the one allowed to test a held
   // account. Declared out here because the release paths below and the returned context are on

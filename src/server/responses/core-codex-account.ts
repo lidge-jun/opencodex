@@ -1,4 +1,4 @@
-import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome } from "../../codex/request-owned-affinity";
+import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
@@ -1164,7 +1164,7 @@ export function codexForwardTerminalOutcomeRecorder(
   logCtx?: RequestLogContext,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
   if (!usesCodexForwardPoolAuth(authCtx, provider)) {
-    if (authCtx.kind !== "main" || !authCtx.affinityKey || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+    if (!isKeyedRequestOwnedMain(authCtx) || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
     return (status, httpStatusOverride) => {
       const quota = [httpStatusOverride, logCtx?.terminalHttpStatus].find(value => value === 429 || value === 402);
       const outcome = status === "completed" || (status === "incomplete" && quota === undefined) ? 200 : (quota ?? httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);

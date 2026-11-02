@@ -6,8 +6,8 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { codexConversationIdentity } from "./lineage";
-import { getThreadAffinity, getModelDetourAffinity, deleteThreadAffinity, deleteModelDetourAffinity, notePendingReleaseReason, type CodexAffinityDecision, type CodexAffinityReason } from "./routing/thread-affinity";
-import { codexQuotaScopeForModel, type CodexQuotaScope } from "./routing/health-store";
+import { getThreadAffinity, getModelDetourAffinity, deleteThreadAffinity, deleteModelDetourAffinity, notePendingReleaseReason, type CodexAffinityDecision, type CodexAffinityReason, type ThreadAffinityEntry } from "./routing/thread-affinity";
+import type { CodexQuotaScope } from "./routing/health-store";
 import { classifyCodexUpstreamOutcome } from "./routing/cooldown-math";
 import type { CodexAuthContext } from "./auth-context";
 
@@ -64,28 +64,57 @@ export function callerOwnedFallbackAffinityDecision(
   return { move: "unbound", reason: affinityKey ? decision?.reason ?? "healthy" : requestOwnedKeyWithheld ? "request_owned" : "no_conversation" };
 }
 
+/** Opaque process-local identity for the bindings present when main was selected. */
+export type RequestOwnedBindingSnapshot = object;
+type EntryIdentity = { entry: ThreadAffinityEntry; accountId: string; generation: number; createdAt: number };
+const bindingSnapshots = new WeakMap<RequestOwnedBindingSnapshot, { key: string; scope?: CodexQuotaScope; modelId?: string; ordinary?: EntryIdentity; detour?: EntryIdentity }>();
+
+function identity(entry: ThreadAffinityEntry | undefined): EntryIdentity | undefined {
+  return entry && { entry, accountId: entry.accountId, generation: entry.generation, createdAt: entry.createdAt };
+}
+function matches(captured: EntryIdentity | undefined, current: ThreadAffinityEntry | undefined): boolean {
+  return !!captured && captured.entry === current && captured.accountId === current.accountId
+    && captured.generation === current.generation && captured.createdAt === current.createdAt;
+}
+
+/** Capture the exact entries that a request is authorized to release after selection. */
+export function captureRequestOwnedAffinityBindings(key: string | undefined, scope?: CodexQuotaScope, modelId?: string): RequestOwnedBindingSnapshot | undefined {
+  if (!key || !isRequestOwnedAffinityKey(key)) return undefined;
+  const snapshot = {};
+  bindingSnapshots.set(snapshot, { key, scope, modelId, ordinary: identity(getThreadAffinity(key, scope)), detour: identity(getModelDetourAffinity(key, modelId, scope)) });
+  return snapshot;
+}
+
+/** Whether a context carries a caller-owned routing key. */
+export function isKeyedRequestOwnedMain(ctx: CodexAuthContext): ctx is Extract<CodexAuthContext, { kind: "main" }> & { affinityKey: string } {
+  return ctx.kind === "main" && !!ctx.affinityKey && isRequestOwnedAffinityKey(ctx.affinityKey);
+}
+
 /** Release this caller’s scoped binding after its own main credential is refused. */
-export function releaseRequestOwnedMainOnOutcome(ctx: CodexAuthContext, outcome: number, modelId?: string): void {
-  if (ctx.kind !== "main" || !ctx.affinityKey || !isRequestOwnedAffinityKey(ctx.affinityKey)) return;
+export function releaseRequestOwnedMainOnOutcome(ctx: CodexAuthContext, outcome: number, _modelId?: string): void {
+  if (!isKeyedRequestOwnedMain(ctx) || !ctx.affinityBindingSnapshot) return;
+  const snapshot = bindingSnapshots.get(ctx.affinityBindingSnapshot);
+  if (!snapshot || snapshot.key !== ctx.affinityKey) return;
   const outcomeClass = classifyCodexUpstreamOutcome(outcome);
   const reason: CodexAffinityReason | undefined = outcomeClass === "quota" ? "quota_refusal"
     : outcomeClass === "credential" ? "unusable" : outcomeClass === "transient" ? "transient" : undefined;
   if (!reason) return;
   const key = ctx.affinityKey;
-  const scope = codexQuotaScopeForModel(modelId);
+  const { scope, modelId: selectedModelId } = snapshot;
   let released = false;
   const ordinary = getThreadAffinity(key, scope);
-  const mainDetour = getModelDetourAffinity(key, modelId, scope)?.accountId === MAIN_CODEX_ACCOUNT_ID;
+  const detour = getModelDetourAffinity(key, selectedModelId, scope);
+  const mainDetour = matches(snapshot.detour, detour) && detour?.accountId === MAIN_CODEX_ACCOUNT_ID;
   // A caller-main fallback or model detour can leave an ordinary binding on a different
   // account. Retire it too so the next placement reports the release rather than reuse. If
   // main was itself bound and another turn has since rebound elsewhere, keep that newer entry.
   const callerMainDetour = ctx.affinityDecision?.move === "detour";
-  if (ordinary && (ordinary.accountId === MAIN_CODEX_ACCOUNT_ID || mainDetour || callerMainDetour)) {
+  if (matches(snapshot.ordinary, ordinary) && (ordinary?.accountId === MAIN_CODEX_ACCOUNT_ID || mainDetour || callerMainDetour)) {
     deleteThreadAffinity(key, scope);
     released = true;
   }
   if (mainDetour) {
-    deleteModelDetourAffinity(key, modelId, scope);
+    deleteModelDetourAffinity(key, selectedModelId, scope);
     released = true;
   }
   if (released) notePendingReleaseReason(key, reason);

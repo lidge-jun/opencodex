@@ -1,4 +1,4 @@
-import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome } from "../../codex/request-owned-affinity";
+import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -1089,7 +1089,7 @@ export async function handleResponsesCompact(
       if (gatewayTransport) return;
       if ((outcome === 401 || outcome === 403) && upstream && wasPermanentAccountRefusal(upstream)) return;
       if (!usesCodexForwardPoolAuth(ctx, route.provider)) {
-        if (typeof outcome === "number" && (!upstream || !isNonReplayableResponse(upstream)) && isCanonicalOpenAiForwardProvider(route.provider)) releaseRequestOwnedMainOnOutcome(ctx, outcome, selectedModelId);
+        if (isKeyedRequestOwnedMain(ctx) && typeof outcome === "number" && (!upstream || !isNonReplayableResponse(upstream)) && isCanonicalOpenAiForwardProvider(route.provider)) releaseRequestOwnedMainOnOutcome(ctx, outcome, selectedModelId);
         return;
       }
       recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {

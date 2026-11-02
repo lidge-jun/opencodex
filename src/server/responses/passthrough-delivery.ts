@@ -1,4 +1,4 @@
-import { releaseRequestOwnedMainOnOutcome } from "../../codex/request-owned-affinity";
+import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isNativeControlResponse } from "./native-response-control";
@@ -579,7 +579,7 @@ export async function deliverPassthroughResponse(
           options.onNativePassthroughTerminal?.(status);
         });
       }
-      if (!terminalBodyWillRecord && !upstreamResponse.ok && !isNonReplayableResponse(upstreamResponse)
+      if (isKeyedRequestOwnedMain(admissionState.authCtx) && !terminalBodyWillRecord && !upstreamResponse.ok && !isNonReplayableResponse(upstreamResponse)
         && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse) && isCanonicalOpenAiForwardProvider(route.provider)) {
         const outcome = upstreamResponse.status >= 500 && await shouldRetryCodexPoolAccountQuota(upstreamResponse, options.abortSignal)
           ? 429 : upstreamResponse.status;

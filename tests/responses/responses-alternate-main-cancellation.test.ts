@@ -391,3 +391,21 @@ test("websocket terminal recorder releases a caller-owned main binding on quota 
     expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
   } finally { turn?.release(); }
 });
+
+test("unkeyed caller-main 5xx does not inspect quota response body", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const account = await import("../../src/server/responses/core-codex-account");
+  const { spyOn } = await import("bun:test");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("unkeyed-inspection")}`, "content-type": "application/json" });
+  config.pausedCodexAccountIds = [POOL_ID];
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  const quotaInspector = spyOn(account, "shouldRetryCodexPoolAccountQuota").mockResolvedValue(false);
+  try {
+    globalThis.fetch = (async () => Response.json({ error: { message: "server error" } }, { status: 503, headers: { "retry-after": "600" } })) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(response.status).toBe(503);
+    expect(quotaInspector).not.toHaveBeenCalled();
+    await response.text();
+  } finally { quotaInspector.mockRestore(); turn?.release(); }
+});

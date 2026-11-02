@@ -459,14 +459,14 @@ test("manual selection clears affinity but retains carried-state issuers until a
 
 test.each([[401, "unusable"], [403, "unusable"], [402, "quota_refusal"], [429, "quota_refusal"], [503, "transient"]] as const)(
   "caller-owned main refusal %s releases namespaced bindings with %s", async (status, reason) => {
-    const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome } = await import("../../src/codex/request-owned-affinity");
+    const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome, captureRequestOwnedAffinityBindings } = await import("../../src/codex/request-owned-affinity");
     const { bindModelDetourAffinity, getModelDetourAffinity, getThreadAffinity, peekPendingReleaseReason, affinityAfterRelease, rememberConversationStateIssuer, peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
     const key = requestOwnedAffinityKey(new Headers({ authorization: "Bearer outcome-test", "session-id": "s", "thread-id": "t" }))!;
     clearThreadAccountMap();
     bindThreadAffinity(key, "__main__", Date.now(), "shared");
     bindModelDetourAffinity(key, "__main__", Date.now(), "gpt-5.5", "shared");
     rememberConversationStateIssuer(key, "__main__");
-    releaseRequestOwnedMainOnOutcome({ kind: "main", accountId: null, affinityKey: key }, status, "gpt-5.5");
+    releaseRequestOwnedMainOnOutcome({ kind: "main", accountId: null, affinityKey: key, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-5.5") }, status, "gpt-5.5");
     expect(getThreadAffinity(key, "shared")).toBeUndefined();
     expect(getModelDetourAffinity(key, "gpt-5.5", "shared")).toBeUndefined();
     expect(peekPendingReleaseReason(key)).toBe(reason);
@@ -477,11 +477,11 @@ test.each([[401, "unusable"], [403, "unusable"], [402, "quota_refusal"], [429, "
 );
 
 test.each([200, 302, 400, 499])("non-refusal %s retains the caller-owned main binding", async status => {
-  const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome } = await import("../../src/codex/request-owned-affinity");
+  const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome, captureRequestOwnedAffinityBindings } = await import("../../src/codex/request-owned-affinity");
   const { getThreadAffinity, peekPendingReleaseReason } = await import("../../src/codex/routing/thread-affinity");
   const key = requestOwnedAffinityKey(new Headers({ authorization: "Bearer no-refusal", "session-id": "s", "thread-id": "t" }))!;
   clearThreadAccountMap(); bindThreadAffinity(key, "__main__", Date.now(), "shared");
-  releaseRequestOwnedMainOnOutcome({ kind: "main", accountId: null, affinityKey: key }, status, "gpt-5.5");
+  releaseRequestOwnedMainOnOutcome({ kind: "main", accountId: null, affinityKey: key, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-5.5") }, status, "gpt-5.5");
   expect(getThreadAffinity(key, "shared")?.accountId).toBe("__main__");
   expect(peekPendingReleaseReason(key)).toBeUndefined();
   clearThreadAccountMap();
@@ -493,7 +493,7 @@ test("a failed caller-main model detour releases its ordinary and detour entries
   const { join } = await import("node:path");
   const { removeTreeWithRetry } = await import("../helpers/remove-tree");
   const { saveCodexAccountCredential } = await import("../../src/codex/account-store");
-  const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome } = await import("../../src/codex/request-owned-affinity");
+  const { requestOwnedAffinityKey, releaseRequestOwnedMainOnOutcome, captureRequestOwnedAffinityBindings } = await import("../../src/codex/request-owned-affinity");
   const { bindModelDetourAffinity, getModelDetourAffinity, getThreadAffinity, peekPendingReleaseReason, affinityAfterRelease } = await import("../../src/codex/routing/thread-affinity");
   const home = mkdtempSync(join(tmpdir(), "ocx-detour-refusal-")); const previous = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = home;
@@ -503,7 +503,7 @@ test("a failed caller-main model detour releases its ordinary and detour entries
     clearThreadAccountMap();
     bindThreadAffinity(key, "a", Date.now(), "shared");
     bindModelDetourAffinity(key, "__main__", Date.now(), "gpt-5.5", "shared");
-    const context = { kind: "main", accountId: null, affinityKey: key } as const;
+    const context = { kind: "main", accountId: null, affinityKey: key, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-5.5") } as const;
     releaseRequestOwnedMainOnOutcome(context, 429, "gpt-5.5");
     expect(getThreadAffinity(key, "shared")).toBeUndefined();
     expect(getModelDetourAffinity(key, "gpt-5.5", "shared")).toBeUndefined();
@@ -513,10 +513,20 @@ test("a failed caller-main model detour releases its ordinary and detour entries
     releaseRequestOwnedMainOnOutcome({ ...context, affinityDecision: { move: "reused", reason: "healthy" } }, 429, "gpt-5.5");
     expect(getThreadAffinity(key, "shared")?.accountId).toBe("a");
     expect(peekPendingReleaseReason(key)).toBeUndefined();
-    releaseRequestOwnedMainOnOutcome({ ...context, affinityDecision: { move: "detour", reason: "cooldown" } }, 429, "gpt-5.5");
+    releaseRequestOwnedMainOnOutcome({ ...context, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-5.5"), affinityDecision: { move: "detour", reason: "cooldown" } }, 429, "gpt-5.5");
     expect(getThreadAffinity(key, "shared")).toBeUndefined();
     expect(peekPendingReleaseReason(key)).toBe("quota_refusal");
     affinityAfterRelease(key, "quota_refusal");
+    const sameTime = Date.now();
+    bindThreadAffinity(key, "a", sameTime, "shared");
+    bindModelDetourAffinity(key, "__main__", sameTime, "gpt-5.5", "shared");
+    const older = { ...context, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-5.5") };
+    bindThreadAffinity(key, "a", sameTime, "shared");
+    bindModelDetourAffinity(key, "__main__", sameTime, "gpt-5.5", "shared");
+    releaseRequestOwnedMainOnOutcome(older, 429, "gpt-5.5");
+    expect(getThreadAffinity(key, "shared")?.accountId).toBe("a");
+    expect(getModelDetourAffinity(key, "gpt-5.5", "shared")?.accountId).toBe("__main__");
+    expect(peekPendingReleaseReason(key)).toBeUndefined();
   } finally { clearThreadAccountMap(); if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; removeTreeWithRetry(home); }
 });
 
@@ -529,4 +539,41 @@ test("caller-main outcome cannot release a stored-credential raw binding", async
   expect(getThreadAffinity("app:stored-binding", "shared")?.accountId).toBe("__main__");
   expect(peekPendingReleaseReason("app:stored-binding")).toBeUndefined();
   clearThreadAccountMap();
+});
+
+test.each(["pool", "main"] as const)("a delayed caller-main failure cannot retire a newer %s binding", async destination => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { removeTreeWithRetry } = await import("../helpers/remove-tree");
+  const { saveCodexAccountCredential } = await import("../../src/codex/account-store");
+  const { resolveCodexAuthContext } = await import("../../src/codex/auth-context");
+  const { releaseRequestOwnedMainOnOutcome } = await import("../../src/codex/request-owned-affinity");
+  const { getThreadAffinity, peekPendingReleaseReason } = await import("../../src/codex/routing/thread-affinity");
+  const home = mkdtempSync(join(tmpdir(), "ocx-binding-race-"));
+  const oldHome = process.env.OPENCODEX_HOME, oldCodex = process.env.CODEX_HOME;
+  process.env.OPENCODEX_HOME = home; process.env.CODEX_HOME = home;
+  try {
+    saveCodexAccountCredential("a", { accessToken: "access-a", refreshToken: "refresh-a", expiresAt: Date.now() + 3600000, chatgptAccountId: "account-a" });
+    const config = { providers: {}, codexAccounts: [{ id: "a", label: "a" }], pausedCodexAccountIds: ["a"], codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+    const headers = new Headers({ authorization: "Bearer race-test", "session-id": "s", "thread-id": "t" });
+    clearThreadAccountMap();
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const reused = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind"); expect(reused.affinityDecision?.move).toBe("reused");
+    const key = first.affinityKey!;
+    const sameTime = getThreadAffinity(key, "shared")!.createdAt;
+    bindThreadAffinity(key, "a", sameTime, "shared");
+    if (destination === "main") bindThreadAffinity(key, "__main__", sameTime, "shared");
+    const stale = destination === "pool" ? { ...first, affinityDecision: { move: "detour", reason: "cooldown" } as const } : first;
+    releaseRequestOwnedMainOnOutcome(stale, 429, "gpt-5.5");
+    expect(getThreadAffinity(key, "shared")?.accountId).toBe(destination === "pool" ? "a" : "__main__");
+    expect(peekPendingReleaseReason(key)).toBeUndefined();
+  } finally {
+    clearThreadAccountMap();
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    removeTreeWithRetry(home);
+  }
 });

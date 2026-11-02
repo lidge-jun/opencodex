@@ -342,11 +342,11 @@ describe("incomplete quota endpoint reporter wiring", () => {
 });
 
 test("caller-owned main streamed terminal releases only on a refusal", async () => {
-  const { requestOwnedAffinityKey } = await import("../../src/codex/request-owned-affinity");
+  const { requestOwnedAffinityKey, captureRequestOwnedAffinityBindings } = await import("../../src/codex/request-owned-affinity");
   const { bindThreadAffinity, getThreadAffinity, peekPendingReleaseReason, affinityAfterRelease } = await import("../../src/codex/routing/thread-affinity");
   const key = requestOwnedAffinityKey(new Headers({ authorization: "Bearer stream-test", "session-id": "s", "thread-id": "t" }))!;
   clearThreadAccountMap(); bindThreadAffinity(key, "__main__", Date.now(), "shared");
-  const ctx: CodexAuthContext = { kind: "main", accountId: null, affinityKey: key };
+  const ctx: CodexAuthContext = { kind: "main", accountId: null, affinityKey: key, affinityBindingSnapshot: captureRequestOwnedAffinityBindings(key, "shared", "gpt-test") };
   const record = codexForwardTerminalOutcomeRecorder(getDefaultConfig(), ctx, provider, "gpt-test", { model: "gpt-test", provider: "openai" });
   expect(record).toBeDefined();
   record!("completed");
