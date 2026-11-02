@@ -12,6 +12,7 @@
 
 import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import type { CodexAuthContext } from "../../codex/auth-context";
+import { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "../../codex/routing/thread-affinity";
 import {
   peekConversationStateIssuer,
   rememberConversationStateIssuer,
@@ -239,7 +240,8 @@ export function rememberServingConversationStateIssuer(
 ): void {
   const binding = conversationStateBindingFromAuth(authCtx, fallbackAffinityKey);
   if (!binding) return;
-  rememberConversationStateIssuer(binding.bindingKey, binding.accountId);
+  rememberConversationStateIssuer(binding.bindingKey, binding.accountId, undefined,
+    authCtx.kind === "pool" ? { generation: authCtx.generation, chatgptAccountId: authCtx.chatgptAccountId } : undefined);
 }
 
 export interface ApplyAccountChangeConversationStateScrubArgs {
@@ -321,7 +323,7 @@ export function accountChangeFileReferenceRefusal(
   const { body, bindingKey, servingAccountId, priorAccountId } = args;
   if (!servingAccountId || !bindingKey) return undefined;
   const issuer = peekConversationStateIssuer(bindingKey);
-  const accountChanged = (issuer != null && issuer !== servingAccountId)
+  const accountChanged = (issuer != null && issuer !== CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER && issuer !== servingAccountId)
     || (priorAccountId != null && priorAccountId !== servingAccountId);
   if (!accountChanged) return undefined;
   // Checked against the carriers directly rather than through the portability verdict: that
