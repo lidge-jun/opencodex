@@ -1,4 +1,9 @@
 {
   "request-log.test.ts": "usage",
-  "request-log-normalization.test.ts": "usage"
+  "request-log-normalization.test.ts": "usage",
+  "request-log-error-detail.test.ts": "usage",
+  "upstream-condition.test.ts": "lib",
+  "client-retry-after.test.ts": "lib",
+  "client-retry-after-sites.test.ts": "server",
+  "upstream-error-detail-boundaries.test.ts": "server"
 }

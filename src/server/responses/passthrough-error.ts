@@ -151,7 +151,8 @@ export function formatPassthroughUpstreamError(
   );
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
-  if (resolved !== undefined) headers.set("Retry-After", resolved);
+  if (formatted !== undefined) headers.set("Retry-After", formatted);
+  else headers.delete("Retry-After");
   if (replayRefusal) applyReplayRefusalClientHeaders(headers);
   const wrapped = new Response(response.body, { status: response.status, headers });
   return replayRefusal ? retainReplayRefusal(wrapped) : wrapped;
