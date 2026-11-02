@@ -403,7 +403,7 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleLogoutCommand } = await import("./logout-command");
     return handleLogoutCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
-  sync: async deps => (await import("./sync-update-guard")).withSyncUpdateGuard(async () => (await import("./sync-command")).runSyncCommand(deps)),
+  sync: async deps => (await import("./sync-update-guard")).withSyncUpdateGuard(async () => (await import("./sync-command")).runSyncCommand(deps), deps.args),
   v2: async deps => {
     const { cmdV2 } = await import("./v2");
     return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);

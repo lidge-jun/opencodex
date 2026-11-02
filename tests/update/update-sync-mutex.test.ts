@@ -145,6 +145,31 @@ test.each(["sync", "update", "unknown"] as const)("sync guard classifies a %s mu
   }
 });
 
+test.each(["sync", "update", "unknown", "marker"] as const)("sync --json emits one fan-out refusal for %s", async holder => {
+  const root = home(), previous = process.env.OPENCODEX_HOME; process.env.OPENCODEX_HOME = root;
+  const lock = holder === "sync" || holder === "update" ? tryAcquireUpdateSyncMutex(root, holder) : null;
+  if (lock && lock.kind !== "acquired") throw new Error("fixture lease not acquired");
+  if (holder === "unknown") mkdirSync(join(root, "sync-update"));
+  if (holder === "marker") writeFileSync(join(root, "update-orchestrated.json"), JSON.stringify({ pid: process.pid, phase: "mutating", startedAt: 1 }));
+  const out = spyOn(console, "log").mockImplementation(() => {});
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const args = ["sync", "--json", "--local-only"];
+    const deps = { args, findLiveProxy: async () => { throw new Error("sync work reached"); } } as unknown as CliDispatchDeps;
+    const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
+    const reason = holder === "sync" ? "sync-in-progress" : "update-in-flight";
+    expect(code).toBe(holder === "sync" ? 1 : 7);
+    expect(err).toHaveBeenCalledWith(reason);
+    expect(out).toHaveBeenCalledTimes(1);
+    const output = out.mock.calls[0]![0] as string;
+    expect(JSON.parse(output)).toEqual({ schema: "ocx.sync.fanout/1", home: { state: "skipped", exit: code }, fanout: { state: "not-applicable", reason }, children: [] });
+    expect(classifySyncResult({ code, stdout: `ocx-fanout:stdout-begin\n${output}\n`, stderr: `ocx-fanout:selected:2.93.0\n${reason}\n` })).toEqual(holder === "sync" ? { state: "failed", reason: "child-sync-failed" } : { state: "skipped", reason: "child-updating" });
+  } finally {
+    out.mockRestore(); err.mockRestore(); if (lock?.kind === "acquired") lock.release();
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+  }
+});
+
 test("sync refuses a live update marker even if its mutex is unexpectedly absent", async () => {
   const root = home(), previous = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = root;
