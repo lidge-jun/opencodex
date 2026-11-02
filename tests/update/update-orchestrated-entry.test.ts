@@ -309,7 +309,7 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
   chmodSync(join(path, "npm"), 0o755);
   writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs"),root=process.env.OCX_FIXTURE_PKG;fs.writeFileSync(root+"/installer-ready","");const end=Date.now()+10000;const t=setInterval(()=>{if(!fs.existsSync(root+"/installer-release") && Date.now()<end)return;clearInterval(t);const p=root+"/package.json",m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));},10);'\n`);
   chmodSync(join(path, "bun"), 0o755);
-  const proc = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json"], {
+  const proc = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json", "--tag", "preview"], {
     cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
       CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
@@ -327,7 +327,7 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect({ code, stderr, stdout }).toMatchObject({ code: 0 });
     expect(JSON.parse(stdout)).toMatchObject({ schema: "ocx.update.result/1", applied: true, healthy: true, toVersion: "2.1.0" });
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
-    expect(readFileSync(log, "utf8").match(/@latest version/g)).toHaveLength(1);
+    expect(readFileSync(log, "utf8").match(/@preview version/g)).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
     const reset = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); reset.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
