@@ -10,6 +10,7 @@
  * The issuer association lives next to thread affinity in `src/codex/routing.ts`.
  */
 
+import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import {
   peekConversationStateIssuer,
@@ -216,14 +217,20 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
   return changed;
 }
 
+/** Preserve a Pool context's absent key instead of borrowing the raw request key. */
+export function compactAlternateAffinityKey(authCtx: CodexAuthContext, rawKey: () => string | undefined): string | undefined {
+  return authCtx.kind === "main" ? (authCtx.affinityKey ?? authCtx.conversationStateKey ?? rawKey()) : authCtx.affinityKey ?? authCtx.conversationStateKey;
+}
+
 export function conversationStateBindingFromAuth(
   authCtx: CodexAuthContext,
   fallbackAffinityKey?: string | null,
 ): { accountId: string; bindingKey: string } | null {
-  if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return null;
-  const bindingKey = authCtx.affinityKey ?? fallbackAffinityKey ?? undefined;
-  if (!bindingKey || !authCtx.accountId) return null;
-  return { accountId: authCtx.accountId, bindingKey };
+  const accountId = conversationStateAccountId(authCtx);
+  if (!accountId) return null;
+  const bindingKey = authCtx.affinityKey ?? authCtx.conversationStateKey ?? fallbackAffinityKey ?? undefined;
+  if (!bindingKey) return null;
+  return { accountId, bindingKey };
 }
 
 export function rememberServingConversationStateIssuer(

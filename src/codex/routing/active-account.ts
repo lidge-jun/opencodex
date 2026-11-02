@@ -32,7 +32,7 @@ let runtimeActiveCodexAccountId: string | undefined;
 
 /** Manual selection resets transient routing evidence without bypassing a real 429 cooldown. */
 export function resetCodexRoutingForManualSelection(accountId: string): void {
-  clearThreadAccountMap();
+  clearThreadAccountMap({ preserveConversationStateIssuers: true });
   // Manual selection is the operator source of truth — drop any automatic runtime cursor.
   runtimeActiveCodexAccountId = undefined;
   // Record the pick as an unspent one-shot on the shared scope and on each independent scope

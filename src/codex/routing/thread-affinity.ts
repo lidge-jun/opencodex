@@ -86,7 +86,9 @@ export type CodexAffinityMove =
   /** There was no live binding; this request established one. */
   | "new_bind"
   /** The binding was released without a replacement on this request. */
-  | "cleared";
+  | "cleared"
+  /** No binding was established for this selection. */
+  | "unbound";
 
 /**
  * Why. A move is the expensive event -- it discards the prompt-cache prefix warmed on the old
@@ -95,6 +97,10 @@ export type CodexAffinityMove =
  */
 export type CodexAffinityReason =
   | "healthy"
+  /** The request had no usable conversation key. */
+  | "no_conversation"
+  /** A caller-owned credential did not opt into affinity. */
+  | "request_owned"
   | "quota_headroom"
   | "quota_refusal"
   | "transient"
@@ -202,7 +208,7 @@ type ConversationStateIssuerEntry = {
 };
 const conversationStateIssuerMap = new Map<string, ConversationStateIssuerEntry>();
 
-export function clearThreadAccountMap(): void {
+export function clearThreadAccountMap(options: { preserveConversationStateIssuers?: boolean } = {}): void {
   threadAccountMap.clear();
   threadAffinityEntryTotal = 0;
   // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it
@@ -213,7 +219,9 @@ export function clearThreadAccountMap(): void {
   // going away. A held account nobody may probe because of a lease issued against the previous
   // roster is a recovery that never starts.
   clearPoolRecoveryState();
-  conversationStateIssuerMap.clear();
+  // A manual account switch clears routing affinity, not the issuer of carried state. The next
+  // account needs that record to scrub or refuse account-bound continuation.
+  if (!options.preserveConversationStateIssuers) conversationStateIssuerMap.clear();
 }
 
 export function clearConversationStateIssuerMap(): void {
@@ -294,7 +302,7 @@ export function peekConversationStateIssuer(
 const pendingReleaseReasons = new Map<string, CodexAffinityReason>();
 const MAX_PENDING_RELEASE_REASONS = 4096;
 
-function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
+export function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
   if (threadId === null) return;
   if (!pendingReleaseReasons.has(threadId) && pendingReleaseReasons.size >= MAX_PENDING_RELEASE_REASONS) {
     const oldest = pendingReleaseReasons.keys().next();

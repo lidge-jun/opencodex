@@ -1,3 +1,4 @@
+import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isNativeControlResponse } from "./native-response-control";
@@ -34,6 +35,7 @@ import {
   codexDenialOutcomeMeta,
   isFixedCodexAccount,
   shouldDeferCodexResetDerivedCooldown,
+  shouldRetryCodexPoolAccountQuota,
 } from "./core-codex-account";
 import { isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
@@ -571,6 +573,18 @@ export async function deliverPassthroughResponse(
         });
       }
     } else {
+      if (terminalBodyWillRecord) {
+        options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
+          terminalRecorder?.(status, httpStatusOverride);
+          options.onNativePassthroughTerminal?.(status);
+        });
+      }
+      if (isKeyedRequestOwnedMain(admissionState.authCtx) && !terminalBodyWillRecord && !upstreamResponse.ok && !isNonReplayableResponse(upstreamResponse)
+        && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse) && isCanonicalOpenAiForwardProvider(route.provider)) {
+        const outcome = upstreamResponse.status >= 500 && await shouldRetryCodexPoolAccountQuota(upstreamResponse, options.abortSignal)
+          ? 429 : upstreamResponse.status;
+        releaseRequestOwnedMainOnOutcome(admissionState.authCtx, outcome, route.modelId);
+      }
       // The WS observer is the only plain-main publisher for a WebSocket exchange;
       // a prelude projection carries the prelude snapshot, not fresh evidence.
       // The dispatch claim is authoritative because downstream wrappers can replace the Response.
