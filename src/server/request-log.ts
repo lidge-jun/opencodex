@@ -66,7 +66,7 @@ import {
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { WorkflowSpendDenialDetail } from "../lib/workflow-budget";
-import { attributeFinalRequest, attributeSealedAttempt } from "./request-log-failure-attribution";
+import { attributeFinalRequest, attributePhysicalAttempt, attributeSealedAttempt } from "./request-log-failure-attribution";
 import { debugAttemptDeliverySummary } from "../lib/debug";
 import {
   appendUsageDebug,
@@ -1387,27 +1387,20 @@ export function recordKeyWireAttemptUsage(logCtx: RequestLogContext, usage: OcxU
   return true;
 }
 
-const innerFinalRequestLogSuppressed = new WeakSet<RequestLogContext>();
-const outerFinalRequestLogFinished = new WeakSet<RequestLogContext>();
+type FinalRequestLogMetaArg = Pick<RequestLogEntry, "terminalStatus" | "closeReason">;
+const finalRequestLogInterceptors = new WeakMap<RequestLogContext, (status: number, meta?: FinalRequestLogMetaArg) => void>();
 
-/** Keep inner producers from publishing a terminal row while a native outer converter owns it. */
-export function suppressInnerFinalRequestLog(logCtx: RequestLogContext): void {
-  innerFinalRequestLogSuppressed.add(logCtx);
+/** Route inner final-log requests to an outer owner (native ingress) instead of writing them. */
+export function interceptFinalRequestLog(logCtx: RequestLogContext, onRequest: (status: number, meta?: FinalRequestLogMetaArg) => void): void {
+  finalRequestLogInterceptors.set(logCtx, onRequest);
 }
 
-/** Write the native outer row once; permanent inner suppression remains in force afterwards. */
-export function addOuterFinalRequestLog(
-  requestId: string,
-  start: number,
-  logCtx: RequestLogContext,
-  status: number,
-  meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
-  addLog: (entry: RequestLogEntry) => void = addRequestLog,
-): boolean {
-  if (outerFinalRequestLogFinished.has(logCtx)) return false;
-  outerFinalRequestLogFinished.add(logCtx);
-  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
-  return true;
+/** The outer owner's write: request-level status from the outer outcome, the physical attempt's from the inner one. */
+export function commitInterceptedFinalRequestLog(
+  requestId: string, start: number, logCtx: RequestLogContext, status: number, meta: FinalRequestLogMetaArg | undefined,
+  attemptStatus: number, addLog: (entry: RequestLogEntry) => void = addRequestLog,
+): void {
+  writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog, attemptStatus);
 }
 
 export function addFinalRequestLog(
@@ -1418,7 +1411,8 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
-  if (innerFinalRequestLogSuppressed.has(logCtx)) return;
+  const intercept = finalRequestLogInterceptors.get(logCtx);
+  if (intercept) { intercept(status, meta); return; }
   writeFinalRequestLog(requestId, start, logCtx, status, meta, addLog);
 }
 
@@ -1429,10 +1423,12 @@ function writeFinalRequestLog(
   status: number,
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  attemptStatus?: number,
 ): void {
   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
-  const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
+  // A coordinated (attemptStatus) write carries an authoritative outer outcome; skip the heuristic.
+  const effectiveStatus = attemptStatus === undefined && status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
   // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
@@ -1450,7 +1446,7 @@ function writeFinalRequestLog(
   if (logCtx.activeAttempt) {
     finishRequestAttempt(
       logCtx.activeAttempt,
-      effectiveStatus,
+      attemptStatus ?? effectiveStatus,
       Date.now() - (logCtx.activeAttemptStartedAt ?? start),
       keyUsageOwners.has(logCtx.activeAttempt)
         ? logCtx.activeAttempt.usage
@@ -1458,7 +1454,9 @@ function writeFinalRequestLog(
     );
     // The final row and its active physical attempt describe the same terminal. Preserve the
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
-    if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
+    const attemptErrorCode = attemptStatus === undefined ? errorCode : attemptStatus < 400 ? undefined
+      : logCtx.errorCode ?? requestLogErrorCode(attemptStatus, logCtx.upstreamError, logCtx.terminalErrorCode, false);
+    if (attemptErrorCode) logCtx.activeAttempt.errorCode = attemptErrorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
   // Derived and stamped in a sibling module, before the attempt snapshot below. Every input is
@@ -1472,8 +1470,10 @@ function writeFinalRequestLog(
     outputObserved: logCtx.firstOutputMs !== undefined,
     ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
-    ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
+    // A coordinated write derives the request pair from a copy and re-derives the attempt's own.
+    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
   });
+  if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.
