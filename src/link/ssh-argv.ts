@@ -251,7 +251,7 @@ try_ocx() {
   [ -x "$c" ] || return
   ( ulimit -c 0; ulimit -f 1; exec "$c" --version ) >"$tmp" 2>/dev/null & vp=$!
   ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$tmp.ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
-  while [ ! -f "$tmp.ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01; done
+  while [ ! -f "$tmp.ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
   { wait "$vp"; status=$?; } 2>/dev/null
   kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; rm -f "$tmp.ready"
   [ "$status" -eq 0 ] || return
@@ -273,10 +273,10 @@ try_ocx() {
     }
     NR>1 {result=2}
     END {exit result}
-  '
+  ' 2>/dev/null
   status=$?
-  if [ "$status" -eq 2 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
-  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
+  if [ "$status" -eq 1 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-lacks-expect-link' >&2; exit 121; fi
+  if [ "$status" -ne 0 ]; then printf '%s\\n' 'ocx-fanout:child-ocx-version-unknown' >&2; exit 121; fi
   rm -f "$tmp" "$tmp.ready"; trap - EXIT HUP INT TERM
   printf 'ocx-fanout:selected:%s\\n' "$version" >&2
   exec "$c" sync --expect-link "$1" --json

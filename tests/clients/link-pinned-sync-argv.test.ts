@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remotePinnedSyncArgv } from "../../src/link/ssh-argv";
@@ -108,6 +108,16 @@ test.skipIf(process.platform === "win32")("a version command that exits nonzero 
   expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "synced\n", stderr: "ocx-fanout:selected:2.93.0\n" });
   expect(readFileSync(join(home, "first"), "utf8")).toBe("--version\n");
   expect(readFileSync(join(home, "second"), "utf8")).toBe("--version\nsync --expect-link lnk_0123456789abcdef --json\n");
+});
+
+test.skipIf(process.platform === "win32")("a missing version parser refuses without preceding shell diagnostics", () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-fanout-no-awk-")); dirs.push(home);
+  const bin = toolDir(home); unlinkSync(join(bin, "awk"));
+  const desktop = join(home, ".opencodex-desktop", "bin"); mkdirSync(desktop, { recursive: true });
+  writeFileSync(join(desktop, "ocx"), '#!/bin/sh\necho 2.93.0\n', { mode: 0o755 });
+  const child = Bun.spawnSync(isolatedArgv(), { env: { HOME: home, OPENCODEX_HOME: join(home, "ocx-home"), CODEX_HOME: join(home, "codex-home"), TMPDIR: home, PATH: bin }, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(121);
+  expect(child.stderr.toString()).toBe("ocx-fanout:child-ocx-version-unknown\n");
 });
 
 test.skipIf(process.platform === "win32")("a version writer ignoring signals is killed and the next candidate is selected", async () => {
