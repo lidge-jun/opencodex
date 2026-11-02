@@ -88,7 +88,7 @@ test("the Node launcher classifies orchestration before package-manager update a
   expect(classification).toBeLessThan(source.indexOf('const probe = bootRestoreProbe('));
 });
 
-test("malformed orchestrated update with help is rejected before the human help shortcut", async () => {
+test("malformed and unsupported internal orchestration is rejected before legacy update", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-update-help-"));
   const home = join(root, "ocx"), codex = join(root, "codex");
   mkdirSync(home); mkdirSync(codex); assertNotRealHomeUnderTest(home);
@@ -96,7 +96,8 @@ test("malformed orchestrated update with help is rejected before the human help 
   if (!node) throw new Error("Node is required to test the published launcher");
   try {
     for (const [executable, entry] of [[node, repoPath("bin/ocx.mjs")], [process.execPath, repoPath("src/cli/index.ts")]]) {
-    const proc = Bun.spawn([executable!, entry!, "update", "--plan", "--json", "--help"], {
+    for (const args of [["--plan", "--json", "--help"], ["--version", "99.0.0", "--orchestrated-result", join(root, "result.json")]]) {
+    const proc = Bun.spawn([executable!, entry!, "update", ...args], {
       cwd: root, stdout: "pipe", stderr: "pipe",
       env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
         OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_TEST_HOME_GUARD: "1" },
@@ -105,6 +106,8 @@ test("malformed orchestrated update with help is rejected before the human help 
     expect(code).toBe(64);
     expect(JSON.parse(stdout)).toEqual({ error: "usage" });
     expect(stderr).toContain("Usage:");
+    expect(existsSync(join(root, "result.json"))).toBe(false);
+    }
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30000);
