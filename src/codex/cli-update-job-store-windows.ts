@@ -686,83 +686,155 @@ export interface WindowsCliRecoveryIo {
   withProofHandle<T>(name: string, run: (handle: bigint) => T): T;
   write(name: string, pendingName: string, body: string, adoptPending?: boolean): void;
 }
+export interface WindowsCliRecoveryAsyncIo {
+  readonly dir: string;
+  names(): string[];
+  read(name: string): Promise<string>;
+  write(name: string, pendingName: string, body: string, adoptPending?: boolean): Promise<void>;
+}
+type RecoveryStoreStep = { kind: "acl"; entries: readonly WindowsAclEntry[] }
+  | { kind: "harden"; path: string; directory: boolean };
+type RecoveryStoreSteps<T> = Generator<RecoveryStoreStep, T, void>;
+function runRecoveryStoreSteps<T>(steps: RecoveryStoreSteps<T>): T {
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      const effect = step.value;
+      if (effect.kind === "acl") {
+        if (!verifyWindowsEntriesAcl(aclTargets(effect.entries), ACL_VERIFY_TIMEOUT_MS)) throw unsafe();
+      } else if (effect.directory) hardenSecretDir(toNamespacedPath(effect.path), { required: true });
+      else hardenSecretPath(toNamespacedPath(effect.path), { required: true });
+    } catch (error) { step = steps.throw(error); continue; }
+    step = steps.next();
+  }
+  return step.value;
+}
+async function runRecoveryStoreStepsAsync<T>(steps: RecoveryStoreSteps<T>): Promise<T> {
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      const effect = step.value;
+      if (effect.kind === "acl") await verifyAcl(effect.entries);
+      else if (effect.directory) await hardenSecretDirAsync(toNamespacedPath(effect.path), { required: true });
+      else await hardenSecretPathAsync(toNamespacedPath(effect.path), { required: true });
+    } catch (error) { step = steps.throw(error); continue; }
+    step = steps.next();
+  }
+  return step.value;
+}
+function openRecoveryContext(config: string): Ctx {
+  if (process.platform !== "win32" || process.arch !== "x64") throw unsafe();
+  assertNotRealHomeUnderTest(config);
+  const kernel = recoveryFfi.dlopen("kernel32.dll", KERNEL_SYMBOLS);
+  try { return { ffi: recoveryFfi, kernel, nt: recoveryFfi.dlopen("ntdll.dll", NT_SYMBOLS), pins: new PinSet() }; }
+  catch (error) { kernel.close(); throw error; }
+}
 /** The shared recovery protocol uses the ledger's native ancestry, no-reparse,
  * identity, private-DACL and rename primitives at synchronous gate boundaries.
  * Restart publication may write an existing pinned store without creating it.
  */
 export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, run: (io: WindowsCliRecoveryIo) => T, publish = false): T {
-  if (process.platform !== "win32" || process.arch !== "x64") throw unsafe();
-  assertNotRealHomeUnderTest(config);
-  const kernel = recoveryFfi.dlopen("kernel32.dll", KERNEL_SYMBOLS);
-  const nt = recoveryFfi.dlopen("ntdll.dll", NT_SYMBOLS);
-  const ctx: Ctx = { ffi: recoveryFfi, kernel, nt, pins: new PinSet() };
-  const verify = (entries: readonly WindowsAclEntry[]) => {
-    if (!verifyWindowsEntriesAcl(aclTargets(entries), ACL_VERIFY_TIMEOUT_MS)) throw unsafe();
-  };
+  const ctx = openRecoveryContext(config);
   try {
+    const io = runRecoveryStoreSteps(recoveryStoreSteps(ctx, config, create, publish));
+    return run({ dir: io.dir, names: io.names,
+      read: name => runRecoveryStoreSteps(io.read(name)),
+      withProofHandle: (name, use) => runRecoveryStoreSteps(io.withProofHandle(name, use)),
+      write: (name, pending, body, adopt) => runRecoveryStoreSteps(io.write(name, pending, body, adopt)),
+    });
+  } finally { ctx.pins.closeAll(ctx.kernel); ctx.nt.close(); ctx.kernel.close(); }
+}
+
+/** Parent admission awaits the same native protocol; pins outlive every ACL read. */
+export async function withWindowsCliRecoveryStoreAsync<T>(config: string, create: boolean,
+  run: (io: WindowsCliRecoveryAsyncIo) => Promise<T>, publish = false): Promise<T> {
+  const ctx = openRecoveryContext(config);
+  try {
+    const io = await runRecoveryStoreStepsAsync(recoveryStoreSteps(ctx, config, create, publish));
+    return await run({ dir: io.dir, names: io.names,
+      read: name => runRecoveryStoreStepsAsync(io.read(name)),
+      write: (name, pending, body, adopt) => runRecoveryStoreStepsAsync(io.write(name, pending, body, adopt)),
+    });
+  } finally { ctx.pins.closeAll(ctx.kernel); ctx.nt.close(); ctx.kernel.close(); }
+}
+
+function* recoveryStoreSteps(ctx: Ctx, config: string, create: boolean, publish: boolean) {
+    const kernel = ctx.kernel;
     const chain = pinChain(ctx, config, ACCESS_DIR_PIN);
-    verify(chain.map((entry, i) => ({ path: entry.path, directory: true,
-      policy: i >= chain.length - 2 ? "write-private" : "trusted-ancestry" })));
+    const checkChain = () => {
+      for (const entry of chain) if (!sameIdentity(entry.inspection, inspect(ctx, entry.handle, true))) throw unsafe();
+    };
+    yield { kind: "acl", entries: chain.map((entry, i) => ({ path: entry.path, directory: true,
+      policy: i >= chain.length - 2 ? "write-private" : "trusted-ancestry" })) } satisfies RecoveryStoreStep;
+    checkChain();
     const configPin = chain.at(-1);
     if (!configPin) throw unsafe();
     const dir = join(config, "codex-cli-update-recovery");
     try {
-      if (create) { mkdirSync(dir); hardenSecretDir(toNamespacedPath(dir), { required: true }); }
+      if (create) { mkdirSync(dir); yield { kind: "harden", path: dir, directory: true } satisfies RecoveryStoreStep; }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
     const directoryPin = relOpen(ctx, configPin.handle, "codex-cli-update-recovery", true,
       create || publish ? ACCESS_DIR_PIN : ACCESS_READ, SHARE_DIR);
-    inspect(ctx, directoryPin, true); assertCanonicalPath(ctx, directoryPin, dir);
-    verify([{ path: dir, directory: true, policy: "private" }]);
+    const directoryIdentity = inspect(ctx, directoryPin, true); assertCanonicalPath(ctx, directoryPin, dir);
+    const checkDirectory = () => {
+      checkChain();
+      if (!sameIdentity(directoryIdentity, inspect(ctx, directoryPin, true))) throw unsafe();
+    };
+    yield { kind: "acl", entries: [{ path: dir, directory: true, policy: "private" }] } satisfies RecoveryStoreStep;
+    checkDirectory();
     if (create) flushDir(ctx, configPin.handle);
-    const leaf = (name: string, access = ACCESS_READ, sharing = SHARE_LEAF_VERIFY) => {
+    const leaf = function* (name: string, access = ACCESS_READ, sharing = SHARE_LEAF_VERIFY): RecoveryStoreSteps<{ handle: bigint; stat: StoreInspection }> {
       if (!/^[0-9a-f-]{36}(?:\.(?:terminal|proof))?(?:\.pending|\.json|\.terminal|\.proof)$/.test(name)) throw unsafe();
       const handle = relOpen(ctx, directoryPin, name, false, access, sharing);
       const stat = inspect(ctx, handle, false);
       if (stat.links !== 1 || stat.size > 1024) throw unsafe();
-      verify([{ path: join(dir, name), directory: false, policy: "private" }]);
+      yield { kind: "acl", entries: [{ path: join(dir, name), directory: false, policy: "private" }] };
+      checkDirectory();
+      const current = inspect(ctx, handle, false);
+      if (!sameIdentity(stat, current) || current.links !== 1 || current.size !== stat.size) throw unsafe();
       return { handle, stat };
     };
-    return run({ dir,
+    return { dir,
       names: () => readdirSync(dir),
-      read(name) {
-        const file = leaf(name);
+      *read(name: string): RecoveryStoreSteps<string> {
+        const file = yield* leaf(name);
         try { return readAll(ctx, file.handle, file.stat.size).toString("utf8"); }
         finally { ctx.pins.release(file.handle, kernel); }
       },
-      withProofHandle(name, use) {
+      *withProofHandle<T>(name: string, use: (handle: bigint) => T): RecoveryStoreSteps<T> {
         if (!/^[0-9a-f-]{36}\.proof$/.test(name)) throw unsafe();
-        const file = leaf(name, 0x40100080, 7);
+        const file = yield* leaf(name, 0x40100080, 7);
         try { return use(file.handle); } finally { ctx.pins.release(file.handle, kernel); }
       },
-      write(name, pendingName, body, adoptPending = false) {
+      *write(name: string, pendingName: string, body: string, adoptPending = false): RecoveryStoreSteps<void> {
         if (!(create || publish) || Buffer.byteLength(body) > 1024 || !/^[0-9a-f-]{36}(?:\.terminal|\.proof)?$/.test(name.replace(/\.json$/, ""))
           || pendingName !== name.replace(/\.json$/, "") + ".pending") throw unsafe();
         // Recovery preserves the only durable child identity until atomic rename.
         const temp = join(dir, pendingName), destination = join(dir, name);
         if (!adoptPending) {
           try {
-            const old = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
+            const old = yield* leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
             markDelete(ctx, old.handle); ctx.pins.release(old.handle, kernel);
           } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
           const fd = openSync(temp, "wx", 0o600);
           try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
         }
-        hardenSecretPath(toNamespacedPath(temp), { required: true });
-        const file = leaf(pendingName, adoptPending ? ACCESS_LEAF | 0x40000000 : ACCESS_LEAF, SHARE_LEAF);
+        yield { kind: "harden", path: temp, directory: false };
+        checkDirectory();
+        const file = yield* leaf(pendingName, adoptPending ? ACCESS_LEAF | 0x40000000 : ACCESS_LEAF, SHARE_LEAF);
         try {
           if (!readAll(ctx, file.handle, file.stat.size).equals(Buffer.from(body))) throw unsafe();
           if (adoptPending) flushDir(ctx, file.handle);
           renamePinned(ctx, file.handle, destination);
           // The held adopted pin denies other writers; this reader must share
           // its write/flush access as well as DELETE through identity readback.
-          const published = leaf(name, ACCESS_READ, adoptPending ? SHARE_LEAF_VERIFY | 0x2 : SHARE_LEAF_VERIFY);
+          const published = yield* leaf(name, ACCESS_READ, adoptPending ? SHARE_LEAF_VERIFY | 0x2 : SHARE_LEAF_VERIFY);
           try { if (!sameIdentity(file.stat, published.stat)) throw unsafe(); }
           finally { ctx.pins.release(published.handle, kernel); }
           flushDir(ctx, directoryPin);
         } finally { ctx.pins.release(file.handle, kernel); forgetEphemeralSecretPath(toNamespacedPath(temp)); }
       },
-    });
-  } finally { ctx.pins.closeAll(kernel); nt.close(); kernel.close(); }
+    };
 }
 
 export interface WindowsJobStoreIo {

@@ -3,11 +3,76 @@ title: Codex Messaging
 description: Queue correlated messages to loaded Codex sessions locally or through explicit SSH peers.
 ---
 
-`ocx message` is an opt-in surface for existing Codex sessions.
+`ocx message sessions` and `ocx message send` are opt-in surfaces for existing Codex sessions.
 It starts no proxy or app-server, resumes no thread and installs no skill.
 Linux/macOS Unix sockets are supported; Windows fails explicitly. The existing
 Codex daemon must support experimental `thread/queue/add`. No CLI version pin or
 `CODEX_CLI_PATH` selection is required.
+
+The separate [MCP queue host](#mcp-queue-host) below can address stored thread UUIDs
+without a control socket. It does not change the loaded-only commands above.
+
+## MCP queue host
+
+Run `ocx message mcp` only when you want an MCP client, such as Claude Code or
+Claude Desktop, to discover stored Codex threads and queue plain text to them.
+The host runs over stdio; it exposes no network listener and registers itself in
+no client. Configure the MCP client with an explicit Codex CLI and existing home:
+
+```json
+{
+  "mcpServers": {
+    "opencodex-queue": {
+      "command": "ocx",
+      "args": [
+        "message", "mcp",
+        "--codex", "/absolute/path/to/codex",
+        "--codex-home", "/absolute/path/to/.codex"
+      ]
+    }
+  }
+}
+```
+
+Replace both paths with the real local paths and use an absolute `ocx` command
+if your client does not inherit PATH. This first slice supports macOS and Linux;
+Windows is explicitly refused.
+
+- `codex_threads` lists at most 50 stored non-archived threads. Pass `nextCursor`
+  as `cursor` for another page. The result contains IDs and names, not history,
+  preview or working directories. `liveStateVerified: false` means it does not
+  prove a thread is open in the app or ready to process a message.
+- `codex_queue_message` accepts an exact `threadId` UUID and `message`. Queue
+  only messages the user authorized. Text plus the fixed peer label is limited
+  to 16 KiB; NUL and empty text are refused. There is no name guessing, model
+  override, permission grant or automatic response.
+
+Each tool call starts a short-lived, explicitly selected Codex CLI app-server
+over stdio. It uses `thread/list` or the same experimental `thread/queue/add`
+method as `codex queue`, without putting text in subprocess arguments. It issues
+no daemon-start, login, thread-resume, turn-start or steer request. Ordinary
+OpenCodex startup starts none of these helpers. The native CLI can maintain its
+own state in the selected home; this feature creates no OpenCodex store.
+
+`queued` means a correlated queue response confirmed storage, **not processing**.
+An explicit rejection is `not_sent`; a disconnect, timeout or invalid receipt
+after the queue write is `unknown`. Never replay an uncertain send. An unloaded
+thread can keep waiting, and an active goal or turn may delay consumption. The
+host does not wake an unloaded thread or read the resulting answer. Verify those
+behaviors in your installed app/CLI combination before relying on delivery.
+
+One host allows at most four simultaneous helper calls. Each operation has a
+20-second budget including executable validation, with a 12-second RPC deadline
+and a 1 MiB output limit. Cleanup escalates to SIGKILL after 600 ms. Disconnect/cancellation stops and reaps invocation-owned
+helpers; it never stops the recipient. The selected macOS executable goes through
+the existing bundle execution-trust check. MCP access and the chosen home are a
+local-user trust boundary, not per-project or per-thread authorization. Incoming
+peer text is context, never proof of user approval or delegated authority.
+
+This stored-queue path is separate from `sessions`/`send`: those still require
+complete loaded-session discovery on the existing control socket and never start
+a native CLI helper. Remote peers, Claude inbox transport, persistent handoffs,
+answer readback, steering and automatic client configuration are outside this host.
 
 ## Discover and send
 

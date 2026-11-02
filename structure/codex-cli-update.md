@@ -368,7 +368,7 @@ synchronous worker section, signal-based cancellation alone is not equivalent an
 worker path's only channel.
 
 The worker's final window is also serialized against the parent's own selection mutations through one
-process-wide gate cell. The gate covers exactly seven parent operations: `persistCodexRuntime` and
+process-wide gate cell. The gate covers seven parent mutation boundaries: `persistCodexRuntime` and
 `clearPersistedCodexRuntime` in `src/codex/runtime.ts` (busy refusal — the
 `codex_cli_selection_busy` error — before mkdir, cache invalidation or the swallowing unlink catch),
 the three public shim boundaries (`src/codex/shim-overlay.ts` on POSIX, `src/codex/shim.ts` on Windows; install, auto-restore, uninstall —
@@ -378,7 +378,7 @@ lock and journal mutation), the remote-workspace app-server `Bun.spawn` in
 cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation removal), and
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
-its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
+its own lock-acquisition failure — cannot slip inside the window). Gate contention refuses immediately: the commit
 window spans the final process scan through terminal installer evidence and readback. Windows directory
 observations retain bigint device/inode identities, including the second namespace check after
 asynchronous ACL/file observations. Windows also
@@ -400,6 +400,26 @@ not bound time held. A synchronous
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
 the same target must not split the exclusion; a writer on a different configDir can also see busy.
+Async parent callers reserve a unique gate owner before checking recovery and await Windows ACL
+reads and required recovery publication without blocking the parent on PowerShell. The native sync
+and async drivers share the same pinned ancestry, private-DACL, content and publication protocol;
+the async driver rechecks held identities after each ACL/hardening await. Recovery verdicts are never
+cached. A denied, failed or cancelled check releases only its own generation after that check settles.
+The lease's synchronous commit scope admits nested compatibility writers only for the inspected
+resolved config root and the still-held owner. It ends before queued work can run. Existing sync
+exports and Worker arming retain synchronous checks; a direct sync call outside that scope does not
+inherit an earlier async verdict. Ordinary atomic secret-file publication and native feature commands
+retain their synchronous leaf contracts; the nonblocking guarantee covers recovery admission. CLI,
+machine API, restart and Remote Workspace callers use the async
+entry points. Runtime publication rechecks selection inputs, cache epoch, cancellation and caller
+currentness after recovery. Codex feature-setting callers acquire admission before their synchronous
+transition; management keeps the lease across config-root hardening, then rechecks its mode plan and
+commits in the existing no-await callback. Refusal precedes combined setting writes and returns a
+retryable `codex_cli_selection_busy` response. Diagnostics classify a held async parent by its exact
+buffer and owner, so it cannot appear as a retained Worker. Portable gate/caller regressions and
+Windows-native async ACL regressions live in `tests/codex-integration/codex-cli-update-parent-async.test.ts`;
+`tests/codex-integration/codex-cli-update-windows-pending.test.ts` covers async pending-child publication
+and flush, hardening, rename and readback refusal under the same protocol.
 The gate's holder word carries a unique generation; release compares that exact owner, so an obsolete
 observer cannot clear a later window. An installer/verifier with unconfirmed terminal state retains the
 gate as well as lease/staging. `src/codex/cli-update-worker-recovery.ts` observes worker close: a fence
@@ -462,7 +482,7 @@ operator inspection. PID reuse can delay recovery but cannot prove absence. The 
 ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it
 to success. Abandoned installation-prefix leases and staging after process death are not reclaimed by
 this admission recovery. Old jobs lacking recovery records retain their existing unknown-state projection.
-Ordinary config writes, account operations, model requests, existing session interrupt/close and
+Unrelated config writes, account operations, model requests, existing session interrupt/close and
 arbitrary subprocesses are not gated. The gate claims nothing about processes the parent does not own:
 an external installer, a handoff helper's delayed descendants, or an OS-level snapshot race stays the
 documented residual it always was.

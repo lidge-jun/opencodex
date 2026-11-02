@@ -43,6 +43,10 @@ export type SizingTier = typeof SIZING_TIERS[number];
 export const SIZING_EFFORTS = ["glance", "measured", "thorough", "exhaustive"] as const;
 export type SizingEffort = typeof SIZING_EFFORTS[number];
 
+/** Task domains, the kind of capability a tier is measured in. A label, never a model or a vendor. */
+export const SIZING_DOMAINS = ["coding", "agentic", "reasoning", "writing", "knowledge", "general"] as const;
+export type SizingDomain = typeof SIZING_DOMAINS[number];
+
 const MAX_FIELD_CHARS = 400;
 
 export const ROLE_SIZING_SYSTEM_PROMPT = [
@@ -66,6 +70,15 @@ export const ROLE_SIZING_SYSTEM_PROMPT = [
   "or a strong model needs only a quick call. Effort buys deliberation, never capability, and more",
   "effort is not more correct.",
   "",
+  "Task domain names the kind of capability the tier is measured in. It sizes nothing; it tells the",
+  "mapping which measured strength matters, because models of one price class differ by domain:",
+  "- coding: writing, changing, or reviewing code in a repository.",
+  "- agentic: long multi-step tool use, where the work is completing a run of actions without derailing.",
+  "- reasoning: math, logic, planning, or analysis whose answer is derived rather than looked up.",
+  "- writing: prose meant for a reader: documents, messages, copy.",
+  "- knowledge: research and factual recall across sources.",
+  "- general: none of the above dominates. Pick it rather than guess.",
+  "",
   "Assess risk and complexity once for both dials:",
   "- file, module, or ownership boundary crossing;",
   "- reversibility and blast radius;",
@@ -86,8 +99,8 @@ export const ROLE_SIZING_SYSTEM_PROMPT = [
   "- Use only the neutral words above. Do not name concrete model products, vendors, versions, or vendor effort levels anywhere in the answer.",
   "",
   "Answer with one JSON object and nothing else, no prose and no code fence:",
-  '{"roles":{"<role name>":{"tier":"fast|standard|frontier","effort":"glance|measured|thorough|exhaustive","rationale":"<one sentence covering both dials>","move_up_if":"<signals that would justify a stronger tier or higher effort>","move_down_if":"<signals that would justify a cheaper tier or lower effort>"}}}',
-  "Include every role you were given, keyed by its exact name, with exactly those five fields.",
+  '{"roles":{"<role name>":{"tier":"fast|standard|frontier","effort":"glance|measured|thorough|exhaustive","domain":"coding|agentic|reasoning|writing|knowledge|general","rationale":"<one sentence covering both dials>","move_up_if":"<signals that would justify a stronger tier or higher effort>","move_down_if":"<signals that would justify a cheaper tier or lower effort>"}}}',
+  "Include every role you were given, keyed by its exact name, with exactly those six fields.",
 ].join("\n");
 
 /**
@@ -105,6 +118,7 @@ export const DELEGATED_WORK_SIZING_SYSTEM_PROMPT = [
 export interface RoleSizing {
   readonly tier: SizingTier;
   readonly effort: SizingEffort;
+  readonly domain: SizingDomain;
   readonly rationale: string;
   readonly moveUpIf: string;
   readonly moveDownIf: string;
@@ -167,13 +181,16 @@ function validateEntry(entry: unknown): RoleSizingOutcome {
   const fields = entry as Record<string, unknown>;
   if (!isMember(SIZING_TIERS, fields.tier)) return { unsized: "the sizing answer has no valid tier" };
   if (!isMember(SIZING_EFFORTS, fields.effort)) return { unsized: "the sizing answer has no valid effort" };
+  // A missing or unknown domain still sizes the role on the overall scale: the domain only picks
+  // which measured capability ranks the candidates, and "general" is the rubric's own no-signal answer.
+  const domain = isMember(SIZING_DOMAINS, fields.domain) ? fields.domain : "general";
   const rationale = oneLine(fields.rationale);
   const moveUpIf = oneLine(fields.move_up_if);
   const moveDownIf = oneLine(fields.move_down_if);
   if (rationale === null || moveUpIf === null || moveDownIf === null) {
     return { unsized: "the sizing answer is missing a rationale or a move trigger" };
   }
-  return { sizing: { tier: fields.tier, effort: fields.effort, rationale, moveUpIf, moveDownIf } };
+  return { sizing: { tier: fields.tier, effort: fields.effort, domain, rationale, moveUpIf, moveDownIf } };
 }
 
 const CODE_FENCE = /^\x60{3}(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\x60{3}$/i;
@@ -183,9 +200,10 @@ const CODE_FENCE = /^\x60{3}(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\x60{3}$/i;
  *
  * The answer must be one JSON object of the shape the rubric asks for. Two leniencies, both for
  * content the mapping never reads: a single surrounding code fence, which models add out of habit,
- * and keys beyond the five fields in a role's entry, which are ignored. Every one of the five must
- * still be present and valid. Anything else wrong marks the affected role, or every role when the
- * whole answer is unusable, as unsized with the reason.
+ * and keys beyond the six fields in a role's entry, which are ignored. Tier, effort, rationale and
+ * both move triggers must still be present and valid; a missing domain falls back to "general".
+ * Anything else wrong marks the affected role, or every role when the whole answer is unusable,
+ * as unsized with the reason.
  */
 export function parseRoleSizingResponse(text: string, roles: readonly string[]): Map<string, RoleSizingOutcome> {
   const out = new Map<string, RoleSizingOutcome>();

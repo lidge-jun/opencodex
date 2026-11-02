@@ -1,3 +1,5 @@
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
+import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 import { codexCompatibleUrl } from "../codex/context-compat";
 /**
  * /v1/live and /v1/realtime/calls relay (issue #371).
@@ -38,6 +40,7 @@ import {
   CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
+  type CodexAuthContext,
 } from "../codex/auth-context";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
@@ -315,10 +318,12 @@ export type LiveSidebandTarget =
 
 export type LiveRelayTarget = {
   headers: Record<string, string>;
+  authContext?: CodexAuthContext;
   providerBaseUrl: string;
   usesBackendShape: boolean;
   keyed: boolean;
   recordOutcome?: (status: number | "timeout" | "connect_error") => void;
+  releaseProbeLease?: () => void;
 };
 
 function isChatGptBackendBaseUrl(baseUrl: string): boolean {
@@ -723,7 +728,9 @@ export async function resolveLiveRelay(
         );
       }
     } catch (err) {
-      if (err instanceof CodexAccountCooldownError) {
+      if (err instanceof CodexInstallationIdUnavailableError) {
+        forwardAuthError = formatErrorResponse(503, "server_busy", err.message);
+      } else if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
       } else if (err instanceof CodexMainProfileDrainingError) {
         forwardAuthError = codexMainProfileDrainingResponse();
@@ -769,11 +776,12 @@ export async function resolveLiveRelay(
       forward.releaseProbeLease?.();
       return denial;
     }
-    if (provider.headers) Object.assign(headers, provider.headers);
-    for (const [name, value] of forward.headers) headers[name] = value;
+    const selectedHeaders = mergeCodexSelectedHeaders({ ...headers, ...provider.headers }, forward.headers);
     logCtx.model = "gpt-live";
     return {
-      headers,
+      headers: Object.fromEntries(selectedHeaders),
+      authContext: forward.authContext,
+      releaseProbeLease: forward.releaseProbeLease,
       providerBaseUrl: provider.baseUrl,
       usesBackendShape: isChatGptBackendBaseUrl(provider.baseUrl),
       keyed: false,
@@ -855,6 +863,18 @@ export async function handleLive(
   const linkedSignal = signalWithTimeout(LIVE_UPSTREAM_TIMEOUT_MS, req.signal);
   const sidecarExit = sidecarEnter("live");
   try {
+    if (relay.authContext?.kind === "pool") {
+      let parsed: unknown;
+      try { parsed = JSON.parse(new TextDecoder().decode(outboundBody)); } catch { /* Upstream owns invalid JSON. */ }
+      const accountId = relay.authContext.chatgptAccountId;
+      let isolated = isolateCodexPoolClientMetadata(parsed, accountId);
+      if (isolated && typeof isolated === "object" && !Array.isArray(isolated)) {
+        const record = isolated as Record<string, unknown>;
+        const session = isolateCodexPoolClientMetadata(record.session, accountId);
+        if (session !== record.session) isolated = { ...record, session };
+      }
+      if (isolated !== parsed) outboundBody = new TextEncoder().encode(JSON.stringify(isolated)).buffer as ArrayBuffer;
+    }
     const upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
@@ -901,6 +921,10 @@ export async function handleLive(
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "live request canceled by client");
     }
+    if (err instanceof CodexInstallationIdUnavailableError) {
+      relay.releaseProbeLease?.();
+      return formatErrorResponse(503, "server_busy", err.message);
+    }
     if (err instanceof Error && err.name === "TimeoutError") {
       relay.recordOutcome?.("timeout");
       return formatErrorResponse(504, "upstream_error", "live upstream timed out");
@@ -925,7 +949,7 @@ export async function resolveLiveSidebandUpgrade(
   target: LiveSidebandTarget,
   turnAdmissionLease?: AdmissionLease,
   admission?: DataPlaneAdmission,
-): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
+): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; authContext?: CodexAuthContext; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
   const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
     admission,
     model: liveSidebandModel(target),
@@ -933,6 +957,7 @@ export async function resolveLiveSidebandUpgrade(
   });
   if (relay instanceof Response) return relay;
   return {
+    authContext: relay.authContext,
     headers: relay.headers,
     upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(target, config.experimentalRealtimeWsBaseUrl),
     recordOutcome: relay.recordOutcome,

@@ -245,6 +245,8 @@ LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セ�
 
 **自動割り当て** は、必要な能力と推論負荷を評価したロールのうち、選んだモデルの推論負荷の段階リストが空でないすべてのロールに推論負荷を提案します。**適用**、**すべて適用**、または `ocx agent roles suggest --apply` は、そのロールの `model_reasoning_effort` を追加または置き換えます。推論負荷は選んだモデル自身の段階から、最も低い段階、既定の段階、既定より 1 つ上の段階、最も高い段階のいずれかになります。段階リストが空なら推論負荷を提案せず（`proposedEffort: null`）、適用時は `effort` を送らないため既存の固定値はそのまま残ります。`null` の提案が固定値を消すことはありません。
 
+CLI の `ocx agent roles suggest --apply` は、1 つの履歴バッチで最大 **50 件の変更対象ロール**を適用します。設定が既に一致するロール、評価されていないロール、割当先のないロールは数えません。50 件を超える場合は、ロールの更新を一件も送信せず終了コード 5 で拒否します。`--apply` なしでプレビューし、個別の変更には `ocx agent roles set <role> <model> [--effort <level>]` を使ってください。途中で失敗した場合の確認済み・未確認の更新と再試行の注意点は、[CLI の適用と復旧の契約](/reference/cli/agents/)を参照してください。
+
 ## Kilo
 
 Kilo CLI、VS Code、JetBrains は同じグローバル設定を共有します。この統合は `~/.config/kilo` 内の `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json` のうち最初に存在するファイルに `provider.opencodex` を書き込みます。`XDG_CONFIG_HOME` でこのディレクトリを変更できます。候補がなければ `kilo.jsonc` を作成します。プロジェクト設定には書き込みません。

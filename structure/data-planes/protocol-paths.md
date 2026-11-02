@@ -373,10 +373,10 @@ it), and `bridge-only-policy` when operator policy that only the translated path
 engage: a pinned reasoning effort for the route (`resolvePinnedEffort`, read with the translated
 body's model id as the bridge reads it), a blocked-skill bundle the translator would elide
 (`anthropicBodyElidesBlockedSkill` in `src/claude/inbound.ts`), or a `web_search*` server tool the
-web-search sidecar could serve (not excluded by `tool_choice`, sidecar not disabled in the Claude
-replay config; backend credentials are decided at dispatch, so this errs toward the bridge). The
-ingress, `count_tokens` and the planner all ask it. The planner can judge only the config-and-route
-parts: skill elision and web search depend on body content no feature describes.
+web-search sidecar could serve (not excluded by `tool_choice`, sidecar enabled). The cancellable ingress
+probe uses the bridge's credential-free affinity headers, existing plan and authorized backend, with a
+short-lived selection lease; uncertain admission keeps the bridge. Without a runnable plan search alone
+does not decline native Messages. `count_tokens` and the planner lack runtime facts and remain conservative.
 
 With the switch on, a declined route re-marks its bridge entry with the decline reason (after
 any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is

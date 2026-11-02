@@ -19,9 +19,10 @@ export class RuntimePreflightError extends Error {
   }
 }
 
-type DirectoryIdentity = { dev: number; ino: number; isDirectory(): boolean; isSymbolicLink(): boolean };
+// bigint: NTFS file IDs exceed 2^53, where adjacent IDs are equal as numbers.
+type DirectoryIdentity = { dev: bigint; ino: bigint; isDirectory(): boolean; isSymbolicLink(): boolean };
 export interface RuntimePreflightFs {
-  lstatSync: (path: string) => DirectoryIdentity;
+  lstatSync: (path: string, options: { bigint: true }) => DirectoryIdentity;
   mkdirSync: (path: string, mode: number) => unknown;
   rmdirSync: (path: string) => void;
   readdirSync: (path: string) => readonly string[];
@@ -44,7 +45,7 @@ export interface RuntimePreflightDeps {
 const probeFs: RuntimePreflightFs = { lstatSync, mkdirSync, rmdirSync, readdirSync };
 
 function sameDirectory(fs: RuntimePreflightFs, path: string, owned: DirectoryIdentity): boolean {
-  const current = fs.lstatSync(path);
+  const current = fs.lstatSync(path, { bigint: true });
   return current.isDirectory() && !current.isSymbolicLink()
     && current.dev === owned.dev && current.ino === owned.ino;
 }
@@ -59,7 +60,7 @@ function removeOwnedEmptyDirectory(fs: RuntimePreflightFs, path: string, owned: 
 function prepareRoot(fs: RuntimePreflightFs, root: string, rootWasAbsent?: boolean): void {
   try {
     if (rootWasAbsent === undefined) {
-      try { fs.lstatSync(root); rootWasAbsent = false; }
+      try { fs.lstatSync(root, { bigint: true }); rootWasAbsent = false; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         rootWasAbsent = true;
@@ -73,7 +74,7 @@ function prepareRoot(fs: RuntimePreflightFs, root: string, rootWasAbsent?: boole
         // Use a concurrently created root, subject to the directory check below.
       }
     }
-    const current = fs.lstatSync(root);
+    const current = fs.lstatSync(root, { bigint: true });
     if (!current.isDirectory() || current.isSymbolicLink()) throw new RuntimePreflightError("create");
   } catch {
     throw new RuntimePreflightError("create");
@@ -83,7 +84,7 @@ function prepareRoot(fs: RuntimePreflightFs, root: string, rootWasAbsent?: boole
 function probeInProcess(fs: RuntimePreflightFs, path: string): void {
   let owned: DirectoryIdentity | undefined;
   try {
-    try { fs.mkdirSync(path, 0o700); owned = fs.lstatSync(path); }
+    try { fs.mkdirSync(path, 0o700); owned = fs.lstatSync(path, { bigint: true }); }
     catch { throw new RuntimePreflightError("create"); }
     try { fs.rmdirSync(path); }
     catch { throw new RuntimePreflightError("remove"); }
@@ -96,10 +97,10 @@ function probeChild(runtime: DurableBunRuntime, path: string, nonce: string, spa
   // The child emits only this invocation's nonce and a fixed result, never paths/errors.
   const script = `const fs = require("node:fs"); const path = ${JSON.stringify(path)};
 let result = "create", owned;
-try { fs.mkdirSync(path, 0o700); owned = fs.lstatSync(path); result = "remove";
+try { fs.mkdirSync(path, 0o700); owned = fs.lstatSync(path, { bigint: true }); result = "remove";
   fs.rmdirSync(path); result = "ok";
 } catch { /* result already names the failed step; details never leave the child */ } finally {
-  if (owned) { try { const now = fs.lstatSync(path);
+  if (owned) { try { const now = fs.lstatSync(path, { bigint: true });
     if (now.isDirectory() && !now.isSymbolicLink() && now.dev === owned.dev && now.ino === owned.ino
       && fs.readdirSync(path).length === 0) fs.rmdirSync(path);
   } catch { /* leave any probe entry that cannot be proven ours */ } }

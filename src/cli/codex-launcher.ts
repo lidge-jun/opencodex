@@ -25,13 +25,13 @@ import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { getCodexRoutingKind, type CodexRoutingKind } from "../codex/inject";
 import { inspectCodexShimBackingForCommand } from "../codex/shim";
+import { validatedCodexExecInvocationAsync, type CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS, CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC } from "../codex/shim-templates";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
-import { commandInvocation } from "../lib/win-exec";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
@@ -265,14 +265,26 @@ export function resolveCodexLaunchCommand(
   }
 }
 
-/** Launch the selected Codex command with inherited IO and preserve its exit status. */
-function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<number> {
+export interface CodexSpawnDeps extends CodexLaunchCommandDeps {
+  execBoundary?: CodexExecBoundaryAsyncDeps;
+  spawn?: typeof spawn;
+}
+
+/** Validate the final backing command immediately before each launch, including fast paths. */
+export async function spawnCodex(args: readonly string[], env: CodexLaunchEnv, deps: CodexSpawnDeps = {}): Promise<number> {
+  let launch: CodexLaunchCommand, inv: Awaited<ReturnType<typeof validatedCodexExecInvocationAsync>>;
+  try {
+    launch = resolveCodexLaunchCommand(env, deps);
+    inv = await validatedCodexExecInvocationAsync(launch.command, args, { ...deps.execBoundary, verifyAnyAppBundle: true, env: launch.env as NodeJS.ProcessEnv });
+  } catch (error) {
+    // A selected executable that vanished before verification is the same missing CLI
+    // the spawn-time ENOENT branch below reports, not a trust refusal.
+    const missing = error instanceof CodexNotFoundError || (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+    console.error(missing ? CODEX_INSTALL_HINT : `❌ Cannot launch codex: ${error instanceof Error ? error.message : "executable verification failed"}`);
+    return 1;
+  }
   return new Promise<number>(resolve => {
-    let launch: CodexLaunchCommand;
-    try { launch = resolveCodexLaunchCommand(env); }
-    catch (error) { console.error(error instanceof CodexNotFoundError ? CODEX_INSTALL_HINT : CODEX_UNVERIFIED_SHIM); resolve(1); return; }
-    const inv = commandInvocation(launch.command, args);
-    const child = spawn(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
+    const child = (deps.spawn ?? spawn)(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
         console.error(CODEX_INSTALL_HINT);

@@ -6,6 +6,7 @@ import {
   workflowSendCeilingReached,
   workflowSpendCeilingReached,
 } from "../../lib/workflow-budget";
+import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflow-refusal";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
@@ -93,7 +94,7 @@ export function createResponsesSendBudget(
   // dropping the record to make room would hand the fan-out a fresh allowance, which is the
   // laundering this ceiling exists to stop. The client is told the task needs a new grant
   // rather than being given a synthetic upstream error.
-  if (workflowSendCeilingReached(workflowRootId)) {
+  if (workflowSendCeilingReached(workflowRootId, currentWorkflowBudgetPolicy())) {
     // A log context exists here, unlike at HTTP admission, so the row this request writes is
     // marked synthetic rather than reading as a request that vanished with zero sends.
     return workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined, workflowRootId);

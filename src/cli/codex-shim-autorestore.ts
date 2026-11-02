@@ -1,4 +1,4 @@
-import { autoRestoreCodexShim } from "../codex/shim";
+import { autoRestoreCodexShim, autoRestoreCodexShimAsync } from "../codex/shim";
 import { codexShimAutoRestoreEnabled, readConfigDiagnostics } from "../config";
 
 export interface CodexShimAutoRestoreCliDeps {
@@ -21,6 +21,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "status" || command === "doctor") return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
   if (command === "codex") return true;
+  // Exec admission only observes the selected target; it must never repair a shim first.
+  if (command === "internal" && args[1] === "codex-exec-target") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
   // Local messaging owns its helpers; even malformed usage must not repair/start anything.
@@ -73,5 +75,21 @@ export function runCodexShimAutoRestore(deps: CodexShimAutoRestoreCliDeps = DEFA
         error instanceof Error ? error.message : String(error)
       }. Run 'ocx codex-shim install' after the Codex update finishes.`,
     );
+  }
+}
+
+export async function maybeAutoRestoreCodexShimAsync(command: string | undefined, args: string[]): Promise<void> {
+  if (!skipsCodexShimAutoRestore(command, args)) await runCodexShimAutoRestoreAsync();
+}
+
+export async function runCodexShimAutoRestoreAsync(): Promise<void> {
+  try {
+    const result = await autoRestoreCodexShimAsync({
+      enabled: () => codexShimAutoRestoreEnabled(DEFAULT_DEPS.readConfig().config, DEFAULT_DEPS.env),
+    });
+    if (result.status === "restored") DEFAULT_DEPS.warn(`⚠️  ${result.message} (automatic repair after Codex update)`);
+    else if ((result.status === "deferred" || result.status === "ineligible") && result.message) DEFAULT_DEPS.warn(`⚠️  ${result.message}`);
+  } catch (error) {
+    DEFAULT_DEPS.warn(`⚠️  Codex shim auto-restore failed; continuing without it: ${error instanceof Error ? error.message : String(error)}. Run 'ocx codex-shim install' after the Codex update finishes.`);
   }
 }

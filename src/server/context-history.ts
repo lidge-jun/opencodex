@@ -1,3 +1,5 @@
+import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 /** Native history/notes JSON relay. No interpretation of encrypted tool arguments or retries. */
 import { formatErrorResponse } from "../bridge";
 import {
@@ -109,7 +111,8 @@ async function relayContextHistory(
       "Context account ownership is unavailable; start a new session and preserve needed state before resetting context");
   }
   let authContext: Awaited<ReturnType<typeof resolveCodexAuthContext>>;
-  const headers = new Headers(candidate.provider.headers);
+  let upstreamBody: unknown = body;
+  let headers = new Headers(candidate.provider.headers);
   try {
     authContext = await resolveCodexAuthContext(contextSelectionHeaders(req.headers, sessionId), config, owner.kind === "stored" ? "pool" : "direct", {
       // The same deadline bounds credential selection and refresh waits.
@@ -131,11 +134,10 @@ async function relayContextHistory(
     logCtx.provider = formatCodexProviderForLog(candidate.providerName, codexLogAccountId(authContext), config);
     // Materialization rechecks the current account policy after async selection.
     // Synthetic lane IDs are local selection metadata, never upstream headers.
-    for (const [key, value] of materializeCodexUpstreamAuth(req.headers, authContext, {
+    headers = mergeCodexSelectedHeaders(candidate.provider.headers, materializeCodexUpstreamAuth(req.headers, authContext, {
       config, modelId: "context_history", admission, substituteMainCredential,
-    })) {
-      headers.set(key, value);
-    }
+    }));
+    if (authContext.kind === "pool") upstreamBody = isolateCodexPoolClientMetadata(body, authContext.chatgptAccountId);
     // Check the assembled outbound headers, including configured provider headers.
     validateForwardAdmissionCredential(headers, config);
     // Recheck actual wire identity after async selection/materialization. A replaced
@@ -148,6 +150,7 @@ async function relayContextHistory(
   } catch (err) {
     const cancelled = cancellationResponse(req, deadline);
     if (cancelled) return cancelled;
+    if (err instanceof CodexInstallationIdUnavailableError) return formatErrorResponse(503, "server_busy", err.message);
     if (err instanceof CodexAccountCooldownError) return cooldownErrorResponse(err);
     if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
     if (err instanceof CodexThreadAffinityExpiredError) return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
@@ -176,7 +179,7 @@ async function relayContextHistory(
   let response: Response | undefined;
   try {
     response = await fetch(`${candidate.provider.baseUrl}/${endpoint}`, {
-      method: "POST", headers, body: JSON.stringify(body), signal: deadline.signal, redirect: "manual",
+      method: "POST", headers, body: JSON.stringify(upstreamBody), signal: deadline.signal, redirect: "manual",
     });
     const result = await readBoundedResponseBytes(response, {maxBytes: MAX_RESPONSE_BYTES, signal: deadline.signal});
     if (result.oversized) return formatErrorResponse(502, "upstream_error", "Context response exceeded 16 MiB");

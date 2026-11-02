@@ -1,5 +1,9 @@
 {
   "exec-trust-boundary.test.ts": "codex-integration",
   "exec-boundary-launch.test.ts": "codex-integration",
+  "exec-launcher-boundary.test.ts": "codex-integration",
+  "exec-cli-renamed-app-bundle.test.ts": "codex-integration",
+  "exec-cli-bundle-containment.test.ts": "codex-integration",
+  "exec-renamed-app-bundle.test.ts": "codex-integration",
   "exec-known-app-bundles.test.ts": "codex-integration"
 }

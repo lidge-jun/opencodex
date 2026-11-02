@@ -63,6 +63,7 @@ import {
 import { shadowInterceptProviderDependency } from "./shadow-call-validation";
 import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
 import { initializeProviderModelSelection } from "../../providers/initial-model-selection";
+import { invalidModelDiscoveryHint } from "../../providers/model-discovery-diagnostic";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
@@ -907,6 +908,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
+      promoteAdditionalTools: p.promoteAdditionalTools,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
@@ -1802,7 +1804,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           latencyMs,
           error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
-            : "upstream /models returned an unexpected shape",
+            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
         });
       }
       const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);

@@ -169,6 +169,9 @@ type OpenItem = {
   /** The gateway sent content_part.done for this item. */
   partDone: boolean;
   text: string;
+  /** Exact UTF-8 size and boundary unit, without rescanning the accumulated text. */
+  textBytes: number;
+  lastCodeUnit: number;
   item: Record<string, unknown>;
 };
 
@@ -219,7 +222,7 @@ export function createResponsesSnapshotBlockRewrite(
   const closeOpenItem = (index: number): void => {
     const open = openItems.get(index);
     if (!open) return;
-    aggregateOpenTextBytes -= Buffer.byteLength(open.text, "utf8");
+    aggregateOpenTextBytes -= open.textBytes;
     openItems.delete(index);
   };
 
@@ -313,6 +316,8 @@ export function createResponsesSnapshotBlockRewrite(
           textDone: false,
           partDone: false,
           text: "",
+          textBytes: 0,
+          lastCodeUnit: -1,
           item: event.item,
         });
         }
@@ -407,12 +412,19 @@ export function createResponsesSnapshotBlockRewrite(
         return [changed ? jsonBlock(nextEvent) : block];
       }
       if (open && (itemId === undefined || itemId === open.itemId)) {
-        const deltaBytes = Buffer.byteLength(event.delta, "utf8");
+        let deltaBytes = Buffer.byteLength(event.delta, "utf8");
+        const first = event.delta.charCodeAt(0);
+        // Joining two isolated surrogate halves replaces two 3-byte replacements with 4 bytes.
+        if (open.lastCodeUnit >= 0xd800 && open.lastCodeUnit <= 0xdbff && first >= 0xdc00 && first <= 0xdfff) {
+          deltaBytes -= 2;
+        }
+        if (event.delta.length > 0) open.lastCodeUnit = event.delta.charCodeAt(event.delta.length - 1);
         open.text += event.delta;
+        open.textBytes += deltaBytes;
         aggregateOpenTextBytes += deltaBytes;
         // Unbounded text accumulation is a retention hole (#893 review):
         // overshoot per-item or aggregate caps and the stream goes fail-closed.
-        if (Buffer.byteLength(open.text, "utf8") > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES
+        if (open.textBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES
           || aggregateOpenTextBytes > MAX_OPEN_ITEM_AGGREGATE_TEXT_BYTES) {
           taintAndRelease();
         }
@@ -437,9 +449,11 @@ export function createResponsesSnapshotBlockRewrite(
           if (typeof event.text === "string") {
             // Replacement must keep the aggregate honest and bounded, the
             // same as delta accumulation (#893 review).
-            const previousBytes = Buffer.byteLength(open.text, "utf8");
+            const previousBytes = open.textBytes;
             const nextBytes = Buffer.byteLength(event.text, "utf8");
             open.text = event.text;
+            open.textBytes = nextBytes;
+            open.lastCodeUnit = event.text.charCodeAt(event.text.length - 1);
             aggregateOpenTextBytes += nextBytes - previousBytes;
             if (nextBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES
               || aggregateOpenTextBytes > MAX_OPEN_ITEM_AGGREGATE_TEXT_BYTES) {

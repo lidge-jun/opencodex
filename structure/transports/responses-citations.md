@@ -17,3 +17,5 @@ gateway preservation and both refresh directions;
 `tests/responses/responses-native-item-extensions-compact.test.ts` covers official API and ChatGPT
 compact repair, while `tests/responses/responses-url-citation-title-repair.test.ts` covers ordinary
 HTTP/WS projection, helper independence and input immutability.
+
+The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.

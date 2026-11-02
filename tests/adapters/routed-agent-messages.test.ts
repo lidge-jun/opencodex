@@ -1,12 +1,24 @@
 import { expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { normalizeRoutedAgentMessages } from "../../src/adapters/routed-agent-messages";
+import { hasItemProvenance, isHistoricalItem, tagHistoricalInputItems } from "../../src/responses/item-provenance";
 import { parseRequest } from "../../src/responses/parser";
 import { routeModel } from "../../src/router";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { OcxProviderConfig } from "../../src/types";
 
 const base: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key", apiKey: "synthetic-key" };
+
+test("agent-message replacement carries historical and live provenance", () => {
+  const input = tagHistoricalInputItems([
+    { type: "agent_message", content: [{ type: "input_text", text: "past" }] },
+    { type: "agent_message", content: [{ type: "input_text", text: "current" }] },
+  ], 1);
+  const result = normalizeRoutedAgentMessages({ input }) as { input: unknown[] };
+  expect(result.input.map(hasItemProvenance)).toEqual([true, true]);
+  expect(result.input.map(isHistoricalItem)).toEqual([true, false]);
+  expect(JSON.stringify(result)).not.toContain("replayHistoricalItem");
+});
 const body = () => ({ model: "muse-spark-1.3-contributor", input: [{ type: "agent_message", id: "amsg_test", author: "/root/reader", recipient: "/root/checker", content: [{ type: "input_text", text: "Exact assignment\nwith lines." }] }], stream: true });
 
 test("Responses converts plaintext task and peer messages without mutating replay or losing routing identities", async () => {

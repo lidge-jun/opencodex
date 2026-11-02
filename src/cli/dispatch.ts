@@ -435,8 +435,8 @@ const commandRunners: Record<string, CommandRunner> = {
         if (expectation) {
           // The root preflight skipped the shim repair for a pinned sync; the identity held, so
           // run it now, as an unpinned sync would have.
-          const { runCodexShimAutoRestore } = await import("./codex-shim-autorestore");
-          runCodexShimAutoRestore();
+          const { runCodexShimAutoRestoreAsync } = await import("./codex-shim-autorestore");
+          await runCodexShimAutoRestoreAsync();
         }
         // The connection the sync ran under, read inside its lock; the read above may be stale.
         const link = result.connection.transport === "link";
@@ -731,10 +731,10 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   "codex-shim": async deps => {
-    const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
+    const { codexShimStatus, diagnoseCodexShim, installCodexShimAsync, uninstallCodexShimAsync } = await import("../codex/shim");
     switch (deps.args[1]) {
       case "install": {
-        const r = installCodexShim();
+        const r = await installCodexShimAsync();
         const { healthy, runnable, active, summary } = diagnoseCodexShim();
         const success = !r.refused && (runnable ?? healthy);
         const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
@@ -764,7 +764,7 @@ const commandRunners: Record<string, CommandRunner> = {
       }
       case "uninstall":
       case "remove": {
-        const r = uninstallCodexShim();
+        const r = await uninstallCodexShimAsync();
         console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
         break;
       }
@@ -858,7 +858,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   ready: async deps => {
     // Fail-closed impossible-state guard: readyArgs is populated by the
-    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShim, so
+    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShimAsync, so
     // reaching here without it means dispatch diverged. Refuse with code 64
     // and perform NO I/O (no discovery/probe). process.exit is `never`,
     // narrowing below.

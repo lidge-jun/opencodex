@@ -41,7 +41,7 @@ import { darwinDesktopAppAdapter, darwinDefaultExec } from "./desktop-app/darwin
 import { linuxDesktopAppAdapter, linuxDefaultExec } from "./desktop-app/linux";
 import { windowsDesktopAppAdapter, windowsDefaultExec } from "./desktop-app/windows";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
-import { beginCodexCliSelectionParentWrite } from "./cli-update-selection-gate";
+import { beginCodexCliSelectionParentWrite, withCodexCliSelectionParentWriteAsync, CodexCliSelectionMutationBusyError } from "./cli-update-selection-gate";
 
 export type { DesktopAppExecOptions } from "./desktop-app/types";
 
@@ -386,5 +386,15 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
     // would drop a lock that is still protecting a restart about to happen.
     selectionWrite.exit();
     if (lockHeld && !handedOff) releaseDesktopRestartLock(io.lock);
+  }
+}
+
+export async function restartCodexDesktopAppAsync(io: DesktopAppRestartIo = {}): Promise<DesktopAppRestartResult> {
+  try { return await withCodexCliSelectionParentWriteAsync(() => restartCodexDesktopApp(io)); }
+  catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return {
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "selection_mutation_busy",
+    };
+    throw error;
   }
 }

@@ -5,7 +5,8 @@ import * as ffi from "bun:ffi";
 import * as acl from "../../src/lib/windows-secret-acl";
 import { hardenSecretDirAsync, hardenSecretPath } from "../../src/lib/windows-secret-acl";
 import { withWindowsCliRecoveryStore } from "../../src/codex/cli-update-job-store-windows";
-import { codexCliUpdateRecoveryBlocksAdmission } from "../../src/codex/cli-update-recovery";
+import { codexCliUpdateRecoveryBlocksAdmission, codexCliUpdateRecoveryBlocksAdmissionAsync } from "../../src/codex/cli-update-recovery";
+import { setWindowsOwnerAclRunnerForTests } from "../../src/lib/windows-owner-acl";
 import { startWindowsCliChild } from "../../src/codex/windows-cli-child";
 import * as lifetime from "../../src/codex/windows-cli-recovery";
 import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
@@ -67,6 +68,27 @@ windows("restart publishes a complete pending child only after terminal native p
   expect(statSync(join(home, "codex-cli-update-recovery", token + ".json")).ino).toBe(pendingIdentity);
   expect(codexCliUpdateRecoveryBlocksAdmission(home)).toBe(false);
 }, 30000);
+windows("async restart adopts the same pending inode without synchronous ACL reads or hardening", async () => {
+  const { armed, child, proof } = records(); seed(armed, child, proof);
+  const pendingIdentity = statSync(join(home, "codex-cli-update-recovery", token + ".pending"), { bigint: true }).ino;
+  let syncReads = 0, syncHardens = 0, ticks = 0;
+  setWindowsOwnerAclRunnerForTests(() => { syncReads++; throw new Error("sync recovery ACL read"); });
+  acl.setIcaclsRunnerForTests(() => { syncHardens++; throw new Error("sync recovery ACL hardening"); });
+  const timer = setInterval(() => { ticks++; }, 1);
+  try {
+    expect(await codexCliUpdateRecoveryBlocksAdmissionAsync(home)).toBe(false);
+    expect(ticks).toBeGreaterThan(0);
+    expect(syncReads).toBe(0);
+    expect(syncHardens).toBe(0);
+  } finally {
+    clearInterval(timer);
+    setWindowsOwnerAclRunnerForTests(null);
+    acl.setIcaclsRunnerForTests(null);
+  }
+  expect(existsSync(join(home, "codex-cli-update-recovery", token + ".pending"))).toBe(false);
+  expect(withWindowsCliRecoveryStore(home, false, io => JSON.parse(io.read(token + ".json")))).toEqual(child);
+  expect(statSync(join(home, "codex-cli-update-recovery", token + ".json"), { bigint: true }).ino).toBe(pendingIdentity);
+}, 30000);
 const negatives = ["token", "job", "parent", "parent-alive", "armed-child", "armed-identity", "missing-child-pid",
   "missing-child-time", "proof-missing", "proof-malformed", "proof-armed", "proof-token", "proof-job", "proof-parent",
   "proof-pid", "pending-malformed", "pending-armed", "native-unknown", "native-throws", "parent-denied",
@@ -101,10 +123,10 @@ windows.each(negatives)("pending child stays fenced without matching authority: 
   try { expect(codexCliUpdateRecoveryBlocksAdmission(home)).toBe(true); expect(snapshot()).toEqual(before); }
   finally { probe?.mockRestore(); parentProbe?.mockRestore(); }
 }, 30000);
-windows.each(["file-flush", "harden", "rename", "readback", "flush"] as const)("reconciliation publication failure fences: %s", stage => {
+for (const asynchronous of [false, true]) windows.each(["file-flush", "harden", "rename", "readback", "flush"] as const)(`${asynchronous ? "async" : "sync"} reconciliation publication failure fences: %s`, async stage => {
   const { armed, child, proof } = records(); seed(armed, child, proof);
   let injected = 0, renamed = false;
-  const harden = stage === "harden" ? spyOn(acl, "hardenSecretPath").mockImplementation(() => { injected++; throw new Error("harden_failed"); }) : undefined;
+  const harden = stage === "harden" ? spyOn(acl, asynchronous ? "hardenSecretPathAsync" : "hardenSecretPath").mockImplementation(() => { injected++; throw new Error("harden_failed"); }) : undefined;
   const realOpen = ffi.dlopen;
   const open = stage !== "harden" ? spyOn(ffi, "dlopen").mockImplementation(((...args: Parameters<typeof ffi.dlopen>) => {
     const lib = realOpen(...args);
@@ -123,7 +145,10 @@ windows.each(["file-flush", "harden", "rename", "readback", "flush"] as const)("
       },
     } };
   }) as typeof ffi.dlopen) : undefined;
-  try { expect(codexCliUpdateRecoveryBlocksAdmission(home)).toBe(true); expect(injected).toBeGreaterThan(0); }
+  try {
+    expect(asynchronous ? await codexCliUpdateRecoveryBlocksAdmissionAsync(home) : codexCliUpdateRecoveryBlocksAdmission(home)).toBe(true);
+    expect(injected).toBeGreaterThan(0);
+  }
   finally { harden?.mockRestore(); open?.mockRestore(); }
   // Failure may leave either armed+pending or an already renamed child. Neither
   // path fabricates terminal proof or changes the persisted child identity.

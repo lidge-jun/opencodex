@@ -435,7 +435,7 @@ cannot prove that the short window disappeared. All-null credits-only and tertia
 the resulting weekly/monthly window still blocks at its long threshold (98% by default). This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. A live main writer applies that same
 retirement proof to the display/rotation cache, so account selection cannot keep refusing the
-recovered main account on its old short tuple. Coverage lives in
+recovered main account on its old short tuple. Pool accounts get the same proof from a valid complete WHAM probe (#7961): `poolWhamPolicyObservation` marks the observation from its window topology only, so a Plus to Pro upgrade cannot keep a stored pool account on the old plan's 5-hour tuple, while partial WHAM, invalid or unparseable readings, an explicit `allowed: false` verdict and response headers keep carrying it. A pool probe retires the tuple only with a live captured pool writer for that account and credential generation, the same proof its history write needs; a missing, stale or other-account writer keeps the tuple. The login usage read marks its observation the same way, but reauthentication clears the row before writing and creation refuses existing ids, so it has nothing to retire. Main-only monthly filtering is not applied to pool observations, and a main observation without a live main writer still carries its tuple. Coverage lives in `tests/codex-integration/codex-credits-probes.test.ts` (pool),
 `tests/codex-integration/main-quota-evidence-validation.test.ts`,
 `tests/codex-integration/main-account-hard-lock-retirement.test.ts`,
 `tests/codex-integration/main-quota-provenance.test.ts`, and

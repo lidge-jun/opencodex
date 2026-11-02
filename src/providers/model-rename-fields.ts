@@ -29,6 +29,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   supportsServiceTier: "none",
   fastEnabled: "none",
   modelSupportsServiceTier: "record",
+  promoteAdditionalTools: "none",
   preserveResponsesReasoningContent: "none",
   preserveResponsesInputItemIds: "none",
   preserveResponsesMessageMetadata: "none",

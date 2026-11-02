@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { closeSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -283,6 +285,28 @@ test("real link collision preserves the winner and does not advance generation o
   expect(readConfigGeneration()).toEqual(generation);
   expect(candidate).toEqual(original);
   expect(initTemps()).toEqual([]);
+});
+
+test("initial config file identity preserves adjacent NTFS-sized values", () => {
+  const identity = 9_007_199_254_740_992n;
+  let ownedFd = -1, tempPath = "";
+  const realFstat = fs.fstatSync, realLstat = fs.lstatSync;
+  const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stat = options?.bigint ? realFstat(fd, { bigint: true }) : realFstat(fd);
+    return fd === ownedFd ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? identity : Number(identity) }) : stat;
+  }) as typeof fs.fstatSync);
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+    const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
+    return samePath(path, tempPath) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? identity + 1n : Number(identity + 1n) }) : stat;
+  }) as typeof fs.lstatSync);
+  try {
+    expect(() => publishInitialConfigNoReplace(getConfigPath(), "candidate bytes", {
+      harden(fd, temp) { ownedFd = fd; tempPath = temp; },
+    })).toThrow(InitialConfigPublicationError);
+    expect(existsSync(getConfigPath())).toBe(false);
+  } finally { fstat.mockRestore(); lstat.mockRestore(); }
 });
 
 test("exclusive temp collision does not remove or modify somebody else's file", () => {

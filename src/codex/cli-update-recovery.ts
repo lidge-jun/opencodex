@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, m
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
-import { withWindowsCliRecoveryStore } from "./cli-update-job-store-windows";
+import { withWindowsCliRecoveryStore, withWindowsCliRecoveryStoreAsync } from "./cli-update-job-store-windows";
 import { windowsCodexCliChildGone } from "./windows-cli-recovery";
 
 export interface CodexCliUpdateNativeChildIdentity { jobName: string; creationTime: string }
@@ -169,19 +169,64 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
   } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.
 }
 
+/** Every attempt observes fresh records; this never caches an ACL/admission verdict. */
+export async function codexCliUpdateRecoveryBlocksAdmissionAsync(configDir = getConfigDir()): Promise<boolean> {
+  if (process.platform !== "win32") return codexCliUpdateRecoveryBlocksAdmission(configDir);
+  try { lstatSync(join(configDir, "codex-cli-update-recovery")); }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  try {
+    const canonical = realpathSync.native(configDir);
+    return await withWindowsCliRecoveryStoreAsync(canonical, false, async io => {
+      const steps = inspectRecoveryFilesSteps(io.names(), true);
+      let step = steps.next();
+      while (!step.done) {
+        const effect = step.value;
+        if (effect.kind === "publish") {
+          await io.write(effect.record.token + ".json", effect.record.token + ".pending", JSON.stringify(effect.record), true);
+          step = steps.next(undefined);
+        } else {
+          const record = JSON.parse(await io.read(effect.token + (effect.suffix ?? ".json"))) as RecoveryRecord;
+          if (!validRecord(record, effect.token)) throw new Error("invalid_recovery_owner");
+          step = steps.next(record);
+        }
+      }
+      return step.value;
+    }, true);
+  } catch { return true; }
+}
+
+type RecoveryInspectionStep = { kind: "read"; token: string; suffix?: string }
+  | { kind: "publish"; record: RecoveryRecord };
+type RecoveryInspectionSteps = Generator<RecoveryInspectionStep, boolean, RecoveryRecord | undefined>;
+function* childGoneSteps(record: RecoveryRecord): RecoveryInspectionSteps {
+  if (process.platform !== "win32") return childGone(record);
+  if (record.pgid === null || !record.windows?.jobName || !record.windows.creationTime) return false;
+  const proof = (yield { kind: "read", token: record.token, suffix: ".proof" })!;
+  return childGone(record, () => proof);
+}
 function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffix?: string) => RecoveryRecord,
   publishChild?: (record: RecoveryRecord) => void): boolean {
+  const steps = inspectRecoveryFilesSteps(files, !!publishChild);
+  let step = steps.next();
+  while (!step.done) {
+    const effect = step.value;
+    if (effect.kind === "publish") { publishChild!(effect.record); step = steps.next(undefined); }
+    else step = steps.next(readRecord(effect.token, effect.suffix));
+  }
+  return step.value;
+}
+function* inspectRecoveryFilesSteps(files: string[], publishChild: boolean): RecoveryInspectionSteps {
     if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
     const active = new Map<string, RecoveryRecord>();
     for (const file of files.filter(file => file.endsWith(".terminal"))) {
-      const record = readRecord(file.slice(0, -9), ".terminal");
+      const record = (yield { kind: "read", token: file.slice(0, -9), suffix: ".terminal" })!;
       if (record.phase !== "terminal") return true;
       terminal.add(record.token);
     }
     for (const file of files.filter(file => file.endsWith(".json"))) {
       if (terminal.has(file.slice(0, -5))) continue;
-      const record = readRecord(file.slice(0, -5));
+      const record = (yield { kind: "read", token: file.slice(0, -5) })!;
       if (record.phase === "terminal") { terminal.add(record.token); continue; }
       active.set(record.token, record);
     }
@@ -202,7 +247,7 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
       if (terminal.has(token)) continue; // Published terminal authority shadows late writes.
       const suffix = file.slice(token.length);
       if (suffix !== ".pending" && suffix !== ".terminal.pending") return true;
-      const record = readRecord(token, suffix);
+      const record = (yield { kind: "read", token, suffix })!;
       const previous = active.get(token) ?? reconciled.get(token);
       if (process.platform === "win32" && suffix === ".pending" && record.phase === "child") {
         const armed = active.get(token);
@@ -211,8 +256,8 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
           || armed.windows.creationTime !== null || armed.windows.jobName !== record.windows?.jobName
           || record.pgid === null || record.pgid > 0xffffffff || !record.windows?.creationTime
           || BigInt(record.windows.creationTime) > 0xffffffffffffffffn
-          || !processGone(record.parentPid) || !childGone(record, token => readRecord(token, ".proof"))) return true;
-        publishChild(record); // Existing protected flush/ACL/rename path; any failure fences.
+          || !processGone(record.parentPid) || !(yield* childGoneSteps(record)) || !processGone(record.parentPid)) return true;
+        yield { kind: "publish", record }; // Existing protected flush/ACL/rename path; any failure fences.
         reconciled.set(token, record); continue;
       }
       // A complete cleanup write can survive a crash before rename. Recognize
@@ -221,7 +266,8 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
       if (record.phase !== "terminal" || record.pgid !== null || !processGone(record.parentPid)
         || (previous && previous.parentPid !== record.parentPid)) return true;
       if (previous?.phase === "child"
-        && !childGone(previous, token => readRecord(token, ".proof"))) return true;
+        && !(yield* childGoneSteps(previous))) return true;
+      if (!processGone(record.parentPid)) return true;
       reconciled.set(token, record);
     }
     for (const record of active.values()) {
@@ -229,7 +275,7 @@ function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffi
       // Re-probe on every admission attempt, including after a restart. A live
       // or inaccessible group stays fenced until the whole group proves absent.
       if (record.phase === "child" && record.pgid !== null
-        && processGone(record.parentPid) && childGone(record, token => readRecord(token, ".proof"))) continue;
+        && processGone(record.parentPid) && (yield* childGoneSteps(record)) && processGone(record.parentPid)) continue;
       return true;
     }
     return false;

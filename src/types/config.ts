@@ -771,6 +771,11 @@ export interface OcxConfig {
    */
   codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
   /**
+   * Measured-capability source for Codex role auto-assign. With an Artificial Analysis API key
+   * (a literal, ${ENV} or keychain reference) its indexes inform measured tiers.
+   */
+  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string } };
+  /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
   subagentModelFallbackPollMs?: number;
@@ -875,6 +880,8 @@ export interface OcxConfig {
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
   /** Canonical ChatGPT reasoning replay allowances; both default off. */
   nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
+  workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**

@@ -271,13 +271,14 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `PUT /api/config` | Disabled full-config replacement guard | 405; use focused endpoints instead |
 | `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, app-owned memory budget, and `codexAccountPickerEnabled` | 400 invalid, non-object, or empty update |
 | `GET, PUT /api/native-reasoning-retention` | Read resolved model/account reasoning-retention booleans; partial PUT preserves omitted fields, JSON `null` restores defaults. See [native reasoning retention](/reference/configuration/server/#native-reasoning-retention). | 400 unknown field, invalid type or non-object/non-null body |
+| `GET, PUT /api/workflow-budget/settings` | Read the effective per-task workflow ceilings with defaults and allowed ranges; partial PUT preserves omitted fields, JSON `null` restores defaults. See [workflow limits](/reference/configuration/server/#workflow-limits). | 400 unknown field, non-integer or out-of-range value, or non-object/non-null body |
 | `GET /api/startup-health` | Read cached service/shim startup health | — |
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
 | `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
 | `GET /api/update/check` | Asynchronously check the `latest` or `preview` package channel and refresh the package cache on success | 400 invalid tag |
-| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
+| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; 409 `update_restart_unsupervised` when the proxy runs inside a systemd unit other than OpenCodex's own user service, or the worker cannot leave the service cgroup (with or without restart, since the update stops the proxy first); job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings, including `sourceModels`; GET also returns the runtime-owned `sourceModelOptions` inventory | 400 invalid shape or value, including an empty, duplicate, whitespace-bearing, or provider-qualified source prefix, or more than 32 prefixes / 128 characters per prefix; source-list failures carry `code: shadow_call_source_invalid`, target conflicts `code: shadow_call_target_invalid` |

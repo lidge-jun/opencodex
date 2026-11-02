@@ -82,3 +82,61 @@ describe("Responses sidecar final data line at EOF", () => {
     await expect(parseSidecarSSE(new Response(body))).rejects.toThrow("transport stopped");
   });
 });
+
+describe("Responses sidecar SSE line endings", () => {
+  for (const [name, endings] of [
+    ["LF", ["\n"]],
+    ["CRLF", ["\r\n"]],
+    ["CR", ["\r"]],
+    ["mixed", ["\r", "\n", "\r\n"]],
+  ] as const) {
+    test.each([["one chunk", false], ["single-byte chunks", true]] as const)(`${name} preserves deltas and citations (%s)`, async (_chunking, fragmented) => {
+      const lines = [
+        ": heartbeat",
+        "event: response.output_text.delta",
+        'data:{"type":"response.output_text.delta","delta":"검색 "}',
+        "",
+        'data: {"type":"response.output_text.delta","delta":"😀"}',
+        "",
+        `data: ${JSON.stringify({ type: "response.output_text.annotation.added", annotation: {
+          type: "url_citation", url: "https://example.com/result", title: "Source",
+        } })}`,
+        "",
+        "data: [DONE]",
+      ];
+      const wire = lines.map((line, index) => line + endings[index % endings.length]).join("");
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({
+        text: "검색 😀", sources: [{ url: "https://example.com/result", title: "Source" }],
+      });
+    });
+  }
+
+  test("preserves a CR-delimited terminal failure and earlier partial text", async () => {
+    const wire = prefix.replaceAll("\n", "\r") +
+      'data: {"type":"response.failed","error":{"message":"search stopped"}}\r\r';
+    expect(await parseSidecarSSE(eofResponse(wire))).toEqual({
+      text: "draft", sources: [], error: "search stopped",
+    });
+  });
+
+  test("CR-delimited text without a terminal event remains incomplete", async () => {
+    expect(await parseSidecarSSE(eofResponse(prefix.replaceAll("\n", "\r")))).toEqual({
+      text: "draft", sources: [], error: "sidecar stream ended before terminal event",
+    });
+  });
+
+  test("a CR-delimited terminal event cancels without waiting for EOF", async () => {
+    let cancelled = false;
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) throw new Error("read past terminal event");
+        sent = true;
+        controller.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\r\r'));
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    expect(await parseSidecarSSE(new Response(body))).toEqual({ text: "", sources: [] });
+    expect(cancelled).toBe(true);
+  });
+});

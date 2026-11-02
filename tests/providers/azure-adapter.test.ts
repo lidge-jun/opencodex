@@ -214,3 +214,57 @@ describe("Azure OpenAI adapter hardening", () => {
     }
   });
 });
+
+describe("Azure Responses include compatibility", () => {
+  test("removes the rejected include through the Azure adapter without mutating the caller", async () => {
+    const raw = {
+      model: "gpt-5.5", input: [], stream: true,
+      include: ["reasoning.encrypted_content", "output.encrypted_content", "message.output_text.logprobs"],
+    };
+    const original = structuredClone(raw);
+    const request = await createAzureAdapter(provider()).buildRequest({ ...parsed, _rawBody: raw });
+    expect(JSON.parse(request.body).include).toEqual([
+      "reasoning.encrypted_content", "message.output_text.logprobs",
+    ]);
+    expect(raw).toEqual(original);
+  });
+
+  test("removes an include containing only the rejected entry", async () => {
+    const request = await createAzureAdapter(provider()).buildRequest({
+      ...parsed, _rawBody: { ...parsed._rawBody, include: ["output.encrypted_content"] },
+    });
+    expect(JSON.parse(request.body)).not.toHaveProperty("include");
+  });
+
+  test("normalizes Azure resource URLs configured with the plain Responses adapter", async () => {
+    const { createResponsesPassthroughAdapter } = await import("../../src/adapters/openai-responses");
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+      authMode: "key",
+      apiKey: "azure-test-key",
+    }));
+    const request = await adapter.buildRequest({
+      ...parsed,
+      _rawBody: { ...parsed._rawBody, include: ["reasoning.encrypted_content", "output.encrypted_content"] },
+    }, { headers: new Headers() });
+    expect(JSON.parse(request.body).include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  test("preserves includes on unrelated and lookalike destinations", async () => {
+    const { createResponsesPassthroughAdapter } = await import("../../src/adapters/openai-responses");
+    for (const baseUrl of [
+      "https://api.openai.com/v1",
+      "https://gateway.example.test/v1",
+      "https://example.openai.azure.com.example.test/openai/v1",
+    ]) {
+      const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
+        adapter: "openai-responses", baseUrl, authMode: "key", apiKey: "test-key",
+      }));
+      const request = await adapter.buildRequest({
+        ...parsed, _rawBody: { ...parsed._rawBody, include: ["output.encrypted_content"] },
+      }, { headers: new Headers() });
+      expect(JSON.parse(request.body).include).toEqual(["output.encrypted_content"]);
+    }
+  });
+});

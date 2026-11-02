@@ -70,8 +70,8 @@ import {
   effortClampAppliesToRuntime,
   liveRemovedEfforts,
   loadLastEffortClamp,
-  persistCodexRuntime,
-  resolveAndPersistCodexRuntime,
+  persistCodexRuntimeAsync,
+  resolveAndPersistCodexRuntimeAsync,
   resolveCodexRuntime,
 } from "../codex/runtime";
 import { CODEX_REAUTH_ACTION, collectOAuthHealthEntriesForCli, MASKED_ACCOUNT_FALLBACK, type OAuthHealthEntry } from "../oauth/health";
@@ -1266,8 +1266,8 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     const resolved = resolveCodexRuntime();
     if (!resolved.newerAvailable) {
       console.log("No newer Codex runtime found; keeping current selection.");
-      const current = resolveAndPersistCodexRuntime();
-      console.log(`Selected: ${displayCodexRuntimePath(current.runtime.command)} (${current.runtime.version ?? "unknown"})`);
+      const current = await resolveAndPersistCodexRuntimeAsync();
+      console.log(`Selected: ${displayCodexRuntimePath(current?.runtime.command ?? "codex")} (${current?.runtime.version ?? "unknown"})`);
       return;
     }
     if (resolved.runtime.source === "environment") {
@@ -1276,7 +1276,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       console.log("Then run ocx sync.");
       return;
     }
-    persistCodexRuntime({
+    await persistCodexRuntimeAsync({
       command: resolved.newerAvailable.command,
       version: resolved.newerAvailable.version,
       source: "configured",

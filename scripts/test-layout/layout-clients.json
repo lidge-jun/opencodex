@@ -32,6 +32,7 @@
   "droid-normalized-reasoning-defaults.test.ts": "clients",
   "desktop-app-server-shim.test.ts": "clients",
   "desktop-app-server-shim-launcher.test.ts": "clients",
+  "desktop-app-server-exec-boundary.test.ts": "clients",
   "desktop-bundle-trust-async.test.ts": "clients",
   "desktop-chatgpt-config.test.ts": "clients",
   "desktop-supervised-restart.test.ts": "clients",

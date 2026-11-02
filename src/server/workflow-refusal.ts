@@ -27,6 +27,7 @@ import {
   type WorkflowLane,
   type WorkflowSpendDenialDetail,
 } from "../lib/workflow-budget";
+import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 
 /**
  * What a caller needs to hand over for the refusal to become a row on `/api/logs`.
@@ -142,7 +143,7 @@ export function admitHttpWorkflowTurn(headers: Headers): WorkflowDecision | unde
   const lane: WorkflowLane = rootId !== undefined && threadId !== undefined && threadId !== rootId
     ? "worker"
     : "interactive";
-  return admitWorkflowTurn(rootId, lane, undefined, threadId);
+  return admitWorkflowTurn(rootId, lane, currentWorkflowBudgetPolicy(), threadId);
 }
 
 /**

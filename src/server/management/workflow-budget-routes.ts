@@ -10,14 +10,27 @@
  * chain runs, so these handlers add no auth code of their own. The GET spends no user identity.
  * The POST clears one root's windowed count ceilings; it does not spend identity, and the
  * underlying ledger leaves in-flight concurrency and the token spend record untouched.
+ *
+ * `/api/workflow-budget/settings` reads and writes the per-install count ceilings. A write
+ * mutates the live config object, which the request path reads per decision, so it applies to
+ * the next admission without a restart and never resets what a root has already used.
  */
 
 import { jsonResponse } from "../auth-cors";
 import type { OcxConfig } from "../../types";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
+import { captureConfigTopLevelRollback, deleteConfigTopLevelKey } from "../../config/rebase-provenance";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
+import {
+  WORKFLOW_BUDGET_BOUNDS,
+  WORKFLOW_BUDGET_SHAPE_HINT,
+  workflowBudgetSchema,
+} from "../../config/schema/workflow-budget";
+import { resolveWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 import {
   clearWorkflowBudgetForRoot,
+  DEFAULT_WORKFLOW_BUDGET_POLICY,
   listTrackedWorkflowRoots,
   listWorkflowBudgetEvents,
   workflowBudgetSnapshot,
@@ -27,6 +40,54 @@ import {
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = WORKFLOW_EVENT_CAPACITY;
 const MAX_ROOT_ID_LENGTH = 200;
+const INVALID_BODY = Symbol("invalid-body");
+
+/** Effective ceilings plus what the dashboard needs to draw them: defaults, bounds, the fixed window. */
+function workflowBudgetSettings(config: OcxConfig) {
+  const policy = resolveWorkflowBudgetPolicy(config);
+  return {
+    maxConcurrentChildren: policy.maxConcurrentChildren,
+    maxPhysicalSends: policy.maxPhysicalSends,
+    maxDistinctChildren: policy.maxDistinctChildren,
+    interactiveReserve: policy.interactiveReserve,
+    windowMs: DEFAULT_WORKFLOW_BUDGET_POLICY.windowMs,
+    defaults: {
+      maxConcurrentChildren: DEFAULT_WORKFLOW_BUDGET_POLICY.maxConcurrentChildren,
+      maxPhysicalSends: DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends,
+      maxDistinctChildren: DEFAULT_WORKFLOW_BUDGET_POLICY.maxDistinctChildren,
+    },
+    bounds: WORKFLOW_BUDGET_BOUNDS,
+  };
+}
+
+/** Partial PUTs preserve omitted ceilings; JSON null removes the block and restores the defaults. */
+async function putWorkflowBudgetSettings(ctx: ManagementContext): Promise<Response> {
+  const { req, config } = ctx;
+  const body = await readManagementJsonBodyOr(req, INVALID_BODY);
+  const parsed = body === null ? null : workflowBudgetSchema.safeParse(body);
+  if (parsed !== null && !parsed.success) {
+    return jsonResponse(
+      { error: { code: "invalid_workflow_budget", message: "body must be null or an object that " + WORKFLOW_BUDGET_SHAPE_HINT } },
+      400,
+      req,
+      config,
+    );
+  }
+  // Resolve the saver before changing the live object: no await may interleave mutation/save.
+  const persist = ctx.deps.saveConfigPreservingClaudeCode
+    ?? (await import("../../config")).saveConfigPreservingClaudeCode;
+  const restore = captureConfigTopLevelRollback(config, ["workflowBudget"]);
+  try {
+    if (parsed === null) deleteConfigTopLevelKey(config, "workflowBudget");
+    else config.workflowBudget = { ...config.workflowBudget, ...parsed.data };
+    persist(config);
+  } catch (error) {
+    // Published bytes remain authoritative even if later bookkeeping failed.
+    if (!(error instanceof ConfigWritePublishedError)) restore();
+    throw error;
+  }
+  return jsonResponse(workflowBudgetSettings(config), 200, req, config);
+}
 
 /**
  * A root id is an opaque caller-thread token, not a path. Without a length cap a client
@@ -60,6 +121,12 @@ function parseLimitParam(rawLimit: string | null): { ok: true; limit: number } |
 export async function handleWorkflowBudgetRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
 
+  if (url.pathname === "/api/workflow-budget/settings" && req.method === "GET") {
+    return jsonResponse(workflowBudgetSettings(config), 200, req, config);
+  }
+  if (url.pathname === "/api/workflow-budget/settings" && req.method === "PUT") return putWorkflowBudgetSettings(ctx);
+  const policy = resolveWorkflowBudgetPolicy(config);
+
   if (url.pathname === "/api/workflow-budget") {
     if (req.method !== "GET") return null;
 
@@ -78,7 +145,7 @@ export async function handleWorkflowBudgetRoutes(ctx: ManagementContext): Promis
     if (rawRoot !== null) {
       const rootId = parseRootId(rawRoot);
       if (rootId === null) return invalidRootResponse(req, config);
-      const snapshot = workflowBudgetSnapshot(rootId);
+      const snapshot = workflowBudgetSnapshot(rootId, policy);
       // An unknown id is a 200 with `root: null`, not a 404: the operator asked what this
       // process currently holds for that token, and "nothing" is a legitimate answer. POST
       // /clear is the opposite — claiming to forgive a ceiling that was never tracked would
@@ -98,7 +165,7 @@ export async function handleWorkflowBudgetRoutes(ctx: ManagementContext): Promis
 
     return jsonResponse(
       {
-        roots: listTrackedWorkflowRoots(limit),
+        roots: listTrackedWorkflowRoots(limit, policy),
         events: listWorkflowBudgetEvents(limit),
       },
       200,
@@ -117,7 +184,7 @@ export async function handleWorkflowBudgetRoutes(ctx: ManagementContext): Promis
     const rootId = parseRootId(rawRoot);
     if (rootId === null) return invalidRootResponse(req, config);
 
-    const before = clearWorkflowBudgetForRoot(rootId);
+    const before = clearWorkflowBudgetForRoot(rootId, policy);
     if (!before) {
       return jsonResponse(
         { error: { code: "unknown_root", message: "root is not currently tracked" } },
