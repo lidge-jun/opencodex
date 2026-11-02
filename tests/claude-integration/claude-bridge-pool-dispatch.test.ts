@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import { clearMainAccountInfoCache } from "../../src/codex/auth-api";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
-import { recordCodexThreadLineage, resolveCodexThreadLineage } from "../../src/codex/lineage";
+import { clearCodexThreadLineageForTests, recordCodexThreadLineage, resolveCodexThreadLineage } from "../../src/codex/lineage";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
@@ -29,7 +29,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   isolated = installIsolatedCodexHome("ocx-bridge-codex-");
   release = acquireOwnedSpendHome();
-  clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota();
+  clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests();
   for (const id of ["fixture-a", "fixture-b"]) {
     saveCodexAccountCredential(id, { accessToken: `fixture-access-${id}`, refreshToken: `fixture-refresh-${id}`, expiresAt: Date.now() + 3_600_000, chatgptAccountId: `account-${id}` });
     updateAccountQuota(id, 10, 10);
@@ -48,7 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch; clearMainAccountInfoCache(); release(); isolated.restore();
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
-  removeTreeWithRetry(home); clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota();
+  removeTreeWithRetry(home); clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests();
 });
 
 async function turn(session: string | undefined, admission: DataPlaneAdmission = local, headers: Record<string, string> = {}, model = "openai/gpt-5.4") {
@@ -73,18 +73,24 @@ test("pool binds multiple turns and separates sessions while preserving the nati
   expect(wires[0]!.get("session_id")).toBe("9745d86c-d579-494a-8d0e-f69a5214cf96");
 });
 
-test("an existing child lineage retains its account across bridge turns", async () => {
+test("a synthesized identity with a recorded parent follows the parent's account", async () => {
   const child = "9745d86c-d579-494a-8d0e-f69a5214cf96";
-  const rootHeaders = new Headers({ "session-id": "fixture-root", "thread-id": "fixture-root" });
+  // A complete caller pair keeps dev behavior, so this binds the root to the first round-robin pick.
+  await turn(undefined, local, { "session-id": "fixture-root", "thread-id": "fixture-root" });
   const childHeaders = new Headers({ "session-id": child, "thread-id": child, "x-codex-parent-thread-id": "fixture-root" });
-  recordCodexThreadLineage(rootHeaders);
   recordCodexThreadLineage(childHeaders);
   const rootPair = new Headers({ "session-id": child, "thread-id": child });
   expect(resolveCodexThreadLineage(rootPair)?.parentThreadId).toBe("fixture-root");
   await turn("user_test_account__session_conversation-native");
   await turn("user_test_account__session_conversation-native");
-  expect(wires[0]!.get("chatgpt-account-id")).toBeTruthy();
-  expect(wires[0]!.get("chatgpt-account-id")).toBe(wires[1]!.get("chatgpt-account-id"));
+  // Control: an unrelated cold session lands on the other account, so the child's placement
+  // above came from the recorded parent rather than from a cold pick.
+  await turn("user_test_account__session_unrelated");
+  const rootAccount = wires[0]!.get("chatgpt-account-id");
+  expect(rootAccount).toBeTruthy();
+  expect(wires[1]!.get("chatgpt-account-id")).toBe(rootAccount);
+  expect(wires[2]!.get("chatgpt-account-id")).toBe(rootAccount);
+  expect(wires[3]!.get("chatgpt-account-id")).not.toBe(rootAccount);
   expect(resolveCodexThreadLineage(rootPair)?.parentThreadId).toBe("fixture-root");
 });
 
