@@ -678,7 +678,7 @@ for (const stream of [false, true]) test(`combo retains its locally constructed 
     const body = await response.json();
     expect(body.error.code).toBe("undeclared_tool_call");
     expect(body.error.message).toContain("undeclared client tool");
-    expect(body.error.message).toContain("Write");
+    expect(body.error.message).not.toContain("Write");
   } finally { await upstream.stop(true); }
 });
 
@@ -735,3 +735,126 @@ for (const stream of [false, true]) test(`copied local message cannot claim diff
   expect(body.error.message).toBe(CLIENT_ERROR_CONTRACTS.cyber_policy);
   expect(text).not.toContain(KEY);
 });
+
+for (const reason of ["adapter_eof", "upstream_stall_timeout", "missing_terminal_event"]) {
+  for (const route of ["direct", "translated", "passthrough"] as const) {
+    test(`copied incomplete sentence stays upstream-derived reason=${reason} route=${route}`, async () => {
+      const { CLIENT_ERROR_CONTRACTS } = await import("../../src/lib/client-error-body");
+      const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+      const { bridgeToResponsesSSE } = await import("../../src/bridge");
+      const { responsesSseToChatCompletionsSse } = await import("../../src/chat/outbound");
+      const message = `upstream stream ended early (${reason})`;
+      const events: AdapterEvent[] = [{ type: "incomplete", reason, message }];
+      const context = {};
+      const budget = createTestTranslatorBudget();
+      const options = { model: "fixture", translatorBudget: budget, proxyErrorContext: context };
+      const source = route === "direct" ? encodeChatCompletionSse((async function* () { yield* events; })(), options)
+        : responsesSseToChatCompletionsSse(route === "translated"
+          ? bridgeToResponsesSSE((async function* () { yield* events; })(), "fixture", undefined, undefined, undefined, undefined, 2_000, { translatorBudget: budget })
+          : bytes("event: response.incomplete\n" + frame({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason, message } } })), "fixture", options);
+      const text = await new Response(source).text();
+      const failure = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error);
+      expect(failure).toBeDefined();
+      expect(failure.error.type).toBe("server_error");
+      expect(failure.error.code).toBe("upstream_server_error");
+      expect(failure.error.message).toBe(CLIENT_ERROR_CONTRACTS.stream_incomplete);
+    });
+  }
+}
+
+for (const buffered of [false, true]) test(`bridge undeclared refusal uses proxy wording buffered=${buffered}`, async () => {
+  const { bridgeToResponsesSSE, buildResponseJSON } = await import("../../src/bridge");
+  const events: AdapterEvent[] = [{ type: "tool_call_start", id: "call_fixture", name: KEY }, { type: "done" }];
+  const replay = async function* () { yield* events; };
+  const options = { translatorBudget: createTestTranslatorBudget(), declaredToolNames: new Set<string>() };
+  const text = buffered ? JSON.stringify(await buildResponseJSON(events, "fixture", options))
+    : await new Response(bridgeToResponsesSSE(replay(), "fixture", undefined, undefined, undefined, undefined, 2_000, options)).text();
+  const payloads = buffered ? [JSON.parse(text)] : text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  const failure = payloads.find(value => value.error || value.response?.error);
+  expect(failure).toBeDefined();
+  const error = failure.error ?? failure.response.error;
+  expect(error.type).toBe(buffered ? "upstream_error" : "server_error");
+  expect(error.code).toBe("upstream_server_error");
+  expect(error.message).toContain("undeclared client tool");
+  expect(text).not.toContain(KEY);
+});
+
+for (const reason of ["adapter_eof", "upstream_stall_timeout", "missing_terminal_event"]) for (const stream of [false, true]) {
+  test(`upstream incomplete copy is normalized by the full Chat handler reason=${reason} stream=${stream}`, async () => {
+    const { CLIENT_ERROR_CONTRACTS } = await import("../../src/lib/client-error-body");
+    const message = `upstream stream ended early (${reason})`;
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(
+      "event: response.incomplete\n" + frame({ type: "response.incomplete", response: { id: "resp_incomplete", status: "incomplete", output: [], incomplete_details: { reason, message } } }),
+      { headers: { "content-type": "text/event-stream" } }) });
+    try {
+      const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+        adapter: "openai-responses", baseUrl: `${upstream.url}v1`, allowPrivateNetwork: true, authMode: "key", apiKey: KEY } } };
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          model: "fixture/model", stream, messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" });
+      expect(response.status).toBe(stream ? 200 : 502);
+      const text = await response.text();
+      const failure = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error) : JSON.parse(text);
+      expect(failure).toBeDefined();
+      expect(failure.error.type).toBe("server_error");
+      expect(failure.error.code).toBe("upstream_server_error");
+      expect(failure.error.message).toBe(CLIENT_ERROR_CONTRACTS.stream_incomplete);
+    } finally { await upstream.stop(true); }
+  });
+}
+
+test("a genuine bridge EOF retains its message through a request-owned wrapper", async () => {
+  const { bridgeToResponsesSSE } = await import("../../src/bridge");
+  const { responsesSseToChatCompletionsSse } = await import("../../src/chat/outbound");
+  const { hasProxyIncomplete } = await import("../../src/lib/client-error-body");
+  const context = {};
+  const budget = createTestTranslatorBudget();
+  const bridge = bridgeToResponsesSSE((async function* () {})(), "fixture", undefined, undefined, undefined, undefined, 2_000,
+    { translatorBudget: budget, proxyErrorContext: context });
+  expect(hasProxyIncomplete(context, "adapter_eof")).toBe(false);
+  const text = await new Response(responsesSseToChatCompletionsSse(bridge.pipeThrough(new TransformStream()), "fixture",
+    { translatorBudget: budget, proxyErrorContext: context })).text();
+  const failure = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error);
+  expect(failure).toBeDefined();
+  expect(failure.error.type).toBe("server_error");
+  expect(failure.error.code).toBe("upstream_server_error");
+  expect(failure.error.message).toBe("upstream stream ended early (adapter_eof)");
+  expect(hasProxyIncomplete(context, "adapter_eof")).toBe(true);
+});
+
+for (const direct of [false, true]) test(`Zed generated EOF keeps its proxy origin direct=${direct}`, async () => {
+  const { translateZedOpenAiStream } = await import("../../src/adapters/zed-openai-stream");
+  const { encodeChatCompletionSse } = await import("../../src/protocols/encoders/chat");
+  const { bridgeToResponsesSSE } = await import("../../src/bridge");
+  const { responsesSseToChatCompletionsSse } = await import("../../src/chat/outbound");
+  const budget = createTestTranslatorBudget();
+  const events = translateZedOpenAiStream(bytes(frame({ type: "response.output_item.added", output_index: 0,
+    item: { type: "function_call", id: "fc_eof", call_id: "call_eof", name: "lookup", arguments: "", status: "in_progress" } })), budget);
+  const source = direct ? encodeChatCompletionSse(events, { model: "fixture", translatorBudget: budget })
+    : responsesSseToChatCompletionsSse(bridgeToResponsesSSE(events, "fixture", undefined, undefined, undefined, undefined, 2_000,
+      { translatorBudget: budget }), "fixture", { translatorBudget: budget });
+  const text = await new Response(source).text();
+  const failure = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error);
+  expect(failure).toBeDefined();
+  expect(failure.error.type).toBe("server_error");
+  expect(failure.error.code).toBe("upstream_server_error");
+  expect(failure.error.message).toBe("upstream stream ended early (adapter_eof)");
+});
+
+for (const message of ["upstream stream ended early (adapter_eof)", KEY]) {
+  test(`a prior synthetic reason cannot authorize a supplied incomplete message shape=${message === KEY ? "sentinel" : "copy"}`, async () => {
+    const { rememberProxyIncomplete, CLIENT_ERROR_CONTRACTS } = await import("../../src/lib/client-error-body");
+    const { responsesSseToChatCompletionsSse } = await import("../../src/chat/outbound");
+    const context = {};
+    rememberProxyIncomplete(context, "adapter_eof");
+    const text = await new Response(responsesSseToChatCompletionsSse(bytes("event: response.incomplete\n" + frame({
+      type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "adapter_eof", message } },
+    })), "fixture", { translatorBudget: createTestTranslatorBudget(), proxyErrorContext: context })).text();
+    const failure = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).find(value => value.error);
+    expect(failure).toBeDefined();
+    expect(failure.error.type).toBe("server_error");
+    expect(failure.error.code).toBe("upstream_server_error");
+    expect(failure.error.message).toBe(CLIENT_ERROR_CONTRACTS.stream_incomplete);
+    expect(text).not.toContain(KEY);
+  });
+}

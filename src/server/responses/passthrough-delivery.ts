@@ -731,7 +731,7 @@ export async function deliverPassthroughResponse(
           upstream,
           terminalRepairPolicy,
           translatorBudget,
-          options.responsesTerminalRepairScheduler,
+          options.responsesTerminalRepairScheduler, logCtx,
         )
         : upstreamResponse.body;
       passthroughSseBody = webSearchBridgePlan
@@ -773,7 +773,7 @@ export async function deliverPassthroughResponse(
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
-                options.responsesTerminalRepairScheduler,
+                options.responsesTerminalRepairScheduler, logCtx,
               ),
               continuation,
             );
@@ -1440,7 +1440,7 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
-          return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
+          return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           }));
         }

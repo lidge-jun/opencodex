@@ -227,7 +227,7 @@ converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/ou
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
 `anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector. Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
+the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams

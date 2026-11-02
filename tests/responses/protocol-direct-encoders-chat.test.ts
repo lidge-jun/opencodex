@@ -87,7 +87,7 @@ async function legacyFold(events: AdapterEvent[], options: ToolOptions = {}): Pr
     const completion = await collectChatCompletion(stream, "client-model", translatorBudget, failureVerdictSink);
     return new Response(JSON.stringify(completion), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (err) {
-    if (isChatCompletionsStreamError(err)) return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract);
+    if (isChatCompletionsStreamError(err)) return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored);
     return ownedChatErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
   }
 }

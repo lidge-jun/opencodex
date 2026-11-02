@@ -185,8 +185,10 @@ mark their locally selected responses too; their arguments come from local polic
 Request decoding, cancellation, encrypted-task/replay compatibility and unavailable-combo constructors
 retain ownership too. Combo exclusion descriptions use configured targets, coarse proxy labels and
 numeric cooldowns; no provider diagnostic is interpolated into those local messages. No serialized flag, code or header mints identity.
-The undeclared-tool guard records the message it constructs in a WeakMap keyed by the request's
-log context. The converter accepts that exact message only in the same request with its registered type/code
+The undeclared-tool guard records its fixed sentence in a WeakMap keyed by the request's
+log context. `UNDECLARED_TOOL_CALL_MESSAGE` contains no tool name: the shared guard, native Messages,
+Responses bridge and passthrough refusals all emit `routed provider emitted undeclared client tool; only request-declared tools may be called`.
+No upstream tool name enters that refusal or its request-log diagnostic. The converter accepts that exact message only in the same request with its registered type/code
 (or the proxy classifier's corresponding field values); a copied message cannot authorize arbitrary
 error fields. The explicit
 collector sink carries its local ownership into buffered delivery. Recovery and continuation
@@ -202,8 +204,16 @@ retain the legacy envelope. Reachable writers for these reasons make local admis
 decisions; upstream attempt codes are separate. Account auto-pause identity selects fixed guidance
 for an upstream refusal after a persisted pause decision; it does not make that response's text local.
 Native local validation and admission sites retain their own messages by call-site provenance.
-A closed exact-message map covers malformed/empty completion diagnostics, synthetic incomplete
-reasons, missing-terminal wording and the
+Synthetic incomplete events carry producer provenance: the direct adapter driver marks its watchdog
+and EOF terminal objects by identity. The Zed adapter marks only its generated EOF event. The
+Responses bridge and native terminal repair register their generated reasons in a request-scoped
+WeakMap, shared with the returned stream and the request context through owned wrappers and combo
+commitment. Sidecar loops carry that same context. The Chat converter accepts synthetic reasons only
+from that registry and only without a supplied message, matching the generated event shape; upstream
+copies of the sentence and reason receive owned incomplete wording even after an earlier local event.
+Neither text, a serialized flag nor a reason code establishes this origin. Genuine synthetic event
+bytes, collector verdicts, terminal decisions and log evidence retain their existing semantics.
+A closed exact-message map covers malformed/empty completion diagnostics, missing-terminal wording and the
 explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
 reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
 `MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token

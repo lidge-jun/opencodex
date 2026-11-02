@@ -578,7 +578,7 @@ Opt-in translated Responses text-only token-limit completion follows [the text c
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
+from the same events. Both bridge forms and the shared undeclared-tool guard use a fixed refusal sentence without the upstream tool name. Synthetic watchdog/EOF origin follows the [Chat error contract](../data-planes/error-detail.md#client-error-bodies-chat). `buildResponseJSON` records a buffered delivery on the attempt unless the
 caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they
 count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in

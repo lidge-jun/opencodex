@@ -1,4 +1,4 @@
-import { fixedProxyErrorMessage, hasProxyErrorMessage } from "../../lib/client-error-body";
+import { isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import type { FailureVerdictSink } from "../../chat/failure-verdict";
 import { ownedChatErrorResponse } from "../../chat/outbound";
 /**
@@ -242,7 +242,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
           finish(outcome.finishReason, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         } else {
           fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-            proxyAuthored: fixedProxyErrorMessage(outcome.originalFailMessage) !== undefined });
+            proxyAuthored: isProxyError(terminal) });
         }
         return;
       }

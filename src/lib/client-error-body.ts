@@ -42,6 +42,24 @@ export const CLIENT_ERROR_CONTRACTS = {
   stream_incomplete: "The provider stream ended before the request completed.",
 } as const;
 export type ClientErrorContract = keyof typeof CLIENT_ERROR_CONTRACTS;
+export const UNDECLARED_TOOL_CALL_MESSAGE = "routed provider emitted undeclared client tool; only request-declared tools may be called";
+/** Only producers of synthetic incomplete events register these process-local origins. */
+type ProxyIncompleteReason = "adapter_eof" | "upstream_stall_timeout" | "missing_terminal_event";
+const proxyIncompletes = new WeakMap<object, Set<string>>();
+export function rememberProxyIncomplete(context: object, reason: ProxyIncompleteReason): void {
+  let reasons = proxyIncompletes.get(context);
+  if (!reasons) { reasons = new Set(); proxyIncompletes.set(context, reasons); }
+  reasons.add(reason);
+}
+export function hasProxyIncomplete(context: object | undefined, reason: unknown, message?: unknown): boolean {
+  return message === undefined && context !== undefined && typeof reason === "string" && proxyIncompletes.get(context)?.has(reason) === true;
+}
+export function carryProxyIncompleteContext<T extends object>(source: object, target: T): T {
+  let reasons = proxyIncompletes.get(source);
+  if (!reasons) { reasons = new Set(); proxyIncompletes.set(source, reasons); }
+  proxyIncompletes.set(target, reasons);
+  return target;
+}
 const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["context_length_exceeded", CLIENT_ERROR_CONTRACTS.context_overflow],
   ["upstream_incomplete", CLIENT_ERROR_CONTRACTS.stream_incomplete],
@@ -138,6 +156,7 @@ export function rememberProxyErrorMessage(context: object, message: string, fiel
   for (const type of [fields.type, classified.type]) for (const code of [fields.code, classified.code]) allowed.add(errorFields({ type, code }));
 }
 export function carryProxyErrorContext(source: object, target: object): void {
+  carryProxyIncompleteContext(source, target);
   let messages = proxyMessages.get(source);
   if (!messages) { messages = new Map(); proxyMessages.set(source, messages); }
   proxyMessages.set(target, messages);
@@ -159,9 +178,6 @@ const PROXY_FIXED_MESSAGES: ReadonlyMap<string, string> = literalMap([
   "upstream stream stalled without meaningful progress",
   "routed provider emitted a client tool call outside the current request's explicit tool catalog",
   "upstream stream ended before a terminal frame (truncated response)",
-  "upstream stream ended early (upstream_stall_timeout)",
-  "upstream stream ended early (adapter_eof)",
-  "upstream stream ended early (missing_terminal_event)",
 ] as const);
 export function fixedProxyErrorMessage(message: unknown): string | undefined {
   return typeof message === "string" ? PROXY_FIXED_MESSAGES.get(message) : undefined;

@@ -579,7 +579,7 @@ export async function executeResponsesSidecars(
           ? clampImageMaxRounds(config.images?.maxRounds)
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec,
+      stallTimeoutSec: config.stallTimeoutSec, proxyErrorContext: logCtx,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
@@ -734,7 +734,7 @@ export async function executeResponsesSidecars(
       beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
-      stallTimeoutSec: wsPlan.stallTimeoutSec,
+      stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
       onRotatedUsage: billRotatedUsage,

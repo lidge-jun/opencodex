@@ -1,6 +1,6 @@
 import { boundedServiceTier } from "../lib/response-service-tier";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
-import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, hasProxyErrorMessage, fixedProxyErrorMessage, type ClientErrorContract } from "../lib/client-error-body";
+import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, hasProxyErrorMessage, hasProxyIncomplete, type ClientErrorContract } from "../lib/client-error-body";
 import { legacyFailureVerdict, legacyStreamErrorStatus as streamErrorStatus, type FailureVerdictSink } from "./failure-verdict";
 /**
  * Chat Completions outbound: internal /v1/responses output -> OpenAI Chat Completions shapes.
@@ -807,7 +807,7 @@ export function responsesSseToChatCompletionsSse(
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
               fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-                proxyAuthored: fixedProxyErrorMessage(outcome.originalFailMessage) !== undefined });
+                proxyAuthored: hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message) });
             }
             break;
           }

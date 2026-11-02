@@ -189,7 +189,7 @@ test("proxy error identity and messages belong to their original request", async
   expect(hasProxyErrorMessage({}, "owned tool refusal", {})).toBe(false);
   expect(hasProxyErrorMessage(context, `owned tool refusal ${KEY}`, {})).toBe(false);
   expect(fixedProxyErrorMessage("upstream stream ended early (upstream_stall_timeout)"))
-    .toBe("upstream stream ended early (upstream_stall_timeout)");
+    .toBeUndefined();
   expect(fixedProxyErrorMessage(`upstream stream ended early (${KEY})`)).toBeUndefined();
   expect(fixedProxyErrorMessage(`upstream stream ended early (upstream_stall_timeout) ${KEY}`)).toBeUndefined();
 });
@@ -197,10 +197,10 @@ test("proxy error identity and messages belong to their original request", async
 test("an exact proxy sentence never grants upstream type or code ownership", () => {
   for (const status of [400, 502]) {
     const body = ownedChatErrorPayload({ status, type: KEY, code: KEY,
-      evidence: { status, type: KEY, code: KEY, message: "upstream stream ended early (upstream_stall_timeout)" } });
+      evidence: { status, type: KEY, code: KEY, message: "upstream response contained no choices" } });
     expect(body.error.type).toBe(status === 400 ? "invalid_request_error" : "server_error");
     expect(body.error.code).toBeNull();
-    expect(body.error.message).toBe("upstream stream ended early (upstream_stall_timeout)");
+    expect(body.error.message).toBe("upstream response contained no choices");
     expect(JSON.stringify(body)).not.toContain(KEY);
   }
 });
@@ -251,4 +251,30 @@ test("committed combo context observes a local guard decision made later", async
   expect(hasProxyErrorMessage(parent, "owned late refusal", {})).toBe(true);
   expect(hasProxyErrorMessage(other, "owned late refusal", {})).toBe(false);
   expect(hasProxyErrorMessage(parent, `owned late refusal ${KEY}`, {})).toBe(false);
+});
+
+test("synthetic incomplete origins stay with the producer context", async () => {
+  const { rememberProxyIncomplete, hasProxyIncomplete, carryProxyIncompleteContext } = await import("../../src/lib/client-error-body");
+  const context = {}; const stream = {};
+  carryProxyIncompleteContext(context, stream);
+  expect(hasProxyIncomplete(context, "adapter_eof")).toBe(false);
+  rememberProxyIncomplete(context, "adapter_eof");
+  expect(hasProxyIncomplete(context, "adapter_eof")).toBe(true);
+  expect(hasProxyIncomplete(stream, "adapter_eof")).toBe(true);
+  expect(hasProxyIncomplete({}, "adapter_eof")).toBe(false);
+  expect(hasProxyIncomplete({ proxyAuthored: true }, "adapter_eof")).toBe(false);
+  expect(hasProxyIncomplete(context, "upstream_stall_timeout")).toBe(false);
+  expect(hasProxyIncomplete(context, KEY)).toBe(false);
+  expect(hasProxyIncomplete(context, "adapter_eof", KEY)).toBe(false);
+  expect(hasProxyIncomplete(context, "adapter_eof", "upstream stream ended early (adapter_eof)")).toBe(false);
+});
+
+test("committed combo context carries later synthetic incomplete origins", async () => {
+  const { carryProxyErrorContext, rememberProxyIncomplete, hasProxyIncomplete } = await import("../../src/lib/client-error-body");
+  const child = {}; const parent = {};
+  carryProxyErrorContext(child, parent);
+  expect(hasProxyIncomplete(parent, "adapter_eof")).toBe(false);
+  rememberProxyIncomplete(child, "adapter_eof");
+  expect(hasProxyIncomplete(parent, "adapter_eof")).toBe(true);
+  expect(hasProxyIncomplete({}, "adapter_eof")).toBe(false);
 });
