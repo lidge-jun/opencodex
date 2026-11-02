@@ -15,8 +15,9 @@ ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **
 Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
 session et la sélection des nouvelles sessions basée sur l'usage entre ces comptes OAuth. Il ne contrôle **pas** le basculement sur 429 : dès que deux comptes utilisables sont enregistrés, une requête limitée bascule vers un autre compte que l'option soit activée ou non, et cela ne peut pas être désactivé. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
-choisit la plus faible utilisation connue dans la fenêtre configurée par `anthropicAccountPool.quotaWindow`
-(`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
+conserve le compte actif jusqu'à ce que son utilisation dans la fenêtre définie par
+`anthropicAccountPool.quotaWindow` (`five-hour` par défaut, `weekly` ou `max-utilization`) atteigne
+`autoSwitchThreshold` (80 par défaut), puis passe au compte le moins utilisé, en privilégiant les comptes encore sous leur propre seuil ; `round-robin`
 répartit les sessions uniformément (`stickyLimit`, `1` par défaut) ; `fill-first` utilise le compte actif jusqu'à
 un délai de récupération, une réauthentification ou le seuil, puis passe au suivant. Cette fonction est
 **désactivée par défaut** et reste expérimentale.

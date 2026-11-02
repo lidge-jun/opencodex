@@ -722,6 +722,13 @@
       ]
     },
     {
+      "path": "providers/codex-round-robin-placement.md",
+      "tier": 4,
+      "title": "Codex Round-Robin Placement",
+      "scope": "Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries.",
+      "documents": ["src/codex/routing/selection.ts"]
+    },
+    {
       "path": "providers/openai-signed-in-preservation.md",
       "tier": 4,
       "title": "Preserve Signed-In Codex Quota",
