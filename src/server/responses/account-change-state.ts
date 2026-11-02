@@ -219,7 +219,7 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
 
 /** Preserve a Pool context's absent key instead of borrowing the raw request key. */
 export function compactAlternateAffinityKey(authCtx: CodexAuthContext, rawKey: () => string | undefined): string | undefined {
-  return authCtx.kind === "main" ? (authCtx.affinityKey ?? rawKey()) : authCtx.affinityKey;
+  return authCtx.kind === "main" ? (authCtx.affinityKey ?? authCtx.conversationStateKey ?? rawKey()) : authCtx.affinityKey ?? authCtx.conversationStateKey;
 }
 
 export function conversationStateBindingFromAuth(
@@ -228,7 +228,7 @@ export function conversationStateBindingFromAuth(
 ): { accountId: string; bindingKey: string } | null {
   const accountId = conversationStateAccountId(authCtx);
   if (!accountId) return null;
-  const bindingKey = authCtx.affinityKey ?? fallbackAffinityKey ?? undefined;
+  const bindingKey = authCtx.affinityKey ?? authCtx.conversationStateKey ?? fallbackAffinityKey ?? undefined;
   if (!bindingKey) return null;
   return { accountId, bindingKey };
 }

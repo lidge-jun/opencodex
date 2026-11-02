@@ -145,6 +145,18 @@ test("stored selection without a key labels the missing binding honestly", async
     const off = await resolveCodexAuthContext(caller, config, "pool", { ...options, requestScopedMainCredential: true });
     expect(off.affinityDecision).toEqual({ move: "unbound", reason: "request_owned" });
     expect(off.affinityKey).toBeUndefined();
+    const { codexPoolAffinityKey } = await import("../../src/codex/auth-context");
+    const { rememberServingConversationStateIssuer, conversationStateBindingFromAuth } = await import("../../src/server/responses/account-change-state");
+    const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
+    expect(off.conversationStateKey).toStartWith("request-owned:v1:");
+    expect(off.conversationStateKey).not.toBe(codexPoolAffinityKey(caller));
+    rememberServingConversationStateIssuer(off, codexPoolAffinityKey(caller));
+    expect(peekConversationStateIssuer(off.conversationStateKey!)).toBe("a");
+    expect(peekConversationStateIssuer(codexPoolAffinityKey(caller)!)).toBeUndefined();
+    const stored = { kind: "pool", accountId: "other", generation: 0, writerGeneration: 0, accessToken: "test", chatgptAccountId: "test" } as const;
+    rememberServingConversationStateIssuer(stored, codexPoolAffinityKey(caller));
+    expect(conversationStateBindingFromAuth(stored, codexPoolAffinityKey(caller))?.bindingKey).toBe(codexPoolAffinityKey(caller));
+    expect(peekConversationStateIssuer(off.conversationStateKey!)).toBe("a");
     config.codexPool = { requestOwnedAffinity: true };
     const bound = await resolveCodexAuthContext(caller, config, "pool", { ...options, requestScopedMainCredential: true });
     const reused = await resolveCodexAuthContext(caller, config, "pool", { ...options, requestScopedMainCredential: true });
@@ -153,7 +165,10 @@ test("stored selection without a key labels the missing binding honestly", async
     const fixedPool = await resolveCodexAuthContext(caller, config, "pool", { ...options, requestScopedMainCredential: true, accountId: "a" });
     const fixedMain = await resolveCodexAuthContext(caller, config, "pool", { ...options, requestScopedMainCredential: true, accountId: "__main__" });
     expect(fixedPool.affinityKey).toBeUndefined();
+    expect(fixedPool.conversationStateKey).toBeUndefined();
+    expect(conversationStateBindingFromAuth(fixedPool, codexPoolAffinityKey(caller))?.bindingKey).toBe(codexPoolAffinityKey(caller));
     expect(fixedMain.affinityKey).toBeUndefined();
+    expect(fixedMain.conversationStateKey).toBeUndefined();
     const { bindModelDetourAffinity, getThreadAffinity, getModelDetourAffinity } = await import("../../src/codex/routing/thread-affinity");
     const { honestAffinityDecision } = await import("../../src/codex/request-owned-affinity");
     bindModelDetourAffinity(bound.affinityKey!, "__main__", Date.now(), "detour-model");
@@ -333,4 +348,148 @@ test("six request-owned round-robin turns rotate when off and bind when on", asy
     if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
     removeTreeWithRetry(home);
   }
+});
+
+test("pinned caller-main keeps the namespaced conversation-state issuer", async () => {
+  const { resolveCodexAuthContext } = await import("../../src/codex/auth-context");
+  const { conversationStateBindingFromAuth, rememberServingConversationStateIssuer, applyAccountChangeConversationStateScrub, accountChangeFileReferenceRefusal } = await import("../../src/server/responses/account-change-state");
+  const cfg = { providers: {}, codexAccounts: [], accountPoolStrategy: "round-robin", codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+  const headers = new Headers({ authorization: "Bearer pinned", "session-id": "s", "thread-id": "t" });
+  clearThreadAccountMap();
+  const initial = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
+  const repeat = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
+  expect(initial.affinityDecision?.move).toBe("new_bind");
+  expect(repeat.affinityDecision?.move).toBe("reused");
+  const pool = { kind: "pool", accountId: "pool-x", writerGeneration: 0, generation: 0, accessToken: "test", chatgptAccountId: "test", affinityKey: initial.affinityKey } as const;
+  rememberServingConversationStateIssuer(pool);
+  cfg.activeCodexAccountId = "__main__"; cfg.activeCodexAccountPinned = "__main__";
+  const pinned = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
+  expect(pinned.kind).toBe("main");
+  expect(pinned.affinityKey).toBeUndefined();
+  expect(pinned.conversationStateKey).toBe(initial.affinityKey);
+  const binding = conversationStateBindingFromAuth(pinned)!;
+  const body = { previous_response_id: "opaque" };
+  expect(applyAccountChangeConversationStateScrub({ body, bindingKey: binding.bindingKey, servingAccountId: binding.accountId })).toBe(true);
+  expect(accountChangeFileReferenceRefusal({ body: { input: [{ file_id: "opaque" }] }, bindingKey: binding.bindingKey, servingAccountId: binding.accountId })?.status).toBe(400);
+  rememberServingConversationStateIssuer(pinned);
+  const reverse = { previous_response_id: "opaque" };
+  expect(applyAccountChangeConversationStateScrub({ body: reverse, bindingKey: initial.affinityKey!, servingAccountId: "pool-x" })).toBe(true);
+  clearThreadAccountMap();
+});
+
+test("caller-main issuer and fallback key use conversation state without routing affinity", async () => {
+  const { conversationStateAccountId } = await import("../../src/codex/request-owned-affinity");
+  const { conversationStateBindingFromAuth, compactAlternateAffinityKey } = await import("../../src/server/responses/account-change-state");
+  const main = { kind: "main", accountId: null, conversationStateKey: "owned-key" } as const;
+  expect(conversationStateAccountId(main)).toBe("__main__");
+  expect(conversationStateBindingFromAuth(main, "raw")).toEqual({ accountId: "__main__", bindingKey: "owned-key" });
+  expect(compactAlternateAffinityKey(main, () => "raw")).toBe("owned-key");
+});
+
+test("preview callbacks use each candidate model when crossing Reserve", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../helpers/repo-root");
+  const source = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
+  const first = source.slice(source.indexOf("subagentFallbackAccountPreview = (modelId"), source.indexOf("const previewAccountId"));
+  const recoveryStart = source.indexOf("subagentFallbackAccountPreview = (modelId", source.indexOf("const recoveryAuthHeaders"));
+  const recovery = source.slice(recoveryStart, source.indexOf("const recoveryPreviewAccountId", recoveryStart));
+  expect(first).toContain("accountId: route.codexAccountId, modelId, admission:");
+  expect(recovery).toContain("accountId: route.codexAccountId, modelId, admission:");
+  const { codexRequestAffinityKey } = await import("../../src/codex/auth-context");
+  const cfg = { providers: {}, codexDesktopAuthless: true, codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+  const headers = new Headers({ authorization: "Bearer preview", "session-id": "session", "thread-id": "thread" });
+  const options = { requestScopedMainCredential: true, admission: { source: "loopback" as const } };
+  expect(codexRequestAffinityKey(headers, cfg, cfg, { ...options, modelId: "gpt-5.5" })).toBeDefined();
+  expect(codexRequestAffinityKey(headers, cfg, cfg, { ...options, modelId: "gpt-reserve" })).toBeUndefined();
+
+});
+
+
+test("recovery preview recomputes lineage when ownership changes", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../helpers/repo-root");
+  const source = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
+  const start = source.indexOf("subagentFallbackAccountPreview = (modelId", source.indexOf("const recoveryAuthHeaders"));
+  const recovery = source.slice(start, source.indexOf("const recoveryPreviewAccountId", start));
+  expect(recovery).toContain("previewCodexPoolLineage(recoveryAuthHeaders");
+  expect(recovery).toContain("requestScopedMainCredential: recoveryRequestScopedMainCredential");
+  expect(recovery).not.toContain("                poolLineage,");
+  const { previewCodexPoolLineage } = await import("../../src/codex/auth-context");
+  const { recordCodexThreadLineage, clearCodexThreadLineageForTests } = await import("../../src/codex/lineage");
+  const cfg = { providers: {}, codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+  const headers = new Headers({ authorization: "Bearer preview", "session-id": "session", "thread-id": "thread" });
+  clearCodexThreadLineageForTests();
+  expect(recordCodexThreadLineage(headers)).toBeDefined();
+  expect(previewCodexPoolLineage(headers, cfg, { requestScopedMainCredential: false })).toBeDefined();
+  expect(previewCodexPoolLineage(headers, cfg, { requestScopedMainCredential: true })).toBeUndefined();
+  clearCodexThreadLineageForTests();
+});
+
+
+test("fallback labels describe the caller-main detour", async () => {
+  const { callerOwnedFallbackAffinityDecision } = await import("../../src/codex/request-owned-affinity");
+  clearThreadAccountMap();
+  bindThreadAffinity("fallback-key", "__main__", Date.now());
+  expect(callerOwnedFallbackAffinityDecision({ move: "reused", reason: "healthy" }, "fallback-key", undefined, undefined, false, "cooldown")).toEqual({ move: "reused", reason: "healthy" });
+  expect(callerOwnedFallbackAffinityDecision({ move: "reused", reason: "healthy" }, undefined, undefined, undefined, true, "cooldown")).toEqual({ move: "unbound", reason: "request_owned" });
+  clearThreadAccountMap();
+});
+
+test("cooldown arriving after pool selection labels caller-main as a detour", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { removeTreeWithRetry } = await import("../helpers/remove-tree");
+  const { saveCodexAccountCredential } = await import("../../src/codex/account-store");
+  const { resolveCodexAuthContext } = await import("../../src/codex/auth-context");
+  const { recordCodexUpstreamOutcome, clearCodexUpstreamHealth } = await import("../../src/codex/routing");
+  const { noteCodexSelectionAffinity } = await import("../../src/server/request-log");
+  const home = mkdtempSync(join(tmpdir(), "ocx-owned-cooldown-"));
+  const oldHome = process.env.OPENCODEX_HOME, oldCodex = process.env.CODEX_HOME;
+  process.env.OPENCODEX_HOME = home; process.env.CODEX_HOME = home;
+  try {
+    saveCodexAccountCredential("a", { accessToken: "access-a", refreshToken: "refresh-a", expiresAt: Date.now() + 3600000, chatgptAccountId: "account-a" });
+    const config = { providers: {}, codexAccounts: [{ id: "a", label: "a" }], activeCodexAccountId: "a", pausedCodexAccountIds: ["__main__"], autoSwitchThreshold: 0, codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+    const headers = new Headers({ authorization: "Bearer distinct-caller", "chatgpt-account-id": "distinct-account", "session-id": "s", "thread-id": "t" });
+    const options = { requestScopedMainCredential: true, primeCodexPoolQuotas: async () => {} };
+    clearThreadAccountMap(); clearCodexUpstreamHealth();
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    const raced = await resolveCodexAuthContext(headers, config, "pool", { ...options, beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release: () => {
+      recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "600", fixedAccount: true });
+    } }) });
+    expect(raced.kind).toBe("main");
+    expect(raced.affinityDecision).toEqual({ move: "detour", reason: "cooldown" });
+    const log = { provider: "openai", model: "test" };
+    noteCodexSelectionAffinity(log, raced);
+    expect(log).toMatchObject({ affinity: "detour", affinityReason: "cooldown" });
+  } finally {
+    clearThreadAccountMap(); clearCodexUpstreamHealth();
+    if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    removeTreeWithRetry(home);
+  }
+});
+
+test("manual selection clears affinity but retains carried-state issuers until a full reset", async () => {
+  const { resolveCodexAuthContext } = await import("../../src/codex/auth-context");
+  const { rememberConversationStateIssuer, peekConversationStateIssuer, getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const { resetCodexRoutingForManualSelection, resetCodexRoutingForClearedSelection } = await import("../../src/codex/routing/active-account");
+  const config = { providers: {}, codexAccounts: [], codexPool: { requestOwnedAffinity: true } } as import("../../src/types").OcxConfig;
+  const headers = new Headers({ authorization: "Bearer pin-reset", "session-id": "s", "thread-id": "t" });
+  clearThreadAccountMap();
+  try {
+    const first = await resolveCodexAuthContext(headers, config, "pool", { requestScopedMainCredential: true });
+    const reused = await resolveCodexAuthContext(headers, config, "pool", { requestScopedMainCredential: true });
+    expect(first.affinityDecision?.move).toBe("new_bind"); expect(reused.affinityDecision?.move).toBe("reused");
+    const key = first.conversationStateKey!;
+    rememberConversationStateIssuer(key, "pool-a");
+    expect(getThreadAffinity(key)).toBeDefined();
+    resetCodexRoutingForManualSelection("__main__");
+    expect(getThreadAffinity(key)).toBeUndefined();
+    expect(peekConversationStateIssuer(key)).toBe("pool-a");
+    clearThreadAccountMap();
+    expect(peekConversationStateIssuer(key)).toBeUndefined();
+  } finally { clearThreadAccountMap(); resetCodexRoutingForClearedSelection(); }
 });

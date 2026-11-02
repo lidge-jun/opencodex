@@ -252,12 +252,12 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
   });
 }
 
-test("caller-owned retry from Pool to main scrubs continuation and main issuer scrubs on return", async () => {
+test.each([false, true])("caller-owned retry from Pool to main scrubs continuation (affinity=%s)", async enabled => {
   const { rememberServingConversationStateIssuer, conversationStateBindingFromAuth, applyAccountChangeConversationStateScrub } = await import("../../src/server/responses/account-change-state");
   const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
   const bearer = fakeChatGptJwt("fixture-caller", { exp: 4_000_000_000 });
   const headers = new Headers({ authorization: `Bearer ${bearer}`, "session-id": "session", "thread-id": "thread" });
-  config.codexPool = { requestOwnedAffinity: true };
+  config.codexPool = { requestOwnedAffinity: enabled };
   config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
   const turn = tryAdmitTurn();
   expect(turn).not.toBeNull();
@@ -266,8 +266,8 @@ test("caller-owned retry from Pool to main scrubs continuation and main issuer s
     const authOptions = { modelId: "gpt-5.5", requestScopedMainCredential: true, primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
     const first = await resolveCodexAuthContext(headers, config, "pool", authOptions);
     const reused = await resolveCodexAuthContext(headers, config, "pool", authOptions);
-    expect(first.affinityDecision?.move).toBe("new_bind");
-    expect(reused.affinityDecision?.move).toBe("reused");
+    expect(first.affinityDecision?.move).toBe(enabled ? "new_bind" : "unbound");
+    expect(reused.affinityDecision?.move).toBe(enabled ? "reused" : "unbound");
     expect(first.kind).toBe("pool");
     if (first.kind !== "pool") throw new Error("expected pool fixture");
     rememberServingConversationStateIssuer(first);
@@ -289,8 +289,8 @@ test("caller-owned retry from Pool to main scrubs continuation and main issuer s
     if (result.kind !== "retried") throw new Error("expected alternate retry");
     expect(result.authCtx.kind).toBe("main");
     expect(sentBody?.previous_response_id).toBeUndefined();
-    rememberServingConversationStateIssuer(result.authCtx, first.affinityKey);
-    expect(peekConversationStateIssuer(first.affinityKey!)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    rememberServingConversationStateIssuer(result.authCtx, first.conversationStateKey);
+    expect(peekConversationStateIssuer(first.conversationStateKey!)).toBe(MAIN_CODEX_ACCOUNT_ID);
     config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
     clearCodexUpstreamHealth();
     const next = await resolveCodexAuthContext(headers, config, "pool", authOptions);
@@ -298,5 +298,42 @@ test("caller-owned retry from Pool to main scrubs continuation and main issuer s
     const body = { previous_response_id: "opaque-main-response" };
     expect(applyAccountChangeConversationStateScrub({ body, bindingKey: binding.bindingKey, servingAccountId: binding.accountId })).toBe(true);
     expect(body).not.toHaveProperty("previous_response_id");
+  } finally { turn?.release(); }
+});
+
+test("regular Responses scrubs retained issuer on a manual main pin and on return to Pool", async () => {
+  const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
+  const { forgetRuntimeActiveCodexAccount, resetCodexRoutingForManualSelection } = await import("../../src/codex/routing/active-account");
+  const { handleResponses } = await import("../../src/server/responses");
+  const bearer = fakeChatGptJwt("fixture-pin-caller", { exp: 4_000_000_000 });
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "session", "thread-id": "thread" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const turn = tryAdmitTurn();
+  expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    expect(first.kind).toBe("pool"); rememberServingConversationStateIssuer(second);
+    resetCodexRoutingForManualSelection(MAIN_CODEX_ACCOUNT_ID);
+    config.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID; config.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID; config.pausedCodexAccountIds = [];
+    const sent: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>); return completedInference(); }) as typeof fetch;
+    const { rememberResponseState, clearResponseStateForTests } = await import("../../src/responses/state");
+    clearResponseStateForTests();
+    rememberResponseState({ model: "gpt-5.5", input: [{ role: "user", content: "earlier" }] }, { id: "opaque", status: "completed", output: [] }, undefined, { force: true });
+    const request = (input: unknown = [{ role: "user", content: "hello" }]) => new Request("http://localhost/v1/responses", { method: "POST", headers,
+      body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque", input, stream: false }) });
+    const refusal = await handleResponses(request([{ role: "user", file_id: "opaque" }]), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(refusal.status).toBe(400); expect(await refusal.text()).toContain("uploaded file"); expect(sent).toHaveLength(0);
+    const pinned = await handleResponses(request(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    const pinnedText = await pinned.text();
+    if (pinned.status !== 200) throw new Error(`pinned status ${pinned.status}: ${pinnedText}`);
+    expect(sent[0]?.previous_response_id).toBeUndefined();
+    forgetRuntimeActiveCodexAccount();
+    config.activeCodexAccountId = POOL_ID; config.activeCodexAccountPinned = undefined; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+    const back = await handleResponses(request(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(back.status).toBe(200); await back.text(); expect(sent[1]?.previous_response_id).toBeUndefined();
   } finally { turn?.release(); }
 });

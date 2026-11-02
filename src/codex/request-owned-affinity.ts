@@ -45,6 +45,19 @@ export function honestAffinityDecision(
 }
 
 /** Identify the issuer for a Pool or keyed caller-main context. */
-export function conversationStateAccountId(ctx: { kind: "main" | "pool" | "main-pool"; accountId: string | null; affinityKey?: string }): string | undefined {
-  return ctx.kind === "main" ? (ctx.affinityKey ? MAIN_CODEX_ACCOUNT_ID : undefined) : ctx.accountId ?? undefined;
+export function conversationStateAccountId(ctx: { kind: "main" | "pool" | "main-pool"; accountId: string | null; affinityKey?: string; conversationStateKey?: string }): string | undefined {
+  return ctx.kind === "main" ? (ctx.affinityKey || ctx.conversationStateKey ? MAIN_CODEX_ACCOUNT_ID : undefined) : ctx.accountId ?? undefined;
+}
+
+/** Describe the account actually serving a caller-owned fallback. */
+export function callerOwnedFallbackAffinityDecision(
+  decision: CodexAffinityDecision | undefined, affinityKey: string | undefined, quotaScope: CodexQuotaScope | undefined,
+  modelId: string | undefined, requestOwnedKeyWithheld: boolean, reason: "cooldown" | "unusable",
+): CodexAffinityDecision {
+  const ordinary = affinityKey ? getThreadAffinity(affinityKey, quotaScope) : undefined;
+  const detour = affinityKey ? getModelDetourAffinity(affinityKey, modelId, quotaScope) : undefined;
+  if (ordinary?.accountId === MAIN_CODEX_ACCOUNT_ID || detour?.accountId === MAIN_CODEX_ACCOUNT_ID)
+    return honestAffinityDecision(decision ?? { move: "reused", reason: "healthy" }, affinityKey, MAIN_CODEX_ACCOUNT_ID, quotaScope, modelId, requestOwnedKeyWithheld)!;
+  if (ordinary || detour) return { move: "detour", reason };
+  return { move: "unbound", reason: affinityKey ? decision?.reason ?? "healthy" : requestOwnedKeyWithheld ? "request_owned" : "no_conversation" };
 }

@@ -913,7 +913,7 @@ export async function retryCodexPoolOnAlternateAccount(
   {
     const binding = conversationStateBindingFromAuth(
       retryAuthCtx,
-      firstAuthCtx.affinityKey,
+      firstAuthCtx.affinityKey ?? firstAuthCtx.conversationStateKey,
     );
     if (binding) {
       applyAccountChangeConversationStateScrub({

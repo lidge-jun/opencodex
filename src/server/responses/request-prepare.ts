@@ -959,10 +959,10 @@ export async function prepareResponsesRequest(
   //
   // "The same" means both halves of the question the final resolution asks. The Authorization
   // it will be given, because the lineage scope is an HMAC of exactly that header; and its own
-  // Pool-state predicate, because a fixed account selector and a request-owned credential
-  // deliberately create no affinity at all -- previewing a family binding for one of those would
-  // hand model fallback an account this request can never authenticate as. Read-only: the record
-  // is written by the resolution that binds, never by a preview that may own no Pool state.
+  // Pool-state predicate: fixed selectors and request-owned credentials never use stored-credential
+  // lineage. An opt-in request-owned key has its own namespace; previewing a stored family binding
+  // would hand model fallback an account this request will not use. Preview is read-only: only
+  // eligible stored-credential resolutions record lineage.
   const poolLineage = previewCodexPoolLineage(previewAuthHeaders, options.codexAuthPolicy ?? config, {
     accountId: route.codexAccountId,
     modelId: route.modelId,
@@ -1001,7 +1001,7 @@ export async function prepareResponsesRequest(
     });
     const fallbackNow = Date.now();
     subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-      codexRequestAffinityKey(previewAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId: route.modelId, admission: options.admission, requestScopedMainCredential: previewRequestScopedMainCredential }) ?? null,
+      codexRequestAffinityKey(previewAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: previewRequestScopedMainCredential }) ?? null,
       config,
       previewNow,
       codexQuotaScopeForModel(modelId),
@@ -1219,7 +1219,7 @@ export async function prepareResponsesRequest(
               // and then fail closed at final auth — the same class of stale-selection bug as
               // the quota scope, one layer over.
               subagentFallbackAccountPreview = (modelId, previewNow, modelEligibleAccountIds) => previewCodexAccountForRequest(
-                codexRequestAffinityKey(recoveryAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId: route.modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }) ?? null,
+                codexRequestAffinityKey(recoveryAuthHeaders, config, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }) ?? null,
                 config,
                 previewNow,
                 codexQuotaScopeForModel(modelId),
@@ -1239,7 +1239,7 @@ export async function prepareResponsesRequest(
                   }),
                 },
                 modelId,
-                poolLineage,
+                previewCodexPoolLineage(recoveryAuthHeaders, options.codexAuthPolicy ?? config, { accountId: route.codexAccountId, modelId, admission: options.admission, requestScopedMainCredential: recoveryRequestScopedMainCredential }),
               );
               const recoveryPreviewAccountId = subagentFallbackAccountPreview(
                 parsed.modelId,

@@ -44,10 +44,21 @@ dispatch. `requestSpendRecord` does not count `unbound` as a move reason.
 
 ## Caller-owned main and carried state
 
-Every caller-owned main context returned after key derivation carries the key and its decision. For
-conversation-state issuer purposes such a context is `__main__` (`conversationStateAccountId`), so Pool to
-main and main to Pool moves, including the regular retry and compact alternate paths, scrub
-`previous_response_id` like any other account change. Without the opt-in, main records no issuer, as before.
+Request-owned Pool contexts and caller-owned main contexts carry a process-local `conversationStateKey`
+separate from the optional routing `affinityKey`. The issuer key is derived even when affinity is off
+and on the manual-pin path; it is never passed to the routing selector. For conversation-state issuer
+purposes a main context with either key is `__main__` (`conversationStateAccountId`). Pool to main and
+main to Pool moves, including regular retry and compact alternate paths, scrub `previous_response_id`
+when the issuer differs. This also applies with affinity off: those requests now record a bearer-scoped
+issuer instead of leaving main untracked or using the stored-credential raw conversation key. Fixed
+account selectors and Reserve do not receive a request-owned issuer key. Manual account selection
+clears routing bindings while retaining issuer records, so the selected account can detect carried
+state from the previous account. General affinity-map resets still clear issuer records.
+
+Known limit, shared with stored-credential traffic: an operator's manual account selection runs
+`resetCodexRoutingForManualSelection`, whose `clearThreadAccountMap()` also clears every issuer record, so
+the first turn after that reset cannot detect the account change. Preserving issuers across that reset
+belongs to the affinity storage owner, not to this namespace.
 
 ## Persistence contract
 
