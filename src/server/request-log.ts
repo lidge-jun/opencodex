@@ -31,7 +31,7 @@ import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import type { UpstreamCondition } from "../lib/upstream-condition";
-import { projectErrorDetail } from "../usage/error-detail";
+import { errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import {
   appendUsageEntry,
   classifyCacheTelemetryProvenance,
@@ -515,11 +515,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...modelIdentityLogFields(entry),
     status: entry.status,
     durationMs: entry.durationMs,
-    ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+    // Closed code, condition, failure detail and quota reset; legacy upstream text is read once and dropped.
+    ...errorDetailFor(entry),
     ...(terminalStatus ? { terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(entry.upstreamCondition ? { upstreamCondition: entry.upstreamCondition } : {}), ...(entry.failureDetail ? { failureDetail: entry.failureDetail } : {}),
-    ...(entry.rateLimitResetAt !== undefined ? { rateLimitResetAt: entry.rateLimitResetAt } : {}),
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),

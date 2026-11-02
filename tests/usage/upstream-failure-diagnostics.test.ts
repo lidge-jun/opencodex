@@ -42,7 +42,9 @@ test("upstream failures record the error code and request id without the body", 
   expect(log.upstreamErrorCode).toBe("server_error");
   expect(log.upstreamErrorType).toBe("server_error");
   expect(warnings.join("\n")).not.toContain("secret upstream body");
-  expect(warnings.some(line => line.includes("code=server_error") && line.includes("request_id=req_abc123"))).toBe(true);
+  // Service logs persist: only closed-vocabulary values are printed, never an upstream request id.
+  expect(warnings.some(line => line.includes("type=server_error"))).toBe(true);
+  expect(warnings.join("\n")).not.toContain("req_abc123");
 });
 
 

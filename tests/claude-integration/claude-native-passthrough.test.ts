@@ -866,7 +866,7 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
       transportPhase?: string;
       terminalSource?: string;
       failureCause?: string;
-      upstreamError?: string;
+      upstreamError?: string; failureDetail?: string;
       usage?: { inputTokens?: number };
     }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
     expect(logs).toHaveLength(1);
@@ -879,7 +879,9 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
     expect(row.transportPhase).toBe("mid_stream");
     expect(row.terminalSource).toBe("synthetic");
     expect(row.failureCause).toBe("transport-ambiguous");
-    expect(row.upstreamError).toContain("anthropic passthrough upstream stream failed: ");
+    // The row keeps the fixed sentence; the runtime error text stays internal.
+    expect(row.failureDetail).toBe("anthropic passthrough upstream stream failed");
+    expect(row.upstreamError).toBeUndefined();
     // Usage seen before the reset is still recorded.
     expect(row.usage?.inputTokens).toBe(12);
   } finally {
@@ -965,7 +967,7 @@ test("a reset after message_stop is a finished turn: no error event and a comple
     const text = await res.text();
     expect(text.endsWith(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`)).toBe(true);
     expect(text).not.toContain("event: error");
-    const logs = logsFromApiBody<{ status?: number; closeReason?: string; transportPhase?: string; upstreamError?: string }>(
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; transportPhase?: string; upstreamError?: string; failureDetail?: string }>(
       await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
     );
     expect(logs).toHaveLength(1);
@@ -1016,7 +1018,7 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
       body: JSON.stringify({ ...claudeBody(), stream: false, ...requestBody }),
     });
     const text = await res.text();
-    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; errorCode?: string }>(
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; failureDetail?: string; errorCode?: string }>(
       await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
     );
     expect(logs).toHaveLength(1);
@@ -1034,9 +1036,9 @@ test("an upstream error response is relayed verbatim and its reason reaches the 
     expect(res.status).toBe(400);
     expect(JSON.parse(text)).toEqual(errorBody);
     expect(row.status).toBe(400);
-    expect(row.upstreamError).toBe("Provider error 400: invalid_request_error");
+    expect(row.failureDetail).toBe("Provider error 400: invalid_request_error");
     // usage.jsonl carries failure diagnostics for >= 400 rows; this row used to persist none.
-    expect(readRecentUsageEntries(1)[0]?.upstreamError).toBe(row.upstreamError);
+    expect(readRecentUsageEntries(1)[0]?.failureDetail).toBe(row.failureDetail);
   } finally {
     upstream.stop(true);
   }
@@ -1047,7 +1049,7 @@ test("a non-JSON upstream error still logs its status as the reason", async () =
   try {
     const { res, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(res.status).toBe(502);
-    expect(row.upstreamError).toBe("Provider error 502");
+    expect(row.failureDetail).toBe("Provider error 502");
   } finally {
     upstream.stop(true);
   }
@@ -1059,9 +1061,10 @@ test("a credential echoed in an upstream error message is excluded from persiste
   try {
     const { row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(row.status).toBe(401);
-    expect(row.upstreamError).toBe("Provider error 401: authentication_error");
-    expect(readRecentUsageEntries(1)[0]?.upstreamError).toBe(row.upstreamError);
-    expect(row.upstreamError).not.toContain(leaked);
+    expect(row.failureDetail).toBe("Provider error 401: authentication_error");
+    expect(readRecentUsageEntries(1)[0]?.failureDetail).toBe(row.failureDetail);
+    expect(row.failureDetail).not.toContain(leaked);
+    expect(row.upstreamError).toBeUndefined();
   } finally {
     upstream.stop(true);
   }
@@ -1090,7 +1093,7 @@ test.each(["account", "request body"] as const)("an upstream message cannot pers
     const usage = readRecentUsageEntries(1);
     expect(usage).toHaveLength(1);
     for (const record of [row, usage[0]]) {
-      expect(record?.upstreamError).toBe(`Provider error 400: ${errorType}`);
+      expect(record?.failureDetail).toBe(`Provider error 400: ${errorType}`);
       expect(JSON.stringify(record)).not.toContain(privateValue);
     }
   } finally {
@@ -1106,8 +1109,8 @@ test.each([
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json({ type: "error", error: { type: errorType, message: privateValue } }, { status: 500 }) });
   try {
     const { row } = await nativeFailureRow(upstream.url.origin);
-    expect(row.upstreamError).toBe(`Provider error 500: ${errorType}`);
-    expect(readRecentUsageEntries(1)[0]?.upstreamError).toBe(row.upstreamError);
+    expect(row.failureDetail).toBe(`Provider error 500: ${errorType}`);
+    expect(readRecentUsageEntries(1)[0]?.failureDetail).toBe(row.failureDetail);
     expect(JSON.stringify(row)).not.toContain(privateValue);
   } finally {
     upstream.stop(true);
@@ -1129,8 +1132,8 @@ test.each([
   try {
     const { text, row } = await nativeFailureRow(upstream.url.origin);
     expect(JSON.parse(text)).toEqual(errorBody);
-    expect(row.upstreamError).toBe("Provider error 502");
-    expect(readRecentUsageEntries(1)[0]?.upstreamError).toBe("Provider error 502");
+    expect(row.failureDetail).toBe("Provider error 502");
+    expect(readRecentUsageEntries(1)[0]?.failureDetail).toBe("Provider error 502");
   } finally {
     upstream.stop(true);
   }
@@ -1150,7 +1153,7 @@ test("an unreachable upstream logs the fetch failure as the reason", async () =>
     const { res, text, row } = await nativeFailureRow(refusedOrigin);
     expect(res.status).toBe(502);
     expect(row.status).toBe(502);
-    expect(row.upstreamError).toBe("anthropic passthrough failed: upstream connection error");
+    expect(row.failureDetail).toBe("anthropic passthrough failed: upstream connection error");
     expect(JSON.parse(text).error.message).toBe("anthropic passthrough failed: connect ECONNREFUSED");
   } finally {
     globalThis.fetch = originalFetch;
@@ -1172,12 +1175,13 @@ test("a credential in a local failure message is redacted for the client as well
     const { res, text, row } = await nativeFailureRow(refusedOrigin);
     expect(res.status).toBe(502);
     expect(text).not.toContain(leaked);
-    expect(row.upstreamError).toBe("anthropic passthrough failed: upstream connection error");
-    expect(row.upstreamError).not.toContain(leaked);
+    expect(row.failureDetail).toBe("anthropic passthrough failed: upstream connection error");
+    expect(row.failureDetail).not.toContain(leaked);
+    expect(row.upstreamError).toBeUndefined();
     expect(JSON.parse(text).error.message).toStartWith("anthropic passthrough failed: proxy rejected key ");
     const usage = readRecentUsageEntries(1);
     expect(usage).toHaveLength(1);
-    expect(usage[0]?.upstreamError).toBe(row.upstreamError);
+    expect(usage[0]?.failureDetail).toBe(row.failureDetail);
     for (const record of [row, usage[0]]) {
       expect(JSON.stringify(record)).not.toContain(privateValue);
       expect(JSON.stringify(record)).not.toContain(leaked);
@@ -1194,7 +1198,7 @@ test("an upstream that never sends headers logs the header timeout as the reason
     const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
     expect(res.status).toBe(504);
     expect(row.status).toBe(504);
-    expect(row.upstreamError).toBe("anthropic passthrough timed out waiting for response headers");
+    expect(row.failureDetail).toBe("anthropic passthrough timed out waiting for response headers");
   } finally {
     silent.stop(true);
   }
@@ -1206,7 +1210,7 @@ test("a non-stream body over the byte cap logs the cap as the reason", async () 
     const { res, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""), { bodyMaxBytes: 1024 });
     expect(res.status).toBe(502);
     expect(row).toMatchObject({ status: 502, closeReason: "body_overflow" });
-    expect(row.upstreamError).toBe("anthropic passthrough body exceeded 1024 bytes");
+    expect(row.failureDetail).toBe("anthropic passthrough body exceeded 1024 bytes");
   } finally {
     upstream.stop(true);
   }
@@ -1220,7 +1224,7 @@ test("an oversized upstream error body is relayed verbatim but not parsed for th
     const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(res.status).toBe(400);
     expect(JSON.parse(text)).toEqual(errorBody);
-    expect(row.upstreamError).toBe("Provider error 400");
+    expect(row.failureDetail).toBe("Provider error 400");
   } finally {
     upstream.stop(true);
   }
@@ -1243,7 +1247,7 @@ test("a 403 permission error is classified without consulting its upstream messa
   try {
     const { row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
     expect(row.status).toBe(403);
-    expect(row.upstreamError).toBe("Provider error 403: permission_error");
+    expect(row.failureDetail).toBe("Provider error 403: permission_error");
     expect(row.errorCode).toBe("permission_denied");
   } finally {
     upstream.stop(true);
@@ -1274,7 +1278,7 @@ test("a non-stream body that stalls logs the stall as the reason", async () => {
     const { res, row } = await nativeFailureRow(`http://127.0.0.1:${upstream.port}`, { bodyStallSec: 1 });
     expect(res.status).toBe(504);
     expect(row).toMatchObject({ status: 504, closeReason: "body_stall" });
-    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+    expect(row.failureDetail).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
   } finally {
     upstream.stop();
   }
@@ -1300,15 +1304,15 @@ test("a client that leaves while a non-stream body is pending logs the cancel as
     await Bun.sleep(50);
     client.abort();
     await pending;
-    let row: { status?: number; closeReason?: string; upstreamError?: string } | undefined;
+    let row: { status?: number; closeReason?: string; upstreamError?: string; failureDetail?: string } | undefined;
     for (let i = 0; i < 100 && !row; i++) {
-      row = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string }>(
+      row = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; failureDetail?: string }>(
         await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
       )[0];
       if (!row) await Bun.sleep(20);
     }
     expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
-    expect(row!.upstreamError).toBe("client closed request during anthropic passthrough");
+    expect(row!.failureDetail).toBe("client closed request during anthropic passthrough");
   } finally {
     await server.stop(true);
     upstream.stop();
@@ -1330,7 +1334,7 @@ async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<stri
       body: JSON.stringify(claudeBody()),
     });
     const text = await res.text();
-    const logs = logsFromApiBody<{ status?: number; terminalStatus?: string; closeReason?: string; upstreamError?: string }>(
+    const logs = logsFromApiBody<{ status?: number; terminalStatus?: string; closeReason?: string; upstreamError?: string; failureDetail?: string }>(
       await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
     );
     expect(logs).toHaveLength(1);
@@ -1350,7 +1354,7 @@ test("a stalled native stream logs a 502 incomplete row and keeps its diagnostic
     expect(text).toContain('"type":"timeout_error"');
     // Same row the Responses relay writes for a stall-timeout incomplete (httpStatusForRequestLogTerminal).
     expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
-    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+    expect(row.failureDetail).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
     // usage.jsonl keeps failure diagnostics only for failed or non-completed rows; a 200 row dropped them.
     expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
   } finally {
@@ -1364,7 +1368,7 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
     const { text, row, usage } = await stalledStreamRow(upstream, { bodyMaxBytes: 64 });
     expect(text).toContain("exceeded 64 bytes");
     expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
-    expect(row.upstreamError).toBe("anthropic passthrough body exceeded 64 bytes");
+    expect(row.failureDetail).toBe("anthropic passthrough body exceeded 64 bytes");
     expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
   } finally {
     upstream.stop(true);

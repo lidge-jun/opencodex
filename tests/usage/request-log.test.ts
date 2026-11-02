@@ -1858,6 +1858,8 @@ describe("request log restart hydrate", () => {
       closeReason: "terminal",
       upstreamError: "socket connection was closed unexpectedly",
     };
+    // Legacy upstream text is read once to classify the failure and never returned.
+    expect(requestLogEntryFromPersistedUsage(persisted).upstreamError).toBeUndefined();
     expect(requestLogEntryFromPersistedUsage(persisted)).toEqual({
       requestId: "ocx-revive",
       timestamp: 1_800_000_000_000,
@@ -1879,7 +1881,7 @@ describe("request log restart hydrate", () => {
       errorCode: "upstream_server_error",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "socket connection was closed unexpectedly",
+      upstreamCondition: "upstream_failed",
     });
   });
 
@@ -1922,7 +1924,7 @@ describe("request log restart hydrate", () => {
       requestId: "ocx-sticky-502",
       status: 502,
       errorCode: "upstream_server_error",
-      upstreamError: "Provider unreachable",
+      upstreamCondition: "upstream_failed",
       requestedEffort: "xhigh",
       shadowCallRewrittenFrom: "gpt-5.6-luna",
     });
