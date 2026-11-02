@@ -8,6 +8,8 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { clearCodexThreadLineageForTests, recordCodexThreadLineage, resolveCodexThreadLineage } from "../../src/codex/lineage";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearThreadAccountMap, clearCodexUpstreamHealth } from "../../src/codex/routing";
+import { codexPoolAffinityKey } from "../../src/codex/auth-context";
+import { clearConversationStateIssuerMap, peekConversationStateIssuer } from "../../src/codex/routing/thread-affinity";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
@@ -19,6 +21,18 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const local: DataPlaneAdmission = { kind: "loopback", source: "loopback" };
+const metadataUuid = "9745d86c-d579-494a-8d0e-f69a5214cf96";
+const principal = (id: string): DataPlaneAdmission => ({ kind: "configured", keyId: "fixture", source: "dedicated", contextPrincipalId: id });
+// Independent oracle for the documented remote scoping; no production helper builds it.
+const scoped = (principalId: string, value: string) => new Bun.CryptoHasher("sha256")
+  .update(JSON.stringify(["opencodex-caller-session-v1", principalId, value])).digest("hex");
+const account = (wire: Headers | undefined) => wire?.get("chatgpt-account-id");
+/** The pool identity is selection-only: no attempt may carry a synthesized pair upstream. */
+function expectNoSynthesizedPair(wire: Headers) {
+  expect(wire.has("session-id")).toBe(false);
+  expect(wire.has("thread-id")).toBe(false);
+  for (const name of ["session_id", "session-id", "thread-id"]) expect(wire.get(name) ?? "").not.toMatch(/^[0-9a-f]{64}$/);
+}
 let home: string, previous: string | undefined, isolated: IsolatedCodexHome, release: () => void;
 let wires: Headers[];
 let cfg: OcxConfig;
@@ -29,7 +43,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   isolated = installIsolatedCodexHome("ocx-bridge-codex-");
   release = acquireOwnedSpendHome();
-  clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests();
+  clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests(); clearConversationStateIssuerMap();
   for (const id of ["fixture-a", "fixture-b"]) {
     saveCodexAccountCredential(id, { accessToken: `fixture-access-${id}`, refreshToken: `fixture-refresh-${id}`, expiresAt: Date.now() + 3_600_000, chatgptAccountId: `account-${id}` });
     updateAccountQuota(id, 10, 10);
@@ -48,7 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch; clearMainAccountInfoCache(); release(); isolated.restore();
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
-  removeTreeWithRetry(home); clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests();
+  removeTreeWithRetry(home); clearThreadAccountMap(); clearCodexUpstreamHealth(); clearAccountQuota(); clearCodexThreadLineageForTests(); clearConversationStateIssuerMap();
 });
 
 async function turn(session: string | undefined, admission: DataPlaneAdmission = local, headers: Record<string, string> = {}, model = "openai/gpt-5.4") {
@@ -70,7 +84,8 @@ test("pool binds multiple turns and separates sessions while preserving the nati
   expect(wires[0]!.get("chatgpt-account-id")).toBe(wires[1]!.get("chatgpt-account-id"));
   expect(wires[2]!.get("chatgpt-account-id")).toBe(wires[3]!.get("chatgpt-account-id"));
   expect(wires[0]!.get("chatgpt-account-id")).not.toBe(wires[2]!.get("chatgpt-account-id"));
-  expect(wires[0]!.get("session_id")).toBe("9745d86c-d579-494a-8d0e-f69a5214cf96");
+  expect(wires[0]!.get("session_id")).toBe(metadataUuid);
+  for (const wire of wires) expectNoSynthesizedPair(wire);
 });
 
 test("a synthesized identity with a recorded parent follows the parent's account", async () => {
@@ -94,12 +109,46 @@ test("a synthesized identity with a recorded parent follows the parent's account
   expect(resolveCodexThreadLineage(rootPair)?.parentThreadId).toBe("fixture-root");
 });
 
-test("remote principals produce stable distinct upstream identities", async () => {
-  const principal = (id: string): DataPlaneAdmission => ({ kind: "configured", keyId: "fixture", source: "dedicated", contextPrincipalId: id });
-  for (const id of ["a", "b", "a"]) await turn("user_test_account__session_conversation-native", principal(id));
-  expect(wires[0]!.get("session_id")).toMatch(/^[0-9a-f]{64}$/);
-  expect(wires[0]!.get("session_id")).toBe(wires[2]!.get("session_id"));
-  expect(wires[0]!.get("session_id")).not.toBe(wires[1]!.get("session_id"));
+test("remote principals with identical metadata pin separately and keep the dev wire", async () => {
+  for (const id of ["a", "a", "b", "b", "a"]) await turn("user_test_account__session_conversation-native", principal(id));
+  expect(account(wires[1])).toBe(account(wires[0]));
+  expect(account(wires[2])).not.toBe(account(wires[0]));
+  expect(account(wires[3])).toBe(account(wires[2]));
+  expect(account(wires[4])).toBe(account(wires[0]));
+  for (const wire of wires) {
+    expect(wire.get("session_id")).toBe(metadataUuid);
+    expectNoSynthesizedPair(wire);
+  }
+});
+
+test("remote principals sending the same session alias do not share a pool binding", async () => {
+  for (const id of ["a", "a", "b", "b", "a"]) await turn(undefined, principal(id), { session_id: "fixture-alias" });
+  expect(account(wires[1])).toBe(account(wires[0]));
+  expect(account(wires[2])).not.toBe(account(wires[0]));
+  expect(account(wires[3])).toBe(account(wires[2]));
+  expect(account(wires[4])).toBe(account(wires[0]));
+  for (const wire of wires) {
+    expect(wire.get("session_id")).toBe("fixture-alias");
+    expectNoSynthesizedPair(wire);
+  }
+});
+
+test("an alias equal to another principal's derived identity does not join that binding", async () => {
+  await turn("user_test_account__session_conversation-native", principal("b"));
+  await turn(undefined, principal("a"), { session_id: scoped("b", metadataUuid) });
+  await turn(undefined, principal("a"), { session_id: scoped("b", metadataUuid) });
+  expect(account(wires[1])).not.toBe(account(wires[0]));
+  expect(account(wires[2])).toBe(account(wires[1]));
+});
+
+test("caller session-id aliases and complete pairs reach the wire exactly as sent", async () => {
+  await turn(undefined, local, { "session-id": "fixture-hyphen" });
+  expect(wires[0]!.get("session-id")).toBe("fixture-hyphen");
+  expect(wires[0]!.get("session_id")).toBe("fixture-hyphen");
+  expect(wires[0]!.has("thread-id")).toBe(false);
+  await turn(undefined, principal("a"), { "session-id": "fixture-pair", "thread-id": "fixture-pair" });
+  expect(wires[1]!.get("session-id")).toBe("fixture-pair");
+  expect(wires[1]!.get("thread-id")).toBe("fixture-pair");
 });
 
 test("spawn markers do not synthesize thread identity", async () => {
@@ -117,7 +166,7 @@ test("API-key Responses routes do not receive pool identity", async () => {
   expect(wires[0]!.has("session-id")).toBe(false);
 });
 
-for (const mode of ["stored", "main"] as const) for (const variant of ["local", "remote", "header"] as const) test(`${mode} pool 401 refresh preserves ${variant} identity on retry`, async () => {
+for (const mode of ["stored", "main"] as const) for (const variant of ["local", "remote", "header"] as const) test(`${mode} pool 401 refresh keeps the dev wire for ${variant} identity on retry`, async () => {
   cfg.codexAccounts = mode === "stored" ? [{ id: "fixture-a", label: "a" }] : [];
   if (mode === "main") {
     cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
@@ -143,7 +192,33 @@ for (const mode of ["stored", "main"] as const) for (const variant of ["local", 
   expect(refreshes).toBe(1);
   expect(wires).toHaveLength(2);
   for (const name of ["session_id", "session-id", "thread-id"]) {
-    expect(wires[0]!.get(name)).toBeTruthy();
     expect(wires[1]!.get(name)).toBe(wires[0]!.get(name));
   }
+  expect(wires[0]!.get("session_id")).toBe(variant === "header" ? null : metadataUuid);
+  for (const wire of wires) expectNoSynthesizedPair(wire);
+});
+
+for (const variant of ["local-metadata", "remote-alias"] as const) test(`alternate-account failover binds ${variant} under the initial selection key`, async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (!url.pathname.endsWith("/responses")) return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
+    wires.push(new Headers(init?.headers));
+    return wires.length === 1 ? Response.json({ error: { message: "rate limited" } }, { status: 429 })
+      : Response.json({ id: "resp_fixture", object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } });
+  }) as typeof fetch;
+  const send = () => variant === "local-metadata"
+    ? turn("user_test_account__session_conversation-native")
+    : turn(undefined, principal("fixture-principal"), { session_id: "fixture-alias" });
+  await send();
+  expect(wires).toHaveLength(2);
+  const alternate = account(wires[1]);
+  expect(alternate).toBeTruthy();
+  expect(alternate).not.toBe(account(wires[0]));
+  const identity = variant === "local-metadata" ? metadataUuid : scoped("fixture-principal", "fixture-alias");
+  const key = codexPoolAffinityKey(new Headers({ "session-id": identity, "thread-id": identity }))!;
+  // The alternate account's conversation-state issuer is recorded under the initial selection key.
+  expect(peekConversationStateIssuer(key)).toBe(alternate!.replace(/^account-/, ""));
+  await send();
+  expect(account(wires[2])).toBe(alternate);
+  for (const wire of wires) expectNoSynthesizedPair(wire);
 });

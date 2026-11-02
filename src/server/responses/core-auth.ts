@@ -157,6 +157,11 @@ function codexRouteCredentialDomainHeadersFor(
 }
 
 
+/**
+ * Credential-domain headers for Codex account SELECTION (previews, recovery, final resolution).
+ * A Claude bridge pool identity is completed here only; upstream headers are always materialized
+ * from the uncompleted form, so the synthesized pair never reaches the wire.
+ */
 export function codexRouteCredentialDomainHeaders(
   req: Request, route: RouteResult, options: HandleResponsesOptions,
   credentialDomainWasRewritten: boolean, config: OcxConfig,
@@ -220,7 +225,7 @@ export async function resolveResponsesCodexAuth(
   // routed credential with it either, because that would be a silent credential swap.
   if (hasAgentAssertionAuthorization(req.headers)) return { ok: false, response: agentAssertionUnsupportedResponse() };
   try {
-    let authInputHeaders = codexRouteCredentialDomainHeaders(
+    let authInputHeaders = codexRouteCredentialDomainHeadersFor(
       req,
       route,
       options,
@@ -280,7 +285,9 @@ export async function resolveResponsesCodexAuth(
       validateForwardAdmissionCredential(authInputHeaders, config);
     }
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
+      // Only selection sees the Claude bridge pool identity; materialization below keeps the
+      // uncompleted headers, so the wire matches the original request.
+      authCtx = await resolveCodexAuthContext(applyClaudeBridgePoolSession(authInputHeaders, route, options), config, route.codexAccountMode, {
         admission: options.admission,
         codexAuthPolicy: options.codexAuthPolicy,
         accountId: route.codexAccountId,
@@ -518,7 +525,7 @@ export async function refreshPoolForwardAuth(args: {
       refreshedAuthCtx,
       route.codexAccountMode,
     );
-    const headers = await materializeCodexUpstreamAuthAsync(applyClaudeBridgePoolSession(req.headers, route, options), refreshedAuthCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
       admission: options.admission,
       config: options.codexAuthPolicy ?? config,
       modelId: route.modelId,
@@ -595,7 +602,7 @@ export async function refreshNativeMainForwardAuth(args: {
       refreshedAuthCtx,
       route.codexAccountMode,
     );
-    const headers = await materializeCodexUpstreamAuthAsync(applyClaudeBridgePoolSession(req.headers, route, options), refreshedAuthCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
       admission: options.admission,
       config: options.codexAuthPolicy ?? config,
       modelId: route.modelId,

@@ -27,6 +27,7 @@ import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { isNonReplayableResponse, isTransientUpstreamStatus, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import {
   codexWsPreOutputRefusalHold,
   codexWsPreOutputRefusalOutcomeRecorded,
@@ -490,6 +491,8 @@ export interface CodexPoolAccountRetryArgs {
     abortSignal?: AbortSignal;
     onCodexAuthContextResolved?: (ctx: CodexAuthContext) => void;
     deferCodexResetDerivedCooldown?: boolean;
+    /** Private Claude bridge pool identity; alternate selection completes it like the first pick. */
+    claudeBridgePoolSession?: string;
     // Narrowed subset of HandleResponsesOptions: the retry rebuilds the adapter, so it
     // needs the inbound scope or the retry could land on a different wire than the
     // first attempt.
@@ -767,7 +770,9 @@ export async function retryCodexPoolOnAlternateAccount(
   }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
-        callerAuthHeaders,
+        // Alternate selection keeps the initial Claude bridge pool identity; the retry's upstream
+        // headers are still built from uncompleted callerAuthHeaders below.
+        applyClaudeBridgePoolSession(callerAuthHeaders, { codexAccountMode: "pool" }, options),
         config,
         "pool",
         {

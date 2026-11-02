@@ -13,14 +13,18 @@ export function resolveClaudeBridgePoolSession(args: {
   if (!admission || isThreadSpawnRequest(ingress) || isThreadSpawnRequest(replay)) return undefined;
   if (ingress.has("x-codex-parent-thread-id") || ingress.has("thread-id")) return undefined;
   if (codexPoolAffinityKey(replay) !== undefined) return undefined;
+  let value: string | undefined;
   if (ingress.has("session_id") || ingress.has("session-id")) {
     const first = ingress.get("session_id");
     const second = ingress.get("session-id");
     if (first && second && first !== second) return undefined;
-    return safeCallerSessionId(first || second);
+    value = safeCallerSessionId(first || second);
+  } else {
+    value = safeCallerSessionId(metadataSessionId ?? ingress.get("x-claude-code-session-id"));
   }
-  const value = safeCallerSessionId(metadataSessionId ?? ingress.get("x-claude-code-session-id"));
   if (!value) return undefined;
+  // Every remote identity this bridge names, caller aliases included, is bound to the admitted
+  // principal: a shared or guessed value must never select another principal's conversation key.
   if (admission.kind === "loopback") return value;
   const principal = contextPrincipalIdOf(admission);
   if (!principal) return undefined;

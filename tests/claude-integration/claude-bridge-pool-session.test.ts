@@ -42,6 +42,22 @@ test("derived metadata and header identities are scoped to remote principals", (
   expect(resolve({ "prompt_cache_key": "shared-system" })).toBeUndefined();
 });
 
+test("caller aliases are scoped to remote principals before they name a pool session", () => {
+  const digest = (principal: string, value: string) => new Bun.CryptoHasher("sha256")
+    .update(JSON.stringify(["opencodex-caller-session-v1", principal, value])).digest("hex");
+  for (const name of ["session_id", "session-id"]) {
+    const a = resolve({ [name]: "fixture-alias" }, remote("a"), "metadata");
+    expect(a).toBe(digest("a", "fixture-alias"));
+    expect(resolve({ [name]: "fixture-alias" }, remote("a"), "metadata")).toBe(a);
+    expect(resolve({ [name]: "fixture-alias" }, remote("b"), "metadata")).not.toBe(a);
+    expect(resolve({ [name]: "fixture-alias" }, remote(), "metadata")).toBeUndefined();
+    expect(resolve({ [name]: "fixture-alias" }, local, "metadata")).toBe("fixture-alias");
+  }
+  // A caller that knows another principal's derived identity cannot reuse it as an alias.
+  const victim = resolve({}, remote("b"), "metadata")!;
+  expect(resolve({ session_id: victim }, remote("a"))).not.toBe(victim);
+});
+
 test("completion agrees with final credential-domain headers for both Codex routes", () => {
   const config = getDefaultConfig();
   const route = routeConcreteModel(config, "openai/gpt-5.4")!;
