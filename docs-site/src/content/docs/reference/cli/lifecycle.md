@@ -538,13 +538,15 @@ See [v2 outcomes](/reference/cli/agents/#explicit-v2-target-and-outcome) and
 for target, scope and spending boundaries. A reset-grant status read can contact
 upstream status but never consumes or resumes a grant.
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
 
 On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
 Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
-the Home outcome and each Child's state; failed or timed-out Children produce exit 6. A skipped
-Child is identified by its reason. An unreadable link store also produces exit 6 and a path-free
-error in human output. Exit 7 is reserved for an update in flight.
+the Home outcome and each Child's state. A skipped Child is identified by its reason. The Home's
+own nonzero exit code is returned unchanged. When the Home exits 0, a failed or timed-out Child or
+an unreadable link store produces exit 6; otherwise the command exits 0, including when Children
+are skipped. An unreadable link store produces a path-free error in human output. Exit 7 is reserved
+for an update in flight.
 If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
 sanitized failure message.
 
