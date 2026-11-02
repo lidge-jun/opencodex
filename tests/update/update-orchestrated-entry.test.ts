@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { assertNotRealHomeUnderTest } from "../../src/lib/test-home-guard";
@@ -9,6 +10,7 @@ test("a source checkout update plan emits one JSON refusal in a temporary home",
   const root = mkdtempSync(join(tmpdir(), "ocx-update-entry-"));
   const home = join(root, "ocx"), codex = join(root, "codex");
   mkdirSync(home); mkdirSync(codex); assertNotRealHomeUnderTest(home);
+  writeFileSync(join(home, "config.json"), JSON.stringify({ port: 1 }));
   const proc = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "update", "--plan", "--json"], {
     cwd: root, stdout: "pipe", stderr: "pipe",
     env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
@@ -29,6 +31,52 @@ test("a source checkout update plan emits one JSON refusal in a temporary home",
     expect(activeCode).toBe(0);
     expect(activeError).not.toContain("shim repair");
     expect(JSON.parse(activeOutput).updateInFlight).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
+test.skipIf(process.platform === "win32")("npm-shaped launcher plans without repair or Desktop handoff, including missing Bun", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-plan-launcher-"));
+  const home = join(root, "home"), ocxHome = join(home, ".opencodex"), path = join(root, "path");
+  const pkg = join(root, "lib", "node_modules", "@bitkyc08", "opencodex");
+  const backup = join(root, "lib", "node_modules", "@bitkyc08", ".ocx-backup-123", "opencodex");
+  const npmLog = join(root, "npm-log");
+  mkdirSync(pkg, { recursive: true }); mkdirSync(ocxHome, { recursive: true }); mkdirSync(path); mkdirSync(backup, { recursive: true });
+  mkdirSync(join(home, ".opencodex-desktop"), { recursive: true });
+  writeFileSync(join(home, ".opencodex-desktop", "cli.json"), JSON.stringify({ version: 1, enabled: true, bundle: { platform: process.platform, kind: process.platform === "darwin" ? "macos-app" : "linux-deb", cliExecutable: join(root, "no-desktop") } }));
+  writeFileSync(join(backup, "keep"), "backup");
+  mkdirSync(join(ocxHome, "codex-shim.json"));
+  writeFileSync(join(ocxHome, "config.json"), JSON.stringify({ port: 1 }));
+  cpSync(repoPath("src"), join(pkg, "src"), { recursive: true });
+  cpSync(repoPath("bin"), join(pkg, "bin"), { recursive: true });
+  cpSync(repoPath("package.json"), join(pkg, "package.json"));
+  mkdirSync(join(pkg, "node_modules"));
+  for (const name of readdirSync(repoPath("node_modules"))) {
+    if (name !== "bun") symlinkSync(repoPath("node_modules", name), join(pkg, "node_modules", name));
+  }
+  symlinkSync(repoPath("node_modules", "bun"), join(pkg, "node_modules", "bun"));
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${npmLog}'\nprintf '99.0.0\\n'\n`); chmodSync(join(path, "npm"), 0o755);
+  const nodeCommand = Bun.which("node"); if (!nodeCommand) throw Error("Node required");
+  const node = spawnSync(nodeCommand, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
+  if (!node) throw Error("Node executable could not be resolved");
+  const env = { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome, CODEX_HOME: join(home, ".codex"),
+    CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: path, OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" };
+  const launch = async () => {
+    const child = Bun.spawn([node, join(pkg, "bin", "ocx.mjs"), "update", "--plan", "--json", "--version", "99.0.0"], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    return { stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text(), code: await child.exited };
+  };
+  try {
+    const first = await launch();
+    expect(first.code).toBe(0);
+    expect({ stderr: first.stderr, npmLog: existsSync(npmLog) ? readFileSync(npmLog, "utf8") : "missing" }).toMatchObject({ npmLog: expect.stringContaining("@bitkyc08/opencodex@99.0.0") });
+    expect(first.stderr).not.toContain("auto-restore");
+    expect(JSON.parse(first.stdout)).toMatchObject({ installer: "npm", targetVersion: "99.0.0", canApply: true });
+    expect(readFileSync(npmLog, "utf8")).toContain("@bitkyc08/opencodex@99.0.0");
+    rmSync(join(pkg, "node_modules", "bun"));
+    const missing = await launch();
+    expect(missing.code).toBe(0);
+    expect(JSON.parse(missing.stdout)).toMatchObject({ installer: "npm", reason: "plan-unavailable", canApply: false });
+    expect(readFileSync(join(backup, "keep"), "utf8")).toBe("backup");
+    expect(missing.stderr).not.toContain("auto-restore");
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30000);
 
