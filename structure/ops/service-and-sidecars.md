@@ -413,7 +413,7 @@ directory is located by `src/server/gui-static.ts`;
 
 ## Bun updater ownership transaction
 
-`src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
+`src/update/orchestrated-token.ts` hashes an explicitly selected, canonical install and runtime identity; runtime attestation secrets are excluded from the digest input. `src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
 stop, package replacement and recovery work. The parent never puts its token in the global
 environment. Fixed stop/service/direct-recovery children can join it; package-manager and
 ancillary children receive environments without the capability. Refusals return through the
