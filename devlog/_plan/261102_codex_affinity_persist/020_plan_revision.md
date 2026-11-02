@@ -149,4 +149,3 @@ reservation map). Locale copies found per locale (fr, ko, zh-cn, and any others)
 Focused new + affected tests, `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`, docs-site build,
 `bun scripts/test.ts --changed=dev --parallel=1`, red-on-old recorded. Before the PR: a dedicated Terra security review (secret file
 permissions/ACL, key scope, cross-restart linkability, snapshot contents, deletion on pool/config reset); its verdict goes in the PR description.
-

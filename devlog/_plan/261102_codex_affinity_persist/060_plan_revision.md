@@ -66,4 +66,3 @@ generation and `assertStorageOwned(token)` refuses it after any release/reacquir
 - Windows: start, use, stop (release hook closes), `removeTreeWithRetry` succeeds.
 - Everything else from 020/030/040 (fences, unknown issuer via responses/compact/retry, home switch, passive, bounds, privacy).
 - Guards: test-home guard (real home refused before ownership init), core-lab boundary, config-ownership tests, file-size ratchet, test layout.
-

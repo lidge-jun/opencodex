@@ -143,4 +143,3 @@ Issue: https://github.com/lidge-jun/opencodex/issues/8091
   (same protection class as `admin-api-token`), and the snapshot holds only digests of keys derived from it.
 - Two processes sharing one config home: exclusive create means the loser keeps a process-local key; acceptable and documented.
 - Write amplification: at most one coalesced write per second while traffic flows, same as the Claude store.
-

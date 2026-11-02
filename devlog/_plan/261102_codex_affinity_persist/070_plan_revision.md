@@ -42,4 +42,3 @@ cannot pass `assertStorageOwned`. Change (minimal, in spend-ledger-owner.ts):
   and linked from it.
 - Unsupported version/shape tests assert the application wrote nothing (no schema/meta change, no row change); they do not claim byte-for-byte
   identity where SQLite's own hot-journal recovery may touch the file.
-

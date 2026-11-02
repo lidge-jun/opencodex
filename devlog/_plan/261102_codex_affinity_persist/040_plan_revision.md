@@ -92,4 +92,3 @@ record's current generation AND `credential.chatgptAccountId` both match (as `ac
 
 structure/providers/openai-tiers.md "Durable Codex pool affinity" describes the SQLite store (file, schema, secret, fences, queue, touch
 semantics, bounds, ownership, contract limits). Rest as in 010/030.
-

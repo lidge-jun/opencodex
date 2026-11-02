@@ -185,4 +185,3 @@ red-on-old recorded. PR gets `ci:full` (subprocess tests, docs, on-disk contract
 
 `src/codex/routing/selection.ts` (Lane C), `src/codex/auth-context.ts` and the affinity log label (Lane D), `src/server/claude-*` and
 `src/server/caller-session-identity.ts` (Lane A), `src/codex/routing.ts` and `src/server/index.ts` (size caps), the ownership API fix (#8093).
-

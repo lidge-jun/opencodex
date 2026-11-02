@@ -96,4 +96,3 @@ snapshot, an already scheduled write, passive getters and observer calls, and ex
 
 Dedicated Terra security review before the PR; per MAINTAINERS.md security-sensitive changes also need explicit maintainer security
 review — the PR says so and requests it.
-

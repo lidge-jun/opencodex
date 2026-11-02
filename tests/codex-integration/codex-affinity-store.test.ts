@@ -320,4 +320,3 @@ test("a pin bound and touched in the same pending batch survives a chunk prune",
   flushCodexAffinityStoreForTests(); lease.release(); lease = acquireSpendLedgerOwner();
   expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
 });
-

@@ -77,4 +77,3 @@ Windows test: arm, use, reset, `removeTreeWithRetry` succeeds.
 `tests/ci-workflows/test-home-guard.test.ts` (the new writer refuses before any filesystem mutation when pointed at the real home),
 `tests/lab/core-lab-boundary.test.ts` (new imports do not reach Lab; startServer window scan), config-ownership tests (INITIAL list),
 file-size ratchet, test-layout guards, plus the 020/030/040 test list adjusted: cross-process cases become single-writer cases above.
-
