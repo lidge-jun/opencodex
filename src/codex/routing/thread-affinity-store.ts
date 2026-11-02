@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
-import { recordOwnedConfigPath } from "../../lib/config-ownership";
+import { initializeConfigOwnership, recordOwnedConfigPath } from "../../lib/config-ownership";
 import { isPassiveRead } from "../../lib/passive-read";
 import {
   assertStorageOwned,
@@ -25,6 +25,7 @@ import {
 import { assertNotRealHomeUnderTest } from "../../lib/test-home-guard";
 import { hardenSecretPath } from "../../lib/windows-secret-acl";
 import { readCodexAccountRecord } from "../account-store";
+import { isRequestOwnedAffinityKey } from "../request-owned-affinity-key";
 import { setCodexConversationAnchorObserver } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
 
@@ -52,6 +53,11 @@ type LiveReader = {
   issuer(
     key: string,
   ): { accountId: string; fence?: string; lastUsedAt: number } | undefined;
+  /** Every live pin and issuer, for re-persisting memory into a newly opened database. */
+  forEach(
+    thread: (key: string, scope: string, entry: { accountId: string; identityFence?: string; createdAt: number; lastUsedAt: number }) => void,
+    issuer: (key: string, entry: { accountId: string; fence?: string; lastUsedAt: number }) => void,
+  ): void;
   clearLive(): void;
 };
 type Op = {
@@ -95,7 +101,12 @@ const BASE_SCOPES_EXHAUSTIVE: Exclude<
 void BASE_SCOPES_EXHAUSTIVE;
 let current: Scope | undefined;
 let observedHome: string | undefined;
-let hadScope = false;
+/** Whether an earlier scope in this process actually opened (and so may have persisted) the database. */
+let hadPersistentScope = false;
+/** Pins or issuers changed while no lease was held; the next scope re-persists memory. */
+let changedWithoutLease = false;
+/** Anchors of the last retired scope, handed to the next scope of the same home. */
+let carried: { home: string; anchors: Scope["anchors"] } | undefined;
 let reader: LiveReader | undefined;
 
 export function registerCodexAffinityLiveState(value: LiveReader): void {
@@ -110,6 +121,9 @@ function retire(): void {
   const s = current;
   if (!s) return;
   current = undefined;
+  // Anchors are process-local facts about this home's conversations; the next scope of the same
+  // home needs them to re-derive row keys for pins that are still live in memory.
+  if (s.db) carried = { home: s.home, anchors: s.anchors };
   if (s.timer) clearTimeout(s.timer);
   if (s.pruneTimer) clearInterval(s.pruneTimer);
   try {
@@ -134,8 +148,12 @@ function open(s: Scope): void {
   let db: Database | undefined;
   try {
     assertNotRealHomeUnderTest(s.home);
+    // An owned home must list these files before they exist, so uninstall removes them. A home with
+    // no ownership manifest (one that predates ownership tracking) cannot record anything, and
+    // uninstall refuses to remove anything from it; like the spend-ledger owner database, the store
+    // still works there rather than silently losing persistence.
     for (const suffix of ["", "-journal", "-wal", "-shm"])
-      if (!recordOwnedConfigPath(s.home, path + suffix))
+      if (!recordOwnedConfigPath(s.home, path + suffix) && initializeConfigOwnership(s.home))
         throw new Error("ownership");
     try {
       closeSync(openSync(path, "wx", 0o600));
@@ -270,6 +288,7 @@ function scope(acquiredHome?: string): Scope | undefined {
   // A lease ends a store scope; only a change of home invalidates live maps.
   if (observedHome !== undefined && observedHome !== home) {
     retire();
+    carried = undefined;
     reader?.clearLive();
   }
   observedHome = home;
@@ -292,8 +311,6 @@ function scope(acquiredHome?: string): Scope | undefined {
   } catch {
     return undefined;
   }
-  if (hadScope) reader?.clearLive();
-  hadScope = true;
   const s: Scope = {
     home,
     generation,
@@ -304,21 +321,58 @@ function scope(acquiredHome?: string): Scope | undefined {
     log: [],
     threads: new Map(),
     issuers: new Map(),
-    anchors: new Map(),
+    anchors: carried?.home === home ? carried.anchors : new Map(),
     threadKeys: new Map(),
     issuerKeys: new Map(),
     consulted: new Set(),
     scheduled: false,
   };
+  carried = undefined;
   current = s;
   open(s);
+  if (s.db) {
+    if (hadPersistentScope && changedWithoutLease) persistLiveState(s);
+    changedWithoutLease = false;
+    hadPersistentScope = true;
+  }
   return s;
+}
+/**
+ * The scope for a change to which pins or issuers exist. With no scope open after an earlier one
+ * persisted, the change happened while no lease was held, so the next scope must re-persist memory.
+ */
+function structuralScope(): Scope | undefined {
+  const s = usable();
+  if (!s && !current && hadPersistentScope && !isPassiveRead()) changedWithoutLease = true;
+  return s;
+}
+/**
+ * A later scope in the same process makes the database equal to memory when memory changed while
+ * no lease was held (a late bind, delete or issuer write after a
+ * release). Memory is what this process routes with, so it wins: every stored row is dropped and
+ * every live pin and issuer with a known anchor is written again. A pin deleted during the gap is
+ * therefore not revived by a later restart, and a pin rebound during the gap is saved as rebound.
+ * Live entries without a known anchor stay memory-only, like every other unanchored key.
+ */
+function persistLiveState(s: Scope): void {
+  s.threadKeys.clear();
+  s.issuerKeys.clear();
+  enqueue(s, { kind: "clearAll", sql: "DELETE FROM threads; DELETE FROM issuers", args: [] });
+  reader?.forEach(
+    (key, scopeName, entry) => {
+      if (!entry.identityFence || entry.accountId === "__main__") return;
+      recordThreadBind(key, scopeName, { scope: scopeName, accountId: entry.accountId, fence: entry.identityFence, createdAt: entry.createdAt, lastUsedAt: entry.lastUsedAt });
+    },
+    (key, entry) => recordIssuerSet(key, entry.accountId, entry.fence ?? null, entry.lastUsedAt),
+  );
 }
 function usable(): Scope | undefined {
   const s = scope();
   return s && !s.disabled && !s.poisoned && s.db ? s : undefined;
 }
 function observeAnchor(key: string, family: string, thread: string): void {
+  // Caller-owned keys are process-local by contract (structure/providers/codex-request-owned-affinity.md).
+  if (isRequestOwnedAffinityKey(key)) return;
   const s = usable();
   if (!s) return;
   const now = Date.now();
@@ -337,6 +391,9 @@ function rowKey(
   key: string,
   kind: "conversation" | "issuer",
 ): string | undefined {
+  // The single choke point for every bind, touch, delete, adoption and issuer path: a request-owned
+  // key never has a durable row key, so nothing for it is ever written or restored.
+  if (isRequestOwnedAffinityKey(key)) return undefined;
   const a = s.anchors.get(key);
   if (!a || Date.now() - a.at > TTL) {
     s.anchors.delete(key);
@@ -525,7 +582,7 @@ function pending(s: Scope, row: string, issuer: boolean): boolean {
       (issuer
         ? op.kind === "clearIssuers" ||
           (op.kind === "issuerDelete" && op.key === row)
-        : op.kind === "deleteKey" && op.key === row),
+        : op.kind === "clearThreads" || (op.kind === "deleteKey" && op.key === row)),
   );
 }
 function consulted(s: Scope, key: string): boolean {
@@ -678,7 +735,7 @@ export function recordThreadBind(
   scopeName: string,
   row: StoredThreadRow,
 ): void {
-  const s = usable();
+  const s = structuralScope();
   if (!s || row.accountId === "__main__" || !row.fence) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -708,7 +765,7 @@ export function recordThreadTouch(key: string, scopeName: string): void {
   scheduleTouch(s);
 }
 export function recordThreadDelete(key: string, scopeName?: string): void {
-  const s = usable();
+  const s = structuralScope();
   if (!s) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -734,7 +791,7 @@ export function recordThreadDelete(key: string, scopeName?: string): void {
   );
 }
 export function recordThreadAccountDeleted(key: string, id: string): void {
-  const s = usable();
+  const s = structuralScope();
   if (!s) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
@@ -746,7 +803,7 @@ export function recordThreadAccountDeleted(key: string, id: string): void {
   enqueue(s, { kind: "deleteKeyAccount", key: rk, sql: "DELETE FROM threads WHERE row_key=? AND account_id=?", args: [rk, id] });
 }
 export function recordAccountPinsCleared(id: string): void {
-  const s = usable();
+  const s = structuralScope();
   if (s) {
     for (const [key, entry] of s.threadKeys) {
       for (const [scopeName, account] of entry.scopes) if (account === id) entry.scopes.delete(scopeName);
@@ -760,7 +817,7 @@ export function recordAccountPinsCleared(id: string): void {
   }
 }
 export function recordAllCleared(): void {
-  const s = usable();
+  const s = structuralScope();
   if (s) {
     s.threadKeys.clear(); s.issuerKeys.clear();
     enqueue(s, {
@@ -770,13 +827,25 @@ export function recordAllCleared(): void {
     });
   }
 }
+/** A manual account switch clears pins but keeps the issuers of carried state. */
+export function recordThreadsCleared(): void {
+  const s = structuralScope();
+  if (s) {
+    s.threadKeys.clear();
+    enqueue(s, { kind: "clearThreads", sql: "DELETE FROM threads", args: [] });
+  }
+}
+/** Test seam: feed the anchor observer directly, as a future derivation path might. */
+export function noteCodexAffinityAnchorForTests(key: string, family: string, thread: string): void {
+  observeAnchor(key, family, thread);
+}
 export function recordIssuerSet(
   key: string,
   id: string,
   fence: string | null,
   lastUsedAt: number,
 ): void {
-  const s = usable();
+  const s = structuralScope();
   if (!s || id === "__main__") return;
   const rk = rowKey(s, key, "issuer");
   if (!rk) return;
@@ -798,7 +867,7 @@ export function recordIssuerTouch(key: string): void {
   scheduleTouch(s);
 }
 export function recordIssuerDelete(key: string): void {
-  const s = usable();
+  const s = structuralScope();
   if (!s) return;
   const rk = rowKey(s, key, "issuer");
   if (rk) {
@@ -812,7 +881,7 @@ export function recordIssuerDelete(key: string): void {
   }
 }
 export function recordIssuersCleared(): void {
-  const s = usable();
+  const s = structuralScope();
   if (s) {
     s.issuerKeys.clear();
     enqueue(s, { kind: "clearIssuers", sql: "DELETE FROM issuers", args: [] });
@@ -826,4 +895,8 @@ export function resetCodexAffinityStoreForTests(): void {
     flush(current, false);
     retire();
   }
+  // Model a fresh process: no earlier persisted scope, no change pending from a lease gap.
+  hadPersistentScope = false;
+  changedWithoutLease = false;
+  carried = undefined;
 }

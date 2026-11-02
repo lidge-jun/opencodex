@@ -6,7 +6,7 @@ import type { CodexThreadLineage } from "../lineage";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeLease } from "../../routing/probe-lease";
 import { clearPoolRecoveryState } from "../../routing/probe-lease";
-import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordThreadAccountDeleted, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
+import { identityFence, adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordThreadAccountDeleted, recordAccountPinsCleared, recordAllCleared, recordThreadsCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
 export { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "./thread-affinity-store";
 
 export type ThreadAffinityEntry = {
@@ -221,13 +221,20 @@ registerCodexAffinityLiveState({
     const entry = conversationStateIssuerMap.get(key);
     return entry && { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt };
   },
+  forEach: (thread, issuer) => {
+    for (const [key, affinities] of threadAccountMap) for (const [scope, entry] of affinities) thread(key, scope, entry);
+    for (const [key, entry] of conversationStateIssuerMap) {
+      issuer(key, { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt });
+    }
+  },
   clearLive: () => { threadAccountMap.clear(); threadAffinityEntryTotal = 0; conversationStateIssuerMap.clear(); },
 });
 }
 registerThreadAffinityLiveState();
 
 export function clearThreadAccountMap(options: { preserveConversationStateIssuers?: boolean } = {}): void {
-  recordAllCleared();
+  if (options.preserveConversationStateIssuers) recordThreadsCleared();
+  else recordAllCleared();
   threadAccountMap.clear();
   threadAffinityEntryTotal = 0;
   // A refresh cooldown is per-account runtime state learned alongside these bindings. Leaving it

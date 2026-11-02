@@ -27,13 +27,14 @@ function bind(fence: string): string {
 }
 beforeEach(() => {
   prior = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-affinity-")); process.env.OPENCODEX_HOME = home; live = undefined;
-  registerCodexAffinityLiveState({ thread: () => live, issuer: () => undefined, clearLive: () => { live = undefined; } });
+  registerCodexAffinityLiveState({ thread: () => live, issuer: () => undefined, forEach: (thread) => { if (live) thread(key(), "legacy", live); }, clearLive: () => { live = undefined; } });
 });
 afterEach(() => { lease?.release(); lease = undefined; resetCodexAffinityStoreForTests(); registerThreadAffinityLiveState(); if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior; removeTreeWithRetry(home); });
 
 test("inactive operations do not open and passive operations do not change the database", async () => {
   key(); expect(existsSync(path())).toBe(false);
   lease = acquireSpendLedgerOwner();
+  flushCodexAffinityStoreForTests();
   const before = readFileSync(path());
   await runPassiveRead(async () => { key(); recordAllCleared(); });
   expect(readFileSync(path()).equals(before)).toBe(true);

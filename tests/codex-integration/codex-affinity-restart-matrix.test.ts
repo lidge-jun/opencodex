@@ -55,10 +55,12 @@ for (const kind of ["symlink", "directory"] as const) {
   }));
 }
 
-test("an unowned nonempty home cannot create an affinity database", () => inHome(home => {
+test("a home without an ownership manifest still persists affinity and gains no manifest", () => inHome(home => {
   writeFileSync(join(home, "unowned"), "keep");
-  matrix(home, "probe");
-  expect(existsSync(join(home, names[0]!))).toBe(false);
+  expect(seed(home).account).toBe("a");
+  expect(existsSync(join(home, names[0]!))).toBe(true);
+  expect(worker(home, "codex-affinity-restart-worker.ts", "read").account).toBe("a");
+  expect(existsSync(join(home, ".opencodex-uninstall.json"))).toBe(false);
 }));
 
 for (const kind of ["extra-table", "wrong-column"] as const) {
@@ -178,13 +180,20 @@ test("home switching drops pending writes and does not carry recorded anchors ac
   expect(JSON.parse(result.stdout.toString())).toEqual({ first: "a", rowsB: 1, restoredB: "a" });
 })));
 
-for (const mutation of ["bind", "delete", "issuer"]) {
-  test(`late ${mutation} after release is discarded on reacquisition`, () => inHome(home => {
+for (const mutation of ["bind", "delete", "issuer"] as const) {
+  test(`late ${mutation} after release is what a reacquired lease persists`, () => inHome(home => {
     seed(home);
-    expect(matrix(home, `late-${mutation}`)).toEqual({ pin: "a", issuer: "a" });
+    // Memory wins when a later lease opens the database: the change made while no lease was held is
+    // what this process routes with, and a restart must restore exactly that, never the older row.
+    const expected = {
+      bind: { pin: "b", issuer: "a", restoredPin: "b", restoredIssuer: "a" },
+      delete: { pin: undefined, issuer: "a", restoredPin: undefined, restoredIssuer: "a" },
+      issuer: { pin: "a", issuer: "b", restoredPin: "a", restoredIssuer: "__unknown_codex_conversation_state_issuer__" },
+    }[mutation];
+    expect(matrix(home, `late-${mutation}`)).toEqual({ pin: expected.pin, issuer: expected.issuer });
     const restored = matrix(home, "read");
-    expect(restored.before).toBe("a");
-    expect(restored.issuer).toBe("a");
+    expect(restored.before).toBe(expected.restoredPin);
+    expect(restored.issuer).toBe(expected.restoredIssuer);
   }));
 }
 
