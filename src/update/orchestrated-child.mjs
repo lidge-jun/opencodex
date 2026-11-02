@@ -8,11 +8,13 @@ export function waitForOrchestratedChild(child, options = {}) {
   const timeoutMs = options.timeoutMs ?? 60_000;
   return new Promise(resolve => {
     let timer;
+    let overrunTimer;
     let settled = false;
     const handlers = new Map();
     const cleanupSignals = () => {
       for (const [signal, handler] of handlers) signals.removeListener(signal, handler);
       if (timer !== undefined) stopTimer(timer);
+      if (overrunTimer !== undefined) stopTimer(overrunTimer);
     };
     const onClose = (code, signal) => {
       child.removeListener("error", onError);
@@ -41,6 +43,16 @@ export function waitForOrchestratedChild(child, options = {}) {
       };
       handlers.set(signal, handler);
       signals.on(signal, handler);
+    }
+    if (options.overrunMs !== undefined) {
+      overrunTimer = startTimer(() => {
+        if (settled) return;
+        settled = true;
+        cleanupSignals();
+        // Do not signal a transaction in progress. The caller must detach its
+        // handles and leave the child's in-flight marker intact.
+        resolve({ confirmed: false, code: null, signal: null, reason: "overrun" });
+      }, Math.max(0, options.overrunMs));
     }
   });
 }

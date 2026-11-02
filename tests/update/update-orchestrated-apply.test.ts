@@ -14,6 +14,37 @@ const base: OutcomeInput = {
   targetVerified: false, runtimeHealthy: true, restarted: false,
 };
 
+test("the parent watchdog reports overrun without signalling a still-running child", async () => {
+  const signals = new EventEmitter(), child = new EventEmitter();
+  const forwarded: string[] = [];
+  Object.assign(child, { kill: (signal: string) => { forwarded.push(signal); return true; } });
+  const timers: Array<{ callback: () => void; ms: number }> = [];
+  const cleared: number[] = [];
+  const waiting = waitForOrchestratedChild(child as never, {
+    signals, overrunMs: 900_000,
+    setTimer: (callback: () => void, ms: number) => { timers.push({ callback, ms }); return timers.length; },
+    clearTimer: (id: unknown) => { cleared.push(id as number); },
+  });
+  expect(timers.map(timer => timer.ms)).toEqual([900_000]);
+  timers[0]!.callback();
+  expect(await waiting).toEqual({ confirmed: false, code: null, signal: null, reason: "overrun" });
+  expect(forwarded).toEqual([]);
+  expect(signals.listenerCount("SIGTERM")).toBe(0);
+  expect(cleared).toContain(1);
+  child.emit("close", 0, null);
+
+  const completed = new EventEmitter();
+  Object.assign(completed, { kill: () => true });
+  const normal = waitForOrchestratedChild(completed as never, {
+    signals, overrunMs: 900_000,
+    setTimer: (callback: () => void, ms: number) => { timers.push({ callback, ms }); return timers.length; },
+    clearTimer: (id: unknown) => { cleared.push(id as number); },
+  });
+  completed.emit("close", 0, null);
+  expect(await normal).toEqual({ confirmed: true, code: 0, signal: null });
+  expect(cleared).toContain(2);
+});
+
 test("a signal is forwarded and completion waits for close or the bounded timer", async () => {
   const signals = new EventEmitter(), child = new EventEmitter();
   const forwarded: string[] = [];
