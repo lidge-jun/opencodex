@@ -95,7 +95,7 @@ import { credentialDomainFor } from "../protocols/opaque-state";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveProtocolSettings } from "../protocols/settings";
-import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
+import { markProtocolBlocked, markProtocolEntry, suppressProtocolTrace } from "../protocols/trace";
 import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
 import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
@@ -125,8 +125,10 @@ export async function handleChatCompletions(
   logIds?: {
     requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
     advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+    suppressProtocolTrace?: boolean;
   },
 ): Promise<Response> {
+  if (logIds?.suppressProtocolTrace) suppressProtocolTrace(logCtx);
   // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
   // fallback, so a native id resolved later on the Responses bridge still replaces it.
   assignNativeLogConversationId(logCtx, nativeLogConversationIdFromHeaders(req.headers));
