@@ -54,7 +54,7 @@ for (const platform of ["win32", "linux"] as const) {
           expect(command.args).toContain("--update-package-only");
           expect(command.args).toContain("--update-worker-home");
         }
-        const body = section(node, "async function runPackageManagerSelfUpdate(manager) {", "function bunBinDir(")
+        const body = section(node, "async function runPackageManagerSelfUpdate(manager, child) {", "function bunBinDir(")
           .replaceAll("import.meta.url", JSON.stringify(new URL("../../bin/ocx.mjs", import.meta.url).href));
         const stage = (args: string[]) => {
           tree(join(args[args.indexOf("--prefix") + 1]!, "node_modules", "@bitkyc08", "opencodex"), "2.0.0");

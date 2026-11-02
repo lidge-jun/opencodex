@@ -13,7 +13,7 @@ const [home, observed, ...argv] = process.argv.slice(2);
 if (!home || process.env.OPENCODEX_HOME !== home) throw new Error("isolated fixture home required");
 const launcher = fileURLToPath(new URL("../../bin/ocx.mjs", import.meta.url));
 const source = readFileSync(launcher, "utf8");
-const from = source.indexOf("async function runPackageManagerSelfUpdate(manager) {");
+const from = source.indexOf("async function runPackageManagerSelfUpdate(manager, child) {");
 const to = source.indexOf("function bunBinDir(", from);
 if (from < 0 || to < from) throw new Error("production function boundary missing");
 const body = source.slice(from, to).replaceAll("import.meta.url", JSON.stringify(new URL("../../bin/ocx.mjs", import.meta.url).href));
