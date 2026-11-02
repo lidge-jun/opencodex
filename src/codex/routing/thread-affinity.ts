@@ -302,7 +302,7 @@ export function peekConversationStateIssuer(
 const pendingReleaseReasons = new Map<string, CodexAffinityReason>();
 const MAX_PENDING_RELEASE_REASONS = 4096;
 
-function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
+export function notePendingReleaseReason(threadId: string | null, reason: CodexAffinityReason): void {
   if (threadId === null) return;
   if (!pendingReleaseReasons.has(threadId) && pendingReleaseReasons.size >= MAX_PENDING_RELEASE_REASONS) {
     const oldest = pendingReleaseReasons.keys().next();

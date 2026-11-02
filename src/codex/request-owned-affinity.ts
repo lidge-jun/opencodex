@@ -6,8 +6,10 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { codexConversationIdentity } from "./lineage";
-import { getThreadAffinity, getModelDetourAffinity, type CodexAffinityDecision } from "./routing/thread-affinity";
-import type { CodexQuotaScope } from "./routing/health-store";
+import { getThreadAffinity, getModelDetourAffinity, deleteThreadAffinity, deleteModelDetourAffinity, notePendingReleaseReason, type CodexAffinityDecision, type CodexAffinityReason } from "./routing/thread-affinity";
+import { codexQuotaScopeForModel, type CodexQuotaScope } from "./routing/health-store";
+import { classifyCodexUpstreamOutcome } from "./routing/cooldown-math";
+import type { CodexAuthContext } from "./auth-context";
 
 const key = randomBytes(32);
 const prefix = "request-owned:v1:";
@@ -60,4 +62,31 @@ export function callerOwnedFallbackAffinityDecision(
     return honestAffinityDecision(decision ?? { move: "reused", reason: "healthy" }, affinityKey, MAIN_CODEX_ACCOUNT_ID, quotaScope, modelId, requestOwnedKeyWithheld)!;
   if (ordinary || detour) return { move: "detour", reason };
   return { move: "unbound", reason: affinityKey ? decision?.reason ?? "healthy" : requestOwnedKeyWithheld ? "request_owned" : "no_conversation" };
+}
+
+/** Release this caller’s scoped binding after its own main credential is refused. */
+export function releaseRequestOwnedMainOnOutcome(ctx: CodexAuthContext, outcome: number, modelId?: string): void {
+  if (ctx.kind !== "main" || !ctx.affinityKey || !isRequestOwnedAffinityKey(ctx.affinityKey)) return;
+  const outcomeClass = classifyCodexUpstreamOutcome(outcome);
+  const reason: CodexAffinityReason | undefined = outcomeClass === "quota" ? "quota_refusal"
+    : outcomeClass === "credential" ? "unusable" : outcomeClass === "transient" ? "transient" : undefined;
+  if (!reason) return;
+  const key = ctx.affinityKey;
+  const scope = codexQuotaScopeForModel(modelId);
+  let released = false;
+  const ordinary = getThreadAffinity(key, scope);
+  const mainDetour = getModelDetourAffinity(key, modelId, scope)?.accountId === MAIN_CODEX_ACCOUNT_ID;
+  // A caller-main fallback or model detour can leave an ordinary binding on a different
+  // account. Retire it too so the next placement reports the release rather than reuse. If
+  // main was itself bound and another turn has since rebound elsewhere, keep that newer entry.
+  const callerMainDetour = ctx.affinityDecision?.move === "detour";
+  if (ordinary && (ordinary.accountId === MAIN_CODEX_ACCOUNT_ID || mainDetour || callerMainDetour)) {
+    deleteThreadAffinity(key, scope);
+    released = true;
+  }
+  if (mainDetour) {
+    deleteModelDetourAffinity(key, modelId, scope);
+    released = true;
+  }
+  if (released) notePendingReleaseReason(key, reason);
 }

@@ -1326,6 +1326,11 @@ Affinity labels describe the binding when selection returns. `unbound` means no 
 `request_owned` means the caller-owned credential did not opt in, and `no_conversation` means no
 conversation key was available. A later eligibility change can release a binding after selection.
 
+With or without the option, a request that carries its own bearer records which account served each
+turn under a key scoped to that bearer. When a later turn is served by a different account, including
+after you switch accounts manually, OpenCodex removes `previous_response_id` before sending and
+rejects carried uploaded `file_id` references with HTTP 400, because the new account cannot read them.
+
 ### Optional idle-window steering
 
 `codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new

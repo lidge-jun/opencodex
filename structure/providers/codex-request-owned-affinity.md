@@ -62,8 +62,8 @@ is not caller-scoped by design and is unchanged by this feature.
 
 Persistence of thread affinity must, for every key where `isRequestOwnedAffinityKey` is true: never register
 an anchor for it, never serialize its thread rows (any scope, including model detours) or issuer rows, and
-never adopt a restored row into it. Whichever of the persistence change and this change lands second adds a
-combined flush-and-restart regression.
+never adopt a restored row into it. The conversation-state key carries the same prefix, so the predicate
+covers issuer records too.
 
 ## Tests
 

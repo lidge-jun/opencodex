@@ -337,3 +337,57 @@ test("regular Responses scrubs retained issuer on a manual main pin and on retur
     expect(back.status).toBe(200); await back.text(); expect(sent[1]?.previous_response_id).toBeUndefined();
   } finally { clearResponseStateForTests(); turn?.release(); }
 });
+
+test.each([429, 503])("caller-owned Responses main quota refusal %s releases only its conversation binding", async refusalStatus => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const { getCodexQuotaHealthSnapshot } = await import("../../src/codex/routing");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("owned-responses-failure")}`, "content-type": "application/json", "session-id": "s", "thread-id": "t" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [POOL_ID];
+  config.accountPoolStrategy = "round-robin"; config.accountPoolStickyLimit = 1;
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    config.pausedCodexAccountIds = [];
+    let status = 200;
+    globalThis.fetch = (async () => status === 200 ? completedInference() : refusalStatus === 429 ? quotaRefusal() : Response.json({ error: { code: "usage_limit_reached", message: "usage limit reached" } }, { status: 503, headers: { "retry-after": "600" } })) as typeof fetch;
+    const makeRequest = () => new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }) });
+    const success = await handleResponses(makeRequest(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(success.status).toBe(200); await success.text();
+    expect(getThreadAffinity(first.affinityKey!, "shared")?.accountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    status = 429;
+    const failure = await handleResponses(makeRequest(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(failure.status).toBe(refusalStatus); await failure.text();
+    expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
+    expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared")).toBeNull();
+    const next = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(next.affinityDecision?.move).toBe("rebound"); expect(next.affinityDecision?.reason).toBe("quota_refusal");
+  } finally { turn?.release(); }
+});
+
+test("websocket terminal recorder releases a caller-owned main binding on quota refusal", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("owned-ws-failure")}`, "content-type": "application/json", "session-id": "s", "thread-id": "t" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [POOL_ID];
+  config.accountPoolStrategy = "round-robin"; config.accountPoolStickyLimit = 1;
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    config.pausedCodexAccountIds = [];
+    globalThis.fetch = (async () => completedInference()) as typeof fetch;
+    let record: ((status: "completed" | "failed" | "incomplete", httpStatusOverride?: number) => void) | undefined;
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { turnAdmissionLease: turn!, inboundTransport: "websocket", recordTerminalOutcomes: false, setTerminalOutcomeRecorder: fn => { record = fn; } });
+    expect(response.status).toBe(200); await response.text();
+    expect(record).toBeDefined();
+    record!("incomplete", 429);
+    expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
+  } finally { turn?.release(); }
+});
