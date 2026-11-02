@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { tryAcquireUpdateSyncMutex } from "./sync-update-mutex.mjs";
+import { inspectUpdateMarker, tryAcquireUpdateSyncMutex } from "./sync-update-mutex.mjs";
 import { assertNotRealHomeUnderTest } from "./test-home-guard.mjs";
 
 function atomicJson(path, value) {
@@ -72,6 +72,11 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
         return { ok: false, error };
       }
       mutex = acquired;
+      if (inspectUpdateMarker(home) !== "free") {
+        mutex.release(); mutex = undefined;
+        atomicJson(resultPath, { phase: "refused", error: "update-in-flight" }); state = "refused";
+        return { ok: false, error: "update-in-flight" };
+      }
       try { startedAt = now(); marker("preflight"); }
       catch (error) { mutex.release(); mutex = undefined; throw error; }
       state = "preflight";

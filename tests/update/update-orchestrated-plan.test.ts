@@ -106,6 +106,7 @@ test("apply admission binds the observed plan and deadline before any update dri
   const plan = buildOrchestratedPlan(base);
   const request = { ok: true, mode: "apply" } as const;
   expect(decideOrchestratedApply(plan, request, 100)).toEqual({ kind: "proceed" });
+  expect(decideOrchestratedApply({ ...plan, updateInFlight: true }, request, 100)).toMatchObject({ exitCode: 10, result: { error: "update-in-flight" } });
   expect(decideOrchestratedApply(plan, { ...request, expectPlan: "different-plan-token" }, 100)).toMatchObject({ exitCode: 10, result: { error: "plan-changed", applied: false } });
   expect(decideOrchestratedApply(plan, { ...request, notAfter: 99 }, 100)).toMatchObject({ exitCode: 10, result: { error: "deadline-passed", applied: false } });
   expect(decideOrchestratedApply(plan, { ...request, notAfter: 100, expectPlan: plan.planToken }, 100)).toEqual({ kind: "proceed" });

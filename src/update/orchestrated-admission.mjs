@@ -5,6 +5,7 @@ export function decideOrchestratedApply(plan, request, now) {
   const refuse = error => ({ kind: "done", exitCode: 10, result: { ...result, error } });
   if (request.expectPlan && request.expectPlan !== plan.planToken) return refuse("plan-changed");
   if (request.notAfter !== undefined && now > request.notAfter) return refuse("deadline-passed");
+  if (plan.updateInFlight) return refuse("update-in-flight");
   if (plan.reason === "up-to-date") return { kind: "done", exitCode: 0, result };
   if (!plan.canApply) return refuse(plan.reason ?? "plan-unavailable");
   return { kind: "proceed" };

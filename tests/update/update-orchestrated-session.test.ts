@@ -16,6 +16,17 @@ function fixture() {
 }
 function read(path: string) { return JSON.parse(readFileSync(path, "utf8")); }
 
+test.each([
+  { pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid },
+  { pid: 2147483647, phase: "failed", startedAt: 1, terminationUnconfirmed: true },
+])("prior installer marker refuses and remains untouched: %j", marker => {
+  const f = fixture(), path = join(f.home, "update-orchestrated.json");
+  const original = JSON.stringify(marker); writeFileSync(path, original);
+  const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  expect(session.start()).toEqual({ ok: false, error: "update-in-flight" });
+  expect(readFileSync(path, "utf8")).toBe(original);
+});
+
 test.skipIf(process.platform === "win32")("POSIX installer timeout terminates its descendant group before returning", () => {
   const f = fixture(), marker = join(f.home, "update-orchestrated.json"), descendant = join(f.home, "descendant");
   writeFileSync(marker, JSON.stringify({ pid: process.pid, phase: "mutating", startedAt: Date.now() }));
