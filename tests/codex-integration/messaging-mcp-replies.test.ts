@@ -96,7 +96,7 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  for (const mode of ["reply-reject","reply-wrong-turn","reply-invalid-client","reply-too-many","reply-bad-turns"]) test(`${mode}: unavailable without private diagnostics`,async()=>{
+  for (const mode of ["reply-reject","reply-wrong-turn","reply-invalid-client","reply-invalid-phase","reply-invalid-text","reply-too-many","reply-bad-turns"]) test(`${mode}: unavailable without private diagnostics`,async()=>{
     const f=queueMcpFixture(mode);
     try { const r=await queueMcpReadReply({...f.options,allowReplyRead:true},input);expect(r.available).toBe(false);expect(JSON.stringify(r)).not.toContain("PRIVATE_"); }
     finally {await f.close();}
@@ -132,9 +132,15 @@ describe.skipIf(process.platform === "win32")("opt-in MCP stored turn replies", 
     finally {await f.close();}
   });
 
-  test("unknown phase is not silently promoted to a final answer",async()=>{
-    const f=queueMcpFixture("reply-unknown-phase");
+  for (const mode of ["reply-unknown-phase","reply-missing-phase"]) test(`${mode}: absent phase is not promoted to a final answer`,async()=>{
+    const f=queueMcpFixture(mode);
     try {expect(await queueMcpReadReply({...f.options,allowReplyRead:true},input)).toMatchObject({status:"observed",replies:[]});}
+    finally {await f.close();}
+  });
+
+  test("unrelated history without phase does not hide a matching receipt or final text",async()=>{
+    const f=queueMcpFixture("reply-unrelated-missing-phase");
+    try {const r=await queueMcpReadReply({...f.options,allowReplyRead:true},input);expect(r).toMatchObject({available:true,status:"observed",replies:[{itemId:"answer-1",text:"fixture answer"}]});expect(JSON.stringify(r)).not.toContain("PRIVATE_");}
     finally {await f.close();}
   });
 

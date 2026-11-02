@@ -65,6 +65,10 @@ rl.on("line", line => {
     if(!searching && mode === "reply-stale") {data=[user];nextCursor="reply-next";}
     if(!searching && mode === "reply-running") data=[user,commentary];
     if(!searching && mode === "reply-unknown-phase") final.item.phase=null;
+    if(mode === "reply-missing-phase") delete final.item.phase;
+    if(mode === "reply-unrelated-missing-phase") {delete commentary.item.phase;if(searching) data.unshift(commentary);}
+    if(mode === "reply-invalid-phase") final.item.phase="unsupported";
+    if(mode === "reply-invalid-text") final.item.text=42;
     if(!searching && mode === "reply-long") data.push({...final,item:{...final.item,id:"answer-2",text:"second"}});
     if(!searching && mode === "reply-earlier-final") data.unshift({...final,item:{...final.item,id:"earlier-answer",text:"earlier fixture answer"}});
     if(!searching && mode === "reply-refresh") {

@@ -18,7 +18,7 @@ function entries(data: unknown, limit: number, turnId?: string): Entry[] {
     seen.add(row.item.id);
     if (row.item.type === "userMessage" && row.item.clientId != null && !validId(row.item.clientId)) throw new Error("invalid correlation");
     if (row.item.type === "agentMessage" && (typeof row.item.text !== "string"
-      || (row.item.phase !== null && !["commentary", "partial_answer", "final_answer"].includes(row.item.phase as string)))) throw new Error("invalid message");
+      || (row.item.phase != null && !["commentary", "partial_answer", "final_answer"].includes(row.item.phase as string)))) throw new Error("invalid message");
   }
   return data as Entry[];
 }

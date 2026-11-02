@@ -212,6 +212,8 @@ messages; malformed non-null IDs still fail validation. Absence is not_observed 
 reachedHistoryEnd flag, never proof of non-delivery. Multiple matches in that page
 are ambiguous and expose no text. A match identifies a turn; one ascending page
 of its final_answer agent messages is projected with IDs and turn association.
+Omitted or null agent phases are accepted but never projected as final text;
+unsupported non-null phases and non-string agent text remain invalid.
 All final texts in the turn are eligible, including text preceding a later input;
 the association is always same_turn_not_exclusive. User bodies, reasoning, command
 outputs, citations and extra native fields are excluded. A shared 16 KiB UTF-8 text
