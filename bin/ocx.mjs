@@ -1026,8 +1026,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
               const result = runPosixInstallerSync({ file: invocation.file, args: invocation.args,
                 markerPath: join(configDir(), "update-orchestrated.json"), authorizeMutation: homePolicy.authorizeMutation,
                 env: unprivilegedOwnershipMutationEnvironment(invocation.options?.env ?? process.env) });
-              if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false) session.retainInstallerFence();
-              return result;
+              if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false || result.processTreeExited === false) {
+                session.retainInstallerFence();
+                return { ...result, processTreeExited: false };
+              }
+              return { ...result, processTreeExited: true };
               } catch (error) { session.retainInstallerFence(); throw error; }
             }
             return guardedSpawnSync(homePolicy.authorizeMutation, "package", invocation.file, invocation.args, {
@@ -1078,8 +1081,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
               try {
               const result = runPosixInstallerSync({ file: invocation.file, args: invocation.args, cwd, markerPath: join(configDir(), "update-orchestrated.json"),
                 authorizeMutation: homePolicy.authorizeMutation, env });
-              if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false) session.retainInstallerFence();
-              return result;
+              if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false || result.processTreeExited === false) {
+                session.retainInstallerFence();
+                return { ...result, processTreeExited: false };
+              }
+              return { ...result, processTreeExited: true };
               } catch (error) { session.retainInstallerFence(); throw error; }
             });
             return withPnpmCommandCwd(args, cwd => homePolicy.authorizeMutation("package") ? guardedSpawnSync(homePolicy.authorizeMutation, "package", invocation.file, invocation.args, {

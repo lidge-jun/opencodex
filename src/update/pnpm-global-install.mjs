@@ -512,9 +512,9 @@ export function runPnpmGlobalUpdate({
   try {
     install = runPnpm(ownerGlobalArgs(["add", "-g", PNPM_BUILD_APPROVAL, spec], owner), false);
   } catch {
-    install = { status: 1 };
+    install = { status: null, processTreeExited: false };
   }
-  if (install?.processTreeExited === false) return { ok: false, phase: "install", processTreeExited: false,
+  if (!Number.isInteger(install?.status) || install?.processTreeExited === false || install?.groupExited === false) return { ok: false, phase: "install", processTreeExited: false, rolledBack: false, uncertain: true,
     error: "installer-termination-unconfirmed" };
 
   // The package path may switch to a different group link, so only constrain
@@ -563,9 +563,9 @@ export function runPnpmGlobalUpdate({
   try {
     rollback = runPnpm(ownerGlobalArgs(["add", "-g", PNPM_BUILD_APPROVAL, packageSpec(packageName, before.version)], owner), false);
   } catch {
-    rollback = { status: 1 };
+    rollback = { status: null, processTreeExited: false };
   }
-  if (rollback?.processTreeExited === false) return { ok: false, phase: "rollback", processTreeExited: false,
+  if (!Number.isInteger(rollback?.status) || rollback?.processTreeExited === false || rollback?.groupExited === false) return { ok: false, phase: "rollback", processTreeExited: false, rolledBack: false, uncertain: true,
     error: "installer-termination-unconfirmed" };
   const restored = readPnpmGlobalPackage(
     packageName,

@@ -166,12 +166,29 @@ export function runOwnedPnpm(
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
-  session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence">,
-): { status: number | null; stdout?: string | null; stderr?: string | null } {
+  session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
+  markerPath = join(getConfigDir(), "update-orchestrated.json"),
+): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
   const target = ownerPnpmTarget(owner, args);
   if (!target) return { status: 1 };
   const mutating = ["add", "install", "update", "remove", "uninstall"].includes(args[0] ?? "");
   try { return withPnpmCommandCwd(args, cwd => {
+    if (mutating && !capture && session && authorizeMutation("package")) {
+      const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env));
+      if (process.platform === "win32") {
+        session.noteUntrackedInstaller();
+        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation });
+        if (result.processTreeExited && Number.isInteger(result.status)) session.confirmInstallerExit();
+        else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
+        return result;
+      }
+      const result = runPosixInstallerSync({ file: target.bin, args: target.args, markerPath, cwd, env, authorizeMutation });
+      if (!Number.isInteger(result.status) || result.signal || !result.groupExited || result.groupKilled !== false || result.processTreeExited === false) {
+        session.retainInstallerFence();
+        return { ...result, processTreeExited: false };
+      }
+      return { ...result, processTreeExited: true };
+    }
     const result = authorizeMutation("package") ? guardedSpawnSync(authorizeMutation, "package", target.bin, target.args, {
     stdio,
     encoding: "utf8",

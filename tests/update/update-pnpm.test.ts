@@ -541,6 +541,26 @@ describe("pnpm global update", () => {
     expect(result).toMatchObject({ ok: false, error: "installer-termination-unconfirmed", processTreeExited: false });
     expect(state.calls.filter(call => call.args[0] === "list")).toHaveLength(1);
   });
+  test.each([{ status: null }, { status: 0, groupExited: false }, { status: 0, processTreeExited: false }])("uncertain mutation %j forbids readback and rollback", uncertain => {
+    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const run = fakePnpm(state, owner); let mutations = 0;
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: (args, capture) => args[0] === "add" ? (mutations++, uncertain) : run(args, capture),
+      verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, rolledBack: false, uncertain: true, processTreeExited: false, error: "installer-termination-unconfirmed" });
+    expect(mutations).toBe(1);
+    expect(state.calls.filter(call => call.args[0] === "list")).toHaveLength(1);
+  });
+  test("an unconfirmed rollback stops before final readback", () => {
+    const owner = ownerFor(), state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
+    const run = fakePnpm(state, owner); let mutations = 0;
+    const result = runPnpmGlobalUpdate({ packageName: PKG, currentVersion: "1.0.0", targetVersion: "2.0.0", tag: "latest", owner,
+      runPnpm: (args, capture) => { if (args[0] === "add" && ++mutations === 2) return { status: null }; const value = run(args, capture); return args[0] === "add" ? { ...value, status: 1 } : value; },
+      verify: fakeVerify(state, owner), verifyShims: fakeShims(state) });
+    expect(result).toMatchObject({ ok: false, phase: "rollback", rolledBack: false, uncertain: true, processTreeExited: false });
+    expect(mutations).toBe(2);
+    expect(state.calls.filter(call => call.args[0] === "list")).toHaveLength(2);
+  });
   test("updates through the selected pnpm owner and verifies the new active group", () => {
     const owner = ownerFor();
     const state: FakePnpmState = { activeVersion: "1.0.0", calls: [] };
