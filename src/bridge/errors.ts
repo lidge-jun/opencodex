@@ -157,6 +157,7 @@ export function formatUsageLimitReachedResponse(message: string, resetsAtMs: num
     ...(resetsAtMs !== null ? { resets_at: Math.ceil(resetsAtMs / 1000) } : {}),
   };
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (retryAfterSeconds !== null) headers.set("Retry-After", String(retryAfterSeconds));
+  const advice = retryAfterSeconds !== null ? formatClientRetryAfter(retryAfterSeconds) : undefined;
+  if (advice !== undefined) headers.set("Retry-After", advice);
   return new Response(JSON.stringify({ error }), { status: 429, headers });
 }

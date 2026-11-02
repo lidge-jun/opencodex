@@ -32,6 +32,7 @@ import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { errorDetailFor, projectErrorDetail } from "../usage/error-detail";
+import { upstreamErrorIsLocal } from "./request-log-failure-detail";
 import {
   appendUsageEntry,
   classifyCacheTelemetryProvenance,
@@ -1606,7 +1607,7 @@ function writeFinalRequestLog(
     ...(errorCode ? { errorCode } : {}),
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
-    ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
+    ...(logCtx.upstreamError && !upstreamErrorIsLocal(logCtx) ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
     ...upstreamDiagnosticLogFields(logCtx),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),

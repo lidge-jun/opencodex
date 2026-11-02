@@ -137,7 +137,9 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
   const failed = status !== undefined ? status >= 400 : typeof entry.terminalStatus === "string" && entry.terminalStatus !== "completed";
   // A client that closed the request is not an upstream condition.
   const clientClosed = status === 499 || errorCode === "client_closed_request" || errorCode === "client_cancelled";
-  let upstreamCondition: UpstreamCondition | undefined = isUpstreamCondition(entry.upstreamCondition) ? entry.upstreamCondition : undefined;
+  // A recorded condition is kept under the same rules that derive one: failed and not a client close.
+  let upstreamCondition: UpstreamCondition | undefined = failed && !clientClosed && isUpstreamCondition(entry.upstreamCondition)
+    ? entry.upstreamCondition : undefined;
   const evidence = str(entry.upstreamError) ?? str(entry.upstreamErrorCode) ?? str(entry.upstreamErrorType);
   if (!upstreamCondition && failed && !clientClosed && evidence !== undefined && status !== undefined) {
     upstreamCondition = classifyUpstreamCondition({

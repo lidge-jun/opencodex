@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { formatErrorResponse } from "../../src/bridge";
+import { formatUsageLimitReachedResponse } from "../../src/bridge/errors";
+import { comboUnavailableResponse } from "../../src/server/responses/core-errors";
 import { fallbackRefusedResponse, type FallbackEvent } from "../../src/routing/fallback-policy";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
 import { bufferCompactResponse } from "../../src/server/responses/compact";
@@ -43,6 +45,16 @@ describe("client Retry-After is regenerated at every boundary", () => {
   test("translated error response", () => {
     expect(formatErrorResponse(429, "rate_limit_error", "slow down", { retryAfter: NUMERIC_KEY }).headers.get("retry-after")).toBe("691200");
     expect(formatErrorResponse(429, "rate_limit_error", "slow down", { retryAfter: "must-not-echo" }).headers.get("retry-after")).toBeNull();
+  });
+
+  test("usage-limit and combo-unavailable refusals", () => {
+    expect(formatUsageLimitReachedResponse("spent", null, 900_000).headers.get("retry-after")).toBe("691200");
+    expect(formatUsageLimitReachedResponse("spent", null, 84_692).headers.get("retry-after")).toBe("84692");
+    expect(formatUsageLimitReachedResponse("spent", null, null).headers.get("retry-after")).toBeNull();
+    expect(comboUnavailableResponse("none", { retryAfter: "900000" }).headers.get("retry-after")).toBe("691200");
+    expect(comboUnavailableResponse("none", { retryAfter: NUMERIC_KEY }).headers.get("retry-after")).toBe("691200");
+    expect(comboUnavailableResponse("none", { retryAfter: "must-not-echo" }).headers.get("retry-after")).toBeNull();
+    expect(comboUnavailableResponse("none", { retryAfter: "60" }).headers.get("retry-after")).toBe("60");
   });
 
   test("compact response buffering", async () => {

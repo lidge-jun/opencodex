@@ -455,7 +455,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       cleanupAbort(); upstream.abort();
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
       const refusal = fail(429, error.message, "rate_limit_error");
-      refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+      const advice = formatClientRetryAfter(error.retryAfterSeconds);
+      if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
   }
@@ -836,7 +837,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = fail(429, sendError.message, "rate_limit_error");
-      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
+      if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");

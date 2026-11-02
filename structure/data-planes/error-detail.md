@@ -13,7 +13,10 @@ append and read, and `requestLogEntryFromPersistedUsage` uses it on hydration. A
   normalized the same way, and upstream text fields removed from attempts, in place.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
-  none. `classifyUpstreamCondition` reads status, bounded structured tokens and,
+  none, and a stored condition is kept only under the same rules. Text set through
+  `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
+  (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
+  it out of the final row's evidence. `classifyUpstreamCondition` reads status, bounded structured tokens and,
   for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
@@ -47,8 +50,9 @@ Client `Retry-After` advice is a string this proxy formats: `formatClientRetryAf
 of seconds clamped to 0..691200 (eight days, so a weekly usage-window reset such as a local Codex account
 cooldown still reaches the client), and yields nothing for any other input. The Ollama surface keeps its
 own smaller bound (`ollamaRetryAfter`). Every other client boundary uses `formatClientRetryAfter`
-(translated errors, native Chat and Messages, Messages passthrough, the Responses error re-wrap, compact,
-context history, WebSocket response metadata, fallback refusal and Copilot refusal). Internal cooldown and
+(translated errors, native Chat and Messages including pacing refusals, Messages passthrough, the Responses
+error re-wrap, compact, context history, WebSocket response metadata, fallback refusal, Copilot refusal,
+usage-limit and combo-unavailable refusals, Codex account cooldowns and the Claude subscription cooldown). Internal cooldown and
 retry scheduling keep reading the parsed evidence through `resolveClientRetryAfter` and
 `src/combos/failover.ts`. `tests/server/client-retry-after-sites.test.ts` and
 `tests/lib/client-retry-after.test.ts` cover the sites and the format.

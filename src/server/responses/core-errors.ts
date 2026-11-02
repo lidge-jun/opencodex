@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
 import { isCyberPolicyMessage, isCyberPolicyCode } from "../../lib/errors";
@@ -102,10 +103,9 @@ export function comboUnavailableResponse(
   options?: { retryAfter?: string | null },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
-  const retryAfter = options?.retryAfter?.trim();
-  if (retryAfter && retryAfter.length > 0 && retryAfter.length <= 128) {
-    headers.set("Retry-After", retryAfter);
-  }
+  // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
+  const advice = formatClientRetryAfter(options?.retryAfter);
+  if (advice !== undefined) headers.set("Retry-After", advice);
   return new Response(
     JSON.stringify({
       error: { message, type: "server_error", code: "combo_unavailable" },

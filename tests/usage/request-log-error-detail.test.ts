@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage } from "../../src/server/request-log";
+import {
+  addFinalRequestLog, addRequestLog, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage,
+  type RequestLogContext, type RequestLogEntry,
+} from "../../src/server/request-log";
+import { recordLocalFailureDetail } from "../../src/server/request-log-failure-detail";
 import {
   appendUsageEntry, readUsageEntries, resetUsageReadCacheForTests, usageLogPath, type PersistedUsageEntry,
 } from "../../src/usage/log";
@@ -88,6 +92,9 @@ describe("errorDetailFor", () => {
   test("a recorded condition is kept only when it is a known member", () => {
     expect(errorDetailFor({ status: 429, upstreamCondition: "billing_exhausted", upstreamError: "rate limit" }).upstreamCondition).toBe("billing_exhausted");
     expect(errorDetailFor({ status: 429, upstreamCondition: PROVIDER_KEY }).upstreamCondition).toBeUndefined();
+    // A recorded condition follows the derivation rules: none on a success or a client close.
+    expect(errorDetailFor({ status: 200, upstreamCondition: "rate_limited" }).upstreamCondition).toBeUndefined();
+    expect(errorDetailFor({ status: 499, upstreamCondition: "rate_limited" }).upstreamCondition).toBeUndefined();
     expect(errorDetailFor({ status: 429, upstreamCondition: "constructor", upstreamError: "x" }).upstreamCondition).toBe("rate_limited");
   });
 
@@ -202,6 +209,22 @@ describe("request-log rows keep only proxy-owned error facts", () => {
     expect(hydrated.errorCode).toBe("permission_denied");
     expect(hydrated.upstreamCondition).toBe("account_verification_required");
   }));
+
+  test("a local diagnostic is failure detail, not upstream evidence", () => {
+    const final = (record: (ctx: RequestLogContext) => void, status: number) => {
+      const ctx: RequestLogContext = { model: "m", provider: "anthropic-native" };
+      record(ctx);
+      const rows: RequestLogEntry[] = [];
+      addFinalRequestLog("local-" + status, Date.now(), ctx, status, { closeReason: "non_stream" }, row => rows.push(row));
+      return rows[0]!;
+    };
+    const timeout = final(ctx => recordLocalFailureDetail(ctx, "anthropic passthrough timed out waiting for response headers"), 504);
+    expect(timeout.failureDetail).toBe("anthropic passthrough timed out waiting for response headers");
+    expect(timeout.upstreamCondition).toBeUndefined();
+    const restated = final(ctx => recordLocalFailureDetail(ctx, "Provider error 429: rate_limit_error", { upstreamEvidence: true }), 429);
+    expect(restated.failureDetail).toBe("Provider error 429: rate_limit_error");
+    expect(restated.upstreamCondition).toBe("rate_limited");
+  });
 
   test("projection keeps identity when nothing changes", () => {
     const entry = log({ requestId: "unchanged", status: 503, errorCode: "server_busy" });

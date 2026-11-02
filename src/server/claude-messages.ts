@@ -418,14 +418,14 @@ async function anthropicNativePassthrough(
     // Upstream text is untrusted: retain only a closed type vocabulary in history.
     // Bound parsing work independently of the larger response-relay body limit.
     const statusReason = `Provider error ${upstream.status}`;
-    recordLocalFailureDetail(logCtx, statusReason);
+    recordLocalFailureDetail(logCtx, statusReason, { upstreamEvidence: true });
     if (text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS) {
       try {
         const parsed: unknown = JSON.parse(text);
         if (isRec(parsed) && parsed.type === "error" && isRec(parsed.error)) {
           const upstreamType = parsed.error.type;
           const knownType = PASSTHROUGH_ERROR_TYPES.find(type => type === upstreamType);
-          if (knownType) recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`);
+          if (knownType) recordLocalFailureDetail(logCtx, `${statusReason}: ${knownType}`, { upstreamEvidence: true });
         }
       } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
     }
