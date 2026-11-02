@@ -36,6 +36,10 @@ finish `stop`, `tool_calls` and `length` to `done_reason`; content filtering, un
 missing finish are native errors without `done: true`. A stream emits its single `done: true` record
 only after the Chat stream reached EOF and the inner path settled, so trailing usage is included and
 a later error never follows a success terminal.
+Success is the Chat layer's settled outcome, not a second judgment: the native Chat relay ends at
+`[DONE]` for every Chat client, and the shared JSON-fallback stream (`jsonCompletionSse`) reports a
+missing finish as `stop` as it does for ordinary Chat clients. A buffered request passes the raw JSON
+through, so a missing finish there is a native error.
 
 ## Final request log
 
