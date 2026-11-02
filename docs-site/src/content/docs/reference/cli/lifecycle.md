@@ -545,6 +545,8 @@ Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fa
 the Home outcome and each Child's state; failed or timed-out Children produce exit 6. A skipped
 Child is identified by its reason. An unreadable link store also produces exit 6 and a path-free
 error in human output. Exit 7 is reserved for an update in flight.
+If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
+sanitized failure message.
 
 Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or run
 `ocx sync --restart-codex` on that Child if a Codex restart is needed. The Child's pinned sync may

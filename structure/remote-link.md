@@ -1,6 +1,6 @@
 # Remote Link
 
-`src/link/ssh-argv.ts` and `src/link/remote-windows.ts` build pinned Child sync commands that select and version-check the same executable before executing `sync --expect-link` without a restart flag. The Home requires one valid selection marker on stderr and one stdout delimiter, and classifies only the text after that delimiter; login-shell output before them is ignored. Oversized version probes are skipped. The Home's `src/cli/sync-command.ts` fans out only after its catalog is current; the Child may still restart its own OpenCodex client runtime after applying changed Home settings.
+`src/link/ssh-argv.ts` and `src/link/remote-windows.ts` build pinned Child sync commands that select and version-check the same executable before executing `sync --expect-link` without a restart flag. Fan-out platform discovery in `src/link/remote-platform.ts` accepts a Windows marker on any stdout line or one framed uname line, so login-shell output cannot decide the platform. The Home requires one valid selection marker on stderr and one stdout delimiter, and classifies only the text after that delimiter; login-shell output before them is ignored. Oversized version probes are skipped. The Home's `src/cli/sync-command.ts` fans out only after its catalog is current; the Child may still restart its own OpenCodex client runtime after applying changed Home settings.
 
 `src/link/` owns the building blocks for linking OpenCodex machines over SSH. The pure modules start no process, open no socket and schedule no timer on import.
 

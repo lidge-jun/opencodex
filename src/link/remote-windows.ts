@@ -66,7 +66,7 @@ export const OCX_JOB_SOURCE = [
   "var p=q;var read=System.Threading.Tasks.Task.Run(()=>{var b=new char[257];int n=0,k;while(n<257&&(k=p.StandardOutput.Read(b,n,257-n))>0)n+=k;return n>256?null:new string(b,0,n);});",
   "System.Threading.Tasks.Task.Run(()=>{var b=new char[1024];while(p.StandardError.Read(b,0,b.Length)>0){} });",
   "var clock=Stopwatch.StartNew();var done=System.Threading.Tasks.Task.Run(()=>p.WaitForExit());if(!read.Wait(10000)||read.Result==null||!done.Wait(Math.Max(0,10000-(int)clock.ElapsedMilliseconds))){q.Kill();q.WaitForExit();return null;}return q.ExitCode==0?read.Result:null;",
-  "}catch{try{if(q!=null&&!q.HasExited){q.Kill();q.WaitForExit();}}catch{}return null;}finally{if(q!=null)q.Dispose();}}",
+  "}catch{try{if(q!=null&&!q.HasExited){q.Kill();q.WaitForExit();}}catch{return null;}return null;}finally{if(q!=null)q.Dispose();}}",
   "public static int Run(string x,string c){",
   "IntPtr z=IntPtr.Zero,j=z,l=z,v=z,h=z,t=z;bool listed=false,done=false;",
   "try{",

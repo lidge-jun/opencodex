@@ -110,11 +110,13 @@ test("committed Home catalog fans out after the Home step; refused refresh does 
     expect(await runSyncCommand(deps)).toBe(0);
     expect(events).toEqual(["home"]);
     expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "skipped", reason: "home-catalog-not-current" });
-    const original = new Error("fixture Home failure");
+    const original = new Error("fixture Home failure\n\u001b[31m");
     sync.mockImplementation(async () => { throw original; });
     output.length = 0; errors.length = 0;
     expect(await runSyncCommand(deps)).toBe(1);
+    expect(output).toHaveLength(1);
     expect(JSON.parse(output.at(-1)!)).toMatchObject({ home: { state: "failed", exit: 1 }, children: [{ state: "skipped", reason: "home-sync-failed" }] });
+    expect(errors).toEqual(["Sync failed: fixture Home failure\\x0a\\x1b[31m"]);
     errors.length = 0;
     await expect(runSyncCommand({ ...deps, args: ["sync"] })).rejects.toBe(original);
     expect(errors).toEqual(["Children were not synced because the Home sync failed."]);
@@ -123,6 +125,67 @@ test("committed Home catalog fans out after the Home step; refused refresh does 
     expect(errors).toEqual([]);
   } finally {
     sync.mockRestore(); status.mockRestore(); child.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+    process.exitCode = previousExit; rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("fan-out discovers unstored platforms despite shell startup output", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "ocx-sync-platform-"));
+  const previousHome = process.env.OPENCODEX_HOME, previousExit = process.exitCode;
+  process.env.OPENCODEX_HOME = temp; process.exitCode = undefined;
+  const linkDir = join(temp, "link"); mkdirSync(linkDir, { recursive: true });
+  const link = { id: "lnk_0123456789abcdef", alias: "fake", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:AAAAAAAAAAAAAAAA", tunnelPort: 27001, apiKeyId: "test", createdAt: "2026-01-01T00:00:00Z" };
+  writeFileSync(join(temp, "config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai" }));
+  writeFileSync(join(linkDir, "links.json"), JSON.stringify({ version: 1, listenerPort: 27000, links: [link] }));
+  const base = { status: "catalog-only" as const, ok: true, added: 0, catalogPath: "fixture", catalogExists: true, catalogWritten: false, cacheSynced: false, message: "done", refreshOutcome: "committed" as const };
+  const sync = spyOn(codexSync, "syncModelsToCodex").mockResolvedValue(base);
+  const status = spyOn(statusApi, "readHomeLinkStatus").mockResolvedValue({ role: "home", listener: { state: "listening", port: 27000 }, child: null, links: [{ ...link, state: "connected", since: link.createdAt, reason: null, lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null }] });
+  const output: string[] = [], commands: string[] = [], probes: string[][] = [];
+  const log = spyOn(console, "log").mockImplementation((...parts) => { output.push(parts.map(String).join(" ")); });
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  let responses: Array<{ code: number; stdout: string; stderr: string }> = [];
+  const runner = spyOn(processApi, "fanoutSshRunner").mockImplementation(() => ({ run: async (argv, options) => { probes.push([...argv]); expect(options?.timeoutMs).toBe(10_000); return responses.shift()!; } }));
+  const child = spyOn(processApi, "runFanoutProcess").mockImplementation(async argv => { commands.push(argv.at(-1)!); return { code: 0, stdout: "ocx-fanout:stdout-begin\nRemote Link Home catalog synchronized.", stderr: "ocx-fanout:selected:2.93.0\n" }; });
+  try {
+    const deps = { args: ["sync", "--json"], findLiveProxy: async () => null } as unknown as CliDispatchDeps;
+    const startup = "shell startup warning\n";
+    responses = [{ code: 127, stdout: startup, stderr: startup }, { code: 0, stdout: `${startup}ocx-platform:Linux\n`, stderr: startup }];
+    expect(await runSyncCommand(deps)).toBe(0);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "synced", reason: null });
+    expect(commands.at(-1)).toContain("sh ");
+    expect(probes[0]!.at(-1)).toBe("cmd /c echo %OS%");
+    expect(probes[1]!.at(-1)).toContain("ocx-platform:%s");
+    expect(probes[1]).toContain("StrictHostKeyChecking=yes");
+    responses = [{ code: 0, stdout: `${startup} Windows_NT \n`, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(0);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "synced", reason: null });
+    expect(commands.at(-1)).toContain("powershell.exe");
+    expect(probes).toHaveLength(1);
+    responses = [{ code: 127, stdout: startup, stderr: startup }, { code: 0, stdout: `${startup}ocx-platform:Linux\nocx-platform:Linux\n`, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(6);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "failed", reason: "platform-probe-failed" });
+    expect(commands).toEqual([]);
+    responses = [{ code: 127, stdout: startup, stderr: startup }, { code: 0, stdout: startup, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(6);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "failed", reason: "platform-probe-failed" });
+    expect(commands).toEqual([]);
+    responses = [{ code: 127, stdout: startup, stderr: startup }, { code: 0, stdout: `${startup}ocx-platform:MINGW64_NT-10.0\n`, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(0);
+    expect(commands.at(-1)).toContain("powershell.exe");
+    responses = [{ code: 255, stdout: `${startup}Windows_NT\n`, stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(6);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "failed", reason: "platform-probe-failed" });
+    expect(probes).toHaveLength(1);
+    expect(commands).toEqual([]);
+    responses = [{ code: 127, stdout: startup, stderr: startup }, { code: 255, stdout: "ocx-platform:Linux\n", stderr: startup }]; output.length = 0; commands.length = 0; probes.length = 0;
+    expect(await runSyncCommand(deps)).toBe(6);
+    expect(JSON.parse(output.at(-1)!).children[0]).toMatchObject({ state: "failed", reason: "platform-probe-failed" });
+    expect(probes).toHaveLength(2);
+    expect(commands).toEqual([]);
+  } finally {
+    sync.mockRestore(); status.mockRestore(); runner.mockRestore(); child.mockRestore(); log.mockRestore(); error.mockRestore(); warn.mockRestore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
     process.exitCode = previousExit; rmSync(temp, { recursive: true, force: true });
   }

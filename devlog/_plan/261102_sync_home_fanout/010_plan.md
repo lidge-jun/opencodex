@@ -50,7 +50,8 @@ the Home, so Children keep a stale catalog until someone syncs them one by one.
   failed or skipped Home sync a Child could only receive whatever the failed run left behind. Every
   Child is then `skipped` with `home-sync-failed` or `home-sync-skipped`, and the Home exit code is
   kept. A Home sync that throws is caught by the runner. JSON mode prints the document (`home.state
-  failed`, `home.exit` 1, every hub-initiated Child `skipped` `home-sync-failed`). Human mode prints
+  failed`, `home.exit` 1, every hub-initiated Child `skipped` `home-sync-failed`) and one sanitized
+  `Sync failed: ...` stderr line. Human mode prints
   one stderr line, `Children were not synced because the Home sync failed.`, when a best-effort
   store read (any error swallowed, so it can never replace the original error) finds a link, then
   rethrows the original error unchanged so today's failure output and exit stay.
@@ -82,9 +83,11 @@ Each Child runs in its own worker with one deadline (180 s from the moment the w
 covering every ssh call. All commands use `buildExecArgv` with the link known_hosts
 (`StrictHostKeyChecking=yes`) and `remoteOcxArgv(args, platform)`.
 
-1. Platform: `record.remotePlatform`, or when absent `requireRemotePlatform` (the same resolution
-   `src/server/management/link-routes.ts` uses), run through the owned runner with each call's
-   timeout clamped to the remaining deadline. Failure -> `failed` `platform-probe-failed`.
+1. Platform: `record.remotePlatform`, or when absent `requireRemotePlatformFramed` through the owned
+   runner with each call's timeout clamped to the remaining deadline. A successful Windows probe
+   identifies Windows when any trimmed stdout line is exactly `Windows_NT`. Otherwise a POSIX probe
+   prints `ocx-platform:<uname -s>`; exactly one framed line is required. Login-shell output is ignored;
+   exit 255 is a transport failure and ambiguous or failed probes -> `failed` `platform-probe-failed`.
 2. One remote operation, `remotePinnedSyncArgv(linkId, platform)` (NEW in `src/link/ssh-argv.ts` for
    POSIX and `src/link/remote-windows.ts` for Windows), sharing the candidate list and order with
    `REMOTE_OCX_SCRIPT` / `windowsOcxArgv`. For each candidate in order it runs that executable's
@@ -165,7 +168,7 @@ reaches the output.
   escalation. A `kill` that throws ESRCH counts as exited; any other signal error, or no exit within
   the final wait, is reported as `termination-unconfirmed` and never claimed as gone.
   Pipe readers are cancelled after exit plus a 250 ms grace, so a descendant holding an inherited
-  pipe cannot hold the worker.
+  pipe cannot hold the worker. A grace-cancelled pipe is incomplete and fails as `ssh-output`.
 - Concurrency cap 3. Workers catch every error. A Child's failure, hang or crash never stops another
   active worker and never changes the Home result. A queued Child starts no later than
   `ceil(position / 3)` waves of (180 s + 3 s kill grace); the whole run is bounded by
@@ -223,7 +226,7 @@ reaches the output.
    `classifySyncResult`, `parseOcxVersion`, `fanoutExitCode`, `renderFanoutJson`, `renderFanoutHuman`,
    bounded pool, `SYNC_FANOUT_PARTIAL_EXIT = 6`.
 6. NEW `src/cli/sync-fanout-process.ts`: the owned-process runner described above; it also
-   implements `SshRunner.run` (timeouts clamped to the remaining deadline) for `requireRemotePlatform`.
+   implements `SshRunner.run` (timeouts clamped to the remaining deadline) for `requireRemotePlatformFramed`.
 6a. MODIFY `src/link/ssh-argv.ts` / `src/link/remote-windows.ts`: `remotePinnedSyncArgv` and its
    Windows script, sharing the candidate lists with `REMOTE_OCX_SCRIPT` / `windowsOcxArgv`.
 6b. NEW `src/cli/sync-link-status.ts`: `readHomeLinkStatus(deadlineMs)` with the typed errors.
@@ -247,7 +250,8 @@ reaches the output.
       fourth by at most one wave, a throwing worker is isolated.
     - `tests/cli/sync-fanout-process.test.ts`: the owned runner against real child processes: a
       process that ignores SIGTERM is SIGKILLed and gone before the call returns; a process that
-      exits 255; a descendant holding the stdout pipe does not hold the call; output over the cap.
+      exits 255; a descendant holding the stdout pipe is rejected as incomplete without holding the
+      call, and is reaped by the test; output over the cap.
     - `tests/cli/sync-command-fanout.test.ts`: through the real CLI entry (`bun run src/cli/index.ts`
       with a temp `OPENCODEX_HOME` and a fake `ssh` on PATH, no live runtime): `--local-only` makes no
       ssh call; JSON mode prints exactly one document; usage errors exit 2 before preflight; a pinned

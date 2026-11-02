@@ -13,14 +13,18 @@ function delay(ms: number): Promise<void> { return new Promise(resolve => setTim
 async function readBounded(stream: ReadableStream<Uint8Array>, cap: number, exited: Promise<number>): Promise<string> {
   const reader = stream.getReader();
   let ended = false;
+  let graceExpired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  void exited.then(() => { if (!ended) timer = setTimeout(() => { void reader.cancel().catch(() => {}); }, 250); });
+  void exited.then(() => { if (!ended) timer = setTimeout(() => { graceExpired = true; void reader.cancel().catch(() => {}); }, 250); });
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
     while (true) {
       const next = await reader.read();
-      if (next.done) break;
+      if (next.done) {
+        if (graceExpired) throw new FanoutProcessError("ssh-output");
+        break;
+      }
       length += next.value.length;
       if (length > cap) throw new FanoutProcessError("ssh-output");
       chunks.push(next.value);

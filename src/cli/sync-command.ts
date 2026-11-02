@@ -9,7 +9,7 @@ import { projectLocalSyncResult } from "./local-sync-result";
 import { readLinkStore } from "../link/store";
 import { linkKnownHostsPath, linkStorePath } from "../link/paths";
 import { buildExecArgv, remotePinnedSyncArgv } from "../link/ssh-argv";
-import { requireRemotePlatform } from "../link/remote-platform";
+import { requireRemotePlatformFramed } from "../link/remote-platform";
 import { FanoutProcessError, fanoutSshRunner, runFanoutProcess } from "./sync-fanout-process";
 import { readHomeLinkStatus } from "./sync-link-status";
 import { classifySyncResult, fanoutExitCode, renderFanoutHuman, renderFanoutJson, runHomeFanout, REMOTE_LINK_SYNC_MESSAGE, STALE_REMOTE_CATALOG_MESSAGE, type HomeResult } from "./sync-fanout";
@@ -198,6 +198,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
         try { if (readLinkStore(linkStorePath()).links.length) console.error("Children were not synced because the Home sync failed."); } catch { /* Preserve the original error. */ }
         throw error;
       }
+      console.error(`Sync failed: ${terminalSafeError(error).message}`);
       code = 1; state = "failed"; applicable = true;
     } finally { console.log = originalLog; }
     if (code !== 0) state = "failed";
@@ -207,7 +208,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       runChild: async (link, deadline) => {
         const runner = fanoutSshRunner(deadline);
         let platform: "posix" | "windows";
-        try { platform = link.remotePlatform ?? await requireRemotePlatform(runner, link.alias, linkKnownHostsPath()); }
+        try { platform = link.remotePlatform ?? await requireRemotePlatformFramed(runner, link.alias, linkKnownHostsPath()); }
         catch (error) {
           if (error instanceof FanoutProcessError && (error.reason === "deadline-exceeded" || error.reason === "termination-unconfirmed")) return { state: "timed-out", reason: error.reason, exit: null };
           return { state: "failed", reason: "platform-probe-failed", exit: null };
