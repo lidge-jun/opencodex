@@ -1,5 +1,6 @@
 import { autoRestoreCodexShim, autoRestoreCodexShimAsync } from "../codex/shim";
 import { codexShimAutoRestoreEnabled, readConfigDiagnostics } from "../config";
+import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 
 export interface CodexShimAutoRestoreCliDeps {
   env: NodeJS.ProcessEnv;
@@ -20,7 +21,7 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "uninstall" || command === "remove") return true;
   // Contract discovery and orchestrated update must validate before any repair.
   if (command === "capabilities") return true;
-  if (command === "update" && args.some(arg => ["--plan", "--yes", "--json", "--expect-plan", "--not-after"].includes(arg) || /^(--expect-plan|--not-after)=/.test(arg))) return true;
+  if (command === "update" && isOrchestratedUpdateArgv(args)) return true;
   if (command === "sync") return true;
   if (command === "status" || command === "doctor") return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
