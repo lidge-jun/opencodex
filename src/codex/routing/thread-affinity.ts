@@ -7,7 +7,7 @@ import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeLease } from "../../routing/probe-lease";
 import { clearPoolRecoveryState } from "../../routing/probe-lease";
 import { createHash } from "node:crypto";
-import { adoptStoredThreadRows, adoptStoredIssuer, codexAffinityIdentityFence, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
+import { adoptStoredThreadRows, adoptStoredIssuer, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, registerCodexAffinityLiveState, recordThreadBind, recordThreadTouch, recordThreadDelete, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerTouch, recordIssuerDelete, recordIssuersCleared } from "./thread-affinity-store";
 export { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER } from "./thread-affinity-store";
 
 export type ThreadAffinityEntry = {
@@ -210,6 +210,8 @@ type ConversationStateIssuerEntry = {
   accountId: string;
   lastUsedAt: number;
   fence?: string;
+  storedAccountId?: string;
+  storedFence?: string | null;
 };
 const conversationStateIssuerMap = new Map<string, ConversationStateIssuerEntry>();
 
@@ -217,11 +219,17 @@ function identityFence(identity: string | undefined): string | undefined {
   return identity ? createHash("sha256").update("opencodex/codex-affinity/identity/v1\0").update(identity).digest("hex") : undefined;
 }
 
+export function registerThreadAffinityLiveState(): void {
 registerCodexAffinityLiveState({
   thread: (key, scope) => threadAccountMap.get(key)?.get(scope as ThreadAffinityScope),
-  issuer: key => conversationStateIssuerMap.get(key),
+  issuer: key => {
+    const entry = conversationStateIssuerMap.get(key);
+    return entry && { accountId: entry.storedAccountId ?? entry.accountId, fence: entry.storedAccountId ? entry.storedFence ?? undefined : entry.fence, lastUsedAt: entry.lastUsedAt };
+  },
   clearLive: () => { threadAccountMap.clear(); threadAffinityEntryTotal = 0; conversationStateIssuerMap.clear(); },
 });
+}
+registerThreadAffinityLiveState();
 
 export function clearThreadAccountMap(options: { preserveConversationStateIssuers?: boolean } = {}): void {
   recordAllCleared();
@@ -316,9 +324,9 @@ export function peekConversationStateIssuer(
   recordIssuerTouch(bindingKey);
   let entry = conversationStateIssuerMap.get(bindingKey);
   if (!entry) {
-    const accountId = adoptStoredIssuer(bindingKey, now);
-    if (accountId !== undefined) {
-      entry = { accountId, lastUsedAt: now, fence: accountId === CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER ? undefined : codexAffinityIdentityFence(accountId) };
+    const stored = adoptStoredIssuer(bindingKey, now);
+    if (stored !== undefined) {
+      entry = { accountId: stored.issuer, lastUsedAt: now, storedAccountId: stored.storedAccountId, storedFence: stored.storedFence };
       conversationStateIssuerMap.set(bindingKey, entry);
       pruneConversationStateIssuers(now);
     }

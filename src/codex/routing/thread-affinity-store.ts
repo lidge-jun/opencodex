@@ -72,6 +72,8 @@ type Scope = {
   threads: Map<string, { key: string; scope: string; rowKey: string }>;
   issuers: Map<string, { key: string; rowKey: string }>;
   anchors: Map<string, { family: string; thread: string; at: number }>;
+  threadKeys: Map<string, { rowKey: string; scopes: Map<string, string> }>;
+  issuerKeys: Map<string, string>;
   consulted: Set<string>;
   timer?: ReturnType<typeof setTimeout>;
   scheduled: boolean;
@@ -278,6 +280,8 @@ function scope(): Scope | undefined {
     threads: new Map(),
     issuers: new Map(),
     anchors: new Map(),
+    threadKeys: new Map(),
+    issuerKeys: new Map(),
     consulted: new Set(),
     scheduled: false,
   };
@@ -311,7 +315,7 @@ function rowKey(
   const a = s.anchors.get(key);
   if (!a || Date.now() - a.at > TTL) {
     s.anchors.delete(key);
-    return undefined;
+    return kind === "conversation" ? s.threadKeys.get(key)?.rowKey : s.issuerKeys.get(key);
   }
   return createHmac("sha256", s.secret!)
     .update(`opencodex/codex-affinity/${kind}/v1\0`)
@@ -336,12 +340,24 @@ export function codexAffinityIdentityFence(
     .update(record.quotaHistoryIdentity)
     .digest("hex");
 }
+function rememberThreadKey(s: Scope, key: string, rk: string, scopeName: string, accountId: string): void {
+  let entry = s.threadKeys.get(key);
+  if (!entry) s.threadKeys.set(key, entry = { rowKey: rk, scopes: new Map() });
+  entry.scopes.set(scopeName, accountId);
+  if (s.threadKeys.size + s.issuerKeys.size > 8192) poison(s);
+}
+function rememberIssuerKey(s: Scope, key: string, rk: string): void {
+  s.issuerKeys.set(key, rk);
+  if (s.threadKeys.size + s.issuerKeys.size > 8192) poison(s);
+}
 /** A poisoned scope cannot safely declare itself clean on release. */
 function poison(s: Scope): void {
   s.poisoned = true;
   s.log = [];
   s.threads.clear();
   s.issuers.clear();
+  s.threadKeys.clear();
+  s.issuerKeys.clear();
   if (s.timer) clearTimeout(s.timer);
   warning();
 }
@@ -512,6 +528,8 @@ export function adoptStoredThreadRows(
         });
         continue;
       }
+      rememberThreadKey(s, key, rk, r.scope, r.account_id);
+      if (s.poisoned) return [];
       result.push({
         scope: r.scope,
         accountId: r.account_id,
@@ -530,7 +548,7 @@ export function adoptStoredThreadRows(
 export function adoptStoredIssuer(
   key: string,
   now: number,
-): string | undefined {
+): { issuer: string; storedAccountId: string; storedFence: string | null } | undefined {
   const s = usable();
   if (!s) return;
   const rk = rowKey(s, key, "issuer");
@@ -566,8 +584,10 @@ export function adoptStoredIssuer(
       r.fence && codexAffinityIdentityFence(r.account_id) === r.fence
         ? r.account_id
         : CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER;
+    rememberIssuerKey(s, key, rk);
+    if (s.poisoned) return;
     consulted(s, `i:${rk}`);
-    return result;
+    return { issuer: result, storedAccountId: r.account_id, storedFence: r.fence };
   } catch {
     warning();
     return;
@@ -582,6 +602,8 @@ export function recordThreadBind(
   if (!s || row.accountId === "__main__" || !row.fence) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
+  rememberThreadKey(s, key, rk, scopeName, row.accountId);
+  if (s.poisoned) return;
   enqueue(s, {
     kind: "bind",
     key: rk,
@@ -610,6 +632,9 @@ export function recordThreadDelete(key: string, scopeName?: string): void {
   if (!s) return;
   const rk = rowKey(s, key, "conversation");
   if (!rk) return;
+  const known = s.threadKeys.get(key);
+  if (scopeName === undefined) s.threadKeys.delete(key);
+  else if (known) { known.scopes.delete(scopeName); if (!known.scopes.size) s.threadKeys.delete(key); }
   enqueue(
     s,
     scopeName === undefined
@@ -630,21 +655,28 @@ export function recordThreadDelete(key: string, scopeName?: string): void {
 }
 export function recordAccountPinsCleared(id: string): void {
   const s = usable();
-  if (s)
+  if (s) {
+    for (const [key, entry] of s.threadKeys) {
+      for (const [scopeName, account] of entry.scopes) if (account === id) entry.scopes.delete(scopeName);
+      if (!entry.scopes.size) s.threadKeys.delete(key);
+    }
     enqueue(s, {
       kind: "deleteAccount",
       sql: "DELETE FROM threads WHERE account_id=?",
       args: [id],
     });
+  }
 }
 export function recordAllCleared(): void {
   const s = usable();
-  if (s)
+  if (s) {
+    s.threadKeys.clear(); s.issuerKeys.clear();
     enqueue(s, {
       kind: "clearAll",
       sql: "DELETE FROM threads; DELETE FROM issuers",
       args: [],
     });
+  }
 }
 export function recordIssuerSet(
   key: string,
@@ -656,6 +688,8 @@ export function recordIssuerSet(
   if (!s || id === "__main__") return;
   const rk = rowKey(s, key, "issuer");
   if (!rk) return;
+  rememberIssuerKey(s, key, rk);
+  if (s.poisoned) return;
   enqueue(s, {
     kind: "issuerSet",
     key: rk,
@@ -675,18 +709,22 @@ export function recordIssuerDelete(key: string): void {
   const s = usable();
   if (!s) return;
   const rk = rowKey(s, key, "issuer");
-  if (rk)
+  if (rk) {
+    s.issuerKeys.delete(key);
     enqueue(s, {
       kind: "issuerDelete",
       key: rk,
       sql: "DELETE FROM issuers WHERE row_key=?",
       args: [rk],
     });
+  }
 }
 export function recordIssuersCleared(): void {
   const s = usable();
-  if (s)
+  if (s) {
+    s.issuerKeys.clear();
     enqueue(s, { kind: "clearIssuers", sql: "DELETE FROM issuers", args: [] });
+  }
 }
 export function flushCodexAffinityStoreForTests(): void {
   if (current && !isPassiveRead()) flush(current, false);

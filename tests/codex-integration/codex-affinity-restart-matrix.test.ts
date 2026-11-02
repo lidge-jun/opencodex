@@ -150,3 +150,9 @@ for (const path of ["responses", "compact"] as const) {
     }));
   }
 }
+
+test("touching an unknown restored issuer extends its durable lifetime", () => inHome(home => {
+  worker(home, "codex-affinity-restart-worker.ts", "unknown-write");
+  expect(worker(home, "codex-affinity-restart-worker.ts", "touch-unknown").issuer).toBe("__unknown_codex_conversation_state_issuer__");
+  expect(worker(home, "codex-affinity-restart-worker.ts", "read-unknown").issuer).toBe("__unknown_codex_conversation_state_issuer__");
+}));

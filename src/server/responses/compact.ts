@@ -985,6 +985,7 @@ export async function handleResponsesCompact(
         if (refusal) return refusal;
         applyAccountChangeConversationStateScrub({
           body: raw,
+          headers,
           bindingKey: binding.bindingKey,
           servingAccountId: binding.accountId,
           logCtx,
@@ -1003,7 +1004,11 @@ export async function handleResponsesCompact(
       && compactProvider.supportsNativeCompactEndpoint === true
       ? buildResponsesTransport({ ...compactProvider, apiKey: compactProvider.apiKey ? resolveProviderApiKey(compactProvider.apiKey) : undefined }, { headers: req.headers })
       : undefined;
-    if (gatewayTransport) headers = new Headers(gatewayTransport.headers);
+    if (gatewayTransport) {
+      headers = new Headers(gatewayTransport.headers);
+      const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
+      if (binding) applyAccountChangeConversationStateScrub({ body: compactBody, headers, bindingKey: binding.bindingKey, servingAccountId: binding.accountId, logCtx });
+    }
     // Native v1 bypasses the adapter serializer. Bind the same replay provenance as ordinary
     // turns, but leave canonical compact's established account-state handling unchanged.
     const gatewayReplayParsed = gatewayTransport ? parseRequest(raw) : undefined;
@@ -1159,7 +1164,9 @@ export async function handleResponsesCompact(
       onPhysicalDispatch?: () => void,
     ): Promise<Response> => {
       // A gateway send carries only its own transport headers, whatever recovery handed in.
+      // An account-change scrub that removed the turn state from the send headers still applies.
       let wireHeaders = gatewayTransport ? new Headers(gatewayTransport.headers) : sendHeaders;
+      if (gatewayTransport && !sendHeaders.has("x-codex-turn-state")) wireHeaders.delete("x-codex-turn-state");
       sendHeaders = wireHeaders;
       const buildCompactSendBody = () => {
         if (gatewayReplayParsed) bindRouteReasoningReplayScope({
@@ -1431,7 +1438,7 @@ export async function handleResponsesCompact(
       recordCompactPoolOutcome(outcomeCtx, outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     };
-    const scrubCompactStateForAlternate = (alternateAuthCtx: CodexAuthContext): void => {
+    const scrubCompactStateForAlternate = (alternateAuthCtx: CodexAuthContext, alternateHeaders: Headers): void => {
       const binding = conversationStateBindingFromAuth(
         alternateAuthCtx,
         compactAlternateAffinityKey(authCtx, () => codexPoolAffinityKey(req.headers)),
@@ -1440,6 +1447,7 @@ export async function handleResponsesCompact(
       for (const body of [raw, compactBody]) {
         applyAccountChangeConversationStateScrub({
           body,
+          headers: alternateHeaders,
           bindingKey: binding.bindingKey,
           servingAccountId: binding.accountId,
           priorAccountId: conversationStateAccountId(authCtx),
@@ -1545,7 +1553,7 @@ export async function handleResponsesCompact(
         await upstream.body?.cancel().catch(() => undefined);
         outcomeCtx = alternate.authCtx;
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
-        scrubCompactStateForAlternate(alternate.authCtx);
+        scrubCompactStateForAlternate(alternate.authCtx, alternate.headers);
         try {
           upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
         } catch (err) {
@@ -1602,7 +1610,7 @@ export async function handleResponsesCompact(
         // B's identity before B's admission, so every budget and spend check runs against B. A's
         // response stays intact until B is actually sent.
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
-        scrubCompactStateForAlternate(alternate.authCtx);
+        scrubCompactStateForAlternate(alternate.authCtx, alternate.headers);
         const recordFirstMove = () => {
           recordCompactPoolOutcome(authCtx, firstStatus, { retryAfter: firstRetryAfter, resetAt: firstResetAt });
           void upstream.body?.cancel().catch(() => undefined);

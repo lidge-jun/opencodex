@@ -5,6 +5,11 @@ import { resolveCodexAccountForThread, rememberConversationStateIssuer, peekConv
 import { applyAccountChangeConversationStateScrub, accountChangeFileReferenceRefusal } from "../../src/server/responses/account-change-state";
 import type { OcxConfig } from "../../src/types";
 
+const action = process.argv[2];
+if (action === "touch-unknown" || action === "read-unknown") {
+  const realNow = Date.now;
+  Date.now = () => realNow() + (action === "touch-unknown" ? 23 : 25) * 60 * 60_000;
+}
 const lease = acquireSpendLedgerOwner();
 for (const id of ["a", "b"]) if (!readCodexAccountRecord(id)) saveCodexAccountCredential(id, {
   accessToken: `access-${id}`, refreshToken: `refresh-${id}`, expiresAt: Date.now() + 600_000, chatgptAccountId: `acct-${id}`,
@@ -13,6 +18,11 @@ const config = { providers: {}, codexAccounts: ["a", "b"].map(id => ({ id, email
 if (process.argv[2] === "read") resolveCodexAccountForThread("advance-cursor", config);
 const key = codexPoolAffinityKey(new Headers({ "session-id": "restart-session", "thread-id": "restart-thread" }))!;
 const issuer = peekConversationStateIssuer(key);
+if (action === "touch-unknown" || action === "read-unknown") {
+  lease.release();
+  console.log(JSON.stringify({ issuer }));
+  process.exit(0);
+}
 const account = resolveCodexAccountForThread(key, config)!;
 const sameBody = { previous_response_id: "previous" };
 const otherBody = { previous_response_id: "previous" };

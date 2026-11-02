@@ -1,3 +1,4 @@
+import { registerThreadAffinityLiveState } from "../../src/codex/routing/thread-affinity";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
@@ -8,7 +9,7 @@ import { codexConversationKeyFor } from "../../src/codex/lineage";
 import { acquireSpendLedgerOwner, type SpendLedgerOwnerLease } from "../../src/lib/spend-ledger-owner";
 import { runPassiveRead } from "../../src/lib/passive-read";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { adoptStoredIssuer, adoptStoredThreadRows, codexAffinityIdentityFence, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, flushCodexAffinityStoreForTests, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordThreadBind, recordThreadTouch, registerCodexAffinityLiveState, resetCodexAffinityStoreForTests } from "../../src/codex/routing/thread-affinity-store";
+import { adoptStoredIssuer, adoptStoredThreadRows, codexAffinityIdentityFence, CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, flushCodexAffinityStoreForTests, recordAccountPinsCleared, recordAllCleared, recordIssuerSet, recordIssuerDelete, recordThreadDelete, recordThreadBind, recordThreadTouch, registerCodexAffinityLiveState, resetCodexAffinityStoreForTests } from "../../src/codex/routing/thread-affinity-store";
 
 let home: string;
 let prior: string | undefined;
@@ -28,7 +29,7 @@ beforeEach(() => {
   prior = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-affinity-")); process.env.OPENCODEX_HOME = home; live = undefined;
   registerCodexAffinityLiveState({ thread: () => live, issuer: () => undefined, clearLive: () => { live = undefined; } });
 });
-afterEach(() => { lease?.release(); lease = undefined; resetCodexAffinityStoreForTests(); if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior; removeTreeWithRetry(home); });
+afterEach(() => { lease?.release(); lease = undefined; resetCodexAffinityStoreForTests(); registerThreadAffinityLiveState(); if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior; removeTreeWithRetry(home); });
 
 test("inactive and passive operations do not create a database", async () => {
   key(); expect(existsSync(path())).toBe(false);
@@ -53,7 +54,7 @@ test("unclean database is discarded and unknown version remains unchanged", () =
 });
 test("issuer fence mismatch is unknown and account clearing preserves issuer", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence); recordIssuerSet(k, "account-a", fence, Date.now()); recordAccountPinsCleared("account-a"); lease.release();
-  seed(); lease = acquireSpendLedgerOwner(); const restoredKey = key(); expect(adoptStoredThreadRows(restoredKey, Date.now())).toEqual([]); expect(adoptStoredIssuer(restoredKey, Date.now())).toBe(CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER);
+  seed(); lease = acquireSpendLedgerOwner(); const restoredKey = key(); expect(adoptStoredThreadRows(restoredKey, Date.now())).toEqual([]); expect(adoptStoredIssuer(restoredKey, Date.now())?.issuer).toBe(CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER);
 });
 test("clear all followed by bind preserves the later bind", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); bind(fence); recordAllCleared(); bind(fence); lease.release(); lease = acquireSpendLedgerOwner(); expect(adoptStoredThreadRows(key(), Date.now())).toHaveLength(1);
@@ -96,8 +97,8 @@ test("three failed flushes poison persistence until the next owner discards rows
 test("known and fence-less issuers restore with distinct outcomes", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); const known = key(); const unknown = codexConversationKeyFor("other-family", "other-thread");
   recordIssuerSet(known, "account-a", fence, Date.now()); recordIssuerSet(unknown, "account-a", null, Date.now()); lease.release();
-  lease = acquireSpendLedgerOwner(); expect(adoptStoredIssuer(key(), Date.now())).toBe("account-a");
-  expect(adoptStoredIssuer(codexConversationKeyFor("other-family", "other-thread"), Date.now())).toBe(CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER);
+  lease = acquireSpendLedgerOwner(); expect(adoptStoredIssuer(key(), Date.now())?.issuer).toBe("account-a");
+  expect(adoptStoredIssuer(codexConversationKeyFor("other-family", "other-thread"), Date.now())?.issuer).toBe(CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER);
 });
 test("account clear followed by bind retains the later pin", () => {
   lease = acquireSpendLedgerOwner(); const fence = seed(); bind(fence); recordAccountPinsCleared("account-a"); bind(fence); lease.release();
@@ -180,4 +181,28 @@ test("release preserves live state, while an observed home change clears it", ()
     process.env.OPENCODEX_HOME = home;
     removeTreeWithRetry(otherHome);
   }
+});
+
+for (const kind of ["thread", "issuer"] as const) {
+  test(`persisted ${kind} delete survives anchor eviction`, () => {
+    lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence);
+    recordIssuerSet(k, "account-a", fence, Date.now()); flushCodexAffinityStoreForTests();
+    for (let i = 0; i < 4096; i++) codexConversationKeyFor(`evict-family-${i}`, `evict-thread-${i}`);
+    if (kind === "thread") recordThreadDelete(k, "legacy"); else recordIssuerDelete(k);
+    lease.release(); lease = acquireSpendLedgerOwner();
+    if (kind === "thread") expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
+    else expect(adoptStoredIssuer(key(), Date.now())).toBeUndefined();
+  });
+}
+
+test("adopted rows retain delete keys after anchor eviction", () => {
+  lease = acquireSpendLedgerOwner(); const fence = seed(); const k = bind(fence);
+  recordIssuerSet(k, "account-a", fence, Date.now()); lease.release();
+  lease = acquireSpendLedgerOwner(); const adopted = key();
+  expect(adoptStoredThreadRows(adopted, Date.now())).toHaveLength(1);
+  expect(adoptStoredIssuer(adopted, Date.now())?.issuer).toBe("account-a");
+  for (let i = 0; i < 4096; i++) codexConversationKeyFor(`adopt-family-${i}`, `adopt-thread-${i}`);
+  recordThreadDelete(adopted, "legacy"); recordIssuerDelete(adopted); lease.release();
+  lease = acquireSpendLedgerOwner(); expect(adoptStoredThreadRows(key(), Date.now())).toEqual([]);
+  expect(adoptStoredIssuer(key(), Date.now())).toBeUndefined();
 });
