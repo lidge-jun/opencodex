@@ -701,8 +701,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return new Response(resp.body, { status: 503, headers });
       }
 
-      const ollamaResponse = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
-      if (ollamaResponse) return ollamaResponse;
+      // Checked synchronously: an await here would delay every later route's admission capture.
+      if (isOllamaNativePath(url.pathname)) {
+        const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
+      }
 
       if (url.pathname.startsWith("/api/")) {
         const localManagementAuth = {
