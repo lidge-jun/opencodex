@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { repoPath } from "../helpers/repo-root";
-import { isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
+import { inspectUpdateMarker, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
 import { createOrchestratedChildSession, encodeOrchestratedExpect, decodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
 
 const roots: string[] = [];
@@ -37,9 +37,32 @@ test.skipIf(process.platform === "win32")("POSIX installer timeout terminates it
   const script = `import {runPosixInstallerSync} from ${JSON.stringify(entry)}; const result=runPosixInstallerSync({file:${JSON.stringify(node)},args:[${JSON.stringify(installer)},${JSON.stringify(descendant)}],markerPath:${JSON.stringify(marker)},timeoutMs:1000,env:process.env});console.log(JSON.stringify(result));`;
   const result = spawnSync(node, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000 });
   expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
-  expect(JSON.parse(result.stdout)).toMatchObject({ processTreeExited: true, status: null });
+  expect(JSON.parse(result.stdout)).toMatchObject({ groupExited: true, processTreeExited: false, status: null });
   const pid = Number(readFileSync(descendant, "utf8"));
   expect(() => process.kill(pid, 0)).toThrow();
+}, 20000);
+
+test.skipIf(process.platform === "win32")("escaped installer descendant keeps the timed-out marker fenced", () => {
+  const f = fixture(), marker = join(f.home, "update-orchestrated.json"), descendant = join(f.home, "escaped");
+  writeFileSync(marker, JSON.stringify({ pid: 2147483647, phase: "mutating", startedAt: 100, fenceUntil: 200 }));
+  const installer = join(f.home, "escape.cjs");
+  writeFileSync(installer, `const {spawn}=require('node:child_process'),fs=require('node:fs'); const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}); c.unref(); fs.writeFileSync(process.argv[2],String(c.pid)); setInterval(()=>{},1000);`);
+  const node = Bun.which("node"); if (!node) throw Error("node unavailable");
+  const entry = pathToFileURL(repoPath("src/update/posix-install-supervisor.mjs")).href;
+  const script = `import {runPosixInstallerSync} from ${JSON.stringify(entry)}; console.log(JSON.stringify(runPosixInstallerSync({file:${JSON.stringify(node)},args:[${JSON.stringify(installer)},${JSON.stringify(descendant)}],markerPath:${JSON.stringify(marker)},timeoutMs:1000,env:process.env})));`;
+  try {
+    const result = spawnSync(node, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000 });
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(result.stdout)).toMatchObject({ groupExited: true, processTreeExited: false, status: null });
+    expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).not.toThrow();
+    expect(inspectUpdateMarker(f.home, { now: () => 199 })).toBe("active");
+    expect(inspectUpdateMarker(f.home, { now: () => 200 })).toBe("free");
+  } finally {
+    if (existsSync(descendant)) {
+      try { process.kill(Number(readFileSync(descendant, "utf8")), "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+  }
 }, 20000);
 
 test("preflight owns the update mutex and remains visible until finalized", () => {
@@ -78,6 +101,14 @@ test("mutation marker publishes the time fence before launching an installer and
   expect(read(marker)).toMatchObject({ phase: "mutating", fenceUntil: 901000 });
   session.finish({ phase: "failed", error: "installer-termination-unconfirmed" });
   expect(read(marker)).toMatchObject({ phase: "failed", fenceUntil: 901000 });
+});
+
+test("group-only supervision keeps the fence even after a successful install", async () => {
+  const f = fixture(), marker = join(f.home, "update-orchestrated.json");
+  const session = createOrchestratedChildSession({ ...f, now: () => 1000, verifyIdentity: () => true });
+  session.start(); await session.enterMutation(); session.retainInstallerFence();
+  session.finish({ phase: "installed", activeRoot: f.home });
+  expect(read(marker)).toMatchObject({ phase: "installed", fenceUntil: 901000 });
 });
 
 test("a confirmed untracked installer releases its fence only after finalization", async () => {

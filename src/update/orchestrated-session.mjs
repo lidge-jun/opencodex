@@ -51,7 +51,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
   assertNotRealHomeUnderTest(home);
   const markerPath = join(home, "update-orchestrated.json");
   const result = value => { if (resultPath !== undefined) atomicJson(resultPath, value); };
-  let state = "new", mutex, startedAt, untrackedPending = false;
+  let state = "new", mutex, startedAt, untrackedPending = false, retainFence = false;
   const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false) => {
     let installer = {};
     if (preserveInstaller) {
@@ -119,13 +119,17 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (state !== "mutating" || !untrackedPending) throw new Error("no untracked installer");
       marker("mutating", true); untrackedPending = false;
     },
+    retainInstallerFence() {
+      if (state !== "mutating") throw new Error("orchestrated session is not mutating");
+      retainFence = true;
+    },
     finish(outcome) {
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
       if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed" };
       result(outcome);
       marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed",
-        outcome.error === "installer-termination-unconfirmed" || outcome.error === "installer-timeout");
+        retainFence || outcome.error === "installer-termination-unconfirmed" || outcome.error === "installer-timeout");
       mutex.release(); mutex = undefined; state = "finished";
     },
   };

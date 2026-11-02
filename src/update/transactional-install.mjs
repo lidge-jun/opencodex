@@ -556,7 +556,7 @@ export async function transactionalNpmUpdateAsync(options) {
   let install;
   try { install = await options.runNpm(step.value); }
   catch (error) { install = { status: null, error, processTreeExited: false }; }
-  if (install.processTreeExited !== true) install = { ...install, status: null, processTreeExited: false,
+  if (install.processTreeExited !== true && !(install.groupExited === true && typeof install.status === "number")) install = { ...install, status: null, processTreeExited: false,
     error: install.error ?? { code: "EINSTALLJOIN", message: "npm process-tree exit was not confirmed" } };
   return transaction.next(install).value;
 }

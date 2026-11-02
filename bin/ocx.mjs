@@ -1020,9 +1020,12 @@ async function runPackageManagerSelfUpdate(manager, child) {
             }
             if (!invocation) return { status: 1 };
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
-            if (session) return runPosixInstallerSync({ file: invocation.file, args: invocation.args,
-              markerPath: join(configDir(), "update-orchestrated.json"), authorizeMutation: homePolicy.authorizeMutation,
-              env: unprivilegedOwnershipMutationEnvironment(invocation.options?.env ?? process.env) });
+            if (session) {
+              session.retainInstallerFence();
+              return runPosixInstallerSync({ file: invocation.file, args: invocation.args,
+                markerPath: join(configDir(), "update-orchestrated.json"), authorizeMutation: homePolicy.authorizeMutation,
+                env: unprivilegedOwnershipMutationEnvironment(invocation.options?.env ?? process.env) });
+            }
             return guardedSpawnSync(homePolicy.authorizeMutation, "package", invocation.file, invocation.args, {
               ...invocation.options,
               stdio: "inherit",
@@ -1068,6 +1071,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
                 if (result.processTreeExited === true) session.confirmInstallerExit();
                 return result;
               }
+              session.retainInstallerFence();
               return runPosixInstallerSync({ file: invocation.file, args: invocation.args, cwd, markerPath: join(configDir(), "update-orchestrated.json"),
                 authorizeMutation: homePolicy.authorizeMutation, env });
             });

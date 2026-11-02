@@ -953,6 +953,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     }
   } else {
     if (!homePolicy.authorizeMutation("package")) return 1;
+    session?.retainInstallerFence();
     installerUncertain = true;
     r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
       stdio: installStdio,

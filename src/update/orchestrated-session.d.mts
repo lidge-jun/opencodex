@@ -21,6 +21,7 @@ export declare function createOrchestratedChildSession(options: {
   enterMutation(): Promise<{ ok: true } | { ok: false; error: "sync-in-progress" | "update-in-flight" | "deadline-passed" | "plan-changed" }>;
   noteUntrackedInstaller(): void;
   confirmInstallerExit(): void;
+  retainInstallerFence(): void;
   finish(outcome: { phase: "installed"; activeRoot: string } | { phase: "failed"; error?: string; rollbackPerformed?: boolean }): void;
 };
 export declare function createLegacyUpdateSession(options: { home: string }): ReturnType<typeof createOrchestratedChildSession>;
