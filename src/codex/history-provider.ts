@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
 import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../lib/file-identity";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
   codexHistoryBackupId,
@@ -268,15 +269,15 @@ function readFirstLineProviderValue(path: string, expectedId: string): string | 
 
 function patchFirstLineProviderInPlace(
   path: string, expectedId: string, provider: string,
-  expectedIdentity: { dev: number | bigint; ino: number | bigint },
+  expectedIdentity: FileIdentity,
 ): FirstLineProviderResult {
   historyAppendHooks?.beforeFirstLineOpen?.(path);
   const fd = openSync(path, "r+");
   try {
     const assertIdentity = (): void => {
       assertHistoryDescriptorIdentity(path, fd);
-      const held = fstatSync(fd);
-      if (held.dev !== expectedIdentity.dev || held.ino !== expectedIdentity.ino) {
+      const held = fstatSync(fd, { bigint: true });
+      if (!sameFileIdentity(held, expectedIdentity)) {
         throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
       }
     };
@@ -360,10 +361,10 @@ function assertLegacyHistoryRecord(line: string): void {
 }
 
 function assertHistoryDescriptorIdentity(path: string, fd: number): void {
-  const held = fstatSync(fd);
-  let current: ReturnType<typeof lstatSync>;
-  try { current = lstatSync(path); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
-  if (!current.isFile() || current.isSymbolicLink() || current.dev !== held.dev || current.ino !== held.ino) {
+  const held = fstatSync(fd, { bigint: true });
+  let current: import("node:fs").BigIntStats;
+  try { current = lstatSync(path, { bigint: true }); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
+  if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, held)) {
     throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
   }
 }
@@ -693,8 +694,8 @@ function inspectBackupForNoop(path: string, stateDbPath: string): StrictBackupIn
 
 function historyFileIdentity(path: string): string | null {
   try {
-    const stat = statSync(path);
-    return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+    const stat = statSync(path, { bigint: true });
+    return [stat.dev, stat.ino, Number(stat.size), statTimeMs(stat.mtimeNs), statTimeMs(stat.ctimeNs)].join(":");
   } catch {
     return null;
   }
@@ -1132,7 +1133,7 @@ function updateSessionMeta(
   } = {},
 ): SessionMetaUpdateResult {
   if (!path || !existsSync(path)) return { changed: false, durableProvider: false };
-  const validatedIdentity = lstatSync(path);
+  const validatedIdentity = lstatSync(path, { bigint: true });
   if (options.expectedFileIdentity !== undefined
     && historyFileIdentity(path) !== options.expectedFileIdentity) {
     return { changed: false, durableProvider: false, conflict: true };

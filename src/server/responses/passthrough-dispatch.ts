@@ -1,3 +1,5 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
+import { passthroughBuildErrorResponse } from "./passthrough-build-error";
 import { recoverAutoPausedAccount, rotatePassthroughKeyOn429 } from "./passthrough-key-rotation";
 import { adoptCodexWsStage, capturePassthroughAffinity } from "./passthrough-observations";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
@@ -48,14 +50,9 @@ import {
   createCodexAuthDispatchGuard,
 } from "../../codex/auth-context";
 import {
-  NamespaceToolCollisionError,
   restoreRoutedNamespaceCalls,
 } from "../../responses/namespace-tool-compat";
-import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
-import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
-import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-responses/muse-tool-choice";
-import { MuseToolCatalogCompatibilityError } from "../../adapters/openai-responses/muse-tool-catalog";
-import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-responses/opengateway-input";
+import { restoreRoutedCustomCalls } from "../../responses/custom-tool-compat";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
 import {
@@ -379,22 +376,8 @@ export async function preparePassthroughExchange(
       });
     } catch (error) {
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
-      // A tool catalog this proxy cannot lower onto one wire namespace is a client input error, and
-      // the rotation-rebuild and bridged paths already answer 400 for the identical throw. Rethrowing
-      // it here escaped every catch up to the Bun handler, so the same request produced an
-      // unstructured 500 — and no request log — depending only on whether a rotation ran first.
-      // Same shape for a tool_choice this proxy cannot honor: the destination rejects a schema the
-      // catalog had to drop, so the selector naming it is a client input error, not a 500.
-      if (
-        error instanceof NamespaceToolCollisionError
-        || error instanceof XaiToolSchemaCompatibilityError
-        || error instanceof RoutedCustomToolCompatError
-        || error instanceof MuseToolChoiceCompatibilityError
-        || error instanceof MuseToolCatalogCompatibilityError
-        || error instanceof OpenGatewayInputCompatibilityError
-      ) {
-        return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
-      }
+      const refusal = passthroughBuildErrorResponse(error, route.codexAccountNamespace);
+      if (refusal) return refusal;
       throw error;
     }
     const functionRepairSchemas = isCanonicalOpenAiForwardProvider(route.provider)
@@ -1124,6 +1107,7 @@ export async function preparePassthroughExchange(
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
+        if (err instanceof CodexInstallationIdUnavailableError) return { failed: transportFailureResponse(err) };
         upstream.abort();
         if (options.abortSignal?.aborted) return { failed: clientCancelledResponse() };
         const msg = err instanceof Error ? err.message : String(err);
@@ -1418,6 +1402,7 @@ export async function preparePassthroughExchange(
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
+        if (err instanceof CodexInstallationIdUnavailableError) return transportFailureResponse(err);
         upstream.abort();
         if (options.abortSignal?.aborted) return clientCancelledResponse();
         const msg = err instanceof Error ? err.message : String(err);

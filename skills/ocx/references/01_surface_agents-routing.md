@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 67.
+Declared capabilities: 68.
 
 ### `ocx agent subagents force`
 
@@ -179,6 +179,24 @@ Drives no management route.
 - Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
 - Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No Claude transport, native lifecycle mutation or skill installation.
+
+### `ocx message mcp`
+
+Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home>`
+
+Serve opt-in MCP tools for stored Codex metadata and queued text delivery over stdio.
+
+State-changing: yes. JSON mode: `none`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--codex` | string | Explicit local Codex CLI executable. |
+| `--codex-home` | string | Explicit existing Codex home; no creation or login. |
+
+- macOS/Linux only. No proxy/control socket required. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
+- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. No daemon start, thread resume, steer, automatic replies or registration.
 
 ### `ocx advisor`
 

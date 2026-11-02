@@ -1036,6 +1036,11 @@ ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
 
+The CLI's `--apply` accepts up to 50 changed roles in one history batch. A larger operation is
+refused before any role update; preview it and apply individual choices with `ocx agent roles set`.
+An interrupted operation reports confirmed writes and the unconfirmed request, and leaves earlier
+writes applied. See the [CLI apply and recovery contract](/reference/cli/agents/) before retrying.
+
 Under the table, **Change history** lists the newest changes a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, in whole batches and never more than 50, so an Apply all is listed with every role it wrote or not at all, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `integrations/codex-agent-roles.jsonl` under the opencodex config directory, which retains at most 256 KiB and 1000 rows by dropping its oldest whole batches. Compaction targets 128 KiB and preserves a Restore together with its complete source batch when they fit both limits, making room by dropping unrelated older batches; history can still expire as later writes arrive. The writer captures the bounded history before appending so a Restore does not evict its own source at the retention boundary; the omo card's Restore center above tracks only `~/.omo/agent/models.json`. Each change records the Codex home it was made in, and only the current home's changes are listed or restored, so after pointing `CODEX_HOME` elsewhere the list starts empty and a Restore from another home's history is refused. If the history file cannot be read, the section says so in place of the list, and the role table keeps working.
 
 ## Kilo

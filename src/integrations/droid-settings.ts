@@ -1,5 +1,5 @@
 /** Read-only guard for competing Factory settings before a managed write. */
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from "node:fs";
 import { join, win32 } from "node:path";
 
 const isWindowsRoot = (path: string) => /^[A-Za-z]:[\\/]|^\\\\/.test(path);
@@ -26,8 +26,8 @@ export function assertDroidSettingsUnambiguous(root: string, baseUrl?: string, m
   }
   for (const name of ["config.json", "settings.local.json"]) {
     const path = isWindowsRoot(root) ? win32.join(root, name) : join(root, name);
-    let stat: ReturnType<typeof lstatSync>;
-    try { stat = lstatSync(path); }
+    let stat: BigIntStats;
+    try { stat = lstatSync(path, { bigint: true }); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw new Error(`Cannot inspect Factory ${name}`);
@@ -37,7 +37,7 @@ export function assertDroidSettingsUnambiguous(root: string, baseUrl?: string, m
     let fd: number | undefined;
     try {
       fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const opened = fstatSync(fd);
+      const opened = fstatSync(fd, { bigint: true });
       if (!opened.isFile() || opened.size > 1024 * 1024 || opened.ino !== stat.ino || opened.dev !== stat.dev) {
         throw new Error("file changed during inspection");
       }

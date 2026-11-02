@@ -781,7 +781,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // one restart, because the toggle removed the fence and start wrote it back.
   if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    const r = await syncGrokConfig(port, config, {
+      ...(config.hostname ? { hostname: config.hostname } : {}),
+      admit: () => !shuttingDown && !cleaned && shouldSyncGrokOnStart(loadConfig()),
+    });
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
   } catch (err) {

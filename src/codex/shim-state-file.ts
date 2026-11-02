@@ -10,12 +10,14 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  type BigIntStats,
   type Stats,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
 
@@ -99,9 +101,9 @@ function fileErrorCode(error: unknown): string | undefined {
 }
 
 function readBoundedRegularFile(path: string, maxBytes: number): { bytes: Buffer; content: string; stat: Stats } | { warning: string } | null {
-  let lexicalBefore: Stats;
+  let lexicalBefore: BigIntStats;
   try {
-    lexicalBefore = lstatSync(path);
+    lexicalBefore = lstatSync(path, { bigint: true });
     if (lexicalBefore.isSymbolicLink() || !lexicalBefore.isFile()) {
       return { warning: `Codex shim state is not a direct regular file at ${path}; auto-restore skipped.` };
     }
@@ -117,12 +119,12 @@ function readBoundedRegularFile(path: string, maxBytes: number): { bytes: Buffer
     return { warning: `Codex shim state could not be opened as a regular file at ${path}.` };
   }
   try {
-    const before = fstatSync(fd);
+    const before = fstatSync(fd, { bigint: true });
     if (!before.isFile()) return { warning: `Codex shim state is not a regular file at ${path}; auto-restore skipped.` };
     if (before.size > maxBytes) {
       return { warning: `Codex shim state exceeds the 1 MiB startup limit at ${path}; auto-restore skipped.` };
     }
-    const buffer = Buffer.allocUnsafe(before.size);
+    const buffer = Buffer.allocUnsafe(Number(before.size));
     let offset = 0;
     while (offset < buffer.length) {
       const bytesRead = readSync(fd, buffer, offset, buffer.length - offset, offset);
@@ -133,25 +135,31 @@ function readBoundedRegularFile(path: string, maxBytes: number): { bytes: Buffer
     if (readSync(fd, extra, 0, 1, offset) !== 0) {
       return { warning: `Codex shim state exceeds the 1 MiB startup limit at ${path}; auto-restore skipped.` };
     }
-    const after = fstatSync(fd);
-    let lexicalAfter: Stats;
+    const after = fstatSync(fd, { bigint: true });
+    let lexicalAfter: BigIntStats;
     try {
-      lexicalAfter = lstatSync(path);
+      lexicalAfter = lstatSync(path, { bigint: true });
     } catch {
       return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
     }
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+    if (!sameFileIdentity(before, after) || before.size !== after.size
+      || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
       || before.mode !== after.mode || before.uid !== after.uid
-      || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
+      || !sameFileIdentity(lexicalBefore, before)
       || lexicalBefore.mode !== before.mode || lexicalBefore.uid !== before.uid
-      || lexicalBefore.size !== before.size || lexicalBefore.mtimeMs !== before.mtimeMs || lexicalBefore.ctimeMs !== before.ctimeMs
-      || !lexicalAfter.isFile() || lexicalAfter.isSymbolicLink() || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino
+      || lexicalBefore.size !== before.size || statTimeMs(lexicalBefore.mtimeNs) !== statTimeMs(before.mtimeNs) || statTimeMs(lexicalBefore.ctimeNs) !== statTimeMs(before.ctimeNs)
+      || !lexicalAfter.isFile() || lexicalAfter.isSymbolicLink() || !sameFileIdentity(lexicalAfter, after)
       || lexicalAfter.mode !== after.mode || lexicalAfter.uid !== after.uid
-      || lexicalAfter.size !== after.size || lexicalAfter.mtimeMs !== after.mtimeMs || lexicalAfter.ctimeMs !== after.ctimeMs) {
+      || lexicalAfter.size !== after.size || statTimeMs(lexicalAfter.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(lexicalAfter.ctimeNs) !== statTimeMs(after.ctimeNs)) {
       return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
     }
-    return { bytes: buffer, content: buffer.toString("utf8"), stat: after };
+    const stat = Object.assign(Object.create(Object.getPrototypeOf(after)), after, {
+      dev: Number(after.dev), ino: Number(after.ino), mode: Number(after.mode), nlink: Number(after.nlink),
+      uid: Number(after.uid), gid: Number(after.gid), rdev: Number(after.rdev), size: Number(after.size),
+      blksize: Number(after.blksize), blocks: Number(after.blocks), atimeMs: statTimeMs(after.atimeNs),
+      mtimeMs: statTimeMs(after.mtimeNs), ctimeMs: statTimeMs(after.ctimeNs), birthtimeMs: statTimeMs(after.birthtimeNs),
+    }) as Stats;
+    return { bytes: buffer, content: buffer.toString("utf8"), stat };
   } finally {
     closeSync(fd);
   }

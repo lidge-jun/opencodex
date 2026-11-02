@@ -12,11 +12,13 @@ import {
   realpathSync,
   renameSync,
   type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Database, constants as sqliteConstants } from "bun:sqlite";
+import { sameFileIdentity, type FileIdentity as NodeIdentity } from "../lib/file-identity";
 
 import { resolveCodexHomeDir } from "./home";
 import {
@@ -33,7 +35,11 @@ import {
 const IMMUTABLE_READONLY_FLAGS =
   sqliteConstants.SQLITE_OPEN_READONLY | sqliteConstants.SQLITE_OPEN_URI;
 
-export type FileIdentity = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
+export type FileIdentity = NodeIdentity & Pick<Stats, "size" | "mtimeMs" | "ctimeMs">;
+
+function milliseconds(ns: bigint): number {
+  return Number(ns / 1_000_000_000n) * 1000 + Number(ns % 1_000_000_000n) / 1e6;
+}
 
 export interface CodexCoordinatorDiagnosticEvidence {
   sizeBytes: number;
@@ -66,15 +72,14 @@ function errorCode(error: unknown): string {
 }
 
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev
-    && left.ino === right.ino
+  return sameFileIdentity(left, right)
     && left.size === right.size
     && left.mtimeMs === right.mtimeMs
     && left.ctimeMs === right.ctimeMs;
 }
 
 function sameNodeAndSize(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+  return sameFileIdentity(left, right) && left.size === right.size;
 }
 
 function coordinatorPathWithoutCreation(): { kind: "absent"; path: string | null } | { kind: "path"; path: string } {
@@ -113,9 +118,9 @@ function inspectTarget(
   path: string,
   options: { allowSqliteSidecars?: boolean } = {},
 ): { kind: "absent" } | { kind: "file"; identity: FileIdentity } | { kind: "unsafe"; reason: string } {
-  let entry: Stats;
+  let entry: BigIntStats;
   try {
-    entry = lstatSync(path);
+    entry = lstatSync(path, { bigint: true });
   } catch (cause) {
     if (errorCode(cause) === "ENOENT") return { kind: "absent" };
     return { kind: "unsafe", reason: "the coordinator file cannot be inspected" };
@@ -132,7 +137,7 @@ function inspectTarget(
   }
   if (process.platform !== "win32") {
     const uid = process.getuid?.();
-    if (uid === undefined || entry.uid !== uid || (entry.mode & 0o777) !== 0o600) {
+    if (uid === undefined || Number(entry.uid) !== uid || (Number(entry.mode) & 0o777) !== 0o600) {
       return { kind: "unsafe", reason: "the coordinator file has unsafe ownership or permissions" };
     }
   }
@@ -143,7 +148,8 @@ function inspectTarget(
       }
     }
   }
-  return { kind: "file", identity: entry };
+  return { kind: "file", identity: { dev: entry.dev, ino: entry.ino, size: Number(entry.size),
+    mtimeMs: milliseconds(entry.mtimeNs), ctimeMs: milliseconds(entry.ctimeNs) } };
 }
 
 function classifyOpenedDatabase(
