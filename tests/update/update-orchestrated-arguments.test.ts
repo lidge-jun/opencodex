@@ -17,5 +17,8 @@ test("orchestrated arguments validate selectors, deadline, and plan binding", ()
 test("orchestrated or malformed orchestration flags never reach legacy update", () => {
   for (const args of [["--plan"], ["--yes"], ["--json"], ["--not-after=3"], ["--expect-plan", "token"]]) expect(isOrchestratedUpdateArgv(args)).toBe(true);
   expect(isOrchestratedUpdateArgv(["--tag", "latest"])).toBe(false);
-  expect(isOrchestratedUpdateArgv(["--version", "2.0.0", "--orchestrated-result", "/fixture"])).toBe(false);
+  for (const args of [["--version", "2.0.0", "--orchestrated-result", "/fixture"], ["--orchestrated-expect", "fixture"], ["--orchestrated-result=/fixture"]]) {
+    expect(isOrchestratedUpdateArgv(args)).toBe(true);
+    expect(parseOrchestratedUpdateArgs(args)).toMatchObject({ ok: false });
+  }
 });

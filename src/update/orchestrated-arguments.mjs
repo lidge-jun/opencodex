@@ -2,7 +2,7 @@ const CORE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:
 
 export function isOrchestratedUpdateArgv(argv) {
   return argv.some(arg => ["--plan", "--yes", "--json", "--expect-plan", "--not-after"].includes(arg)
-    || /^(--expect-plan|--not-after)=/.test(arg));
+    || /^(--expect-plan|--not-after|--orchestrated-expect|--orchestrated-result)(?:=|$)/.test(arg));
 }
 
 function strictSemver(value) {
