@@ -45,6 +45,22 @@ test("the parent watchdog reports overrun without signalling a still-running chi
   expect(cleared).toContain(2);
 });
 
+test("a distant watchdog deadline is not shortened by the platform timer limit", async () => {
+  const signals = new EventEmitter(), child = new EventEmitter();
+  Object.assign(child, { kill: () => true });
+  const timers: Array<{ callback: () => void; ms: number }> = [];
+  const waiting = waitForOrchestratedChild(child as never, {
+    signals, overrunMs: 2_147_483_647 + 42,
+    setTimer: (callback: () => void, ms: number) => { timers.push({ callback, ms }); return timers.length; },
+    clearTimer: () => {},
+  });
+  expect(timers[0]!.ms).toBe(2_147_483_647);
+  timers[0]!.callback();
+  expect(timers[1]!.ms).toBe(42);
+  timers[1]!.callback();
+  expect(await waiting).toMatchObject({ confirmed: false, reason: "overrun" });
+});
+
 test("a signal is forwarded and completion waits for close or the bounded timer", async () => {
   const signals = new EventEmitter(), child = new EventEmitter();
   const forwarded: string[] = [];

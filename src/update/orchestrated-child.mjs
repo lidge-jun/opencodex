@@ -45,14 +45,21 @@ export function waitForOrchestratedChild(child, options = {}) {
       signals.on(signal, handler);
     }
     if (options.overrunMs !== undefined) {
-      overrunTimer = startTimer(() => {
-        if (settled) return;
-        settled = true;
-        cleanupSignals();
-        // Do not signal a transaction in progress. The caller must detach its
-        // handles and leave the child's in-flight marker intact.
-        resolve({ confirmed: false, code: null, signal: null, reason: "overrun" });
-      }, Math.max(0, options.overrunMs));
+      let remaining = Math.max(0, options.overrunMs);
+      const schedule = () => {
+        const delay = Math.min(remaining, 2_147_483_647);
+        overrunTimer = startTimer(() => {
+          if (settled) return;
+          remaining -= delay;
+          if (remaining > 0) { schedule(); return; }
+          settled = true;
+          cleanupSignals();
+          // Do not signal a transaction in progress. The caller must detach its
+          // handles and leave the child's in-flight marker intact.
+          resolve({ confirmed: false, code: null, signal: null, reason: "overrun" });
+        }, delay);
+      };
+      schedule();
     }
   });
 }
