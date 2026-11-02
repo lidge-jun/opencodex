@@ -1562,13 +1562,14 @@ export async function deliverPassthroughResponse(
 }
 
 /**
- * Model ids the user configured for the selected provider: its models, selection and retention
- * lists and default. A provider-owned model hint that names one of them is relayed as the proxy's
- * copy. Live-discovered ids are not trusted here: the upstream's own /models answer chose them.
+ * Model ids the user configured for the selected provider: its models and retention lists and
+ * default. A provider-owned model hint that names one of them is relayed as the proxy's copy.
+ * Live-discovered ids are not trusted here, because the upstream's own /models answer chose them;
+ * neither is the selection list, which a model preset fills from that same discovered catalog.
  */
 function providerKnownModels(provider: OcxProviderConfig): string[] {
   return [
-    ...(provider.models ?? []), ...(provider.selectedModels ?? []), ...(provider.retainModels ?? []),
+    ...(provider.models ?? []), ...(provider.retainModels ?? []),
     ...(provider.defaultModel ? [provider.defaultModel] : []),
   ];
 }

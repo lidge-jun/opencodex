@@ -8,6 +8,8 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
 import { stubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+import { materializeModelPreset } from "../../src/providers/model-presets";
+import { modelIdentityLogFields } from "../../src/usage/log";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -162,6 +164,43 @@ describe("a passthrough openai-model header is kept only as a known model id", (
     } finally {
       clearModelCache("fixture-openai");
     }
+  });
+
+  // A model preset fills selectedModels from the discovered catalog, so a preset-selected id is not
+  // trusted either; an explicit provider.models entry still is.
+  test.each([
+    ["a preset-selected upstream id", `openai/gpt-5.5-${PROVIDER_KEY}`, false],
+    ["an explicit provider.models entry", "openai/gpt-5.5-configured", true],
+  ])("a model header naming %s", async (_name, reported, relayed) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    globalThis.fetch = (async () => new Response(JSON.stringify(responseSnapshot(undefined)), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-codex-safety-buffering-enabled": "true", "openai-model": reported, "x-codex-safety-buffering-faster-model": reported },
+    })) as unknown as typeof fetch;
+    const config = routedConfig("fixture-openai", "openai-responses", "openai/gpt-5.5");
+    const provider = config.providers["fixture-openai"]!;
+    // The ids a preset would persist after evaluating its rules against a discovered catalog.
+    provider.selectedModels = materializeModelPreset("openrouter", ["openai/gpt-5.5", `openai/gpt-5.5-${PROVIDER_KEY}`, "unrelated/model"]);
+    if (relayed) provider.models = ["openai/gpt-5.5", reported];
+    // Non-vacuous: the preset really persisted the upstream-shaped id as a selected model.
+    expect(provider.selectedModels).toEqual(["openai/gpt-5.5", `openai/gpt-5.5-${PROVIDER_KEY}`]);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-openai/openai/gpt-5.5", input: "hi", stream: false }),
+    }), config, logCtx, {});
+    const text = await response.text();
+    // Non-vacuous: the passthrough answered and relayed its other safety-buffering hint.
+    expect(response.status).toBe(200);
+    expect(logCtx.provider).toBe("fixture-openai");
+    expect(response.headers.get("x-codex-safety-buffering-enabled")).toBe("true");
+    const expected = relayed ? reported : undefined;
+    expect(response.headers.get("openai-model") ?? undefined).toBe(expected);
+    expect(response.headers.get("x-codex-safety-buffering-faster-model") ?? undefined).toBe(expected);
+    expect(logCtx.servedModel).toBe(expected);
+    // The recorded row trusts only the route's own ids, so even the configured hint is not stored.
+    expect(modelIdentityLogFields(logCtx).servedModel).toBeUndefined();
+    expect(JSON.stringify([...response.headers, text, logCtx.servedModel, logCtx.resolvedModel, modelIdentityLogFields(logCtx)])).not.toContain(PROVIDER_KEY);
   });
 });
 
