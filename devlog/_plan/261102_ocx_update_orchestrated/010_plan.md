@@ -306,3 +306,15 @@ F2 The synchronous npm transaction blocks the child's event loop, so the overrun
    at notAfter+bound (or start+bound) with the child still alive, the parent emits result exit 12 error "overrun" and
    exits without killing the child; the child's marker stays preflight|mutating with a live pid, so updateInFlight
    stays true until the child finishes (supersedes E3's "child records overrun").
+
+## Review r3 resolutions (2026-11-02)
+G1 Admission refuses when plan.updateInFlight is true (exit 10 "update-in-flight"); the child, after acquiring the mutex,
+   re-reads the marker and proceeds only if it is positively free (finalized or absent); otherwise refused, marker untouched.
+G2 Legacy `ocx update` (both lanes, interactive and package-only workers) also takes the sync/update mutex as "update" for
+   its full mutation lifetime and publishes the marker; held by sync → refuse before any mutation with a clear message.
+G3 Fail-closed fence by time bound: the marker is published (phase "mutating", fenceUntil = startedAt + 900000) BEFORE any
+   installer/supervisor is launched. inspectUpdateMarker treats a non-final marker as active while the worker pid or a
+   recorded installer pid/pgid is alive, OR while now < fenceUntil — so a dead worker or an escaped installer descendant
+   keeps updateInFlight=true (and sync refused) until the bound passes. A timeout-terminated installer finishes "failed"
+   but keeps fenceUntil. Escaped descendants that outlive the 15-minute bound are not contained on POSIX (residual risk,
+   documented); Windows uses the Job Object supervisor.
