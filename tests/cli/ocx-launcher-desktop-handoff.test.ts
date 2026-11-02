@@ -296,7 +296,7 @@ posixTest("a killed launcher leaves the live Desktop delegate fenced past the st
     let lease = tryAcquireUpdateSyncMutex(home, "update", { now: future });
     while (lease.kind !== "acquired" && Date.now() < end) { await Bun.sleep(10); lease = tryAcquireUpdateSyncMutex(home, "update", { now: future }); }
     expect(lease.kind).toBe("acquired");
-    if (lease.kind === "acquired") lease.release();
+    if (lease.kind === "acquired") { delegate = 0; lease.release(); }
   } finally {
     if (launcherChild.exitCode === null && launcherChild.signalCode === null) launcherChild.kill("SIGKILL");
     if (delegate) { try { process.kill(delegate, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
