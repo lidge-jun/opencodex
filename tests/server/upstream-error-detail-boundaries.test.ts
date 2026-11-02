@@ -50,6 +50,7 @@ function saveProviders(messagesNative: boolean) {
       fxr: { adapter: "openai-responses", baseUrl: base + "/v1", authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["m1"] },
       fxa: { adapter: "anthropic", baseUrl: base, authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["claude-x"] },
     },
+    combos: { echo: { strategy: "failover", targets: [{ provider: "fxc", model: "m1" }, { provider: "fxr", model: "m1" }] } },
     ...(messagesNative ? { protocols: { rollout: { managedMessagesNative: true } } } : {}),
   } as unknown as OcxConfig);
 }
@@ -82,6 +83,8 @@ const CASES = [
     body: (stream: boolean) => ({ model: "fxc/m1", messages: [{ role: "user", content: "hi" }], stream }) },
   { name: "Responses passthrough", path: "/v1/responses", messagesNative: false,
     body: (stream: boolean) => ({ model: "fxr/m1", input: "hi", stream }) },
+  { name: "combo route", path: "/v1/responses", messagesNative: false,
+    body: (stream: boolean) => ({ model: "combo/echo", input: "hi", stream }) },
   { name: "native Messages", path: "/v1/messages", messagesNative: true,
     body: (stream: boolean) => ({ model: "fxa/claude-x", max_tokens: 16, messages: [{ role: "user", content: "hi" }], stream }) },
   { name: "Messages passthrough", path: "/v1/messages", messagesNative: false,

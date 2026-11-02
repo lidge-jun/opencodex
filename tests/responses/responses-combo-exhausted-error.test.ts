@@ -356,7 +356,7 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(logCtx.attempts).toHaveLength(2);
   });
 
-  test("the hop warning names the upstream refusal on one redacted line", async () => {
+  test("the hop warning names the classified condition, never the upstream text", async () => {
     const key = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     globalThis.fetch = (async () => Response.json(
       { error: { code: "invalid_api_key", message: `Incorrect API key provided: ${key}.\nRotate it.` } },
@@ -366,14 +366,15 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     try {
       await loggedCombo(config, { model: "", provider: "" });
       const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
-      expect(line).toMatch(/failed with 401 after \d+ms: invalid_api_key: Incorrect API key provided: .* Rotate it\.$/);
+      expect(line).toMatch(/failed with 401 after \d+ms: auth_failed$/);
       expect(line).not.toContain(key);
+      expect(line).not.toContain("Incorrect API key");
     } finally {
       warn.mockRestore();
     }
   });
 
-  test("the hop warning redacts credential framing before flattening parsed codes", async () => {
+  test("the hop warning never prints a parsed upstream code", async () => {
     const credential = "synthetic-multipart-credential";
     globalThis.fetch = (async () => Response.json({ error: {
       code: `name="authorization"\r\n\r\n${credential}`,
@@ -385,8 +386,8 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
       const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
       expect(line).toBeDefined();
       expect(line!.includes(credential)).toBe(false);
-      expect(line).toContain("[REDACTED]");
-      expect(line).not.toMatch(/[\r\n]/);
+      expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
+      expect(line).not.toContain("upstream refused");
     } finally { warn.mockRestore(); }
   });
 
@@ -396,7 +397,8 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     try {
       await loggedCombo(config, { model: "", provider: "" });
       const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
-      expect(line).toMatch(/failed with 502 after \d+ms$/);
+      expect(line).toMatch(/failed with 502 after \d+ms: upstream_failed$/);
+      expect(line).not.toContain("session=abc123");
     } finally {
       warn.mockRestore();
     }

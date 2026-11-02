@@ -1,3 +1,4 @@
+import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
@@ -54,7 +55,6 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -1445,12 +1445,11 @@ export async function executeComboResponses(
       contextFailure = { childLog, response: formatErrorResponse(400, "invalid_request_error",
         failure.upstreamMessage ?? failure.classificationText, { code: "context_length_exceeded", classified: true }) };
     }
-    // A bare status made a revoked credential read as a provider outage. Log only the parsed
-    // code and message, never the raw envelope, as one redacted, bounded line.
-    const failureReason = sanitizeLogMetadataString(
-      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
-      200,
-    );
+    // A bare status made a revoked credential read as a provider outage. Log the classified
+    // condition (a closed member), never upstream-authored code or message text.
+    const failureReason = classifyUpstreamCondition({
+      status: failure.response.status, code: failure.upstreamCode, message: failure.upstreamMessage,
+    });
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
         + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,
