@@ -7,9 +7,20 @@ import { repoPath } from "../helpers/repo-root";
 import { assertNotRealHomeUnderTest } from "../../src/lib/test-home-guard";
 import { encodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
 import { createUpdatePlanToken } from "../../src/update/orchestrated-token.mjs";
-import { tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
+import { inspectUpdateMarker, inspectUpdateSyncMutex, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
 import { isUpdateInFlight } from "../../src/update/sync-update-mutex";
 import { watch } from "node:fs";
+
+// These scenarios run sequentially in one disposable home. Simulate the bound
+// passing only after the fixture worker and recorded installer have settled.
+function expireFixtureFence(home: string) {
+  const path = join(home, "update-orchestrated.json"), marker = JSON.parse(readFileSync(path, "utf8"));
+  expect(["failed", "installed", "refused"]).toContain(marker.phase);
+  expect(inspectUpdateSyncMutex(home)).toBe("free");
+  expect(inspectUpdateMarker(home, { now: () => marker.fenceUntil })).toBe("free");
+  marker.fenceUntil = marker.startedAt;
+  writeFileSync(path, JSON.stringify(marker));
+}
 
 test.skipIf(process.platform === "win32")("npm child fences identity, deadline and sync before mutation and installs the pinned version", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-node-pin-")));
@@ -91,7 +102,8 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed" });
     expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
-    expect(isUpdateInFlight(home)).toBe(false);
+    expect(isUpdateInFlight(home)).toBe(true);
+    expireFixtureFence(home);
     rmSync(result); rmSync(log);
     const unauthorized = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
       cwd: root, env: { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" }, encoding: "utf8", timeout: 30000,
@@ -113,6 +125,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect({ status: rolledBack.status, stdout: rolledBack.stdout, stderr: rolledBack.stderr }).toMatchObject({ status: 1 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: true });
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+    expireFixtureFence(home);
     const updated = run(token);
     expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
@@ -124,6 +137,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect(calls.find(call => call.args[0] === "install").outcome.phase).toBe("mutating");
     expect(calls.find(call => call.args[0] === "install").args).toContain("@bitkyc08/opencodex@2.1.0");
     const installs = calls.filter(call => call.args[0] === "install").length;
+    expireFixtureFence(home);
     const current = run(token);
     expect({ status: current.status, stderr: current.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
@@ -140,11 +154,13 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     const parentRollback = parent({ OCX_FIXTURE_ROLLBACK: "1" });
     expect({ status: parentRollback.status, stderr: parentRollback.stderr }).toMatchObject({ status: 11 });
     expect(JSON.parse(parentRollback.stdout)).toMatchObject({ rolledBack: true, applied: false });
+    expireFixtureFence(home);
     const parentApplied = parent({ OCX_FIXTURE_MOVED: "1" });
     expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@preview");
+    expireFixtureFence(home);
     const resetVersion = () => {
       const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
       writeFileSync(join(pkg, "package.json"), JSON.stringify(m));
@@ -161,15 +177,20 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     await new Promise<void>((resolveDone, rejectDone) => {
       const timer = setTimeout(() => { observer.close(); rejectDone(new Error("fixture child did not finish")); }, 30000);
       const check = () => {
-        if (!isUpdateInFlight(home)) { clearTimeout(timer); observer.close(); resolveDone(); }
+        const current = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
+        if (["installed", "failed", "refused"].includes(current.phase) && inspectUpdateSyncMutex(home) === "free") {
+          clearTimeout(timer); observer.close(); resolveDone();
+        }
       };
       const observer = watch(home, check);
       check();
     });
+    expireFixtureFence(home);
     resetVersion();
     const missing = parent({ OCX_FIXTURE_EXIT_EFFECT: "missing" });
     expect({ status: missing.status, stderr: missing.stderr }).toMatchObject({ status: 12 });
     expect(JSON.parse(missing.stdout).error).toBe("outcome-unverified");
+    expireFixtureFence(home);
     resetVersion();
     const damaged = parent({ OCX_FIXTURE_EXIT_EFFECT: "damage" });
     expect({ status: damaged.status, stderr: damaged.stderr }).toMatchObject({ status: 12 });
@@ -203,6 +224,7 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     expect({ status: failed.status, stdout: failed.stdout, stderr: failed.stderr }).toMatchObject({ status: 1 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: false });
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+    expireFixtureFence(home);
     const updated = spawnSync(node, args, { cwd: root, env, encoding: "utf8", timeout: 30000 });
     expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
@@ -212,6 +234,7 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     expect(calls.find(call => call.args[0] === "add")).toMatchObject({ outcome: { phase: "mutating" }, mutex: true });
     expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
     expect(calls.find(call => call.args[0] === "add").args).toContain("@bitkyc08/opencodex@2.1.0");
+    expireFixtureFence(home);
     const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
     const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
@@ -220,6 +243,7 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const unchanged = parent({ OCX_FIXTURE_FAIL: "1" });
     expect({ status: unchanged.status, stderr: unchanged.stderr }).toMatchObject({ status: 11 });
     expect(JSON.parse(unchanged.stdout)).toMatchObject({ rolledBack: false, applied: false });
+    expireFixtureFence(home);
     const parentApplied = parent();
     expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
@@ -345,6 +369,7 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8").match(/@preview version/g)).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
+    expireFixtureFence(ocxHome);
     const reset = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); reset.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
     rmSync(join(pkg, "tag-queried"));
@@ -362,6 +387,7 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect({ code: failedCode, stderr: failedErr }).toMatchObject({ code: 12 });
     expect(JSON.parse(failedOut)).toMatchObject({ applied: true, healthy: false, error: "runtime-unhealthy" });
     expect(JSON.parse(readFileSync(join(ocxHome, "update-orchestrated.json"), "utf8")).phase).toBe("installed");
+    expireFixtureFence(ocxHome);
     writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
     const childResult = join(root, "bun-worker-result.json"), cliRoot = realpathSync.native(pkg), childHome = ocxHome;
     const planToken = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "bun", cliRoot,
