@@ -199,14 +199,17 @@ function createLeaseHandle(path, generation, token, options) {
       const observed = readOwner(path);
       if (released || !current || current.generation !== generation || current.delegated || !observed || !sameOwner(current.snapshot, observed)) throw new Error("mutation lease is no longer held");
       const temporary = `${path}.${randomUUID()}.tmp`;
+      let created = false;
       try {
         writeFileSync(temporary, `${JSON.stringify({ ...observed.record, delegatePid: pid })}\n`, { flag: "wx", mode: 0o600 });
+        created = true;
         renameSync(temporary, observed.ownerPath);
+        created = false;
         const updated = readOwner(path);
         if (!updated || updated.record.token !== token || updated.record.delegatePid !== pid) throw new Error("mutation lease delegate could not be verified");
         current.snapshot = updated;
       } finally {
-        try { unlinkSync(temporary); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+        if (created) { try { unlinkSync(temporary); } catch (error) { if (error?.code !== "ENOENT") throw error; } }
       }
     },
     release: () => {
