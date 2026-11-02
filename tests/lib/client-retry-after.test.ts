@@ -16,19 +16,22 @@ describe("formatClientRetryAfter", () => {
   });
 
   test("long delays clamp to the client maximum", () => {
-    expect(formatClientRetryAfter("600", now)).toBe("600");
-    expect(formatClientRetryAfter(String(MAX_CLIENT_RETRY_AFTER_SECONDS), now)).toBe("3600");
-    expect(formatClientRetryAfter("3601", now)).toBe("3600");
+    expect(MAX_CLIENT_RETRY_AFTER_SECONDS).toBe(691_200);
+    expect(formatClientRetryAfter("84692", now)).toBe("84692");
+    expect(formatClientRetryAfter("172800", now)).toBe("172800");
+    expect(formatClientRetryAfter("691200", now)).toBe("691200");
+    expect(formatClientRetryAfter("691201", now)).toBe("691200");
     // An all-digit value of credential length is a valid delay, but its bytes are never echoed.
-    expect(formatClientRetryAfter("73915028461739205817", now)).toBe("3600");
-    expect(formatClientRetryAfter(1e30, now)).toBe("3600");
+    expect(formatClientRetryAfter("73915028461739205817", now)).toBe("691200");
+    expect(formatClientRetryAfter(1e30, now)).toBe("691200");
   });
 
   test("HTTP dates become seconds from now", () => {
     expect(formatClientRetryAfter("Mon, 02 Nov 2026 00:00:30 GMT", now)).toBe("30");
     expect(formatClientRetryAfter("Mon, 02 Nov 2026 00:00:00 GMT", now)).toBe("0");
     expect(formatClientRetryAfter("Sun, 01 Nov 2026 23:00:00 GMT", now)).toBe("0");
-    expect(formatClientRetryAfter("Tue, 03 Nov 2026 00:00:00 GMT", now)).toBe("3600");
+    expect(formatClientRetryAfter("Tue, 03 Nov 2026 00:00:00 GMT", now)).toBe("86400");
+    expect(formatClientRetryAfter("Mon, 30 Nov 2026 00:00:00 GMT", now)).toBe("691200");
   });
 
   test("anything else yields no advice", () => {

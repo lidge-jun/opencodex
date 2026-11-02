@@ -2,8 +2,12 @@
  * Client-facing Retry-After formatting, dependency-free so leaf header modules can use it.
  */
 
-/** Longest wait this proxy advertises to a client. Internal cooldowns keep their own parsed values. */
-export const MAX_CLIENT_RETRY_AFTER_SECONDS = 3600;
+/**
+ * Longest wait this proxy advertises to a client: eight days, so a weekly usage window's reset
+ * (a local Codex account cooldown, for example) still reaches the client intact. Internal cooldowns
+ * keep their own parsed values.
+ */
+export const MAX_CLIENT_RETRY_AFTER_SECONDS = 8 * 24 * 60 * 60;
 
 /**
  * Retry advice as bytes this proxy writes: a non-negative integer number of seconds, clamped to

@@ -104,7 +104,7 @@ describe("upstream error details stay out of retry advice and request logs", () 
             if (name === "retry-after") {
               expect(value).not.toContain(PROVIDER_KEY);
               expect(value).toMatch(/^\d+$/);
-              expect(Number(value)).toBeLessThanOrEqual(3600);
+              expect(Number(value)).toBeLessThanOrEqual(691200);
             }
           }
           expect(result.rows.length).toBeGreaterThan(0);

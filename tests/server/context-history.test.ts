@@ -132,7 +132,7 @@ describe("context relay contract",()=>{
   });
   test("regenerates retry advice instead of relaying upstream bytes",async()=>{
     const numericKey="73915028461739205817";
-    for(const [raw,expected] of [[numericKey,"3600"],["must-not-echo",null]] as const){
+    for(const [raw,expected] of [[numericKey,"691200"],["must-not-echo",null]] as const){
       setFetch(async()=>new Response('{"error":"slow down"}',{status:429,headers:{"retry-after":raw}}));
       const req=new Request("http://localhost/v1/alpha/notes/v2/write_file",{method:"POST",headers:{authorization:"Bearer test","content-type":"application/json"},body:JSON.stringify({context:{session_id:"s"}})});
       const r=await handleContextHistory(req, config, logContext(), "alpha/notes/v2/write_file", undefined, keyAdmission);

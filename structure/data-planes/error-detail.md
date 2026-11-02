@@ -41,7 +41,9 @@ row, `usage.jsonl`, hydration and console output.
 
 Client `Retry-After` advice is a string this proxy formats: `formatClientRetryAfter` in
 `src/lib/client-retry-after.ts` turns delay seconds (fractions round up) or an IMF HTTP date into an integer
-of seconds clamped to 0..3600, and yields nothing for any other input. Every client boundary uses it
+of seconds clamped to 0..691200 (eight days, so a weekly usage-window reset such as a local Codex account
+cooldown still reaches the client), and yields nothing for any other input. The Ollama surface keeps its
+own smaller bound (`ollamaRetryAfter`). Every other client boundary uses `formatClientRetryAfter`
 (translated errors, native Chat and Messages, Messages passthrough, the Responses error re-wrap, compact,
 context history, WebSocket response metadata, fallback refusal and Copilot refusal). Internal cooldown and
 retry scheduling keep reading the parsed evidence through `resolveClientRetryAfter` and
