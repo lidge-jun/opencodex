@@ -1,5 +1,6 @@
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import { isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
@@ -1395,6 +1396,8 @@ export async function handleResponsesCompact(
       outcomeCtx = replay.authCtx;
       compactProvider = replay.provider;
       headers = replay.headers;
+      const replayBinding = conversationStateBindingFromAuth(replay.authCtx, codexPoolAffinityKey(req.headers));
+      if (replayBinding) applyAccountChangeConversationStateScrub({ body: compactBody, headers, bindingKey: replayBinding.bindingKey, servingAccountId: replayBinding.accountId, logCtx });
       logCtx.accountLogLabel = codexAuthContextLogLabel(replay.authCtx, config);
       try {
         upstream = await sendCompactAttempt(compactProvider, headers, "single", authCtx);
@@ -1439,10 +1442,15 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     };
     const scrubCompactStateForAlternate = (alternateAuthCtx: CodexAuthContext, alternateHeaders: Headers): void => {
-      const binding = conversationStateBindingFromAuth(
-        alternateAuthCtx,
-        compactAlternateAffinityKey(authCtx, () => codexPoolAffinityKey(req.headers)),
-      );
+      const affinityKey = compactAlternateAffinityKey(authCtx, () => codexPoolAffinityKey(req.headers))
+        ?? codexPoolAffinityKey(req.headers);
+      const priorAccountId = conversationStateAccountId(authCtx);
+      // An unkeyed caller-owned main alternate has no binding of its own, but moving off the issuing
+      // account still makes the carried state foreign. Scrub for this request only; nothing persists.
+      const binding = conversationStateBindingFromAuth(alternateAuthCtx, affinityKey)
+        ?? (alternateAuthCtx.kind === "main" && priorAccountId && affinityKey
+          ? { bindingKey: affinityKey, accountId: priorAccountId === MAIN_CODEX_ACCOUNT_ID ? "__caller_main__" : MAIN_CODEX_ACCOUNT_ID }
+          : null);
       if (!binding) return;
       for (const body of [raw, compactBody]) {
         applyAccountChangeConversationStateScrub({
