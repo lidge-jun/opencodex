@@ -1017,7 +1017,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
-              }).then(result => { if (session && result.processTreeExited === true) { session.confirmInstallerExit(); if (!Number.isInteger(result.status)) session.retainInstallerFence(); } return result; });
+              }).then(result => {
+                if (session && result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
+                else if (session) { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
+                return result;
+              });
             }
             if (!invocation) return { status: 1 };
             if (!homePolicy.authorizeMutation("package")) return { status: 1 };
@@ -1045,7 +1049,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
         });
         if (session) childOutcome = tx.ok ? { phase: "installed", activeRoot: packageDir }
           : { phase: "failed", rollbackPerformed: tx.rolledBack === true,
-            ...(tx.processTreeExited === false ? { error: "installer-termination-unconfirmed" } : {}) };
+            ...(tx.processTreeExited === false ? { error: "installer-termination-unconfirmed", terminationConfirmed: false } : {}) };
         postUpdateLauncherUsable = launcherUsableAfterNpmUpdate(tx);
         if (!tx.ok) npmFailure = tx;
         if (tx.ok) {
@@ -1075,7 +1079,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
                 const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
-                if (result.processTreeExited === true) { session.confirmInstallerExit(); if (!Number.isInteger(result.status)) session.retainInstallerFence(); }
+                if (result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
+                else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
                 return result;
               }
               try {
@@ -1104,7 +1109,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
         });
         if (session) childOutcome = update.ok ? { phase: "installed", activeRoot: update.path }
           : { phase: "failed", rollbackPerformed: update.rollbackPerformed === true,
-            ...(update.processTreeExited === false ? { error: "installer-termination-unconfirmed" } : {}) };
+            ...(update.processTreeExited === false ? { error: "installer-termination-unconfirmed", terminationConfirmed: false } : {}) };
         if (update.ok) {
           // pnpm switches the active global group and updates its shim. Continue recovery
           // through that fresh package tree, not the old group whose launcher is still

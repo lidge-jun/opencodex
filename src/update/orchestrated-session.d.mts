@@ -22,6 +22,6 @@ export declare function createOrchestratedChildSession(options: {
   noteUntrackedInstaller(): void;
   confirmInstallerExit(): void;
   retainInstallerFence(): void;
-  finish(outcome: { phase: "installed"; activeRoot: string } | { phase: "failed"; error?: string; rollbackPerformed?: boolean }): void;
+  finish(outcome: ({ phase: "installed"; activeRoot: string } | { phase: "failed"; error?: string; rollbackPerformed?: boolean }) & { terminationConfirmed?: boolean }): void;
 };
 export declare function createLegacyUpdateSession(options: { home: string }): ReturnType<typeof createOrchestratedChildSession>;

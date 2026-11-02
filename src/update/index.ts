@@ -938,6 +938,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   // Every post-update action below receives the verified active launcher.
   if (installer === "pnpm") {
     let update: ReturnType<typeof runPnpmGlobalUpdate>;
+    installerUncertain = true;
     try {
       if (!homePolicy.authorizeMutation("package")) return 1;
       update = runPnpmGlobalUpdate({
@@ -963,9 +964,12 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
         ok: false,
         phase: "rollback",
         rolledBack: false,
+        processTreeExited: false,
         error: "pnpm update failed unexpectedly; active package could not be verified",
       };
+      session?.retainInstallerFence();
     }
+    installerUncertain = !update.ok && update.processTreeExited === false;
     if (update.ok) {
       postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
       postUpdateLauncherUsable = true;
@@ -984,15 +988,17 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
       const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
         env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
       });
-      if (supervised.processTreeExited === true) session.confirmInstallerExit();
-      if (!Number.isInteger(supervised.status)) session.retainInstallerFence();
+      if (supervised.processTreeExited === true && Number.isInteger(supervised.status)) session.confirmInstallerExit();
+      else session.retainInstallerFence();
       r = supervised;
+      installerUncertain = supervised.processTreeExited !== true || !Number.isInteger(supervised.status);
     } else if (session) {
       try {
         const supervised = runPosixInstallerSync({ file: target.bin, args: target.args,
           markerPath: join(getConfigDir(), "update-orchestrated.json"),
           authorizeMutation: homePolicy.authorizeMutation, env: mutation.unprivilegedEnvironment() });
-        if (!Number.isInteger(supervised.status) || supervised.signal || !supervised.groupExited || supervised.groupKilled !== false) session.retainInstallerFence();
+        installerUncertain = !Number.isInteger(supervised.status) || Boolean(supervised.signal) || !supervised.groupExited || supervised.groupKilled !== false || supervised.processTreeExited === false;
+        if (installerUncertain) session.retainInstallerFence();
         r = supervised;
       } catch (error) { session.retainInstallerFence(); throw error; }
     } else r = guardedSpawnSync(homePolicy.authorizeMutation, "package", target.bin, target.args, {
@@ -1004,7 +1010,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
       ...target.options,
       env: mutation.unprivilegedEnvironment(),
     });
-    installerUncertain = r.status === null;
+    if (!session) installerUncertain = r.status === null;
   }
   if (r && installStdio === "pipe") logSpawnOutput("", r);
   }
@@ -1020,6 +1026,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     return 1;
   }
   if (!r) throw new Error("update replacement returned no result");
+  if (installerUncertain) { console.error("Installer termination was not confirmed; update recovery is deferred."); return 1; }
   if (session && r.status === 0 && latest) {
     const root = realpathSync.native(packageRoot());
     if (verifyOrchestratedInstall(root, latest, "bun")) installedRoot = root;
@@ -1278,8 +1285,8 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     return 1;
   }
   } catch (error) {
-    await recoverStoppedRuntime("update failed unexpectedly");
-    if (trayWasRunning) {
+    if (!installerUncertain) await recoverStoppedRuntime("update failed unexpectedly");
+    if (trayWasRunning && !installerUncertain) {
       try { const { guardedStartWindowsTray } = await import("./guarded-tray-ops"); if (homePolicy.authorizeMutation("own-tray")) guardedStartWindowsTray(homePolicy.authorizeMutation); } catch { /* retain original failure */ }
     }
     throw error;
@@ -1289,7 +1296,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   } finally {
     if (session && mutationStarted) session.finish(installedRoot
       ? { phase: "installed", activeRoot: installedRoot, ...(!completed || updateExitCode ? { recoveryFailed: true, error: "runtime-unhealthy" } : {}) }
-      : { phase: "failed", error: installerUncertain ? "installer-timeout" : "update-failed" });
+      : { phase: "failed", error: installerUncertain ? "installer-timeout" : "update-failed", ...(installerUncertain ? { terminationConfirmed: false } : {}) });
   }
   if (updateExitCode) {
     if (child) process.exitCode = updateExitCode;

@@ -1,7 +1,7 @@
-export type Outcome = { phase: "preflight" | "mutating" | "overrun" }
+export type Outcome = ({ phase: "preflight" | "mutating" | "overrun" }
   | { phase: "installed"; activeRoot: string; recoveryFailed?: boolean; error?: string }
   | { phase: "refused"; error?: string }
-  | { phase: "failed"; error?: string; rollbackPerformed?: boolean };
+  | { phase: "failed"; error?: string; rollbackPerformed?: boolean }) & { terminationConfirmed?: boolean };
 export interface OutcomeInput {
   fromVersion: string;
   toVersion: string | null;

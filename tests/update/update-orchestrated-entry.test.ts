@@ -108,7 +108,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
       cwd: root, env: { ...env, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
     });
     expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
-    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed" });
+    expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed", terminationConfirmed: false });
     expect(() => process.kill(Number(readFileSync(descendant, "utf8")), 0)).toThrow();
     expect(isUpdateInFlight(home)).toBe(true);
     expectSyncAdmission(pkg, root, env, false);
@@ -159,6 +159,11 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json", "--tag", "preview"];
     const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
     const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
+    const parentTimeout = parent({ OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant });
+    expect({ status: parentTimeout.status, stderr: parentTimeout.stderr }).toMatchObject({ status: 12 });
+    expect(JSON.parse(parentTimeout.stdout)).toMatchObject({ applied: false, error: "installer-termination-unconfirmed" });
+    expect(isUpdateInFlight(home)).toBe(true);
+    expireFixtureFence(home);
     const sync = tryAcquireUpdateSyncMutex(home, "sync");
     expect(sync.kind).toBe("acquired");
     try { const blocked = parent(); expect(blocked.status).toBe(10); expect(JSON.parse(blocked.stdout).error).toBe("sync-in-progress"); }

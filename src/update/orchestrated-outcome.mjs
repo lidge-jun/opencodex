@@ -5,6 +5,7 @@ function validOutcome(outcome) {
   if (!["preflight", "mutating", "installed", "failed", "refused", "overrun"].includes(outcome.phase)) return false;
   if (outcome.error !== undefined && typeof outcome.error !== "string") return false;
   if (outcome.rollbackPerformed !== undefined && typeof outcome.rollbackPerformed !== "boolean") return false;
+  if (outcome.terminationConfirmed !== undefined && typeof outcome.terminationConfirmed !== "boolean") return false;
   return outcome.phase !== "installed" || (typeof outcome.activeRoot === "string" && isAbsolute(outcome.activeRoot));
 }
 
@@ -17,6 +18,7 @@ export function classifyOrchestratedOutcome(input) {
   };
   const done = (exitCode, error) => ({ exitCode, result: error ? { ...result, error } : result });
   if (!input.childExited || input.childExitCode === null || !validOutcome(input.outcome) || input.outcome.phase === "overrun") return done(12, "outcome-unverified");
+  if (input.outcome.terminationConfirmed === false) return done(12, input.outcome.error || "installer-termination-unconfirmed");
   if (input.outcome.phase === "refused" && input.childExitCode !== 0) return done(10, input.outcome.error || "runtime-ownership-refused");
   if (input.outcome.phase === "failed" && input.outcome.error === "installer-termination-unconfirmed") return done(12, input.outcome.error);
   if (input.outcome.phase === "installed") {

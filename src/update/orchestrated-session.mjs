@@ -126,10 +126,10 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
     finish(outcome) {
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
-      if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed" };
+      if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed", terminationConfirmed: false };
       result(outcome);
       marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed",
-        retainFence || outcome.error === "installer-termination-unconfirmed" || outcome.error === "installer-timeout");
+        retainFence || outcome.terminationConfirmed === false || outcome.error === "installer-termination-unconfirmed" || outcome.error === "installer-timeout");
       mutex.release(); mutex = undefined; state = "finished";
     },
   };

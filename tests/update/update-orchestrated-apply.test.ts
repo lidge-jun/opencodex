@@ -95,6 +95,16 @@ test("an unconfirmed installer termination is never classified as a safe rollbac
     .toMatchObject({ exitCode: 12, result: { error: "installer-termination-unconfirmed", applied: false } });
 });
 
+test("explicitly unconfirmed termination overrides previous-state proof for every outcome", () => {
+  for (const outcome of [
+    { phase: "failed", error: "installer-timeout", terminationConfirmed: false },
+    { phase: "refused", error: "plan-changed", terminationConfirmed: false },
+    { phase: "installed", activeRoot: join(tmpdir(), "fixture"), terminationConfirmed: false },
+  ]) {
+    expect(classifyOrchestratedOutcome({ ...base, outcome: outcome as OutcomeInput["outcome"], targetVerified: true })).toMatchObject({ exitCode: 12 });
+  }
+});
+
 test("exit classification requires confirmed termination and independently verified active state", () => {
   expect(classifyOrchestratedOutcome({ ...base, outcome: { phase: "refused", error: "plan-changed" } })).toMatchObject({ exitCode: 10, result: { applied: false, error: "plan-changed", rolledBack: false } });
   expect(classifyOrchestratedOutcome(base)).toMatchObject({ exitCode: 11, result: { applied: false, rolledBack: false } });
@@ -108,7 +118,7 @@ test("exit classification requires confirmed termination and independently verif
   expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: true })).toMatchObject({ exitCode: 0, result: { applied: true, healthy: true } });
   expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: true, runtimeHealthy: false })).toMatchObject({ exitCode: 12, result: { applied: true, healthy: false, error: "runtime-unhealthy" } });
   expect(classifyOrchestratedOutcome({ ...base, childExitCode: 0, outcome: installed, targetVerified: false })).toMatchObject({ exitCode: 12, result: { applied: false, error: "install-unverified" } });
-  for (const malformed of [{ phase: "installed" }, { phase: "installed", activeRoot: "" }, { phase: "refused", error: 42 }, { phase: "failed", rollbackPerformed: "yes" }]) {
+  for (const malformed of [{ phase: "installed" }, { phase: "installed", activeRoot: "" }, { phase: "refused", error: 42 }, { phase: "failed", rollbackPerformed: "yes" }, { phase: "failed", terminationConfirmed: "yes" }]) {
     expect(classifyOrchestratedOutcome({ ...base, childExitCode: malformed.phase === "installed" ? 0 : 1, outcome: malformed as OutcomeInput["outcome"], targetVerified: true })).toMatchObject({ exitCode: 12 });
   }
 });
