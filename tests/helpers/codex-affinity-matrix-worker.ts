@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { readFileSync, symlinkSync } from "node:fs";
+import { linkSync, readFileSync, symlinkSync } from "node:fs";
 import { acquireSpendLedgerOwner, assertStorageOwned, mintSpendLedgerStorage } from "../../src/lib/spend-ledger-owner";
 import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
@@ -60,11 +60,13 @@ if (action === "probe") {
   lease.release();
   process.exit(0);
 }
-if (action === "late-journal-link") {
+if (action === "late-journal-link" || action === "late-hard-link") {
   // The store is open (the lease opened it). A rollback journal exists only during a write, so a
   // link planted now is met by the next transaction, which must refuse it rather than follow it.
+  // A second name for the database itself must stop writes the same way.
   const file = join(process.env.OPENCODEX_HOME!, "codex-affinity.sqlite");
-  symlinkSync(join(process.env.OPENCODEX_HOME!, "outside-target"), `${file}-journal`);
+  if (action === "late-hard-link") linkSync(file, join(process.env.OPENCODEX_HOME!, "outside-target"));
+  else symlinkSync(join(process.env.OPENCODEX_HOME!, "outside-target"), `${file}-journal`);
   bindThreadAffinity(key, "b", Date.now());
   flushCodexAffinityStoreForTests();
   lease.release();

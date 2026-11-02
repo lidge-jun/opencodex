@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { initializeConfigOwnership, recordOwnedConfigPath } from "../../lib/config-ownership";
 import { isPassiveRead } from "../../lib/passive-read";
-import { assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "../../lib/private-sqlite-path";
+import { assertPrivateSqliteEntryOrMissing, assertPrivateSqliteSidecars, preparePrivateSqliteDatabase } from "../../lib/private-sqlite-path";
 import {
   assertStorageOwned,
   currentSpendLedgerOwnerGeneration,
@@ -66,6 +66,8 @@ type Scope = {
   generation: number;
   token: SpendLedgerStorage;
   db?: Database;
+  /** The database file the handle was opened on; every write transaction re-checks the path against it. */
+  file?: Stats;
   secret?: Uint8Array;
   disabled: boolean;
   poisoned: boolean;
@@ -254,6 +256,7 @@ function open(s: Scope): void {
     const after = checkFile(path);
     if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("replaced");
     s.db = db;
+    s.file = after;
     s.secret = secret;
     s.pruneTimer = setInterval(() => {
       if (current === s) {
@@ -276,6 +279,18 @@ function open(s: Scope): void {
     s.disabled = true;
     warning();
   }
+}
+/**
+ * Refuse a write unless the database is still the single-link private file this handle opened and
+ * no sidecar name holds a link: the rollback journal is created per transaction, and a link added
+ * to the database since open would expose every later write.
+ */
+function assertWritable(s: Scope): void {
+  const path = spendLedgerStoragePath(s.token);
+  assertPrivateSqliteSidecars(path);
+  if (!assertPrivateSqliteEntryOrMissing(path)) throw new Error("missing");
+  const now = checkFile(path);
+  if (!s.file || now.dev !== s.file.dev || now.ino !== s.file.ino) throw new Error("replaced");
 }
 function resolvedHome(acquiredHome?: string): string {
   let home = resolve(acquiredHome ?? getConfigDir());
@@ -471,7 +486,7 @@ function pruneOnly(s: Scope): boolean {
   if (!s.db || s.disabled) return false;
   try {
     assertStorageOwned(s.token);
-    assertPrivateSqliteSidecars(spendLedgerStoragePath(s.token));
+    assertWritable(s);
     s.db.exec("BEGIN IMMEDIATE");
     // Pending touches first, so a pin used since its last persisted timestamp is not evicted as idle.
     if (!s.poisoned) applyTouches(s, s.db);
@@ -516,9 +531,7 @@ function flush(s: Scope, clean: boolean): boolean {
   const db = s.db;
   for (let attempt = 0; attempt < 2; attempt++) try {
     assertStorageOwned(s.token);
-    // The rollback journal is created per write transaction; a link planted there since the last
-    // one would be followed on Windows.
-    assertPrivateSqliteSidecars(spendLedgerStoragePath(s.token));
+    assertWritable(s);
     db.exec("BEGIN IMMEDIATE");
     // Touches go before the log as well as after it, so the pruning between chunks sees the live
     // last-used times and cannot evict a pin that is in use but persisted with an old timestamp.

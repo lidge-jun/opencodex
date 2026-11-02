@@ -104,6 +104,17 @@ test("a journal link planted while the store is open is refused before the next 
   expect(matrix(home, "read").before).toBeUndefined();
 }));
 
+test("a hard link added to the open database stops every later write", () => inHome(home => {
+  seed(home);
+  const file = join(home, names[0]!);
+  expect(matrix(home, "late-hard-link")).toEqual({ planted: true });
+  const db = new Database(file, { readonly: true });
+  // Neither the bind to b nor the clean release reached the twice-linked file.
+  expect(db.query("SELECT DISTINCT account_id FROM threads").all()).toEqual([{ account_id: "a" }]);
+  expect(db.query("SELECT value FROM meta WHERE name='clean'").get()).toEqual({ value: 0 });
+  db.close();
+}));
+
 test("a hot rollback journal from an interrupted writer is recovered, not refused", () => inHome(home => {
   seed(home);
   const file = join(home, names[0]!);
