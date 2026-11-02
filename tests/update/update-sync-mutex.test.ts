@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { inspectUpdateMarker, inspectUpdateSyncMutex, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import { withSyncUpdateGuard } from "../../src/cli/sync-update-guard";
+import { observeOrchestratedPlan } from "../../src/update/orchestrated-entry";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -16,6 +17,12 @@ test("a fresh home is free in plans and sync can acquire its guard", async () =>
   try {
     expect(inspectUpdateSyncMutex(fresh)).toBe("free");
     expect(isUpdateInFlight(fresh)).toBe(false);
+    const plan = await observeOrchestratedPlan({ ok: true, mode: "plan" }, {
+      install: () => ({ installer: "npm", cliRoot: root, desktopPath: false }), currentVersion: () => "2.0.0",
+      identity: async () => ({ kind: "absent" }), ownership: () => ({ runtimeOwner: "none", permits: true }),
+      target: () => "2.1.0", inFlight: () => isUpdateInFlight(fresh),
+    });
+    expect(plan.updateInFlight).toBe(false);
     let ran = false;
     expect(await withSyncUpdateGuard(async () => { ran = true; return 0; })).toBe(0);
     expect(ran).toBe(true);
