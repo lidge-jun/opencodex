@@ -293,7 +293,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "update",
-    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]",
+    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]",
     summary: "Update opencodex. Preview installs stay on the preview tag unless overridden.",
     details: [
       "--plan --json previews an orchestrated update; --yes --json applies it. --expect-plan binds apply to the returned planToken; --not-after sets a Unix millisecond mutation deadline.",

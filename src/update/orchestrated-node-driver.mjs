@@ -25,7 +25,7 @@ export async function applyNodeOrchestratedUpdate(request, deps) {
   try {
     const bun = deps.resolveBun();
     if (!bun) return fail("plan-unavailable");
-    const p = deps.plan(bun, request.version);
+    const p = deps.plan(bun, request.version, request.tag);
     if (p.status !== 0 || p.error || p.signal || typeof p.stdout !== "string" || Buffer.byteLength(p.stdout) > 65536) return fail("plan-unavailable");
     plan = JSON.parse(p.stdout);
     const validVersion = version => typeof version === "string"

@@ -103,7 +103,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "install")).toHaveLength(installs);
     const restored = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); restored.version = "2.0.0";
     writeFileSync(join(pkg, "package.json"), JSON.stringify(restored));
-    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json"];
+    const parentArgs = [join(pkg, "bin/ocx.mjs"), "update", "--yes", "--json", "--tag", "preview"];
     const parentEnv = { ...env, OCX_UPDATE_ORCHESTRATED_CHILD: "0" };
     const parent = (extraEnv = {}) => spawnSync(node, parentArgs, { cwd: root, env: { ...parentEnv, ...extraEnv }, encoding: "utf8", timeout: 30000 });
     const sync = tryAcquireUpdateSyncMutex(home, "sync");
@@ -117,6 +117,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect({ status: parentApplied.status, stderr: parentApplied.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
+    expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@preview");
     const resetVersion = () => {
       const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
       writeFileSync(join(pkg, "package.json"), JSON.stringify(m));

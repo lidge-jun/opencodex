@@ -1269,7 +1269,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
 const updateHelpRequested = process.argv[2] === "update" && !isOrchestratedUpdateArgv(process.argv.slice(3)) &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
-  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
+  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
   process.exit(0);
 }
 
@@ -1312,8 +1312,8 @@ if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX
   const result = await applyNodeOrchestratedUpdate(orchestratedArgs, {
     installer: installMethod, currentVersion: String(currentPackageVersion()), cliRoot: resolve(here, ".."),
     home: configDir(), launcher: fileURLToPath(import.meta.url), resolveBun: () => resolveBun({ allowInstall: false, allowMissing: true }),
-    plan: (bun, version) => probeSpawnSync(bun.path, ["--no-env-file", cliPath, "update", "--plan", "--json",
-      ...(version ? ["--version", version] : [])], { encoding: "utf8", maxBuffer: 65536, timeout: 60000, windowsHide: true,
+    plan: (bun, version, tag) => probeSpawnSync(bun.path, ["--no-env-file", cliPath, "update", "--plan", "--json",
+      ...(version ? ["--version", version] : tag ? ["--tag", tag] : [])], { encoding: "utf8", maxBuffer: 65536, timeout: 60000, windowsHide: true,
       stdio: ["ignore", "pipe", 2], env: process.env }),
     identity: bun => {
       const probe = probeSpawnSync(bun.path, ["--no-env-file", join(here, "../src/update/orchestrated-identity-probe-entry.ts"), "__update-orchestrated-identity"], {
