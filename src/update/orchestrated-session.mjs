@@ -42,14 +42,15 @@ export function decodeOrchestratedExpect(encoded) {
 }
 
 export function createOrchestratedChildSession({ home, resultPath, expect, notAfter, now = Date.now, pid = process.pid, verifyIdentity }) {
-  validateExpect(expect);
-  if (expect.home !== home || typeof resultPath !== "string" || !isAbsolute(resultPath)
+  if (expect !== undefined) validateExpect(expect);
+  if ((expect !== undefined && expect.home !== home) || (resultPath !== undefined && (typeof resultPath !== "string" || !isAbsolute(resultPath)))
     || (notAfter !== undefined && (!Number.isSafeInteger(notAfter) || notAfter <= 0))
     || !Number.isSafeInteger(pid) || pid <= 0 || typeof now !== "function" || typeof verifyIdentity !== "function") {
     throw new Error("invalid orchestrated session options");
   }
   assertNotRealHomeUnderTest(home);
   const markerPath = join(home, "update-orchestrated.json");
+  const result = value => { if (resultPath !== undefined) atomicJson(resultPath, value); };
   let state = "new", mutex, startedAt, untrackedPending = false;
   const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false) => {
     let installer = {};
@@ -64,17 +65,17 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
   return {
     start() {
       if (state !== "new") throw new Error("orchestrated session already started");
-      atomicJson(resultPath, { phase: "preflight" });
+      result({ phase: "preflight" });
       const acquired = tryAcquireUpdateSyncMutex(home, "update");
       if (acquired.kind === "busy") {
         const error = acquired.holder === "sync" ? "sync-in-progress" : "update-in-flight";
-        atomicJson(resultPath, { phase: "refused", error }); state = "refused";
+        result({ phase: "refused", error }); state = "refused";
         return { ok: false, error };
       }
       mutex = acquired;
       if (inspectUpdateMarker(home) !== "free") {
         mutex.release(); mutex = undefined;
-        atomicJson(resultPath, { phase: "refused", error: "update-in-flight" }); state = "refused";
+        result({ phase: "refused", error: "update-in-flight" }); state = "refused";
         return { ok: false, error: "update-in-flight" };
       }
       try { startedAt = now(); marker("preflight"); }
@@ -91,7 +92,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (state !== "preflight") throw new Error("orchestrated session is not in preflight");
       state = "entering";
       marker("mutating");
-      atomicJson(resultPath, { phase: "mutating" });
+      result({ phase: "mutating" });
       let error;
       if (notAfter !== undefined && now() > notAfter) error = "deadline-passed";
       else {
@@ -101,7 +102,7 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (!error && notAfter !== undefined && now() > notAfter) error = "deadline-passed";
       if (error) {
         marker("refused");
-        atomicJson(resultPath, { phase: "refused", error });
+        result({ phase: "refused", error });
         mutex.release(); mutex = undefined; state = "refused";
         return { ok: false, error };
       }
@@ -120,9 +121,13 @@ export function createOrchestratedChildSession({ home, resultPath, expect, notAf
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");
       if (!outcome || (outcome.phase !== "installed" && outcome.phase !== "failed")) throw new Error("invalid final outcome");
       if (untrackedPending) outcome = { phase: "failed", error: "installer-termination-unconfirmed" };
-      atomicJson(resultPath, outcome);
+      result(outcome);
       marker(outcome.phase, true, outcome.error === "installer-termination-unconfirmed");
       mutex.release(); mutex = undefined; state = "finished";
     },
   };
+}
+
+export function createLegacyUpdateSession({ home }) {
+  return createOrchestratedChildSession({ home, verifyIdentity: () => true });
 }

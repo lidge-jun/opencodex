@@ -48,7 +48,7 @@ import { runPosixInstallerSync } from "../src/update/posix-install-supervisor.mj
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";
-import { createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";
+import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";
 import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";
 import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";
 import {
@@ -270,6 +270,14 @@ async function runPackageManagerSelfUpdate(manager, child) {
       console.error(`Orchestrated update preflight failed: ${error?.message ?? error}`);
       process.exit(1);
     }
+  } else {
+    session = createLegacyUpdateSession({ home: configDir() });
+    const started = session.start();
+    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exit(1); }
+    process.once("exit", () => {
+      try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); }
+      catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; }
+    });
   }
   const current = currentPackageVersion();
   const tag = updateTag(current);

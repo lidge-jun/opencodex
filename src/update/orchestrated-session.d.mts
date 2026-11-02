@@ -23,3 +23,4 @@ export declare function createOrchestratedChildSession(options: {
   confirmInstallerExit(): void;
   finish(outcome: { phase: "installed"; activeRoot: string } | { phase: "failed"; error?: string; rollbackPerformed?: boolean }): void;
 };
+export declare function createLegacyUpdateSession(options: { home: string }): ReturnType<typeof createOrchestratedChildSession>;

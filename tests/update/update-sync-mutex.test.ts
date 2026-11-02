@@ -1,5 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { repoPath } from "../helpers/repo-root";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectUpdateMarker, inspectUpdateSyncMutex, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
@@ -10,6 +12,40 @@ import { observeOrchestratedPlan } from "../../src/update/orchestrated-entry";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function home() { const root = mkdtempSync(join(tmpdir(), "ocx-update-sync-")); roots.push(root); return root; }
+
+test.skipIf(process.platform === "win32")("legacy Node and Bun update refuse a sync holder before their work", () => {
+  const root = home(), config = join(root, "config"), packageRoot = join(root, "node_modules", "@bitkyc08", "opencodex");
+  mkdirSync(join(packageRoot, "bin"), { recursive: true }); mkdirSync(config);
+  copyFileSync(repoPath("bin/ocx.mjs"), join(packageRoot, "bin", "ocx.mjs"));
+  symlinkSync(repoPath("src"), join(packageRoot, "src"), "dir");
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "@bitkyc08/opencodex", version: "1.0.0", type: "module" }));
+  const env = { ...process.env, HOME: root, CODEX_HOME: join(root, "codex"), OPENCODEX_HOME: config,
+    OCX_TEST_HOME_GUARD: "1", OCX_NO_DESKTOP_HANDOFF: "1", npm_config_registry: "http://127.0.0.1:9", NPM_CONFIG_REGISTRY: "http://127.0.0.1:9" };
+  const lock = tryAcquireUpdateSyncMutex(config, "sync"); if (lock.kind !== "acquired") throw Error("fixture lock");
+  try {
+    const before = readFileSync(join(packageRoot, "package.json"), "utf8");
+    const node = spawnSync("node", [join(packageRoot, "bin", "ocx.mjs"), "update"], { env, encoding: "utf8", timeout: 12000 });
+    expect({ status: node.status, stderr: node.stderr }).toMatchObject({ status: 1, stderr: expect.stringContaining("sync-in-progress") });
+    const script = `import {runUpdate} from ${JSON.stringify(repoPath("src/update/index.ts"))}; await runUpdate();`;
+    const bun = spawnSync(process.execPath, ["--no-env-file", "-e", script], { env, encoding: "utf8", timeout: 12000 });
+    expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 1, stderr: expect.stringContaining("sync-in-progress") });
+    expect(readFileSync(join(packageRoot, "package.json"), "utf8")).toBe(before);
+  } finally { lock.release(); }
+}, 20000);
+
+test("sync refuses while a legacy update session holds its marker and mutex", async () => {
+  const root = home(), previous = process.env.OPENCODEX_HOME; process.env.OPENCODEX_HOME = root;
+  const { createLegacyUpdateSession } = await import("../../src/update/orchestrated-session.mjs");
+  const session = createLegacyUpdateSession({ home: root });
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(session.start()).toEqual({ ok: true });
+    expect(await withSyncUpdateGuard(async () => { throw Error("sync work reached"); })).toBe(7);
+  } finally {
+    session.finishPreflight(); err.mockRestore();
+    if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+  }
+});
 
 test("a fresh home is free in plans and sync can acquire its guard", async () => {
   const root = home(), fresh = join(root, "missing"), previous = process.env.OPENCODEX_HOME;

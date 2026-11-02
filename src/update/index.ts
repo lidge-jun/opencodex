@@ -44,7 +44,7 @@ import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { isStandaloneModuleUrl } from "../lib/standalone";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
+import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
 import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
 import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
@@ -438,6 +438,11 @@ export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: tru
       process.exitCode = 1;
       return;
     }
+  } else {
+    session = createLegacyUpdateSession({ home: getConfigDir() });
+    const started = session.start();
+    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exitCode = 1; return; }
+    process.once("exit", () => session?.finishPreflight());
   }
   try { await runUpdateWithSession(child, session); }
   finally { session?.finishPreflight(); }
