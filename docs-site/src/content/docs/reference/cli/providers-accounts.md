@@ -846,7 +846,7 @@ that state and still exits 0. `--json` returns:
 
 Selects an existing Codex account, OAuth account, or API key. For `openai`, `main` selects the Codex
 App login. A Codex Pool selection clears affinity and applies to the next request,
-including one from an existing visible task. Eligible bindings survive a graceful proxy restart for up to 24 hours idle; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound, while in-flight requests keep their captured account. This controls Pool routing only;
+including one from an existing visible task. Bindings for requests with a session ID (including normal Codex CLI and App turns and subagents), or session-less requests anchored on their immediate parent, survive a graceful proxy restart for up to 24 hours idle. Deeper session-less chains and bindings to the Codex App main login stay in memory only and are assigned again after restart; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound, while in-flight requests keep their captured account. This controls Pool routing only;
 Direct mode keeps using the caller-owned/native main credential. Usage-based proactive switching,
 401/403 reauthentication, 429/retry-after cooldowns, exclusion, and pre-output 429/402 failure
 recovery may later select another eligible Pool account. Those recovery paths remain active when

@@ -141,8 +141,11 @@ test("a legacy account without an identity falls back and removes its stored row
   expect(result.rows).toBe(0);
 }));
 
-for (const [label, timestamp] of [["expired", Date.now() - 25 * 60 * 60_000], ["future", Date.now() + 60_000]] as const) {
+// Offsets, not timestamps: each case computes its time when it runs, because the subprocess
+// workers can take long enough on a loaded host for a load-time "future" value to become past.
+for (const [label, offsetMs] of [["expired", -25 * 60 * 60_000], ["future", 60 * 60_000]] as const) {
   test(`${label} restored pin falls back and is deleted`, () => withSeededHome(home => {
+    const timestamp = Date.now() + offsetMs;
     const db = new Database(join(home, "codex-affinity.sqlite"));
     db.query("UPDATE threads SET last_used_at=?").run(timestamp);
     db.close();
@@ -218,8 +221,9 @@ test("resolver reuse persists its updated last-used time on release", () => with
   expect(result.row.timestamp).toBe(result.timestamp);
 }));
 
-for (const [label, timestamp] of [["expired", Date.now() - 25 * 60 * 60_000], ["future", Date.now() + 60_000]] as const) {
+for (const [label, offsetMs] of [["expired", -25 * 60 * 60_000], ["future", 60 * 60_000]] as const) {
   test(`${label} issuer is removed when read`, () => withSeededHome(home => {
+    const timestamp = Date.now() + offsetMs;
     const db = new Database(join(home, "codex-affinity.sqlite"));
     db.query("UPDATE issuers SET last_used_at=?").run(timestamp);
     db.close();

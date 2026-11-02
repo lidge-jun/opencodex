@@ -372,6 +372,10 @@ journal instead of inheriting figures.
 Final-release hooks run before that discard while existing storage tokens remain valid; each hook
 is isolated from errors in the others. Acquiring another lease or minting storage during these
 hooks is refused. Releasing a non-final reference or releasing the same lease twice runs no hooks.
+Acquired hooks run once per new ownership generation, after the owner is recorded and before
+`acquireSpendLedgerOwner` returns; a hook error does not block acquisition, and a nested lease on an
+existing owner does not run them again. The durable Codex pool affinity store uses one to open and
+prune at startup ([Durable Codex Pool Affinity](../providers/codex-pool-affinity.md)).
 The ledger records the ownership it was built under and
 proves that exact identity on every accounting read and change, so a handle kept across a release
 and a reacquire of the same directory is refused rather than resuming over writes another owner

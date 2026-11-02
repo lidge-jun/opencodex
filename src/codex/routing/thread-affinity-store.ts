@@ -551,7 +551,13 @@ export function adoptStoredThreadRows(
   const s = usable();
   if (!s) return [];
   const rk = rowKey(s, key, "conversation");
-  if (!rk || pending(s, rk, false) || (scopeName !== undefined && s.consulted.has(`t:${rk}:${scopeName}`))) return [];
+  // A completed unscoped read (marker "*") already adopted every stored scope for this key.
+  if (
+    !rk
+    || pending(s, rk, false)
+    || s.consulted.has(`t:${rk}:*`)
+    || (scopeName !== undefined && s.consulted.has(`t:${rk}:${scopeName}`))
+  ) return [];
   try {
     // Enumerating every scope matters: routing decides account-wide release from this view. The
     // table itself is trimmed to 2048 rows at open and on every flush, which bounds the read.
@@ -612,6 +618,7 @@ export function adoptStoredThreadRows(
     }
     for (const row of rows) consulted(s, `t:${rk}:${row.scope}`);
     if (scopeName !== undefined) consulted(s, `t:${rk}:${scopeName}`);
+    else consulted(s, `t:${rk}:*`);
     return result;
   } catch {
     warning();
