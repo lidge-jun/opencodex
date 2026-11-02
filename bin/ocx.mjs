@@ -1399,7 +1399,7 @@ if (!orchestratedUpdate && process.argv[2] === "update" && isNodeModulesInstall(
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (!orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (process.argv[2] !== "sync" && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {
@@ -1410,7 +1410,9 @@ if (!orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection && 
   } catch { /* the probe must never block launch */ }
 }
 
-const bunRuntime = resolveBun({ allowInstall: !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate });
+const passiveSync = process.argv[2] === "sync";
+const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
+if (!bunRuntime && passiveSync) fail("Bun is unavailable; install Bun before running sync.");
 if (!bunRuntime && orchestratedArgs?.ok) {
   const currentVersion = String(currentPackageVersion()), cliRoot = resolve(here, "..");
   if (orchestratedArgs.mode === "plan") {

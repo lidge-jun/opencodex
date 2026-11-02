@@ -59,6 +59,17 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1",
       OPENCODEX_BUN_PATH: process.execPath, PATH: path, OCX_FIXTURE_LOG: log, OCX_FIXTURE_CACHE: cache, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_RESULT: result };
+    const backup = join(root, "lib/node_modules/@bitkyc08/.ocx-backup-sync/opencodex");
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(join(backup, "package.json"), JSON.stringify({ version: "1.9.0" }));
+    const update = tryAcquireUpdateSyncMutex(home, "update");
+    if (update.kind !== "acquired") throw new Error("fixture update mutex unavailable");
+    try {
+      const blockedSync = spawnSync(node, [launcher, "sync", "--local-only"], { cwd: root, env, encoding: "utf8", timeout: 30000 });
+      expect({ status: blockedSync.status, stderr: blockedSync.stderr }).toMatchObject({ status: 7, stderr: expect.stringContaining("update-in-flight") });
+      expect(existsSync(join(backup, "package.json"))).toBe(true);
+      expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
+    } finally { update.release(); }
     const run = (planToken: string, deadline?: number, rollback = false) => {
       const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken });
       const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
