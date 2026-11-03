@@ -541,7 +541,7 @@
     "cli-version-skew.test.ts": "cli",
     "client-config-export-new-clients.test.ts": "config",
     "client-config-export.test.ts": "config",
-    "client-config-new-clients.test.ts": "config",
+    "client-config-new-clients.test.ts": "config", "client-config-kimi-efforts.test.ts": "config",
     "client-injection-guard.test.ts": "codex-integration",
     "cli-link-child.test.ts": "cli",
     "cline-pass-deepseek-v4-tool-replay.test.ts": "providers",
