@@ -60,9 +60,13 @@ export function buildUnit(
   const launcher = deps.launcher ?? null;
   const log = logPath();
   const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "linux");
-  const codexHome = systemdEnvironmentAssignment("CODEX_HOME", currentCodexHome());
+  // Resolve each home once: the default Codex home follows filesystem state (a retargeted
+  // ~/.codex link), so a second resolution could write two different homes into one unit.
+  const codexHomeValue = currentCodexHome();
+  const opencodexHomeValue = currentOpenCodexHome();
+  const codexHome = systemdEnvironmentAssignment("CODEX_HOME", codexHomeValue);
   const codexSqliteHome = systemdEnvironmentAssignment("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute());
-  const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", currentOpenCodexHome());
+  const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", opencodexHomeValue);
   // The Environment= lines are a first pin only: ExecStart is /bin/sh -lc, so a login profile
   // can re-export the homes after systemd supplies them. The command re-assigns both after
   // profile initialization and before exec, with the same shell quoting the rest of the line uses.
@@ -85,7 +89,7 @@ export function buildUnit(
     opencodexHome,
     ...proxyEnv.map(({ name, value }) => systemdEnvironmentAssignment(name, value)),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = `${pinnedServiceHomeShellAssignments(currentCodexHome(), currentOpenCodexHome())} ${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
+  const command = `${pinnedServiceHomeShellAssignments(codexHomeValue, opencodexHomeValue)} ${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
   return `[Unit]
 Description=OpenCodex Proxy Server
 After=network-online.target

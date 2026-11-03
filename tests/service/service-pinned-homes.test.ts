@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import * as serviceState from "../../src/service/state";
 import { buildPlist, buildUnit, buildWindowsServiceScript } from "../../src/service";
 import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { serviceApiTokenFilePath } from "../../src/lib/service-secrets";
@@ -99,6 +100,27 @@ describe("systemd service unit", () => {
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
+    }
+  });
+
+  test("resolves each home once so Environment= and ExecStart agree", () => {
+    // The default Codex home follows filesystem state, so two resolutions can disagree.
+    // Return a different value on every call: a unit built from one resolution stays consistent.
+    let codexCalls = 0;
+    let opencodexCalls = 0;
+    const codex = spyOn(serviceState, "currentCodexHome").mockImplementation(() => `/resolved/codex-${++codexCalls}`);
+    const opencodex = spyOn(serviceState, "currentOpenCodexHome").mockImplementation(() => `/resolved/opencodex-${++opencodexCalls}`);
+    try {
+      const unit = buildUnit([], { launcher: "/usr/local/bin/ocx" });
+      expect(codexCalls).toBe(1);
+      expect(opencodexCalls).toBe(1);
+      expect(unit).toContain('Environment="CODEX_HOME=/resolved/codex-1"');
+      expect(unit).toContain('Environment="OPENCODEX_HOME=/resolved/opencodex-1"');
+      expect(unit).toContain("CODEX_HOME='/resolved/codex-1' OPENCODEX_HOME='/resolved/opencodex-1' export CODEX_HOME OPENCODEX_HOME;");
+      expect(unit).not.toContain("codex-2");
+    } finally {
+      codex.mockRestore();
+      opencodex.mockRestore();
     }
   });
 });
