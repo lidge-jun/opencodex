@@ -63,7 +63,7 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
-import { fetchQoderModels, qoderDiscoveryRequestBudgetMs } from "../../adapters/qoder/live-models";
+import { discoverQoderModels, qoderDiscoveryJoinable } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "../../adapters/codebuddy/profiles";
 import { fetchCodeBuddyModels } from "../../adapters/codebuddy/live-models";
@@ -129,8 +129,6 @@ import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders
 const KIRO_PUBLISHABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** Upper bound on observed Kiro ids added to the catalog across the whole roster. */
 const KIRO_OBSERVED_CATALOG_MAX = 64;
-/** In-flight Qoder CLI discoveries; see the qoder branch of the gather below. */
-const qoderDiscoveries = new Map<string, Promise<ProviderModelsResult>>();
 export interface ProviderModelsResult {
   readonly models: CatalogModel[];
   readonly outcome: CatalogGatherProviderModelOutcome;
@@ -460,53 +458,37 @@ export async function fetchProviderModelsWithAuth(
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStale) {
+    // A run another caller started (the dashboard test) is joined even inside the failure
+    // cooldown: its late success is what the catalog re-sync after it is waiting for (#8115).
+    if (isModelsFetchCoolingDown(name) && scopedStale && !qoderDiscoveryJoinable(profile, apiKey)) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       ), "degraded");
     }
-    const fallback = () => {
-      const stale = getStaleCached(name, authorityIdentity);
-      return observed(withConfiguredRetention(
-        stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false) : configured,
-      ), "degraded");
-    };
-    // One CLI run per provider, account and cache generation: concurrent catalog requests join it,
-    // and a run that outlasts this request's budget still commits its roster for the next one (#8115).
-    const key = `${name}\0${authorityIdentity}\0${cacheGeneration}`;
-    let discovery = qoderDiscoveries.get(key);
-    if (!discovery) {
-      discovery = (async () => {
-        const live = await fetchQoderModels(profile, apiKey);
-        if (live.ok) {
-          const discovered = live.models.map(id => ({
-            id,
-            provider: name,
-            ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
-          }));
-          const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-          if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
-            return observed(withConfiguredRetention(configured), "degraded");
-          }
-          markProviderDiscoveryOk(name, live.models.length);
-          return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
-        }
-        if (isCurrentCacheGeneration()) {
-          markModelsFetchFailure(name);
-          markProviderDiscoveryFailed(name, { reason: "provider" });
-          console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
-        }
-        return fallback();
-      })().finally(() => qoderDiscoveries.delete(key));
-      qoderDiscoveries.set(key, discovery);
+    // Background discovery: waits for the full CLI bound, shared with any concurrent caller.
+    const live = await discoverQoderModels(profile, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(id => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
+      }));
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    let budget: ReturnType<typeof setTimeout> | undefined;
-    const pending = new Promise<null>(resolve => { budget = setTimeout(() => resolve(null), qoderDiscoveryRequestBudgetMs()); });
-    try {
-      return await Promise.race([discovery, pending]) ?? fallback();
-    } finally {
-      clearTimeout(budget);
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
     }
+    const stale = getStaleCached(name, authorityIdentity);
+    return observed(withConfiguredRetention(
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false) : configured,
+    ), "degraded");
   }
   if (prov.adapter === "devin") {
     if (!apiKey) return observed(configured, "degraded");

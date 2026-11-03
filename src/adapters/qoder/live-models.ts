@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { commandInvocation } from "../../lib/win-exec";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { baseScopedEnv, redactSecrets } from "../coding-agent/turn";
@@ -51,26 +52,69 @@ export function parseQoderModelList(stdout: string): QoderModelsResult {
 }
 
 /**
- * Upper bound for one `--list-models` run. The CLI starts a full agent runtime before it lists the
- * account's roster; 14.5 s was measured on a working install (#8115), so the former 8 s bound
- * discarded successful listings. Failures still end in the stale/static catalog and back off.
+ * Upper bound for one background `--list-models` run. The CLI starts a full agent runtime before it
+ * lists the account's roster; 14.5 s was measured on a working install (#8115), so the former 8 s
+ * bound discarded successful listings. Failures still end in the stale/static catalog and back off.
  */
 export const QODER_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 
 /**
- * How long a catalog request waits for that run before it answers from the retained or static
- * catalog. The run keeps going and fills the cache, so a slow CLI no longer holds `/v1/models`
- * (and its callers' own deadlines, such as `ocx doctor`'s 8 s probe) for the full bound.
+ * Deadline of an interactive caller (the dashboard connection test). When it passes, the caller
+ * reports the provider as still discovering; the run itself keeps its background bound.
  */
-export const QODER_DISCOVERY_REQUEST_BUDGET_MS = 8_000;
-let qoderDiscoveryRequestBudgetForTests: number | null = null;
+export const QODER_INTERACTIVE_DEADLINE_MS = 8_000;
 
-export function setQoderDiscoveryRequestBudgetForTests(next: number | null): void {
-  qoderDiscoveryRequestBudgetForTests = next;
+/**
+ * A successful listing stays joinable this long after it finished, so the catalog re-sync a late
+ * result triggers reads it instead of starting a second CLI run.
+ */
+export const QODER_DISCOVERY_REUSE_MS = 60_000;
+
+type QoderDiscoveryFlight = { promise: Promise<QoderModelsResult>; succeededAt?: number };
+const qoderDiscoveryFlights = new Map<string, QoderDiscoveryFlight>();
+
+function qoderDiscoveryKey(profile: QoderProfile, apiKey: string): string {
+  // The roster is entitlement-specific, so one flight serves exactly one PAT.
+  return `${profile.providerId}\0${createHash("sha256").update(apiKey).digest("hex")}`;
 }
 
-export function qoderDiscoveryRequestBudgetMs(): number {
-  return qoderDiscoveryRequestBudgetForTests ?? QODER_DISCOVERY_REQUEST_BUDGET_MS;
+function joinableFlight(key: string, now: number): QoderDiscoveryFlight | undefined {
+  const flight = qoderDiscoveryFlights.get(key);
+  if (!flight) return undefined;
+  if (flight.succeededAt === undefined || now - flight.succeededAt < QODER_DISCOVERY_REUSE_MS) return flight;
+  qoderDiscoveryFlights.delete(key);
+  return undefined;
+}
+
+/** True while a run for this PAT is in flight or its success can still be joined. */
+export function qoderDiscoveryJoinable(profile: QoderProfile, apiKey: string, now = Date.now()): boolean {
+  return joinableFlight(qoderDiscoveryKey(profile, apiKey), now) !== undefined;
+}
+
+/**
+ * One `--list-models` run per PAT, shared by the background catalog gather and interactive callers.
+ * A failed run is forgotten when it settles; a successful one stays joinable for the reuse window.
+ */
+export function discoverQoderModels(profile: QoderProfile, apiKey: string, now = Date.now()): Promise<QoderModelsResult> {
+  const key = qoderDiscoveryKey(profile, apiKey);
+  const existing = joinableFlight(key, now);
+  if (existing) return existing.promise;
+  const flight: QoderDiscoveryFlight = {
+    promise: Promise.resolve().then(() => fetchQoderModels(profile, apiKey)).then(result => {
+      if (result.ok) flight.succeededAt = Date.now();
+      else if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
+      return result;
+    }, error => {
+      if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
+      throw error;
+    }),
+  };
+  qoderDiscoveryFlights.set(key, flight);
+  return flight.promise;
+}
+
+export function clearQoderDiscoveryFlightsForTests(): void {
+  qoderDiscoveryFlights.clear();
 }
 
 function execQoder(command: string, args: readonly string[], options: Parameters<QoderExecFn>[2]): Promise<QoderExecResult> {
