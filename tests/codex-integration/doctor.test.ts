@@ -474,6 +474,29 @@ describe("live native-main admission in doctor", () => {
     expect(formatNativeMainAdmissionLines(report).join("\n")).toContain("reason: foreign-ownership");
   });
 
+  test("surfaces admission fields the doctor endpoint attaches to a non-503 error", async () => {
+    // The endpoint adds admissionStatus/admissionBlockReason to every NativeProfileError
+    // status, so a 409 storage or home-change error still carries the proxy's fence reason.
+    const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    const read = (status: number, body: Record<string, unknown>) => fetchNativeMainAdmission(target, {
+      readRuntime: () => ({ pid: 4242, port: 10100, attestationSecret: secret }),
+      createNonce: () => nonce,
+      now: () => 1_800_000_000_000,
+      fetchImpl: (async () => Response.json(body, {
+        status,
+        headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)! },
+      })) as unknown as typeof fetch,
+    });
+    const error = { error: "The canonical native-main home changed unexpectedly.", code: "CODEX_HOME_UNAVAILABLE", retryable: false };
+
+    const blocked = await read(409, { ...error, admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
+    expect(blocked).toEqual({ status: "blocked", reason: "foreign-ownership" });
+    expect(formatNativeMainAdmissionLines(blocked).join("\n")).toContain("reason: foreign-ownership");
+    expect(await read(409, error)).toEqual({ status: "unavailable", reason: "http 409" });
+  });
+
   test("runDoctor reports a separate fenced service process, not its local gate", async () => {
     const secret = "A".repeat(43);
     const home = mkdtempSync(join(tmpdir(), "ocx-doctor-admission-"));

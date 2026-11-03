@@ -124,13 +124,15 @@ export async function fetchNativeMainAdmission(
   );
   if (read.kind !== "response") return { status: "unavailable", reason: read.reason };
   if (read.response.status === 401 || read.response.status === 403) return { status: "unavailable", reason: "unauthorized" };
-  // The endpoint can return its admission fields alongside an owner-guard 503. Read that
-  // authenticated response too; rejecting every non-2xx would hide the exact fence reason.
-  if (!read.response.ok && read.response.status !== 503) return { status: "unavailable", reason: `http ${read.response.status}` };
+  // The endpoint attaches its admission fields to every NativeProfileError status (an
+  // owner-guard 503, a storage or home-change 409, ...). Read any authenticated error body;
+  // only one without admission fields is reported as an unavailable HTTP status.
+  const httpUnavailable = { status: "unavailable", reason: `http ${read.response.status}` } as const;
   let payload: unknown;
-  try { payload = await read.response.json(); } catch { return { status: "unavailable", reason: "malformed" }; }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { status: "unavailable", reason: "malformed" };
+  try { payload = await read.response.json(); } catch { return read.response.ok ? { status: "unavailable", reason: "malformed" } : httpUnavailable; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return read.response.ok ? { status: "unavailable", reason: "malformed" } : httpUnavailable;
   const row = payload as Record<string, unknown>;
+  if (!read.response.ok && row.admissionStatus === undefined) return httpUnavailable;
   if (row.admissionStatus !== "ready" && row.admissionStatus !== "blocked") return { status: "unavailable", reason: "malformed" };
   if (row.admissionStatus === "ready") return { status: "ready" };
   if (!isNativeMainAdmissionBlockReason(row.admissionBlockReason)) return { status: "unavailable", reason: "malformed" };
