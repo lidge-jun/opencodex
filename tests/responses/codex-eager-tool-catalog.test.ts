@@ -87,6 +87,51 @@ describe("Codex stale metadata cannot spend an eagerly expanded MCP catalog", ()
     expect(upstreamCalls).toBe(0);
   });
 
+  test.each(["/v1/responses/compact", "/v1/responses"])("%s compaction history does not trigger a reload refusal", async path => {
+    const response = await post(path, [], true, {
+      input: [
+        { type: "additional_tools", role: "developer", tools: mcpTools() },
+        { role: "user", content: "Earlier request" },
+        { role: "assistant", content: "Earlier response" },
+        ...(path === "/v1/responses" ? [{ type: "compaction_trigger" }] : []),
+      ],
+    });
+    expect({ status: response.status, body: await response.clone().text() }).toMatchObject({ status: 200 });
+    await response.text();
+    expect(upstreamCalls).toBe(1);
+  });
+
+  test.each([
+    ["originator", "my-codex-wrapper/1"],
+    ["user-agent", "my-codex-wrapper/1"],
+  ])("a generic %s containing codex remains allowed", async (header, value) => {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", authorization: "Bearer fixture-client",
+        [header]: value,
+      },
+      body: JSON.stringify({ model: "fixture/model", input: "hello", stream: false, tools: mcpTools() }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(upstreamCalls).toBe(1);
+  });
+
+  test("the canonical Codex user-agent alone still triggers the reload refusal", async () => {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", authorization: "Bearer fixture-client",
+        "user-agent": "codex_cli_rs/0.166.0",
+      },
+      body: JSON.stringify({ model: "fixture/model", input: "hello", stream: false, tools: mcpTools() }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "codex_catalog_reload_required" } });
+    expect(upstreamCalls).toBe(0);
+  });
+
   test("a small explicitly loaded MCP subset is not rejected", async () => {
     const declarations = mcpTools();
     declarations[0]!.tools.length = 3;

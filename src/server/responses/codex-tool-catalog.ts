@@ -1,6 +1,7 @@
 import { currentTurnWireToolCatalogBody } from "../responses-undeclared-tool-guard";
 
 const MAX_EAGER_CODEX_MCP_TOOLS = 64;
+const CODEX_CLIENT_IDENTITY = /^(?:codex|codex_cli_rs|codex_app|codex_work_desktop|codexless_agent|Codex Desktop)(?:\/|$)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -26,14 +27,15 @@ function eagerMcpToolCount(specs: unknown[], names: Set<string>, namespace?: str
   }
 }
 
-export function codexToolCatalogReloadResponse(body: unknown, headers: Headers): Response | null {
-  const identity = `${headers.get("originator") ?? ""} ${headers.get("user-agent") ?? ""}`;
-  if (!headers.has("x-codex-turn-metadata") && !/\bcodex(?:[ _/\-]|$)/i.test(identity)) return null;
+export function codexToolCatalogReloadResponse(body: unknown, headers: Headers, surface: "responses" | "compact" = "responses"): Response | null {
+  if (!headers.has("x-codex-turn-metadata")
+    && !CODEX_CLIENT_IDENTITY.test(headers.get("originator") ?? "")
+    && !CODEX_CLIENT_IDENTITY.test(headers.get("user-agent") ?? "")) return null;
   const current = currentTurnWireToolCatalogBody(body, undefined);
   if (!isRecord(current)) return null;
   const names = new Set<string>();
   if (Array.isArray(current.tools)) eagerMcpToolCount(current.tools, names);
-  if (Array.isArray(current.input)) {
+  if (surface === "responses" && Array.isArray(current.input)) {
     for (const item of current.input) {
       if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
         eagerMcpToolCount(item.tools, names);

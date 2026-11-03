@@ -691,7 +691,7 @@ export async function handleResponsesCompact(
   }
   const clientModelLabel = options.clientModelLabel ?? clientFacingModelLabel(options.compactionRoutingOverride?.sourceModel ?? (body as { model?: unknown }).model);
   options = { ...options, clientModelLabel };
-  const catalogReload = codexToolCatalogReloadResponse(body, req.headers);
+  const catalogReload = codexToolCatalogReloadResponse(body, req.headers, "compact");
   if (catalogReload) return catalogReload;
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
   redactHostedImageDisplayPaths(body);

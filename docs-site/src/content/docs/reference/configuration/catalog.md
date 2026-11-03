@@ -13,8 +13,14 @@ If a Codex client sends 64 or more eager MCP tool definitions, OpenCodex refuses
 request before contacting a model provider with HTTP 400 and error code
 `codex_catalog_reload_required`. This prevents missing or stale model metadata from
 causing repeated large prompts and compactions. Run the restart command and retry.
-The check also covers definitions embedded in Code Mode; it leaves deferred tools,
-ordinary conversation history, and other API clients unchanged.
+The check also covers definitions embedded in Code Mode. It recognizes canonical
+Codex client identities or Codex turn metadata; an incidental `codex` substring in
+another client's name does not activate it. For compaction, including Responses
+API compaction triggers, only the top-level tool catalog is checked:
+`additional_tools` items in the input are history, not
+current declarations. Responses Lite current `additional_tools` declarations
+remain checked. Explicitly deferred tools, conversation text, and other API
+clients retain their existing behavior.
 
 Routed models advertise deferred discovery. In Code Mode, discover available tools
 through `ALL_TOOLS` and call them through `tools`; a separate `tool_search` function

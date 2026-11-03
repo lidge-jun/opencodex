@@ -249,8 +249,13 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
+    && Array.isArray((body as { input?: unknown }).input)
+    && ((body as { input: unknown[] }).input).some((item: unknown) =>
+      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   if (inboundWire === "responses" && !concreteSelection) {
-    const catalogReload = codexToolCatalogReloadResponse(body, req.headers);
+    const surface = options.compactionRecoveryKind === "compaction-v1" || isCompactionTrigger ? "compact" : "responses";
+    const catalogReload = codexToolCatalogReloadResponse(body, req.headers, surface);
     if (catalogReload) return catalogReload;
   }
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
@@ -319,10 +324,6 @@ export async function prepareResponsesRequest(
       effort: comboEffortRow.effort,
     };
   }
-  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
-    && Array.isArray((body as { input?: unknown }).input)
-    && ((body as { input: unknown[] }).input).some((item: unknown) =>
-      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
   if (!concreteSelection && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
