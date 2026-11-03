@@ -264,6 +264,25 @@ describe("Kimi monthly quota", () => {
     expect(pickComboTarget(cfg, "quota-scope")?.target.provider).toBe("fallback");
   });
 
+  test.each([
+    { name: "zero remaining beside an impossible used", row: { limit: 100, used: -1, remaining: 0, used_ratio: 0.2 } },
+    { name: "used at the limit beside an impossible remaining", row: { limit: 100, used: 100, remaining: 101, used_ratio: 0.2 } },
+  ])("an exhaustion signal wins over an impossible companion counter: $name", async ({ row }) => {
+    mockUsage({ usages: { limit_month_total: row } });
+    const cfg = comboConfig();
+    const { reports } = await fetchProviderQuotaReports(cfg, true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(100);
+    expect(pickComboTarget(cfg, "quota-scope")?.target.provider).toBe("fallback");
+  });
+
+  test("a tiny positive remainder is not exhaustion", async () => {
+    mockUsage({ usages: { limit_month_total: { limit: 100, remaining: 0.000000000000001 } } });
+    const cfg = comboConfig();
+    const { reports } = await fetchProviderQuotaReports(cfg, true);
+    expect(reports[0]?.quota.monthlyPercent).toBeLessThan(100);
+    expect(pickComboTarget(cfg, "quota-scope")?.target.provider).not.toBe("fallback");
+  });
+
   test("drops a row whose only counters are invalid", async () => {
     mockUsage({ usages: { limit_month_total: { limit: 100, remaining: 200 }, limit_month_code: { used_ratio: 0.4 } } });
     const { reports } = await fetchProviderQuotaReports(config(), true);

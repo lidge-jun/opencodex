@@ -1145,21 +1145,26 @@ function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, un
     .toLowerCase();
 }
 
+/** Highest percentage a window with a positive remainder may report; 100 means exhausted. */
+const KIMI_BELOW_EXHAUSTED_PERCENT = 99.999;
+
 /**
- * Counter-derived usage, or undefined when a counter is impossible (negative used, or
- * remaining above the limit). An overage (used above the limit, or negative remaining)
- * reads as exhausted: dropping it would make an over-quota account look available.
+ * Counter-derived percentage, or undefined when the counters cannot be trusted. Any
+ * exhaustion signal (used at or past the limit, or remaining at or below zero) wins first,
+ * even beside an impossible companion counter: dropping it would let an over-quota account
+ * look available. Otherwise a negative used or a remaining above the limit is impossible.
+ * A positive remainder never rounds up to exhaustion.
  */
-function kimiCounterUsed(row: Record<string, unknown>): { used: number; limit: number } | undefined {
+function kimiCounterPercent(row: Record<string, unknown>): number | undefined {
   const limit = toFiniteNumber(row.limit);
   if (limit === undefined || limit <= 0) return undefined;
   const used = toFiniteNumber(row.used);
   const remaining = toFiniteNumber(row.remaining);
+  if ((used !== undefined && used >= limit) || (remaining !== undefined && remaining <= 0)) return 100;
   if ((used !== undefined && used < 0) || (remaining !== undefined && remaining > limit)) return undefined;
-  // Either overage wins over any other counter: the window is used up.
-  if ((used !== undefined && used >= limit) || (remaining !== undefined && remaining <= 0)) return { used: limit, limit };
-  if (used !== undefined) return { used, limit };
-  return remaining === undefined ? undefined : { used: limit - remaining, limit };
+  if (used !== undefined) return (used / limit) * 100;
+  if (remaining === undefined) return undefined;
+  return Math.min(((limit - remaining) / limit) * 100, KIMI_BELOW_EXHAUSTED_PERCENT);
 }
 
 /** Parse consumed usage, preferring valid counters, then a valid [0, 1] ratio, then direct percentages. */
@@ -1167,9 +1172,9 @@ function parseKimiQuotaRow(value: unknown, resetFallback?: Record<string, unknow
   const row = asRecord(value);
   if (!row) return null;
   const resetAt = quotaResetAt(row) ?? (resetFallback ? quotaResetAt(resetFallback) : undefined);
-  const counters = kimiCounterUsed(row);
-  if (counters) {
-    const percent = normalizePercent((counters.used / counters.limit) * 100);
+  const counterPercent = kimiCounterPercent(row);
+  if (counterPercent !== undefined) {
+    const percent = normalizePercent(counterPercent);
     if (percent !== undefined) return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
   }
   // Newer Kimi responses expose utilization as a fraction in [0, 1].
