@@ -222,6 +222,14 @@ export function currentCodexHome(deps: CodexHomeDeps = {}): string {
   return resolveCodexHomeDir(deps);
 }
 
+/** Resolve an explicit CODEX_HOME using Windows path rules for generated service artifacts. */
+export function currentWindowsServiceCodexHome(): string {
+  const raw = process.env.CODEX_HOME?.trim();
+  if (!raw) return currentCodexHome();
+  const expanded = expandUserPath(raw);
+  return win32.isAbsolute(expanded) ? win32.normalize(expanded) : resolve(expanded);
+}
+
 export function currentCodexSqliteHomeAbsolute(target: "native" | "windows" = "native"): string | undefined {
   const raw = process.env.CODEX_SQLITE_HOME?.trim();
   if (!raw) return undefined;
