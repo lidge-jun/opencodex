@@ -1,4 +1,3 @@
-import { motion, useReducedMotion } from "motion/react";
 import { useKeyedClientResource } from "../client-resource";
 import { useT, getActiveLocale } from "../i18n/shared";
 import type { Page } from "../app-routing";
@@ -37,7 +36,6 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
 
 export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex }: HomeProps) {
   const t = useT();
-  const reduce = useReducedMotion();
   const locale = getActiveLocale();
   const number = new Intl.NumberFormat(locale);
   const compact = new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 });
@@ -77,19 +75,13 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const doneCount = steps.filter(step => step.done).length;
   const allDone = doneCount === steps.length;
 
-  const rise = (delay: number) => reduce ? {} : {
-    initial: { opacity: 0, y: 12 },
-    animate: { opacity: 1, y: 0 },
-    transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] as const, delay },
-  };
-
   const headline = !online ? t("shellV2.homeDown")
     : failures.length > 0 ? t("shellV2.homeErrorsToday", { count: number.format(failures.length) })
     : t("shellV2.homeOk");
 
   return (
     <div className="ui-v2 flex flex-col gap-6 font-sans text-fg">
-      <motion.header {...rise(0)} className="flex flex-wrap items-center justify-between gap-4">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           <span className="relative inline-flex size-3 shrink-0" aria-hidden>
             <span className={cn("relative size-3 rounded-full", !online ? "bg-danger" : failures.length ? "bg-warning" : "bg-success")} />
@@ -103,24 +95,24 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
           </Button>
           <Button variant="primary" onClick={() => navigate("logs")}>{t("shellV2.openLogs")}</Button>
         </div>
-      </motion.header>
+      </header>
 
-      <motion.section {...rise(0.06)} className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t("shellV2.tileVersion")} value={health.data?.version ? `v${health.data.version}` : "—"} />
         <Stat label={t("shellV2.tileUptime")} value={online ? t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) }) : "—"} />
         <Stat label={t("shellV2.tileRequests")} value={number.format(requests7d)} />
         <Stat label={t("shellV2.tileTokens")} value={compact.format(tokens7d)} />
-      </motion.section>
+      </section>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <motion.section {...rise(0.12)} className="flex flex-col gap-4 rounded-card bg-surface p-5">
+        <section className="flex flex-col gap-4 rounded-card bg-surface p-5">
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="m-0 text-[15px] font-semibold">{t("shellV2.checklistTitle")}</h2>
             <span className="text-[13px] text-fg-muted tabular-nums">{t("shellV2.checklistProgress", { done: String(doneCount), total: String(steps.length) })}</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-            <motion.div className="h-full rounded-full bg-accent" initial={false}
-              animate={{ width: `${(doneCount / steps.length) * 100}%` }} transition={{ duration: reduce ? 0 : 0.6, ease: [0.22, 1, 0.36, 1] }} />
+            <div className="h-full origin-left rounded-full bg-accent transition-transform duration-[600ms] ease-soft"
+              style={{ transform: `scaleX(${doneCount / steps.length})` }} />
           </div>
           {allDone ? (
             <p className="m-0 text-[14px] text-fg-muted">{t("shellV2.checklistAllDone")}</p>
@@ -150,9 +142,9 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
               })}
             </ol>
           )}
-        </motion.section>
+        </section>
 
-        <motion.section {...rise(0.18)} className="flex flex-col gap-3 rounded-card bg-surface p-5">
+        <section className="flex flex-col gap-3 rounded-card bg-surface p-5">
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="m-0 text-[15px] font-semibold">{t("shellV2.recentErrors")}</h2>
             <button type="button" onClick={() => navigate("logs")}
@@ -178,7 +170,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
             <button type="button" onClick={() => navigate("dashboard", "update")}
               className="cursor-pointer font-medium text-highlight hover:underline">{t("shellV2.checkUpdate")}</button>
           </div>
-        </motion.section>
+        </section>
       </div>
     </div>
   );

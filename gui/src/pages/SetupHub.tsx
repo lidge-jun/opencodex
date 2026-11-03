@@ -1,4 +1,3 @@
-import { motion, useReducedMotion } from "motion/react";
 import { useKeyedClientResource } from "../client-resource";
 import { useT } from "../i18n/shared";
 import type { Page } from "../app-routing";
@@ -43,7 +42,6 @@ interface Step {
 
 export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
   const t = useT();
-  const reduce = useReducedMotion();
   const config = useKeyedClientResource(`home-config:${apiBase}`, [apiBase],
     signal => getJson<ConfigBody>(`${apiBase}/api/config`, signal));
   const usage = useKeyedClientResource(`setup-usage:${apiBase}`, [apiBase],
@@ -91,9 +89,8 @@ export default function SetupHub({ apiBase, navigate }: SetupHubProps) {
         </div>
         <div className="h-1 overflow-hidden rounded-full bg-surface-2" role="progressbar"
           aria-labelledby="setup-essentials" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneCount}>
-          <motion.div className="h-full rounded-full bg-accent" initial={false}
-            animate={{ width: `${(doneCount / steps.length) * 100}%` }}
-            transition={{ duration: reduce ? 0 : 0.6, ease: [0.22, 1, 0.36, 1] }} />
+          <div className="h-full origin-left rounded-full bg-accent transition-transform duration-[600ms] ease-soft"
+            style={{ transform: `scaleX(${doneCount / steps.length})` }} />
         </div>
         {allDone && <p className="m-0 text-[14px] text-fg-muted">{t("shellV2.checklistAllDone")}</p>}
         <ol className={cn(frame, "m-0 mt-1 list-none divide-y divide-line p-0")}>

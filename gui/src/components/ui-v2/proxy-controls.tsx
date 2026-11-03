@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { IconPower, IconRefresh, IconX } from "../../icons";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +44,6 @@ export function ProxyControls({
   session,
   className,
 }: ProxyControlsProps) {
-  const reduce = useReducedMotion();
   const done = useSettledFlash(restarting);
   const live = !stopping;
   const status = stopping ? stoppingLabel : statusLabel;
@@ -68,22 +66,16 @@ export function ProxyControls({
       )}
       <TrayButton onClick={onRestart} disabled={restarting}
         label={restarting ? restartingLabel : restartLabel} title={restartLabel}>
-        <AnimatePresence mode="popLayout" initial={false}>
-          {done ? (
-            <motion.svg key="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-              strokeLinecap="round" strokeLinejoin="round" className="text-success"
-              initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}>
-              <path d="M5 12l5 5L20 7" />
-            </motion.svg>
-          ) : (
-            <motion.span key="refresh" className={cn("inline-flex", restarting && "animate-spin")}
-              initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}>
-              <IconRefresh />
-            </motion.span>
-          )}
-        </AnimatePresence>
+        {done ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
+            strokeLinecap="round" strokeLinejoin="round" className="text-success" aria-hidden>
+            <path d="M5 12l5 5L20 7" />
+          </svg>
+        ) : (
+          <span className={cn("inline-flex", restarting && "animate-spin")}>
+            <IconRefresh />
+          </span>
+        )}
       </TrayButton>
       <TrayButton onClick={onStop} disabled={stopping} danger
         label={stopping ? stoppingLabel : stopLabel} title={stopping ? stoppingLabel : stopLabel}>

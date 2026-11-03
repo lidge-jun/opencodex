@@ -1,11 +1,11 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { motion, useReducedMotion } from "motion/react";
 import type { TFn, TKey } from "../i18n/shared";
 import { IconFilter, IconSearch, IconX } from "../icons";
 import { formatProviderDisplayName } from "../provider-icons";
 import { PROTOCOL_MODE_KEYS } from "../components/protocols/protocol-labels";
 import { chip, fieldControl, fieldLabel, quietButton } from "../components/v2-logs/classes";
 import { cn } from "@/lib/utils";
+import { SegmentThumb, SegmentThumbGroup } from "@/components/ui-v2/segment-thumb";
 import { Select } from "../ui";
 import { LOG_PROTOCOL_MODE_FILTERS, type LogFilterState, type LogProtocolModeFilter, type LogStatusFilter, type LogTimeWindow } from "./logs-filter";
 import { logsSurfaceKeyDown } from "./logs-surface-keydown";
@@ -53,7 +53,6 @@ function speedBounds(value: string): Pick<LogFilterState, "minTokPerSec" | "maxT
 export function LogsFilterBar({
   filters, options, hasActiveFilters, filteredCount, totalCount, t, onFilterChange, onResetFilters, trailing,
 }: LogsFilterBarProps) {
-  const reduce = useReducedMotion();
   const thumbId = useId();
   const panelId = useId();
   const [open, setOpen] = useState(false);
@@ -96,37 +95,32 @@ export function LogsFilterBar({
           aria-label={t("logs.filter.surface.label")}
           className="relative inline-flex max-w-full items-center gap-0.5 rounded-control bg-bg p-0.5 ring-1 ring-inset ring-line"
         >
-          {SURFACES.map(surface => {
-            const selected = filters.surface === surface;
-            return (
-              <button
-                key={surface}
-                ref={surface === "all" ? allSurfaceRef : undefined}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                id={`logs-surface-${surface}`}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => set({ surface })}
-                onKeyDown={event => logsSurfaceKeyDown(event, surface, nextSurface => set({ surface: nextSurface }))}
-                className={cn(
-                  "ui-v2 relative inline-flex h-7 min-w-8 cursor-pointer items-center justify-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
-                  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
-                  selected ? "text-fg" : "text-fg-subtle hover:text-fg-muted",
-                )}
-              >
-                {selected && (
-                  <motion.span
-                    layoutId={thumbId}
-                    aria-hidden
-                    transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 420, damping: 36 }}
-                    className="absolute inset-0 rounded-[inherit] bg-raised shadow-sm ring-1 ring-line dark:bg-surface-2"
-                  />
-                )}
-                <span className="relative">{t(`logs.filter.surface.${surface}`)}</span>
-              </button>
-            );
-          })}
+          <SegmentThumbGroup>
+            {SURFACES.map(surface => {
+              const selected = filters.surface === surface;
+              return (
+                <button
+                  key={surface}
+                  ref={surface === "all" ? allSurfaceRef : undefined}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  id={`logs-surface-${surface}`}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => set({ surface })}
+                  onKeyDown={event => logsSurfaceKeyDown(event, surface, nextSurface => set({ surface: nextSurface }))}
+                  className={cn(
+                    "ui-v2 relative inline-flex h-7 min-w-8 cursor-pointer items-center justify-center rounded-[8px] px-3 text-[13px] font-medium transition-colors duration-200",
+                    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
+                    selected ? "text-fg" : "text-fg-subtle hover:text-fg-muted",
+                  )}
+                >
+                  {selected && <SegmentThumb layoutId={thumbId} />}
+                  <span className="relative">{t(`logs.filter.surface.${surface}`)}</span>
+                </button>
+              );
+            })}
+          </SegmentThumbGroup>
         </div>
 
         <button

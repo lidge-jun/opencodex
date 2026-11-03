@@ -1,5 +1,4 @@
 import { useDeferredValue, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useT, type TKey } from "../i18n/shared";
 import type { Page } from "../app-routing";
 import { IconActivity, IconBot, IconClaude, IconCodex, IconHardDrive, IconList, IconSearch, IconServer, IconShuffle, IconStar, IconTerminal } from "../icons";
@@ -53,7 +52,6 @@ const ENTRIES: readonly Entry[] = [
 
 export default function AdvancedHub({ navigate }: AdvancedHubProps) {
   const t = useT();
-  const reduce = useReducedMotion();
   const [query, setQuery] = useState("");
   const needle = useDeferredValue(query.trim().toLowerCase());
   const shown = ENTRIES.filter(entry => !needle
@@ -85,24 +83,19 @@ export default function AdvancedHub({ navigate }: AdvancedHubProps) {
       {shown.length === 0 ? (
         <p className="m-0 rounded-card bg-surface p-6 text-center text-[14px] text-fg-muted">{t("shellV2.advancedEmpty")}</p>
       ) : (
-        <motion.div layout={!reduce} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <AnimatePresence initial={false} mode="popLayout">
-            {shown.map(entry => (
-              <motion.div key={entry.id} layout={!reduce}
-                initial={reduce ? false : { opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
-                exit={reduce ? {} : { opacity: 0, scale: 0.97 }} transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}>
-                <HubCard
-                  icon={<entry.Icon aria-hidden />}
-                  title={t(entry.title)}
-                  term={entry.term}
-                  body={<><b className="font-medium text-fg">{t("shellV2.advancedWhen")}</b> · {t(entry.when)}</>}
-                  onOpen={() => navigate(entry.page, entry.subPath)}
-                  openLabel={t("shellV2.stepOpen")}
-                />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </motion.div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map(entry => (
+            <HubCard
+              key={entry.id}
+              icon={<entry.Icon aria-hidden />}
+              title={t(entry.title)}
+              term={entry.term}
+              body={<><b className="font-medium text-fg">{t("shellV2.advancedWhen")}</b> · {t(entry.when)}</>}
+              onOpen={() => navigate(entry.page, entry.subPath)}
+              openLabel={t("shellV2.stepOpen")}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
