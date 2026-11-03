@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE, isProxyError, rememberProxyIncomplete, carryProxyIncompleteContext } from "../lib/client-error-body";
 import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
@@ -23,7 +24,7 @@ import {
   mayBecomePatchEnvelope,
   repairFreeformToolInput,
 } from "../responses/apply-patch-envelope";
-import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
+import { ProgressiveFreeformInputReader } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary, releaseCompactionCiphertextLease } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
@@ -76,6 +77,7 @@ export function bridgeToResponsesSSE(
   heartbeatMs = 2_000,
   options?: MaxOutputCompletionOptions & {
     responseId?: string;
+    proxyErrorContext?: object;
     /** Trusted structural grouping only; never provider state or execution authority. */
     outputItemIds?: { next(kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call"): string };
 
@@ -165,6 +167,7 @@ export function bridgeToResponsesSSE(
     };
   },
 ): ReadableStream<Uint8Array> {
+  const proxyIncompleteContext = options?.proxyErrorContext ?? {};
   const replayCacheScope = options?.replayCacheScope;
   const maxOutputCompletion = createMaxOutputCompletion(options);
   const outputItemId = (kind: "message" | "reasoning" | "function_call" | "custom_tool_call" | "tool_search_call", prefix: string): string =>
@@ -477,7 +480,7 @@ export function bridgeToResponsesSSE(
       // Full assistant text of a compaction turn (across message boundaries) — becomes the
       // synthetic compaction item's payload on done.
       let compaction = emptyChunks();
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string; codeModeHelperName?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string; freeformReader?: ProgressiveFreeformInputReader; codeModeHelperName?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -1092,7 +1095,7 @@ export function bridgeToResponsesSSE(
                 const failure = responseError(
                   502,
                   "upstream_error",
-                  `routed provider emitted undeclared client tool "${effectiveName}"; only request-declared tools may be called`,
+                  UNDECLARED_TOOL_CALL_MESSAGE,
                 );
                 emit("response.failed", {
                   response: {
@@ -1154,7 +1157,9 @@ export function bridgeToResponsesSSE(
                   // is the same disagreement in the other direction.
                   const ownsFreeformGrammar = currentToolCall.namespace === undefined
                     || currentToolCall.namespace === "functions";
-                  const full = progressiveFreeformInput(
+                  // One reader per call resumes where the previous delta stopped.
+                  currentToolCall.freeformReader ??= new ProgressiveFreeformInputReader();
+                  const full = currentToolCall.freeformReader.update(
                     currentToolCall.args,
                     ownsFreeformGrammar ? currentToolCall.name : "",
                   );
@@ -1330,6 +1335,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "incomplete": {
+              if (isProxyError(event) && event.reason === "adapter_eof") rememberProxyIncomplete(proxyIncompleteContext, "adapter_eof");
               if (currentMsg) closeCurrentMessage();
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
@@ -1470,6 +1476,7 @@ export function bridgeToResponsesSSE(
         })) return;
         options?.onUsage?.(undefined);
         await awaitThoughtSignatureDurability();
+        rememberProxyIncomplete(proxyIncompleteContext, "adapter_eof");
         emit("response.incomplete", {
           response: {
             ...responseSnapshot("incomplete", finishedItems),
@@ -1526,6 +1533,7 @@ export function bridgeToResponsesSSE(
             // barrier is not awaited on the stall-timeout kill path. The in-memory store is
             // already updated; only a crash between here and the queued write loses it,
             // which is the pre-#1926 status quo for an already-abnormal termination.
+            rememberProxyIncomplete(proxyIncompleteContext, "upstream_stall_timeout");
             emit("response.incomplete", {
               response: {
                 ...responseSnapshot("incomplete", finishedItems),
@@ -1558,7 +1566,7 @@ export function bridgeToResponsesSSE(
         }, heartbeatMs);
       };
 
-  return new ReadableStream<Uint8Array>({
+  return carryProxyIncompleteContext(proxyIncompleteContext, new ReadableStream<Uint8Array>({
     start(streamController) {
       controller = streamController;
       startStream();
@@ -1577,5 +1585,5 @@ export function bridgeToResponsesSSE(
         releasePendingWebSources();
         disposeOwnedBudget();
       },
-    });
+    }));
   }

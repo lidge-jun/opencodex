@@ -605,7 +605,7 @@ id/name; именованный `tool_choice` без имени.
 **Таксономия ошибок:** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-прочие 5xx — `api_error`. `Retry-After` сохраняется.
+прочие 5xx — `api_error`. `Retry-After` передаётся целым числом секунд (HTTP-дата переводится в оставшиеся секунды) и ограничивается восемью днями.
 
 ## Кеширование промптов и расход токенов
 

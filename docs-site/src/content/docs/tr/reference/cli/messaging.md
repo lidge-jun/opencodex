@@ -3,11 +3,17 @@ title: Codex mesajlaşma
 description: Yüklü Codex oturumlarına yerel olarak veya açıkça tanımlanmış SSH eşleri üzerinden ilişkili mesajlar gönderin.
 ---
 
-`ocx message`, mevcut Codex oturumları için isteğe bağlı arayüzdür. Proxy veya
+`ocx message sessions` ve `ocx message send`, mevcut Codex oturumları için isteğe bağlı arayüzdür. Proxy veya
 app-server başlatmaz, konuşma sürdürmez, beceri kurmaz. Linux/macOS Unix soketleri
 desteklenir; Windows açık hatayla durur. Mevcut Codex daemon'ı deneysel
 `thread/queue/add` desteklemelidir. CLI sürümü sabitlemek veya `CODEX_CLI_PATH`
 seçmek gerekmez.
+
+Ayrı `ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex`
+komutu, kayıtlı konuşmalar için isteğe bağlı MCP araçları sunar ve kısa ömürlü bir
+stdio app-server başlatır. Kayıtlı konuşmaların canlı olduğu doğrulanmaz; `queued`
+yanıtı işlenmiş veya yanıtlanmış anlamına gelmez. Kurulum ve sınırlar için
+[İngilizce MCP başvurusuna](/reference/cli/messaging/#mcp-queue-host) bakın.
 
 ## Keşfetme ve gönderme
 

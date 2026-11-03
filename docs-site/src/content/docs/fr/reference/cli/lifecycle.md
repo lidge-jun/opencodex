@@ -32,6 +32,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+Un Link Child non supervisé restaure Codex natif et Grok avant de libérer son listener lors d’un signal, en revérifiant la connexion à chaque écriture. Service/Desktop, sibling, transfert de redémarrage et reçu stop du parent préservent les intégrations. L’arrêt refuse le redémarrage avec `409 runtime_stopping`. Une terminaison forcée peut éviter le signal ; la restauration par `ocx stop` reste nécessaire.
+
 Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
 
 Sur un client hub connecté, `ocx stop`, y compris via l’API, conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion ; `ocx start` les dessert de nouveau. L’arrêt explicite d’un Remote Link Child rétablit au contraire, si la restauration partagée réussit, le routage natif de Codex, le catalogue et les métadonnées de reprise sauvegardées, et supprime la configuration Grok gérée. La connexion Home enregistrée reste conservée ; `ocx disconnect` la supprime.
@@ -157,7 +159,11 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 
 ## Synchronisation du catalogue
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+Sur un Home Remote Link, après la validation et l’enregistrement d’un catalogue à jour, `ocx sync` synchronise aussi les Enfants liés admissibles. `--local-only` désactive cette propagation. `--json` produit un seul document `ocx.sync.fanout/1` contenant le résultat du Home et l’état de chaque Enfant ; un Enfant ignoré indique la raison. Le code de sortie non nul du Home est renvoyé sans modification. Si le Home réussit, un Enfant en échec ou en délai dépassé, ou un registre de liens illisible, entraîne le code de sortie 6 ; sinon, la commande se termine avec le code 0, y compris lorsque des Enfants sont ignorés. En mode texte, le registre illisible produit un message sans chemin. Le code 7 est réservé à une mise à jour en cours. Si la synchronisation du Home lève une erreur en mode JSON, stdout conserve un seul document et stderr fournit un diagnostic assaini.
+
+La propagation ne demande jamais le redémarrage de l’application Codex ni d’un app-server sur un Enfant. Pour cela, utilisez GOAT ou exécutez `ocx sync --restart-codex` sur l’Enfant. La synchronisation épinglée de l’Enfant peut néanmoins redémarrer son propre runtime client OpenCodex après l’application de réglages Home modifiés. Si le Home interrompt son processus SSH local après un délai dépassé, une synchronisation distante déjà lancée peut continuer sur l’Enfant.
 
 > **Enfant Remote Link :** `ocx sync` applique aussi les réglages Codex du Home et, si le runtime client a démarré avant cette application, le redémarre même sans option de redémarrage. Si le redémarrage échoue, l'ancien runtime continue de servir et la commande se termine avec un code non nul. Les champs correspondants de `ocx status --json` et `ocx link status --json` sont décrits dans [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (en anglais).
 

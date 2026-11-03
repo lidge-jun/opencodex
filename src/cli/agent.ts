@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   csv,
   desktopSwitchApplyReason,
   printData,
@@ -345,27 +346,48 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
   );
   const proposals = result.proposals ?? [];
   const applied: Array<{ role: string; model: string; effort?: string }> = [];
-  const skipped: string[] = [];
+  const skipped = apply ? proposals.filter(p => p.status === "proposed" && p.proposedModel && proposalAlreadySet(p)).map(p => p.role) : [];
+  const changes = proposals.filter((p): p is CodexRoleProposal & { proposedModel: string } =>
+    p.status === "proposed" && !!p.proposedModel && !proposalAlreadySet(p));
+  const { ROLE_HISTORY_LIMIT } = await import("../codex/role-model-history");
   const omoJsoncNotWritten: Array<{ role: string; status: string }> = [];
+  let batch: string | undefined;
+  let failure: { cause: unknown; unconfirmedRole: string; unattemptedRoles: string[] } | undefined;
   if (apply) {
-    for (const proposal of proposals) {
-      if (proposal.status !== "proposed" || !proposal.proposedModel) continue;
-      if (proposalAlreadySet(proposal)) {
-        skipped.push(proposal.role);
-        continue;
+    // Splitting into several batches would hide earlier changes from the bounded Restore list.
+    if (changes.length > ROLE_HISTORY_LIMIT) {
+      const message = `${changes.length} changed proposals exceed the ${ROLE_HISTORY_LIMIT}-role batch limit. No role files were written. Preview without --apply and use 'ocx agent roles set' for individual changes.`;
+      printData({ ...result, applied, skipped, omoJsoncNotWritten, complete: false,
+        refusal: { code: "too_many_role_changes", limit: ROLE_HISTORY_LIMIT, count: changes.length },
+        unattemptedRoles: changes.map(p => p.role) }, wantsJson, [message]);
+      throw new RuntimeApiError(message, 409, null);
+    }
+    for (const [index, proposal] of changes.entries()) {
+      const body = {
+        model: proposal.proposedModel,
+        ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}),
+        ...(batch ? { batch } : {}),
+      };
+      let written: { batch?: string; omoJsonc?: { status?: string } } | null;
+      try {
+        written = await runtimeRequest<typeof written>(
+          `/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`,
+          { method: "PUT", body: JSON.stringify(body) },
+          deps,
+        );
+      } catch (cause) {
+        // A lost response can follow a persisted write: report uncertainty and do not replay it.
+        failure = { cause, unconfirmedRole: proposal.role, unattemptedRoles: changes.slice(index + 1).map(p => p.role) };
+        break;
       }
-      const body = { model: proposal.proposedModel, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) };
-      const written = await runtimeRequest<{ omoJsonc?: { status?: string } } | null>(
-        `/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`,
-        { method: "PUT", body: JSON.stringify(body) },
-        deps,
-      );
-      applied.push({ role: proposal.role, ...body });
+      batch = written?.batch ?? batch;
+      applied.push({ role: proposal.role, model: body.model, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) });
       const omoStatus = written?.omoJsonc?.status;
       if (omoStatus && OMO_JSONC_NOT_WRITTEN.has(omoStatus)) omoJsoncNotWritten.push({ role: proposal.role, status: omoStatus });
     }
   }
-  printData(apply ? { ...result, applied, skipped, omoJsoncNotWritten } : result, wantsJson, [
+  printData(apply ? { ...result, applied, skipped, omoJsoncNotWritten, ...(batch ? { batch } : {}),
+    ...(failure ? { complete: false, unconfirmedRole: failure.unconfirmedRole, unattemptedRoles: failure.unattemptedRoles } : {}) } : result, wantsJson, [
     `Sized with ${result.sizingModel ?? "unknown"}.`,
     ...proposals.map(p => p.status === "unsized"
       ? `${p.role}: not sized (${p.reason ?? "unknown"})`
@@ -374,9 +396,16 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
         : `${p.role}: ${p.model ?? "(no pin)"} -> ${p.proposedModel}${p.proposedEffort ? ` (${p.proposedEffort})` : ""} [${p.tier}/${p.effortIntent}] ${p.rationale ?? ""}`),
     apply
       ? `Applied ${applied.length} of ${proposals.length} roles.${skipped.length > 0 ? ` Skipped ${skipped.length} already set: ${skipped.join(", ")}.` : ""}`
-      : "Nothing was written; rerun with --apply to write every proposal that differs from the role's current pin.",
+      : `Nothing was written; --apply accepts up to ${ROLE_HISTORY_LIMIT} changed roles in one batch. Use 'ocx agent roles set' for individual changes.`,
     ...omoJsoncNotWritten.map(entry => `${entry.role}: omo.jsonc not written (${entry.status}); the role TOML was updated.`),
+    ...(batch ? [`Recorded history batch: ${batch}. Restore uses the retained changes in the dashboard's Change history.`] : []),
+    ...(failure ? [
+      `Confirmed writes: ${applied.map(p => p.role).join(", ") || "none"}.`,
+      `Write not confirmed for ${failure.unconfirmedRole}; it may have been saved. Not attempted: ${failure.unattemptedRoles.join(", ") || "none"}.`,
+      "Earlier writes remain applied. Inspect 'ocx agent roles --json' before retrying.",
+    ] : []),
   ]);
+  if (failure) throw failure.cause;
 }
 
 async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {

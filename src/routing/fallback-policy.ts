@@ -13,6 +13,7 @@
  * Privacy: events carry public selectors, coarse trigger codes and device ids only. No request
  * body, credential, account id, label or email reaches the ring or the refusal body.
  */
+import { formatClientRetryAfter } from "../lib/client-retry-after";
 import type { OcxConfig } from "../types";
 import type { OcxFallbackConfig, OcxFallbackKind, OcxFallbackSwitches } from "../types/fallback";
 import { FALLBACK_DEVICE_ID, FALLBACK_SELECTOR } from "../config/schema/fallback-policy";
@@ -262,7 +263,8 @@ export function fallbackRefusedResponse(event: FallbackEvent, hop: Pick<Fallback
     + " fallback to " + event.to + " is off " + scopePhrase(event) + ", so OpenCodex did not send the request there."
     + " To allow it: ocx fallback on --kind " + event.kind + scopeFlag(event);
   const headers = new Headers({ "x-opencodex-fallback": "refused", "cache-control": "no-store" });
-  if (hop.retryAfter) headers.set("retry-after", hop.retryAfter);
+  const advice = formatClientRetryAfter(hop.retryAfter);
+  if (advice !== undefined) headers.set("retry-after", advice);
   return Response.json({
     error: {
       message,

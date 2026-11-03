@@ -845,9 +845,8 @@ that state and still exits 0. `--json` returns:
 `auto` clears the manual selection so the pool places work by its own strategy again — unless a Codex account literally carries the id `auto`, which wins by exact-id precedence; `ocx account clear <provider>` always restores automatic selection. Any Codex account can be named by the alias set with `ocx account alias` instead of its id; that holds for `priority`, `pause`, `resume`, `clear-cooldown`, `remove` and `alias` too. For Codex accounts, `auto`, `main` and `__main__` are reserved regardless of case and cannot be assigned as aliases. OAuth and API-key display names keep their existing rules.
 
 Selects an existing Codex account, OAuth account, or API key. For `openai`, `main` selects the Codex
-App login. A Codex Pool selection clears process-local affinity and applies to the next request,
-including one from an existing visible task; proxy restart or affinity eviction can also leave a task
-unbound, while in-flight requests keep their captured account. This controls Pool routing only;
+App login. A Codex Pool selection clears affinity and applies to the next request,
+including one from an existing visible task. Bindings for requests with a session ID (including normal Codex CLI and App turns and subagents), or session-less requests anchored on their immediate parent, can survive a graceful proxy restart, for up to 24 hours idle, when the final affinity save at shutdown succeeds. Deeper session-less chains and bindings to the Codex App main login stay in memory only and are assigned again after restart; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound, while in-flight requests keep their captured account. This controls Pool routing only;
 Direct mode keeps using the caller-owned/native main credential. Usage-based proactive switching,
 401/403 reauthentication, 429/retry-after cooldowns, exclusion, and pre-output 429/402 failure
 recovery may later select another eligible Pool account. Those recovery paths remain active when

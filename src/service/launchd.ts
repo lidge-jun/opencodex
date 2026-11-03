@@ -11,19 +11,14 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
-import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
-import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
+import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments, serviceApiTokenFileUnder } from "./definition";
+import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
+import { encodePlistString, plistKeyedString } from "./plist-xml";
 
-function plistString(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+/** Encode a plist value; `field` names it if it holds a character XML cannot carry. */
+const plistString = encodePlistString;
 
 /**
  * Render the launchd plist from the package-local Bun + CLI pair. Unlike systemd, launchd
@@ -34,15 +29,15 @@ function plistString(value: string): string {
  */
 export function buildPlist(
   proxyEnv: { name: string; value: string }[] = resolvedProxyEnv(),
-  deps: { runtime?: DurableBunRuntime; launcher?: string | null } = {},
+  deps: { runtime?: DurableBunRuntime; launcher?: string | null; homes?: LaunchdPinnedHomes } = {},
 ): string {
   const runtime = deps.runtime ?? durableBunRuntime();
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   const log = logPath();
   const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "darwin");
-  const codexHome = process.env.CODEX_HOME?.trim();
+  const homes = deps.homes ?? currentLaunchdPinnedHomes();
+  const { codexHome, opencodexHome } = homes;
   const codexSqliteHome = currentCodexSqliteHomeAbsolute();
-  const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
     // OCX_SERVICE alone cannot identify the managed job: `ocx claude` and `ocx opencode`
@@ -51,15 +46,15 @@ export function buildPlist(
     // the dashboard-stop refusal below can tell a real launchd job from an ordinary child.
     `    <key>${SERVICE_MANAGED_ENV}</key><string>1</string>`,
     `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
-    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
-    `    <key>PATH</key><string>${plistString(path)}</string>`,
-    codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
-    codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
-    opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
+    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun, BUN_RUNTIME_PATH_ENV)}</string>`,
+    `    <key>PATH</key><string>${plistString(path, "PATH")}</string>`,
+    codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome, "CODEX_HOME")}</string>` : null,
+    codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome, "CODEX_SQLITE_HOME")}</string>` : null,
+    opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome, "OPENCODEX_HOME")}</string>` : null,
     ...proxyEnv.map(({ name, value }) =>
-      `    <key>${name}</key><string>${plistString(value)}</string>`),
+      `    <key>${name}</key><string>${plistString(value, name)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = launchdServiceCommand(runtime);
+  const command = launchdServiceCommand(runtime, resolveServiceListenPort(), homes);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -69,7 +64,7 @@ export function buildPlist(
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>${plistString(command)}</string>
+    <string>${plistString(command, "the service command")}</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -77,8 +72,8 @@ export function buildPlist(
   <dict>
 ${envLines}
   </dict>
-  <key>StandardOutPath</key><string>${plistString(log)}</string>
-  <key>StandardErrorPath</key><string>${plistString(log)}</string>
+  <key>StandardOutPath</key><string>${plistString(log, "the service log path")}</string>
+  <key>StandardErrorPath</key><string>${plistString(log, "the service log path")}</string>
 </dict>
 </plist>
 `;
@@ -132,19 +127,58 @@ export function reusePreviousPlistPathVariable(previous: string, rendered: strin
   return adopted === normalizedPrevious ? normalizedPrevious : null;
 }
 
+/** The homes a launchd plist pins, resolved once per definition. */
+export type LaunchdPinnedHomes = { codexHome: string; opencodexHome: string };
+
+function currentLaunchdPinnedHomes(): LaunchdPinnedHomes {
+  return { codexHome: currentCodexHome(), opencodexHome: currentOpenCodexHome() };
+}
+
 /**
- * The exec line {@link buildPlist} bakes, for the runtime a single install already
+ * The homes the installed plist pins, or null when it cannot be read or does not pin both.
+ * The plist path does not follow either home, so this answers the same from any shell.
+ */
+function installedLaunchdPinnedHomes(readPlist: () => string): LaunchdPinnedHomes | null {
+  let plist: string;
+  try { plist = readPlist(); } catch { return null; }
+  const codexHome = plistKeyedString(plist, "CODEX_HOME");
+  const opencodexHome = plistKeyedString(plist, "OPENCODEX_HOME");
+  return codexHome && opencodexHome ? { codexHome, opencodexHome } : null;
+}
+
+/**
+ * The homes the installed job runs with: the plist on disk, then the recorded install state,
+ * and the current shell only when neither records them. Every comparison against a job that
+ * is already loaded starts here, so a shell exporting other homes cannot make it read stale.
+ */
+function installedLaunchdHomes(state: ServiceInstallState | null, readPlist: () => string): LaunchdPinnedHomes {
+  return installedLaunchdPinnedHomes(readPlist)
+    ?? (state?.codexHome && state.opencodexHome ? { codexHome: state.codexHome, opencodexHome: state.opencodexHome } : null)
+    ?? currentLaunchdPinnedHomes();
+}
+
+/**
+ * The complete exec line {@link buildPlist} bakes, for the runtime a single install already
  * resolved. Shared so `installLaunchd` can verify the live job against the exact string it
  * just wrote instead of re-deriving it from install state that has not been written yet
  * (a fresh install has no state, so `expectedLaunchdCommand` falls back to the package
  * pair — identical here, but only by accident of the fresh state).
+ *
+ * The EnvironmentVariables dict is supplied first, but `/bin/sh -lc` runs a login shell
+ * after launchd injects it. A profile export could otherwise overwrite the pinned homes,
+ * so the command re-assigns both immediately before exec. The assignments are part of the
+ * line every live-job comparison uses: a job loaded from an older plist without them, or
+ * with other homes, must read as stale.
  */
 function launchdServiceCommand(
   runtime: DurableBunRuntime = durableBunRuntime(),
   port: number = resolveServiceListenPort(),
+  homes: LaunchdPinnedHomes = currentLaunchdPinnedHomes(),
 ): string {
   const { bun, cli } = cliEntry(runtime);
-  return buildServiceShellCommand(bun, cli, port);
+  // The token file lives under the pinned OpenCodex home, so it follows the homes too.
+  const tokenFile = serviceApiTokenFileUnder(homes.opencodexHome);
+  return `${pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome)} ${buildServiceShellCommand(bun, cli, port, tokenFile)}`;
 }
 
 /**
@@ -153,15 +187,29 @@ function launchdServiceCommand(
  * stateless install runs the Bun + CLI pair. `start` and `status` compare the live job
  * against this, so both must follow the launcher or a healthy launcher-backed job reads as
  * "an OLDER plist" (#3464). PATH is deliberately NOT re-walked here.
+ *
+ * The pinned homes follow the same rule. A status run from a shell that exports another
+ * CODEX_HOME must still recognise a job loaded from the plist on disk, so the homes come from
+ * that plist, then from the recorded install state, and from the current environment only
+ * when neither records them. A fresh install bakes its own line through
+ * {@link launchdServiceCommand} and does not come through here.
  */
 export function expectedLaunchdCommand(
   port: number,
-  deps: { state?: ServiceInstallState | null; entry?: { bun: string; cli: string | null } } = {},
+  deps: {
+    state?: ServiceInstallState | null;
+    entry?: { bun: string; cli: string | null };
+    homes?: LaunchdPinnedHomes;
+    readPlist?: () => string;
+  } = {},
 ): string {
   const state = deps.state === undefined ? readServiceInstallState() : deps.state;
-  if (state?.launcherPath) return buildServiceLauncherShellCommand(state.launcherPath, port);
+  const homes = deps.homes ?? installedLaunchdHomes(state, deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")));
+  const pinned = pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome);
+  const tokenFile = serviceApiTokenFileUnder(homes.opencodexHome);
+  if (state?.launcherPath) return `${pinned} ${buildServiceLauncherShellCommand(state.launcherPath, port, tokenFile)}`;
   const entry = deps.entry ?? cliEntry();
-  return buildServiceShellCommand(entry.bun, entry.cli, port);
+  return `${pinned} ${buildServiceShellCommand(entry.bun, entry.cli, port, tokenFile)}`;
 }
 
 /**
@@ -510,7 +558,9 @@ export function installLaunchd(deps: {
   // install there is no state yet, and after a lost state file `expectedLaunchdCommand`
   // falls back to the Bun + CLI pair, which happens to be the same answer only by accident
   // of the empty state.
-  const expectedCommand = launchdServiceCommand();
+  // The homes are resolved once so the probe and the plist pin the same directories.
+  const homes = currentLaunchdPinnedHomes();
+  const expectedCommand = launchdServiceCommand(undefined, undefined, homes);
   const uid = process.getuid?.() ?? 0;
   const guiDomain = launchdGuiDomain();
   const guiTarget = `${guiDomain}/${LABEL}`;
@@ -531,7 +581,7 @@ export function installLaunchd(deps: {
     );
   }
 
-  let rendered = buildPlist(resolvedProxyEnv());
+  let rendered = buildPlist(resolvedProxyEnv(), { homes });
   if (previousPlist !== null && previousPlist !== rendered && verdict.state === "loaded-current") {
     // The live job runs exactly the exec line this install baked, so the definition on disk
     // IS the one launchd is running: keep the PATH it already carries instead of replacing
@@ -732,13 +782,20 @@ export function installLaunchd(deps: {
 export function restartLaunchdJob(deps: {
   launchctl?: typeof runLaunchctl;
   probe?: typeof probeLaunchdLoadState;
-  /** The exec line the live job must carry; defaults to the one an install would bake. */
+  /**
+   * The exec line the live job must carry; defaults to the one an install would bake for the
+   * homes the installed plist pins, so a restart from a shell with other homes still matches.
+   */
   expectedCommand?: () => string;
+  readPlist?: () => string;
 } = {}): void {
   const run = deps.launchctl ?? runLaunchctl;
   const target = `${launchdGuiDomain()}/${LABEL}`;
   const expectedCommand = deps.expectedCommand
-    ?? (() => launchdServiceCommand());
+    ?? (() => launchdServiceCommand(undefined, undefined, installedLaunchdHomes(
+      readServiceInstallState(),
+      deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")),
+    )));
   const kicked = run(["kickstart", "-k", target]);
   const verdict = (deps.probe ?? probeLaunchdLoadState)({ expectedCommand });
   if (!kicked.ok || verdict.state === "not-loaded" || verdict.state === "loaded-stale") {
