@@ -36,6 +36,7 @@ import {
 import { replaceSseDataPayload, splitSseBlock, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
 import { clientWireLogOf } from "./inference/client-wire";
+import { knownModelIdentity } from "../lib/model-identity";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
 import { nativeResponseFingerprint } from "./responses/native-response-json";
 import { nativeResponseOutput } from "./responses/native-response-output";
@@ -1824,13 +1825,28 @@ export function codexSafetyBufferingFilterOptions(
   return { dropCodexSafetyBuffering: config.dropCodexSafetyBuffering === true };
 }
 
-export function sanitizePassthroughHeaders(upstream: Headers, options?: CodexSafetyBufferingFilterOptions): Headers {
+/** Model ids a passthrough route knows, for the relayed model headers. */
+export interface PassthroughHeaderOptions extends CodexSafetyBufferingFilterOptions {
+  knownModels?: readonly string[];
+  provider?: string;
+}
+
+// Upstream-reported model headers: relayed only as a model id the proxy already knows (the route's
+// own ids, the bundled Codex catalog, or the selected provider's catalog), never as upstream bytes.
+const PASSTHROUGH_MODEL_HEADERS: ReadonlySet<string> = new Set(["openai-model", "x-codex-safety-buffering-faster-model"]);
+
+export function sanitizePassthroughHeaders(upstream: Headers, options?: PassthroughHeaderOptions): Headers {
   const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const out = new Headers();
   upstream.forEach((value, key) => {
     const lower = key.toLowerCase();
     if (PASSTHROUGH_DROP_HEADERS.has(lower)) return;
     if (dropSafetyBuffering && CODEX_SAFETY_BUFFERING_HEADER_SET.has(lower)) return;
+    if (PASSTHROUGH_MODEL_HEADERS.has(lower)) {
+      const known = knownModelIdentity(value.trim(), options?.knownModels, options?.provider);
+      if (known) out.set(key, known);
+      return;
+    }
     out.set(key, value);
   });
   return out;

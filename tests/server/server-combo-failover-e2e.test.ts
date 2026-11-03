@@ -926,8 +926,13 @@ describe("server combo failover 030 activation matrix", () => {
         expect(logs[0]).toMatchObject({
           provider: "combo", model: "combo/free", resolvedModel: "m1",
           status: scenario.logStatus, terminalStatus: scenario.status,
-          closeReason: "terminal", upstreamError: scenario.message,
+          closeReason: "terminal",
         });
+        // A failed row keeps a closed condition (a successful output-limit stop has none); the
+        // upstream message stays on the request context.
+        if (scenario.logStatus >= 400) expect(logs[0]!.upstreamCondition).toBeDefined();
+        else expect(logs[0]!.upstreamCondition).toBeUndefined();
+        expect(JSON.stringify(logs[0])).not.toContain(scenario.message);
         expect(logs[0]!.attempts).toMatchObject([{ provider: "a", model: "m1", status: scenario.logStatus }]);
         expect(logs[0]!.attempts).toHaveLength(1);
         if (scenario.status === "failed") expect(logs[0]!.errorCode).toBe("cyber_policy");
@@ -3392,7 +3397,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(statuses).toEqual(["completed"]);
     expect(cancels).toBe(0);
     expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "final-b" });
+    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "m2" });
     for (const field of ["terminalHttpStatus", "terminalIncompleteReason", "terminalErrorCode", "upstreamError"] as const) {
       expect(snapshots[0]![field]).toBeUndefined();
     }

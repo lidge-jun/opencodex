@@ -103,7 +103,7 @@ one. `/api/logs` spreads the entry and accepts `protocolMode`
 an unknown value matches nothing. The dashboard renders it with
 `gui/src/components/protocols/` (a row badge and a detail-dialog section) and filters by mode
 client-side in `gui/src/pages/logs-filter.ts`. `tests/responses/protocol-trace.test.ts` and
-`tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter.
+`tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter. A translating native ingress can suppress the trace: see [Ollama-Compatible Inbound](ollama-inbound.md#protocol-trace).
 
 ## Planner and preview
 
