@@ -647,4 +647,11 @@ describe("serializedJsonByteLength", () => {
     expect(() => JSON.stringify(parsed)).toThrow(RangeError);
     expect(serializedJsonByteLength(parsed)).toBe(2 * depth);
   });
+
+  test("measures wide and mixed containers exactly", () => {
+    const wide = JSON.parse("[" + Array(1_000_000).fill("0").join(",") + "]");
+    expect(serializedJsonByteLength(wide)).toBe(Buffer.byteLength(JSON.stringify(wide), "utf8"));
+    const mixed = JSON.parse(JSON.stringify({ a: Array.from({ length: 50_000 }, (_, i) => ({ [`k${i}`]: [i, "é", null] })) }));
+    expect(serializedJsonByteLength(mixed)).toBe(Buffer.byteLength(JSON.stringify(mixed), "utf8"));
+  });
 });
