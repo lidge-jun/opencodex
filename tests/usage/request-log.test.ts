@@ -816,7 +816,7 @@ describe("request log metadata", () => {
     expect(entries[0]).toMatchObject({
       status: 403,
       errorCode: "permission_denied",
-      upstreamError: "Provider error 403",
+      upstreamCondition: "access_denied",
     });
 
     const subEntries: RequestLogEntry[] = [];
@@ -1185,7 +1185,7 @@ describe("request log metadata", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       terminalStatus: "failed",
-      upstreamError: cursorMessage,
+      upstreamCondition: "rate_limited",
       status: 429,
       errorCode: "rate_limit_exceeded",
     });
@@ -1217,7 +1217,7 @@ describe("request log metadata", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       terminalStatus: "failed",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
       status: 400,
       errorCode: "cyber_policy",
       closeReason: "terminal",
@@ -1252,7 +1252,7 @@ describe("request log metadata", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       terminalStatus: "failed",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
       status: 400,
       errorCode: "cyber_policy",
       closeReason: "terminal",
@@ -1290,7 +1290,7 @@ describe("request log metadata", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       terminalStatus: "failed",
-      upstreamError: policyMessage,
+      upstreamCondition: "request_rejected",
       status: 400,
       errorCode: "cyber_policy",
       closeReason: "terminal",
@@ -1418,7 +1418,6 @@ describe("request log metadata", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       terminalStatus: "failed",
-      upstreamError: message,
       status: 499,
       errorCode: "client_closed_request",
       closeReason: "client_cancel",
@@ -1443,7 +1442,6 @@ describe("request log metadata", () => {
       status: 499,
       errorCode: "client_closed_request",
       closeReason: "client_cancel",
-      upstreamError: "client closed request during web-search",
     });
   });
 
@@ -1515,8 +1513,8 @@ describe("request log metadata", () => {
     const text = await response.text();
     expect(text).toContain("\"message\":\"unauthorized: Bearer secret-leak-abc123\"");
     expect(entries).toHaveLength(1);
-    expect(entries[0].upstreamError).not.toContain("secret-leak-abc123");
-    expect(entries[0].upstreamError).toContain("[REDACTED]");
+    expect(JSON.stringify(entries[0])).not.toContain("secret-leak-abc123");
+    expect(entries[0].upstreamError).toBeUndefined();
   });
 
   test("plain-text upstream errors are captured in deferred logging", async () => {
@@ -1532,7 +1530,7 @@ describe("request log metadata", () => {
     const text = await response.text();
     expect(text).toBe("provider says nope");
     expect(entries).toHaveLength(1);
-    expect(entries[0].upstreamError).toBe("provider says nope");
+    expect(entries[0].upstreamError).toBeUndefined(); expect(entries[0].upstreamCondition).toBeDefined();
   });
 
   test("deferred SSE logging uses adapter-provided Kiro log input tokens", async () => {
@@ -1701,7 +1699,7 @@ describe("request log metadata", () => {
     });
   });
 
-  test("deferred SSE logging surfaces upstream_stall_timeout reason as upstreamError", async () => {
+  test("deferred SSE logging surfaces upstream_stall_timeout reason as failure detail", async () => {
     const entries: RequestLogEntry[] = [];
     const incompletePayload = JSON.stringify({
       type: "response.incomplete",
@@ -1731,8 +1729,7 @@ describe("request log metadata", () => {
       status: 502,
       errorCode: "upstream_server_error",
     });
-    expect(entries[0].upstreamError).toContain("upstream_stall_timeout");
-    expect(entries[0].upstreamError).toContain("Upstream stalled");
+    expect(entries[0].failureDetail).toEqual({ code: "stall_timeout" });
   });
 
   test("deferred SSE logging treats the requested output limit as a successful terminal", async () => {
@@ -1766,12 +1763,14 @@ describe("request log metadata", () => {
       status: 200,
       usageStatus: "reported",
       usage: { inputTokens: 9, outputTokens: 64 },
-      upstreamError: "Output reached the requested token limit (max_output_tokens)",
+      failureDetail: { code: "output_limit" },
     });
+    // A successful output-limit terminal is not an upstream failure.
+    expect(entries[0].upstreamCondition).toBeUndefined();
     expect(entries[0]).not.toHaveProperty("errorCode");
   });
 
-  test("deferred SSE logging surfaces adapter_eof reason as upstreamError", async () => {
+  test("deferred SSE logging surfaces adapter_eof reason as failure detail", async () => {
     const entries: RequestLogEntry[] = [];
     const incompletePayload = JSON.stringify({
       type: "response.incomplete",
@@ -1801,8 +1800,7 @@ describe("request log metadata", () => {
       status: 502,
       errorCode: "upstream_server_error",
     });
-    expect(entries[0].upstreamError).toContain("adapter_eof");
-    expect(entries[0].upstreamError).toContain("ended unexpectedly");
+    expect(entries[0].failureDetail).toEqual({ code: "adapter_eof" });
   });
 });
 
@@ -1858,6 +1856,8 @@ describe("request log restart hydrate", () => {
       closeReason: "terminal",
       upstreamError: "socket connection was closed unexpectedly",
     };
+    // Legacy upstream text is read once to classify the failure and never returned.
+    expect(requestLogEntryFromPersistedUsage(persisted).upstreamError).toBeUndefined();
     expect(requestLogEntryFromPersistedUsage(persisted)).toEqual({
       requestId: "ocx-revive",
       timestamp: 1_800_000_000_000,
@@ -1879,7 +1879,7 @@ describe("request log restart hydrate", () => {
       errorCode: "upstream_server_error",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "socket connection was closed unexpectedly",
+      upstreamCondition: "upstream_failed",
     });
   });
 
@@ -1922,7 +1922,7 @@ describe("request log restart hydrate", () => {
       requestId: "ocx-sticky-502",
       status: 502,
       errorCode: "upstream_server_error",
-      upstreamError: "Provider unreachable",
+      upstreamCondition: "upstream_failed",
       requestedEffort: "xhigh",
       shadowCallRewrittenFrom: "gpt-5.6-luna",
     });

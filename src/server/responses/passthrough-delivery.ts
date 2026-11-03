@@ -1,5 +1,11 @@
+import { clientFacingModelText } from "../../lib/error-destination";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
+import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
+import { routeKnownModels } from "../../usage/log";
+import type { OcxProviderConfig } from "../../types";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
@@ -34,6 +40,7 @@ import {
   codexDenialOutcomeMeta,
   isFixedCodexAccount,
   shouldDeferCodexResetDerivedCooldown,
+  shouldRetryCodexPoolAccountQuota,
 } from "./core-codex-account";
 import { isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
@@ -482,9 +489,16 @@ export async function deliverPassthroughResponse(
     });
   }
 
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    // Every relayed header set below goes through this filter with the route's known models, so a
+    // reported model (row and header) is only ever a model id this route or a catalog already names.
+    const passthroughHeaderOptions = {
+      ...codexSafetyBufferingOptions,
+      knownModels: [...routeKnownModels(logCtx), ...providerKnownModels(route.provider)],
+      provider: logCtx.provider,
+    };
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions);
     if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
-    const resolvedModel = headers.get("openai-model")?.trim();
+    const resolvedModel = headers.get("openai-model") ?? undefined;
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
@@ -571,6 +585,18 @@ export async function deliverPassthroughResponse(
         });
       }
     } else {
+      if (terminalBodyWillRecord) {
+        options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
+          terminalRecorder?.(status, httpStatusOverride);
+          options.onNativePassthroughTerminal?.(status);
+        });
+      }
+      if (isKeyedRequestOwnedMain(admissionState.authCtx) && !terminalBodyWillRecord && !upstreamResponse.ok && !isNonReplayableResponse(upstreamResponse)
+        && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse) && isCanonicalOpenAiForwardProvider(route.provider)) {
+        const outcome = upstreamResponse.status >= 500 && await shouldRetryCodexPoolAccountQuota(upstreamResponse, options.abortSignal)
+          ? 429 : upstreamResponse.status;
+        releaseRequestOwnedMainOnOutcome(admissionState.authCtx, outcome, route.modelId);
+      }
       // The WS observer is the only plain-main publisher for a WebSocket exchange;
       // a prelude projection carries the prelude snapshot, not fresh evidence.
       // The dispatch claim is authoritative because downstream wrappers can replace the Response.
@@ -602,7 +628,7 @@ export async function deliverPassthroughResponse(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions),
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions),
       });
     }
     if (!upstreamResponse.ok) {
@@ -621,27 +647,28 @@ export async function deliverPassthroughResponse(
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
       if (upstreamResponse.status === 413) {
+        if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
-          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
           : jsonContextOverflowResponse();
       }
       const policyRefusal = rewriteUpstreamPolicyRefusal({
         status: upstreamResponse.status,
         errorText,
         stream: clientRequestedStream,
-        modelId: parsed._responseModelId ?? parsed.modelId,
+        modelId: clientFacingModelText(options.clientModelLabel),
         destinationIsXai: isXaiResponsesDestination(route.provider),
         translatorBudget,
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
-      return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+      return carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
         // Provenance, not inference: `errorText` is empty when the bounded read finds nothing
         // display-safe, and an empty body is exactly what the retryable-429 default fires on.
         replayRefusal: isReplayRefusalResponse(upstreamResponse),
-      });
+      }));
     }
 
     if (options.nativeControl && isNativeControlResponse(upstreamResponse) && upstreamResponse.body) {
@@ -707,7 +734,7 @@ export async function deliverPassthroughResponse(
           upstream,
           terminalRepairPolicy,
           translatorBudget,
-          options.responsesTerminalRepairScheduler,
+          options.responsesTerminalRepairScheduler, logCtx,
         )
         : upstreamResponse.body;
       passthroughSseBody = webSearchBridgePlan
@@ -749,7 +776,7 @@ export async function deliverPassthroughResponse(
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
-                options.responsesTerminalRepairScheduler,
+                options.responsesTerminalRepairScheduler, logCtx,
               ),
               continuation,
             );
@@ -912,7 +939,8 @@ export async function deliverPassthroughResponse(
             providerExecutedCallTypes,
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
-            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive },
+            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive,
+              onRefusal: message => rememberProxyErrorMessage(logCtx, message, { status: 502, type: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE }) },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -1147,7 +1175,7 @@ export async function deliverPassthroughResponse(
           rememberPassthroughResponseChecked(client.terminal.response);
         }
 
-        const jsonHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+        const jsonHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
         jsonHeaders.set("content-type", "application/json");
         return markPreinspectedJsonResponse(new Response(clientJson, {
           status: upstreamResponse.status,
@@ -1415,9 +1443,9 @@ export async function deliverPassthroughResponse(
           }
         })();
         if (undeclared !== undefined) {
-          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
+          return markProxyError(formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(), {
             code: UNDECLARED_TOOL_CALL_ERROR_CODE,
-          });
+          }));
         }
       }
       // Same split as the SSE rewrite: normalization applies whenever a declared name exists,
@@ -1489,7 +1517,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
+          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {
@@ -1536,4 +1564,17 @@ export async function deliverPassthroughResponse(
       status: upstreamResponse.status,
       headers,
     });
+}
+
+/**
+ * Model ids the user configured for the selected provider: its models and retention lists and
+ * default. A provider-owned model hint that names one of them is relayed as the proxy's copy.
+ * Live-discovered ids are not trusted here, because the upstream's own /models answer chose them;
+ * neither is the selection list, which a model preset fills from that same discovered catalog.
+ */
+function providerKnownModels(provider: OcxProviderConfig): string[] {
+  return [
+    ...(provider.models ?? []), ...(provider.retainModels ?? []),
+    ...(provider.defaultModel ? [provider.defaultModel] : []),
+  ];
 }

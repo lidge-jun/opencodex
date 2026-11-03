@@ -90,6 +90,8 @@ modality 和 reasoning metadata；目标显式声明的限制仍然优先，因�
 
 ## 选择策略
 
+无法保留强制 `tool_choice` 的目标会在发送前跳过；如果所有目标都不兼容，则返回说明该限制的错误。判断会考虑仅支持 `auto` 选择的 Chat 模型，以及 OpenAI 虚拟模型实际发送到上游的模型策略。直接 hosted/MCP 选择、`tool_search` 和无效选择值的处理范围请参阅[英文基准说明](/guides/combos/#failover-ordered-primary-and-backups)。
+
 ### 故障切换：按顺序的主目标和备用目标
 
 `failover` 会按配置顺序选择第一个合格目标。当 provider 存在、已启用、未处于冷却中，并且能够满足任何特殊请求约束时，该目标就是合格的。权重和 `stickyLimit` 不影响这种策略。

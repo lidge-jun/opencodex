@@ -1051,7 +1051,6 @@ async function* parseOllamaNativeStream(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const encoder = new TextEncoder();
   const state = streamState(allowParallelToolCalls);
   const issuedIds = issuedToolCallIds ?? new Set<string>();
   let buffer = "";
@@ -1060,15 +1059,20 @@ async function* parseOllamaNativeStream(
 
   const ingest = function* (text: string): Generator<AdapterEvent> {
     if (!text) return;
+    const hasNewline = text.includes("\n");
     buffer += text;
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+    // After draining, the carry contains no newline. Only new text can complete a record.
+    const lines = hasNewline ? buffer.split("\n") : [];
+    if (hasNewline) buffer = lines.pop() ?? "";
     // The safety bound applies to the genuinely retained residual — the incomplete NDJSON record
     // still being assembled — and to each complete record below. It must never depend on the
     // transport read size (one read may carry many valid records) nor transiently charge
     // old + replacement together. On a ceiling violation the old reservation is left in place so
     // the generator's finally releases exactly what is held.
-    const residualBytes = encoder.encode(buffer).byteLength;
+    // TextDecoder emits complete code points; fragment byte counts add without a surrogate fixup.
+    const residualBytes = hasNewline
+      ? Buffer.byteLength(buffer, "utf8")
+      : bufferBytes + Buffer.byteLength(text, "utf8");
     if (residualBytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) {
       throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_SSE_EVENT_BYTES);
     }
@@ -1077,7 +1081,7 @@ async function* parseOllamaNativeStream(
 
     for (const rawLine of lines) {
       const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-      const lineBytes = encoder.encode(line).byteLength;
+      const lineBytes = Buffer.byteLength(line, "utf8");
       if (lineBytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) {
         throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_SSE_EVENT_BYTES);
       }
@@ -1112,7 +1116,7 @@ async function* parseOllamaNativeStream(
       yield* ingest(decoder.decode());
     if (!state.terminal && buffer.length > 0) {
       const rawLine = buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer;
-      const lineBytes = encoder.encode(rawLine).byteLength;
+      const lineBytes = Buffer.byteLength(rawLine, "utf8");
       if (lineBytes > TRANSLATOR_MAX_SSE_EVENT_BYTES) throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_SSE_EVENT_BYTES);
       try {
         // The EOF record keeps its residual charge while it is parsed and consumed — releasing it

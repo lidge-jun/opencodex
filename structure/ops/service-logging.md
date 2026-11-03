@@ -7,6 +7,16 @@ other CLI commands retain their existing format, even with an inherited marker.
 Existing redaction stays in the producers; this adds no request-body capture or
 diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 
+## Combo diagnostics
+
+`src/combos/resolve.ts` and `src/server/responses/core-combo.ts` name combos by their
+position in configuration and targets by position plus the validated provider-id label from
+`src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
+combo aliases, model ids and URLs. `src/combos/request.ts` effort diagnostics retain the
+validated provider and closed effort/capability fields, with no model field. Operational
+selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
+covers failure, wait, last-resort, reprobe and effort diagnostic output.
+
 ## Retention
 
 Startup and once-per-minute checks rotate above 20 MiB. The previous archive

@@ -17,6 +17,10 @@ npm resolver. The resolver replaces all ambient aliases with the captured entrie
 project dotenv cannot supply missing settings or change the captured precedence.
 An older snapshot without a transport map conveys no transport settings, with no
 ambient fallback. Snapshot values are internal inputs, never report or diagnostic fields.
+For orchestrated OpenCodex updates the launcher intercepts plan/apply before desktop
+handoff and boot restoration, resolves Bun without installation, and delegates npm/pnpm
+apply to the Node driver. The [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction) owns admission and verification.
+For `sync`, the launcher acquires the home sync/update mutex before Desktop handoff or Bun launch and holds it until that child exits. A current Bun child reuses the lease only when its recorded live sync holder is its parent and the launcher pid matches the inherited claim; old Desktop CLIs remain protected by the launcher lease.
 Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
 Plan identity also binds a bounded content observation (installContentDigest): a versioned file set
 fixed by the supported npm-global layout — the package manifest, its declared bin/codex.js
@@ -412,7 +416,13 @@ inherit an earlier async verdict. Ordinary atomic secret-file publication and na
 retain their synchronous leaf contracts; the nonblocking guarantee covers recovery admission. CLI,
 machine API, restart and Remote Workspace callers use the async
 entry points. Runtime publication rechecks selection inputs, cache epoch, cancellation and caller
-currentness after recovery. Codex feature-setting callers acquire admission before their synchronous
+currentness after recovery. Automatic v1 injection uses the same async admission before its config
+lock when the global v2 flag needs disabling. Its synchronous feature-transition commit permits
+nested runtime-pin writes while excluding the update worker; already-v1 no-ops acquire no lease,
+and a newly enabled flag without admission refuses retryably before spawning.
+The injection releases admission after config commit or rollback, including config-lock acquisition
+failure, before its history worker starts. The feature transition retains the shared artifact preimage.
+Codex feature-setting callers acquire admission before their synchronous
 transition; management keeps the lease across config-root hardening, then rechecks its mode plan and
 commits in the existing no-await callback. Refusal precedes combined setting writes and returns a
 retryable `codex_cli_selection_busy` response. Diagnostics classify a held async parent by its exact
@@ -492,6 +502,11 @@ documented residual it always was.
 `src/cli/codex-cli-update.ts` records confirmed CLI apply in that ledger and exposes `status <job-id>` from the same protected record, without requiring a GUI token. `src/server/management/codex-cli-update-routes.ts` exposes a proof-bound read-only plan, confirmed human dashboard session (`hasHumanDashboardSession`) plus trusted-loopback apply admission, and authenticated status. Plan and job reads use ordinary management admission. HTTP apply returns after durable admission; disconnect does not cancel the worker. Dashboard display data is never accepted back as a candidate, prefix, executable or managed-selection attestation. There is no dashboard job UI in this contract. `tests/server/persistent-dashboard-consent.test.ts` covers management admission and the apply service boundary.
 
 On Windows, `src/codex/cli-update-job-store-windows.ts` maps the same ledger contract onto NTFS handle semantics and the public admit/read/finish API in `src/codex/cli-update-job.ts` dispatches to it asynchronously. Each ancestor from the volume root is opened relative to its already-held parent — never a re-parsed path — and refused on any reparse attribute, then evaluated under the "trusted-ancestry" ACL policy (owner is the serving token or SYSTEM/Administrators/TrustedInstaller; untrusted grantees may hold read and, on admin-owned ancestors only, broad create-only rights). The config-root parent and a pre-existing config root are verified under the "write-private" policy and are never rehardened; only a directory the call itself creates is icacls-hardened and held to the strict "private" rule. File identity is the volume serial plus 128-bit file ID with single link and no pending delete, the dev:ino analog. Ledger writes go through a private hardened temp that is byte/ACL/identity-verified, renamed while its handle is held, re-read through the published name, and flushed at the directory. The admission mutex is a mkdir lock plus an owner record released only while both held pins still show this call identity and content, so a leftover lock blocks later admission exactly like POSIX. ACL snapshots are taken per phase through the shared bounded PowerShell read in `src/lib/windows-owner-acl.ts` (async variant), not per path. Pins bind each object to its verified state for the operation and the private DACL confines writers, but this is not a proof against concurrent mutation by the serving account or an elevated process, which sit inside the trust boundary as on POSIX. The backend is x64-only; cross-account (other-SID) and ARM64 behavior are unverified.
+
+The existing-ancestor policy ignores inherit-only templates; it never authorizes creating a child
+under that ancestor. Every direct creation parent uses "write-private" or the stricter "private"
+policy, rejecting untrusted inherit-only write/create grants before mkdir. This preserves a protected descendant under a volume
+root with broad child templates while refusing the same template on the actual creation parent.
 
 Apply-authority disposal requires successful identity/token-fenced delete-on-close of both original
 lock objects, zero remaining pins and no staging. A replacement at the pathname neither proves nor

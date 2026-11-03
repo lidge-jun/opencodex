@@ -626,3 +626,102 @@ describe("preview and final authentication agree on the native-main read fence",
     expect(upstreamAuth[0]).not.toBe("Bearer physical-main-token");
   });
 });
+
+test("subagent preview evaluates affinity separately for Reserve candidates", async () => {
+  const routing = await import("../../src/codex/routing");
+  const auth = await import("../../src/codex/auth-context");
+  const { bindThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const config = providerConfig({ codexDesktopAuthless: true, codexPool: { requestOwnedAffinity: true }, subagentModelFallback: ["gpt-reserve", "gpt-5.5"] });
+  const headers = codexHeaders("caller-account", { "session-id": "preview-session", "thread-id": "preview-thread" });
+  config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const authOptions = { requestScopedMainCredential: true, modelId: PREFERRED_MODEL, primeCodexPoolQuotas: async () => {} };
+  const first = await auth.resolveCodexAuthContext(headers, config, "pool", authOptions);
+  const second = await auth.resolveCodexAuthContext(headers, config, "pool", authOptions);
+  expect(first.affinityDecision?.move).toBe("new_bind");
+  expect(second.affinityDecision?.move).toBe("reused");
+  const key = first.affinityKey!;
+  expect(key).toBe(auth.codexRequestAffinityKey(headers, config, config, { requestScopedMainCredential: true }));
+  config.pausedCodexAccountIds = [];
+  bindThreadAffinity(key, "pool-a", NOW, "reserve");
+  noteSubagentModelFailure(PREFERRED_MODEL, "429", config, "pool-a", NOW);
+  noteSubagentModelFailure("gpt-reserve", "429", config, MAIN_CODEX_ACCOUNT_ID, NOW);
+  noteSubagentModelFailure("gpt-reserve", "429", config, "pool-a", NOW);
+  const observed: Array<{ model: string | undefined; key: string | null; account: string | null }> = [];
+  const original = routing.previewCodexAccountForRequest;
+  const spy = spyOn(routing, "previewCodexAccountForRequest").mockImplementation((thread, cfg, now, scope, opts, model, lineage) => {
+    const account = original(thread, cfg, now, scope, opts, model, lineage);
+    observed.push({ model, key: thread, account });
+    return account;
+  });
+  globalThis.fetch = (async () => completedCanonicalSse()) as typeof fetch;
+  try {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await postSpawn(config, { admission: { kind: "loopback", source: "loopback" } }, headers, readableInput(), PREFERRED_MODEL, logCtx);
+    expect(response.status).toBe(200);
+    expect(observed.some(row => row.model === "gpt-reserve" && row.key === null)).toBe(true);
+    expect(observed.some(row => row.model === "gpt-5.5" && row.key === key && row.account === "pool-a")).toBe(true);
+    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBe("gpt-5.5");
+  } finally { spy.mockRestore(); }
+});
+
+test("recovery preview reads the recovered ownership key and lineage", async () => {
+  const routing = await import("../../src/codex/routing");
+  const auth = await import("../../src/codex/auth-context");
+  const coreAuth = await import("../../src/server/responses/core-auth");
+  const { recordCodexThreadLineage, clearCodexThreadLineageForTests } = await import("../../src/codex/lineage");
+  const { bindThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const config = providerConfig({ defaultProvider: "xai", agentTaskRecovery: { enabled: true }, codexPool: { requestOwnedAffinity: true }, subagentModelFallback: ["gpt-5.5"] });
+  const headers = codexHeaders("caller-account", { "session-id": "recovery-session", "thread-id": "recovery-thread" });
+  clearCodexThreadLineageForTests();
+  config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const authOptions = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+  const first = await auth.resolveCodexAuthContext(headers, config, "pool", authOptions);
+  const second = await auth.resolveCodexAuthContext(headers, config, "pool", authOptions);
+  expect(first.affinityDecision?.move).toBe("new_bind");
+  expect(second.affinityDecision?.move).toBe("reused");
+  const ownedKey = first.affinityKey!;
+  config.pausedCodexAccountIds = [];
+  const lineage = recordCodexThreadLineage(headers)!;
+  const rawKey = auth.codexPoolAffinityKey(headers)!;
+  bindThreadAffinity(rawKey, MAIN_CODEX_ACCOUNT_ID, NOW, "shared");
+  noteSubagentModelFailure("gpt-5.5", "429", config, MAIN_CODEX_ACCOUNT_ID, NOW);
+  noteSubagentModelFailure("gpt-5.5", "429", config, "pool-a", NOW);
+  let recovered = false;
+  const observed: Array<{ key: string | null; model: string | undefined; lineage: unknown; account: string | null; recovered: boolean }> = [];
+  const originalPreview = routing.previewCodexAccountForRequest;
+  const preview = spyOn(routing, "previewCodexAccountForRequest").mockImplementation((key, cfg, now, scope, opts, model, hint) => {
+    const account = originalPreview(key, cfg, now, scope, opts, model, hint);
+    observed.push({ key, model, lineage: hint, account, recovered });
+    return account;
+  });
+  // The request-level harness cannot naturally reroute from a readable canonical candidate to a
+  // recovery-required provider: ciphertext restricts the first fallback pass to trusted routes.
+  // Switch the credential-domain result at the recovery boundary to exercise the real closure
+  // with the headers and ownership that a reroute would provide.
+  const originalDomainHeaders = coreAuth.codexRouteCredentialDomainHeaders;
+  const domainHeaders = spyOn(coreAuth, "codexRouteCredentialDomainHeaders").mockImplementation((...args) => recovered ? new Headers(headers) : originalDomainHeaders(...args));
+  const originalOwnership = coreAuth.codexRouteCredentialOwnership;
+  const ownershipCalls: Array<{ recovered: boolean; hasAuth: boolean }> = [];
+  const ownership = spyOn(coreAuth, "codexRouteCredentialOwnership").mockImplementation((...args) => { ownershipCalls.push({ recovered, hasAuth: args[0].has("authorization") }); return { ...originalOwnership(...args), requestScopedMainCredential: recovered }; });
+  globalThis.fetch = (async (input, init) => {
+    if (typeof init?.body === "string" && init.body.includes("capture_assignment")) {
+      recovered = true;
+      resetSubagentModelFallbackStateForTests();
+      noteSubagentModelFailure("xai/grok-4.5", "429", config, null, NOW);
+      return new Response(recoverySse("Recovered assignment"), { headers: { "content-type": "text/event-stream" } });
+    }
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    return url.hostname === "chatgpt.com" ? completedCanonicalSse() : completedResponses(FALLBACK_MODEL);
+  }) as typeof fetch;
+  try {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await postSpawn(config, {}, headers, encryptedInput(), "xai/grok-4.5", logCtx);
+    expect(response.status).toBe(200);
+    expect(recovered).toBe(true);
+    expect(observed.some(row => !row.recovered && row.key === rawKey && row.lineage !== undefined && row.account === MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+    expect(ownershipCalls).toContainEqual({ recovered: true, hasAuth: true });
+    expect(observed.filter(row => row.recovered).map(row => ({ model: row.model, owned: row.key === ownedKey, raw: row.key === rawKey, hasLineage: row.lineage !== undefined, account: row.account }))).toContainEqual({ model: "gpt-5.5", owned: true, raw: false, hasLineage: false, account: "pool-a" });
+    expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo).toBe("gpt-5.5");
+    expect(lineage.conversationKey).toBe(rawKey);
+  } finally { preview.mockRestore(); ownership.mockRestore(); domainHeaders.mockRestore(); clearCodexThreadLineageForTests(); }
+});
