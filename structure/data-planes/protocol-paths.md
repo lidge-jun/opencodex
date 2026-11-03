@@ -225,7 +225,7 @@ the wire-silence heartbeat and live-destination stall watchdog ([timeout policy]
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
 (ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
-`anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
+`anthropicIncompleteOutcome`, `anthropicFailedStatus`, `isContextOverflowError`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
 the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 

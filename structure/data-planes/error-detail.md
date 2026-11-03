@@ -208,7 +208,12 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
-`src/lib/upstream-retry.ts` owns the retry constructors.
+`src/lib/upstream-retry.ts` owns the retry constructors. `fetchWithTransientRetry` does not resend a
+transient-status response whose body is a definite context-overflow verdict
+(`isDefiniteContextOverflow`, #8127): the same input is refused the same way, so it is returned for the
+caller to classify. The check reads a clone of at most 16 KiB within 250 ms, so the caller still receives
+the untouched body, a slow, endless or event-stream body keeps the normal retry, and a throttle worded only
+as "too many tokens" is still retried.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other

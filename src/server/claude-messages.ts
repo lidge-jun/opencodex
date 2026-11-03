@@ -1303,7 +1303,7 @@ async function handleClaudeMessagesWithBudget(
       } catch {
         // A plain-text gateway body carries the same verdict with no envelope to read a code from.
         const plain = text.trim().slice(0, 400);
-        contextError = Boolean(plain) && ![401, 403, 429].includes(response.status)
+        contextError = Boolean(plain) && ![401, 402, 403, 429].includes(response.status)
           && isContextOverflowError({}, plain);
         if (text) message = contextError ? plain : `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }

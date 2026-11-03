@@ -155,6 +155,11 @@ describe("translated Messages route end to end", () => {
     expect(error.message).not.toContain("upstream error (500)");
   });
 
+  test.each([402, 429])("a plain-text HTTP %i that mentions the context window keeps its status", async status => {
+    const { response } = await send(() => new Response(OVERFLOW, { status }));
+    expect(response.status).toBe(status);
+  });
+
   test("a plain-text 500 that is not an overflow keeps its retryable class", async () => {
     const { response } = await send(() => new Response("bad gateway", { status: 500 }));
     expect(response.status).toBe(529);
