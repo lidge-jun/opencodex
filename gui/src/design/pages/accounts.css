@@ -215,6 +215,27 @@
 .acc-settings .acc-danger-btn { color: var(--ocx-danger); }
 .acc-settings .acc-danger-btn:hover:not(:disabled) { background: var(--ocx-danger-soft); color: var(--ocx-danger); border-color: transparent; }
 
+/* Quota meters: a native <meter> drawn as a hairline track with a rounded fill. The fill colour
+   comes from --acc-meter-fill, which the component switches to warning or danger. Each engine's
+   pseudo-elements sit in their own rule, since one unknown selector drops the whole rule. */
+.acc-quota-meter {
+  --acc-meter-track: color-mix(in oklab, var(--ocx-fg) 7%, transparent);
+  --acc-meter-fill: color-mix(in oklab, var(--ocx-fg) 80%, transparent);
+  appearance: none;
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--acc-meter-track);
+}
+.acc-quota-meter::-webkit-meter-bar { height: 100%; border: 0; border-radius: 999px; background: var(--acc-meter-track); }
+.acc-quota-meter::-webkit-meter-optimum-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-webkit-meter-suboptimum-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-webkit-meter-even-less-good-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-moz-meter-bar { border-radius: 999px; background: var(--acc-meter-fill); }
+
 /* Meters: credits slot drawn as one more meter cell. */
 .acc-meters { padding: 0; }
 .acc-meters.quota-compact--pending { height: auto; min-height: 0; max-height: none; overflow: visible; }

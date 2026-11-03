@@ -72,14 +72,13 @@ export default function AccountQuotaMeters({ quota, plan, threshold, t, pending 
                   {exhausted ? t("quota.limitReached") : t("accountsV2.left", { pct: left })}
                 </span>
               </span>
-              <span role="meter" aria-label={row.limitLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}
+              <meter aria-label={row.limitLabel} min={0} max={100} value={left}
                 aria-valuetext={`${t("accountsV2.left", { pct: left })} · ${usedLabel}`}
-                className={cn("relative block w-full overflow-hidden rounded-full bg-fg/[0.07]", size === "hero" ? "h-2" : "h-1.5")}>
-                <span className={cn(
-                  "block h-full rounded-full transition-[width] duration-300 ease-soft motion-reduce:transition-none",
-                  exhausted ? "bg-danger" : warn ? "bg-warning" : "bg-fg/80",
-                )} style={{ width: `${left}%` }} />
-              </span>
+                className={cn(
+                  "acc-quota-meter",
+                  size === "hero" ? "h-2" : "h-1.5",
+                  exhausted ? "[--acc-meter-fill:var(--color-danger)]" : warn ? "[--acc-meter-fill:var(--color-warning)]" : undefined,
+                )} />
               {reset && <span className="truncate text-[11.5px] leading-4 text-fg-subtle tabular-nums">{reset}</span>}
             </div>
             {row.windowKey === "weekly" && afterWeekly}
