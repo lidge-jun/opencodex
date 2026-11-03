@@ -33,7 +33,6 @@ import {
 } from "./shim-fingerprint";
 import {
   fileErrorCode,
-  readState,
   readStateResult,
   stateFiles,
   statePath,
@@ -61,10 +60,12 @@ import { ownedWrapperFingerprint, windowsShimContent, wrapperInodeIsOurs, writeS
 import {
   checkLegacyShimRecord,
   hostShimPathApi,
+  assertLegacyShimMutationAllowed,
   legacyShimBackupPath,
   legacyShimDirectoryUnchanged,
   legacyShimFilesProblem,
   legacyShimManualRestoreMessage,
+  setLegacyShimMutationGuard,
 } from "./shim-legacy-record";
 
 export { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim } from "./shim-templates";
@@ -339,6 +340,7 @@ function primaryState(files: ShimFileState[]): ShimState {
 }
 
 function replaceOwnedBackup(sourcePath: string, backupPath: string): void {
+  assertLegacyShimMutationAllowed();
   const oldBackupPath = `${backupPath}.old-${process.pid}`;
   if (existsSync(oldBackupPath)) unlinkSync(oldBackupPath);
   if (existsSync(backupPath)) renameSync(backupPath, oldBackupPath);
@@ -462,6 +464,7 @@ function rollbackGuardedRefresh(journal: readonly GuardedRefreshJournalEntry[]):
   const rollbackErrors: Error[] = [];
   const attempt = (operation: () => void): void => {
     try {
+      assertLegacyShimMutationAllowed();
       operation();
     } catch (error) {
       rollbackErrors.push(error instanceof Error ? error : new Error(String(error)));
@@ -535,11 +538,13 @@ function applyGuardedRefreshTransaction(
     };
     journal.push(entry);
     try {
+      assertLegacyShimMutationAllowed();
       if (existsSync(operation.file.backupPath)) {
         entry.stagedOldBackupPath = `${operation.file.backupPath}.autorestore-${transactionId}-${index}`;
         if (existsSync(entry.stagedOldBackupPath)) unlinkSync(entry.stagedOldBackupPath);
         renameSync(operation.file.backupPath, entry.stagedOldBackupPath);
       }
+      assertLegacyShimMutationAllowed();
       renameSync(operation.sourcePath, operation.file.backupPath);
       entry.replacementMovedToBackup = true;
       const movedReplacement = stableShimPathProbe(operation.file.backupPath);
@@ -777,12 +782,19 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[], runtime?: Dur
   };
 }
 
-function installCodexShimInternal(options: InstallCodexShimInternalOptions): { installed: boolean; message: string; refused?: boolean } {
-  const existing = readState();
-  if (existing) {
-    const legacy = checkLegacyShimRecord(existing);
-    if (!legacy.ok) return { installed: false, refused: true, message: legacyShimManualRestoreMessage(legacy.reason, statePath()) };
-  }
+type InstallResult = { installed: boolean; message: string; refused?: boolean };
+
+function installCodexShimInternal(options: InstallCodexShimInternalOptions): InstallResult {
+  const read = readStateResult();
+  // A record that is present but unreadable is not "no record": a fresh install would overwrite it.
+  if (read.present && !read.state) return { installed: false, refused: true, message: legacyShimManualRestoreMessage(read.warning ? "the shim record is unsafe to read" : "the shim record is unreadable", statePath()) };
+  const legacy = read.state ? checkLegacyShimRecord(read.state) : null;
+  if (legacy && !legacy.ok) return { installed: false, refused: true, message: legacyShimManualRestoreMessage(legacy.reason, statePath()) };
+  const release = setLegacyShimMutationGuard(legacy);
+  try { return installCodexShimFromState(options, read.state); } finally { release(); }
+}
+
+function installCodexShimFromState(options: InstallCodexShimInternalOptions, existing: ShimState | null): InstallResult {
   const filesBefore = existing ? stateFiles(existing) : [];
   if (filesBefore.length > 0 && filesBefore.every(file => {
     if (file.preserveOnly) return existsSync(file.backupPath) && !existsSync(file.originalPath);
@@ -878,6 +890,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   // The writer obeys the rules every later restore checks, so it never records a layout it would refuse.
   const fresh = checkLegacyShimRecord(primaryState(targets));
   if (!fresh.ok) return { installed: false, refused: true, message: `Refusing to install the Codex autostart shim: ${fresh.reason}.` };
+  setLegacyShimMutationGuard(fresh); // released with the caller's guard
 
   for (const target of targets) {
     if (existsSync(target.backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
@@ -893,6 +906,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     freshJournal.push(entry);
     try {
       if (existsSync(target.originalPath)) {
+        assertLegacyShimMutationAllowed();
         renameSync(target.originalPath, target.backupPath);
         entry.originalMovedToBackup = true;
         // Metadata-only, and before the content probe: an empty or otherwise
@@ -1124,8 +1138,11 @@ function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
         const recheck = checkLegacyShimRecord(state);
         if (!recheck.ok) return { status: "ineligible", message: legacyShimManualRestoreMessage(recheck.reason, statePath()) };
         const realFor = (path: string) => { const file = files.find(entry => entry.wrapperPath === path)!; return file.realPath ?? file.backupPath; };
-        return refreshAdmittedWindowsShims(obsoleteShimProbes, currentShimProbes, path => windowsShimContent(path, realFor(path), runtime))
-          ? { status: "restored", message: `Upgraded Codex autostart shim at ${[...obsoleteShimProbes.keys()].join(", ")}.` } : { status: "deferred" };
+        const release = setLegacyShimMutationGuard(recheck);
+        try {
+          return refreshAdmittedWindowsShims(obsoleteShimProbes, currentShimProbes, path => windowsShimContent(path, realFor(path), runtime))
+            ? { status: "restored", message: `Upgraded Codex autostart shim at ${[...obsoleteShimProbes.keys()].join(", ")}.` } : { status: "deferred" };
+        } finally { release(); }
       }
       const result = refreshObsoleteUnixShims(files);
       return result.installed

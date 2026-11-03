@@ -59,10 +59,6 @@ function nameKey(path: string, api: PlatformPath): string {
   return api.basename(path).toLowerCase();
 }
 
-function sameDirectory(left: string, right: string, api: PlatformPath): boolean {
-  return api === win32 ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
-
 /** Lexical validation: shape, platform, and the exact layout an OpenCodex install writes. */
 export function validateLegacyWindowsShimRecord(value: unknown, api: PlatformPath = hostShimPathApi()): LegacyShimRecordVerdict {
   const fail = (reason: string): LegacyShimRecordVerdict => ({ ok: false, reason });
@@ -103,7 +99,8 @@ export function validateLegacyWindowsShimRecord(value: unknown, api: PlatformPat
     }
   }
   const directory = api.dirname(files[0]!.wrapperPath);
-  if (files.some(file => !sameDirectory(api.dirname(file.wrapperPath), directory, api))) {
+  // Exact spelling: Windows directories can be case-sensitive, so differently cased names may differ.
+  if (files.some(file => api.dirname(file.wrapperPath) !== directory)) {
     return fail("the launchers are not in one directory");
   }
   if (new Set(files.map(file => nameKey(file.wrapperPath, api))).size !== files.length) return fail("a launcher is listed twice");
@@ -111,7 +108,7 @@ export function validateLegacyWindowsShimRecord(value: unknown, api: PlatformPat
 }
 
 export interface LegacyShimDiskDeps {
-  lstat?: (path: string) => { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number | bigint };
+  lstat?: (path: string) => { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number | bigint; nlink?: number | bigint };
   realpath?: (path: string) => string;
   readPrefix?: (path: string, bytes: number) => string;
 }
@@ -167,12 +164,13 @@ export function resolveLegacyShimDirectory(recordedDirectory: string, api: Platf
   return { ok: true, resolved };
 }
 
-type EntryShape = "absent" | "file" | "other";
+type EntryShape = "absent" | "file" | "shared" | "other";
 
 function entryShape(path: string, lstat: NonNullable<LegacyShimDiskDeps["lstat"]>): { shape: EntryShape; size: number } {
   try {
     const entry = lstat(path);
     if (entry.isSymbolicLink() || !entry.isFile()) return { shape: "other", size: 0 };
+    if (Number(entry.nlink ?? 1) > 1) return { shape: "shared", size: Number(entry.size) };
     return { shape: "file", size: Number(entry.size) };
   } catch (error) {
     if (fileErrorCode(error) === "ENOENT") return { shape: "absent", size: 0 };
@@ -186,12 +184,14 @@ export function legacyShimFilesProblem(files: readonly ShimFileState[], resolved
   const readPrefix = deps.readPrefix ?? defaultReadPrefix;
   for (const file of files) {
     for (const launcher of new Set([file.wrapperPath, file.originalPath])) {
-      if (entryShape(api.join(resolvedDirectory, api.basename(launcher)), lstat).shape === "other") return "a launcher is not a regular file";
+      const shape = entryShape(api.join(resolvedDirectory, api.basename(launcher)), lstat).shape;
+      if (shape === "other") return "a launcher is not a regular file";
+      if (shape === "shared") return "a launcher shares its file with another path";
     }
     const backupPath = api.join(resolvedDirectory, api.basename(file.backupPath));
     const backup = entryShape(backupPath, lstat);
     if (backup.shape === "absent") continue;
-    if (backup.shape === "other" || backup.size === 0) return "a backup is not a non-empty regular file";
+    if (backup.shape !== "file" || backup.size === 0) return "a backup is not a non-empty regular file";
     try {
       if (readPrefix(backupPath, BACKUP_MARKER_SCAN_BYTES).includes(SHIM_MARKER)) return "a backup is itself a shim";
     } catch {
@@ -222,6 +222,29 @@ export function checkLegacyShimRecord(value: unknown, api: PlatformPath = hostSh
 export function legacyShimDirectoryUnchanged(recordedDirectory: string, resolvedDirectory: string, api: PlatformPath = hostShimPathApi(), deps: LegacyShimDiskDeps = {}): boolean {
   const now = resolveLegacyShimDirectory(recordedDirectory, api, deps);
   return now.ok && now.resolved === resolvedDirectory;
+}
+
+let mutationGuard: (() => void) | null = null;
+
+/**
+ * Binds every later Windows shim mutation to a validated record until the returned release runs:
+ * each rename, link, unlink and write first checks that the recorded directory still resolves to
+ * the directory that was validated.
+ */
+export function setLegacyShimMutationGuard(check: Extract<LegacyShimCheck, { ok: true }> | null): () => void {
+  const previous = mutationGuard;
+  mutationGuard = check && (() => {
+    const now = resolveLegacyShimDirectory(check.recordedDirectory);
+    if (!now.ok || now.resolved !== check.resolvedDirectory) {
+      throw new Error("Codex shim launcher directory changed after validation; refusing to modify it");
+    }
+  });
+  return () => { mutationGuard = previous; };
+}
+
+/** Throws when a guarded Windows shim operation would act outside its validated directory. */
+export function assertLegacyShimMutationAllowed(): void {
+  mutationGuard?.();
 }
 
 export function legacyShimManualRestoreMessage(reason: string, statePath: string, partial = false): string {

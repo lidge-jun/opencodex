@@ -21,9 +21,13 @@ import {
   legacyShimBackupPath,
   legacyShimFilesProblem,
   resolveLegacyShimDirectory,
+  setLegacyShimMutationGuard,
   validateLegacyWindowsShimRecord,
 } from "../../src/codex/shim-legacy-record";
 import { buildWindowsCodexShim } from "../../src/codex/shim-templates";
+import { stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
+import { writeShim } from "../../src/codex/shim-wrapper-write";
 import { setUninstallElevationProbeForTests, uninstallRunsElevated } from "../../src/lib/config-ownership-removal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -57,6 +61,7 @@ describe("legacy Windows shim record layout (every OS)", () => {
     ["a side-by-side original with another name", { platform: "win32", wrapperPath: at("codex.cmd"), originalPath: at("other.exe"), backupPath: at("other.opencodex-real.exe") }],
     ["a side-by-side entry in a list", { platform: "win32", wrappers: [{ wrapperPath: at("codex.cmd"), originalPath: at("codex.exe"), backupPath: at("codex.opencodex-real.exe") }, inPlace("codex.ps1")] }],
     ["launchers in two directories", { platform: "win32", wrappers: [inPlace("codex.cmd"), inPlace("codex.ps1", "C:\\Tools")] }],
+    ["launchers in directories that differ only by case", { platform: "win32", wrappers: [inPlace("codex.cmd"), inPlace("codex.ps1", DIR.toUpperCase())] }],
     ["a launcher listed twice", { platform: "win32", wrappers: [inPlace("codex.cmd"), inPlace("CODEX.cmd")] }],
     ["too many launchers", { platform: "win32", wrappers: [inPlace("codex.cmd"), inPlace("codex.ps1"), inPlace("codex"), inPlace("codex.cmd")] }],
     ["an empty launcher list", { platform: "win32", wrappers: [] }],
@@ -313,6 +318,62 @@ describe("other Windows shim consumers refuse an invalid record", () => {
     expect(diagnoseCodexShim().summary).toContain("needs manual restore");
     expect(snapshot()).toEqual(before);
   });
+
+  test("explicit install over an unreadable record is refused and keeps the record", () => {
+    const statePath = join(home, "codex-shim.json");
+    fs.writeFileSync(statePath, "{broken");
+    const before = snapshot();
+    asWindows();
+    const result = installCodexShim();
+    expect(result).toMatchObject({ installed: false, refused: true });
+    expect(result.message).toContain("needs manual restore");
+    expect(snapshot()).toEqual(before);
+  });
+
+  test.skipIf(process.platform === "win32")("a side-by-side launcher that is a hard link to another file is never written through", () => {
+    const victim = join(elsewhere, "victim.cmd");
+    fs.writeFileSync(victim, SHIM(join(elsewhere, "x")));
+    const wrapperPath = join(bin, "codex.cmd"), originalPath = join(bin, "codex.exe");
+    fs.linkSync(victim, wrapperPath);
+    fs.writeFileSync(originalPath, NATIVE);
+    fs.writeFileSync(join(home, "codex-shim.json"), JSON.stringify({ platform: "win32", wrapperPath, originalPath, backupPath: legacyShimBackupPath(originalPath) }));
+    const before = snapshot();
+    asWindows();
+    expect(installCodexShim()).toMatchObject({ installed: false, refused: true });
+    expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("ineligible");
+    expect(snapshot()).toEqual(before);
+    // The writer itself refuses a shared or linked wrapper path even without a record.
+    expect(() => writeShim(wrapperPath, originalPath)).toThrow("not a private regular file");
+    expect(fs.readFileSync(victim, "utf8")).toBe(before[victim]!);
+  });
+});
+
+describe("mutations after validation stay in the validated directory", () => {
+  test("a guarded refresh or write refuses once the recorded directory resolves elsewhere", () => {
+    const link = join(root, "linked-npm");
+    fs.symlinkSync(bin, link, linkType);
+    seed(elsewhere);
+    const seeded = seed(link);
+    const checked = checkLegacyShimRecord(JSON.parse(fs.readFileSync(seeded.statePath, "utf8")));
+    if (!checked.ok) throw new Error(checked.reason);
+    const observed = stableShimPathProbe(seeded.wrapperPath)!;
+    const release = setLegacyShimMutationGuard(checked);
+    try {
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(elsewhere, link, linkType);
+      const before = snapshot();
+      asWindows();
+      // The refresh either refuses outright or reports that nothing was published; it never moves a file.
+      let published: unknown;
+      try { published = refreshObsoleteWindowsShim(seeded.wrapperPath, observed, () => "current wrapper"); } catch (error) { published = error; }
+      expect(published).not.toBe(true);
+      expect(() => writeShim(join(link, "codex.ps1"), seeded.backupPath)).toThrow("changed after validation");
+      Object.defineProperty(process, "platform", platform);
+      expect(snapshot()).toEqual(before);
+    } finally {
+      release();
+    }
+  });
 });
 
 describe("on-disk checks (every OS, host filesystem)", () => {
@@ -334,6 +395,9 @@ describe("on-disk checks (every OS, host filesystem)", () => {
     const files = [{ wrapperPath: seeded.wrapperPath, originalPath: seeded.originalPath, backupPath: seeded.backupPath }];
     const dir = fs.realpathSync.native(bin);
     expect(legacyShimFilesProblem(files, dir)).toBeNull();
+    fs.linkSync(seeded.wrapperPath, join(elsewhere, "shared.cmd"));
+    expect(legacyShimFilesProblem(files, dir)).toContain("shares its file");
+    fs.unlinkSync(join(elsewhere, "shared.cmd"));
     fs.writeFileSync(seeded.backupPath, "");
     expect(legacyShimFilesProblem(files, dir)).toContain("backup");
     fs.unlinkSync(seeded.backupPath);

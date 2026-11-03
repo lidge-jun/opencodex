@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, openSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { sameFingerprintAfterRename, sameStableShimPathProbe, shimPathFingerprint, stableShimPathProbe, type StableShimPathProbe } from "./shim-fingerprint";
+import { assertLegacyShimMutationAllowed } from "./shim-legacy-record";
 
 /**
  * Identity of a directory entry: device, inode and whether the entry is itself a symbolic link.
@@ -52,6 +53,7 @@ function release(held: HeldFile | null): void {
 
 /** Create `path` exclusively (never through an existing entry or link), write it, and keep it open. */
 function createExclusive(path: string, content: string): HeldFile {
+  assertLegacyShimMutationAllowed();
   const flags = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL
     | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW);
   const fd = openSync(path, flags, 0o644);
@@ -91,6 +93,7 @@ function holdExisting(path: string): HeldFile | null {
  * source nor its target belongs to an independent later publisher and stays.
  */
 function linkExpected(source: string, destination: string, expected: EntryIdentity): "published" | "occupied" | "refused" {
+  assertLegacyShimMutationAllowed();
   try {
     linkSync(source, destination);
   } catch (error) {
@@ -149,7 +152,7 @@ export function refreshObsoleteWindowsShim(
   let moved: HeldFile | null = null;
   let stage: HeldFile | null = null;
   const discard = (path: string, held: HeldFile | null): void => {
-    if (held && entryIs(path, held.identity)) { try { unlinkSync(path); } catch { /* already gone */ } }
+    if (held && entryIs(path, held.identity)) { try { assertLegacyShimMutationAllowed(); unlinkSync(path); } catch { /* already gone, or the directory moved */ } }
   };
   /**
    * Put the moved wrapper back only onto an empty path, and only while the aside is still it. If the
@@ -159,11 +162,12 @@ export function refreshObsoleteWindowsShim(
   const restoreAside = (): void => {
     if (!moved || existsSync(wrapperPath) || !entryIs(aside, moved.identity)) return;
     if (linkExpected(aside, wrapperPath, moved.identity) === "published") { discard(aside, moved); return; }
-    if (!existsSync(wrapperPath) && entryIs(aside, moved.identity)) { try { renameSync(aside, wrapperPath); } catch { /* the aside copy stays recoverable */ } }
+    if (!existsSync(wrapperPath) && entryIs(aside, moved.identity)) { try { assertLegacyShimMutationAllowed(); renameSync(aside, wrapperPath); } catch { /* the aside copy stays recoverable */ } }
   };
 
   // Never displace a working wrapper on a filesystem that cannot publish its replacement.
   if (!hardLinksWork(dirname(wrapperPath))) return false;
+  assertLegacyShimMutationAllowed();
   try { renameSync(wrapperPath, aside); } catch { return false; }
   try {
     const movedFingerprint = shimPathFingerprint(aside);
@@ -172,7 +176,7 @@ export function refreshObsoleteWindowsShim(
       // Not the observed wrapper: hand the path back to whatever was moved, untouched.
       const foreign = entryIdentity(aside);
       if (foreign && !existsSync(wrapperPath) && linkExpected(aside, wrapperPath, foreign) === "published" && entryIs(aside, foreign)) {
-        try { unlinkSync(aside); } catch { /* the restored link keeps the content */ }
+        try { assertLegacyShimMutationAllowed(); unlinkSync(aside); } catch { /* the restored link keeps the content */ }
       }
       return false;
     }
