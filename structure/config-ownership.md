@@ -38,8 +38,11 @@ then deletes the manifest and owner marker under the lock and removes the lock f
   the snapshot and removed, or refused; one that arrives after the metadata is gone records nothing
   and its file is reported as a residual path.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
-  keep refusing, and the next `ocx uninstall` finishes from the same manifest.
-- Uninstall deletes the manifest before the owner marker. If it stops after that (a crash, or a lock
+  keep refusing, and the next `ocx uninstall` finishes from the same manifest. Under the lock it also
+  removes manifest temporary files a stopped write left behind.
+- Creation writes the manifest before the owner marker and uninstall deletes them in the reverse
+  order, so a root holding only the owner marker is always a stopped uninstall, never a home being
+  created. If uninstall stops after deleting the manifest (a crash, or a lock
   file Windows keeps because another process holds it open), a rerun that finds only a valid owner
   marker and lock files removes them and the root. Any other file next to them is still refused.
 - Callers that create a file only after registering it skip that file on a refusal: the restart

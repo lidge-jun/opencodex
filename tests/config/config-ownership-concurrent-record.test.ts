@@ -254,3 +254,29 @@ describe("upgraded homes near the manifest byte limit (#8093)", () => {
     expect(removeOwnedConfigState(dir).status).toBe("refused");
   }));
 });
+
+describe("interrupted metadata writes (#8093)", () => {
+  test("a manifest write that stopped before its rename does not block uninstall", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const temp = join(dir, CONFIG_UNINSTALL_MANIFEST + ".4242." + crypto.randomUUID() + ".tmp");
+    writeFileSync(temp, "{}");
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+
+  test("a home whose creation wrote the manifest but not yet the owner marker is refused untouched", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    // Creation writes the manifest first, so this is the in-progress state; uninstall's own
+    // leftover state is the reverse (owner marker without manifest).
+    removeTreeWithRetry(join(dir, ".opencodex-owner.json"));
+    removeTreeWithRetry(join(dir, CONFIG_OWNERSHIP_LOCK));
+    expect(removeOwnedConfigState(dir).status).toBe("refused");
+    expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(true);
+  }));
+
+  test("creation writes the manifest before the owner marker", () => {
+    const source = readFileSync(modulePath, "utf8");
+    const create = source.slice(source.indexOf("function createOwnership"), source.indexOf("function createOwnership") + 2_000);
+    expect(create.indexOf("CONFIG_UNINSTALL_MANIFEST")).toBeLessThan(create.indexOf("CONFIG_OWNER_FILE"));
+  });
+});

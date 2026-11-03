@@ -282,22 +282,38 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
     root: canonicalRoot(configDir),
   };
   const manifest: ConfigUninstallManifest = { ...owner, paths: [...INITIAL_OWNED_PATHS] };
-  writeFileSync(join(configDir, CONFIG_OWNER_FILE), `${JSON.stringify(owner, null, 2)}\n`, {
+  // Manifest first, owner marker second: the reverse of uninstall's deletion order. A root holding
+  // only the owner marker is therefore a stopped uninstall, never an initialization in progress,
+  // and leftover recovery cannot remove a home that is still being created.
+  writeFileSync(join(configDir, CONFIG_UNINSTALL_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
   try {
-    writeFileSync(join(configDir, CONFIG_UNINSTALL_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, {
+    writeFileSync(join(configDir, CONFIG_OWNER_FILE), `${JSON.stringify(owner, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
   } catch (error) {
-    try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch { /* incomplete metadata fails closed */ }
+    try { unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)); } catch { /* incomplete metadata fails closed */ }
     throw error;
   }
   return { owner, manifest };
+}
+
+/** Temporary names `writeManifest` uses; one left behind means a write stopped before its rename. */
+const MANIFEST_TEMP_PATTERN = new RegExp(`^${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`);
+
+/** Under the lock no manifest write is in progress, so any such temporary file is abandoned. */
+function removeAbandonedManifestTemps(configDir: string): void {
+  for (const name of readdirSync(configDir)) {
+    if (!MANIFEST_TEMP_PATTERN.test(name)) continue;
+    const path = join(configDir, name);
+    const entry = lstatSync(path);
+    if (entry.isFile() && !entry.isSymbolicLink()) unlinkSync(path);
+  }
 }
 
 /** Room the `uninstallStartedAt` tombstone needs on top of a registration's manifest. */
@@ -557,6 +573,7 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
+      removeAbandonedManifestTemps(configDir);
       return { paths: [...ownership.manifest.paths] };
     });
     snapshot = locked?.value ?? { refused: "config ownership metadata is missing or invalid" };
