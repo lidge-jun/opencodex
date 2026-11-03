@@ -1,5 +1,7 @@
 # Baseline comparison of the 66 captured failures
 
+Follow-up resolution and final scoped validation: [validation environment](030-validation-environment.md).
+
 ## Result and scope
 
 The original `test:changed --parallel=2 --timeout 60000` attempt exceeded its

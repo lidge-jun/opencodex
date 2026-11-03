@@ -29,6 +29,14 @@ test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage a
     which: () => process.execPath,
     killGraceMs: 20,
     timeoutMs: 5000,
+    // This synthetic CLI has no descendants. Keep HTTP abort/reap assertions on
+    // the real child without making them depend on Windows taskkill's tree scan;
+    // the Windows process-tree dispatch contract has its own adapter coverage.
+    killWindowsProcessTree: pid => {
+      const child = ownedChildren.find(candidate => candidate.pid === pid);
+      if (!child) throw new Error("Cannot terminate an unowned fixture process");
+      child.kill();
+    },
     spawn: (_command, args, options) => {
       const child = spawn(process.execPath, [join(import.meta.dir, "../fixtures/claude-efficiency-cli.ts"), JSON.stringify(args), fixture, process.env.OCX_EFFICIENCY_NEGATIVE_CONTROL ?? ""], options);
       children.push(child.pid!);
