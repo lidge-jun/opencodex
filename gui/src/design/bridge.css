@@ -280,10 +280,12 @@
 @media (prefers-reduced-motion: reduce) {
   .ocx-shine { animation: none; background: none; -webkit-text-fill-color: currentColor; }
 }
-/* Proxy lever motion. Stop is a train braking: the row lurches forward and rocks back
-   (.ocx-halt), the status word slides in and pulls up (.ocx-brake), and dashes under the row run
-   and slow to a standstill (.ocx-rails). Reload is a charge: a band of sky light crosses the row
-   once (.ocx-sweep) and the lever's slot glows while it runs (.ocx-charge). */
+/* Proxy lever motion. Stop is a train braking and the power going out: the row lurches forward
+   and rocks back (.ocx-halt), the status word slides in and pulls up (.ocx-brake), and the proxy's
+   light flickers out to an unlit ring (.ocx-lightout). Held at the bottom first, the light flickers
+   (.ocx-flicker) and the row dims and shudders (.ocx-dim, .ocx-tremble). Reload is a charge: a band
+   of sky light crosses the row (.ocx-sweep, looping while held) and the lever's slot glows while it
+   runs (.ocx-charge). */
 .ocx-halt { animation: ocx-halt 520ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes ocx-halt {
   0% { transform: translateX(0); }
@@ -299,18 +301,28 @@
   85% { transform: translateX(-0.75px); }
   100% { transform: translateX(0); }
 }
-.ocx-rails {
-  position: absolute;
-  inset: auto 10px 2px 35px;
-  height: 1px;
-  pointer-events: none;
-  background: repeating-linear-gradient(90deg, color-mix(in oklab, var(--ocx-danger) 55%, transparent) 0 6px, transparent 6px 12px);
-  animation: ocx-rails 1400ms cubic-bezier(0.1, 0.75, 0.3, 1) forwards;
+.ocx-flicker { animation: ocx-flicker 900ms steps(1, end) infinite; }
+@keyframes ocx-flicker {
+  0% { opacity: 1; }
+  12% { opacity: 0.35; }
+  18% { opacity: 1; }
+  46% { opacity: 0.2; }
+  52% { opacity: 0.85; }
+  58% { opacity: 0.4; }
+  64% { opacity: 1; }
+  100% { opacity: 1; }
 }
-@keyframes ocx-rails {
-  from { background-position: 96px 0; opacity: 1; }
-  to { background-position: 0 0; opacity: 0.35; }
+.ocx-lightout { animation: ocx-lightout 1300ms linear forwards; }
+@keyframes ocx-lightout {
+  0% { opacity: 1; }
+  10% { opacity: 0.25; }
+  16% { opacity: 1; }
+  30% { opacity: 0.15; }
+  36% { opacity: 0.8; }
+  48% { opacity: 0.1; background-color: var(--ocx-danger); box-shadow: none; }
+  100% { opacity: 1; background-color: transparent; box-shadow: inset 0 0 0 1.5px var(--ocx-fg-subtle); }
 }
+.ocx-dim { opacity: 0.72; transition: opacity 240ms; }
 .ocx-sweep {
   position: absolute;
   inset: 0 auto 0 0;
@@ -323,6 +335,7 @@
   from { transform: translateX(-100%); }
   to { transform: translateX(240%); }
 }
+.ocx-sweep-loop { animation: ocx-sweep 1000ms cubic-bezier(0.3, 0, 0.2, 1) infinite; }
 .ocx-charge {
   background: linear-gradient(0deg, var(--ocx-highlight-soft), color-mix(in oklab, var(--ocx-highlight) 55%, transparent) 50%, var(--ocx-highlight-soft)) 0 0 / 100% 250%;
   animation: ocx-charge 1200ms linear infinite;
@@ -331,25 +344,6 @@
   from { background-position: 0 100%; }
   to { background-position: 0 -150%; }
 }
-/* While the lever is held: rails run under the row (fast and grey, a red crawl once a release
-   would stop the proxy), a held reload sweeps sky light on a loop, and a held stop shudders. */
-.ocx-rails-run {
-  position: absolute;
-  inset: auto 10px 2px 35px;
-  height: 1px;
-  pointer-events: none;
-  background: repeating-linear-gradient(90deg, var(--ocx-line-strong) 0 6px, transparent 6px 12px);
-  animation: ocx-rails-run 240ms linear infinite;
-}
-.ocx-rails-run.is-braking {
-  background-image: repeating-linear-gradient(90deg, color-mix(in oklab, var(--ocx-danger) 60%, transparent) 0 6px, transparent 6px 12px);
-  animation-duration: 1100ms;
-}
-@keyframes ocx-rails-run {
-  from { background-position: 12px 0; }
-  to { background-position: 0 0; }
-}
-.ocx-sweep-loop { animation: ocx-sweep 1000ms cubic-bezier(0.3, 0, 0.2, 1) infinite; }
 .ocx-tremble { animation: ocx-tremble 120ms linear infinite; }
 @keyframes ocx-tremble {
   0% { transform: translate(0, 0); }
@@ -359,7 +353,9 @@
   100% { transform: translate(0, 0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  :is(.ocx-halt, .ocx-brake, .ocx-rails, .ocx-sweep, .ocx-charge, .ocx-rails-run, .ocx-tremble) { animation: none; }
+  :is(.ocx-halt, .ocx-brake, .ocx-flicker, .ocx-sweep, .ocx-charge, .ocx-tremble) { animation: none; }
+  /* The light still ends unlit, just without the flicker. */
+  .ocx-lightout { animation-duration: 1ms; }
   .ocx-sweep { display: none; }
 }
 .sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }

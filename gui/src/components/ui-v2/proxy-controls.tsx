@@ -34,11 +34,12 @@ interface ProxyControlsProps {
  * Design system v2 proxy status, as one sidebar row: a status dot, the title and how long it has
  * been up, then one slot lever (proxy-lever.tsx) that reloads Codex models at its middle notch and
  * stops the proxy at the bottom. While the lever is hovered or pulled, the status line says what
- * letting go will do (red for the stop). Each action has its own feel once it starts: a stop
- * brakes like a train (the row lurches and rocks back, the dot turns into a red brake light, the
- * status word slides in and pulls up, and the rails under the row slow to a standstill); a reload
- * runs a band of sky light across the row, shines its status word and charges the lever's slot,
- * and the handle flashes green when it settles. The status word stays available to assistive tech
+ * letting go will do (red for the stop). Held at the bottom, the proxy's light is losing power:
+ * the dot flickers red, the row dims and shudders. Each action has its own feel once it starts: a
+ * stop brakes like a train and cuts the power (the row lurches and rocks back, the status word
+ * slides in and pulls up, and the dot flickers out to an unlit ring); a reload runs a band of sky
+ * light across the row, shines its status word and charges the lever's slot, and the handle
+ * flashes green when it settles. The status word stays available to assistive tech
  * and as the row's tooltip.
  */
 export function ProxyControls({
@@ -68,26 +69,23 @@ export function ProxyControls({
     : preview === "hover" ? leverText.hover
     : preview === "rest" ? leverText.cancel
     : leverText[preview];
-  // "rest", "restart" and "stop" only come from a drag in progress.
-  const held = !busy && (preview === "rest" || preview === "restart" || preview === "stop");
 
   return (
     <div className={cn("ui-v2 relative flex h-8 items-center gap-[9px] overflow-hidden px-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
-      {/* While the lever is held the row already moves: rails run under it as soon as it is pulled,
-          a held reload keeps a band of sky light sweeping across, and a held stop slows the rails to a
-          red crawl and makes the row shudder like a braking train. Once an action starts, its own
-          motion plays once: a reload sweeps the row, a stop lurches it and brings the rails to a halt. */}
-      {held && <span className={cn("ocx-rails-run", preview === "stop" && "is-braking")} aria-hidden />}
+      {/* A held reload keeps a band of sky light sweeping across the row; once the reload starts it
+          sweeps once more. */}
       {(preview === "restart" || (restarting && !stopping)) && (
         <span className={cn("ocx-sweep", preview === "restart" && "ocx-sweep-loop")} aria-hidden />
       )}
-      {stopping && <span className="ocx-rails" aria-hidden />}
-      <span className={cn("relative flex min-w-0 flex-1 items-center gap-[9px]", stopping ? "ocx-halt" : preview === "stop" && "ocx-tremble")}>
+      <span className={cn("relative flex min-w-0 flex-1 items-center gap-[9px]",
+        stopping ? "ocx-halt" : preview === "stop" && "ocx-tremble ocx-dim")}>
       {/* The dot sits in the same 16px slot as the globe and GitHub marks below, so every label starts
-          on one line. While the proxy stops it is a brake light. */}
+          on one line. It is the proxy's light: it flickers while a stop is held and goes out when the
+          stop starts. */}
       <span className="grid size-4 shrink-0 place-items-center" aria-hidden>
         <span className={cn("size-2 rounded-full transition-colors duration-300",
-          stopping || preview === "stop" ? "bg-danger" : preview === "restart" ? "bg-highlight" : live ? "bg-success" : "bg-fg-subtle")} />
+          stopping ? "bg-danger ocx-lightout" : preview === "stop" ? "bg-danger ocx-flicker"
+          : preview === "restart" ? "bg-highlight" : live ? "bg-success" : "bg-fg-subtle")} />
       </span>
       {previewText !== null ? (
         <span aria-hidden className={cn(
