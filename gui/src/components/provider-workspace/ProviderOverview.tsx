@@ -1,3 +1,4 @@
+import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
 /**
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
@@ -244,6 +245,7 @@ export default function ProviderOverview({
           : reverifyPending
             ? t("pws.firstResponse.probeReverify", { model: reverifyModel })
             : t("pws.firstResponse.probeUntested");
+  const displayEmail = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item) ? undefined : oauthEmail;
   const openModelsAction = onOpenModelsTab ?? onOpenModels;
   const fixCredentialsAction = onOpenAccounts ?? onEditSettings;
 
@@ -270,7 +272,7 @@ export default function ProviderOverview({
           </div>
           <div className="pws-kv-row">
             <dt>{t("pws.cell.auth")}</dt>
-            <dd>{oauthEmail ? `${authModeLabel(item, t)} · ${oauthEmail}` : authModeLabel(item, t)}</dd>
+            <dd>{displayEmail ? `${authModeLabel(item, t)} · ${displayEmail}` : authModeLabel(item, t)}</dd>
           </div>
           <div className="pws-kv-row">
             <dt>{t("modal.defaultModel")}</dt>
@@ -444,8 +446,8 @@ export default function ProviderOverview({
               {item.authMode === "forward"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
-                  ? (oauthEmail
-                    ? t("pws.loggedInAs", { email: oauthEmail })
+                  ? (displayEmail
+                    ? t("pws.loggedInAs", { email: displayEmail })
                     : oauth?.loggedIn
                       ? t("pws.loggedInTitle")
                       : t("pws.notLoggedIn"))

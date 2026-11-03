@@ -1,7 +1,8 @@
+import type { FailureVerdictSink } from "../../src/chat/failure-verdict";
+import { ownedChatErrorResponse } from "../../src/chat/outbound";
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
-  chatCompletionsErrorResponse,
   collectChatCompletion,
   isChatCompletionsStreamError,
   responsesSseToChatCompletionsSse,
@@ -30,6 +31,7 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
 
 function legacyChatStream(events: AdapterEvent[], options: ToolOptions = {}) {
   const translatorBudget = createTestTranslatorBudget();
+  const failureVerdictSink: FailureVerdictSink = {};
   const responses = bridgeToResponsesSSE(
     replay(events), "internal/model", undefined, options.freeformToolNames, undefined, undefined, 2_000,
     {
@@ -42,7 +44,7 @@ function legacyChatStream(events: AdapterEvent[], options: ToolOptions = {}) {
       enforceDeclaredToolNames: false,
     },
   );
-  return { stream: responsesSseToChatCompletionsSse(responses, "client-model", { translatorBudget }), translatorBudget };
+  return { stream: responsesSseToChatCompletionsSse(responses, "client-model", { translatorBudget, failureVerdictSink }), translatorBudget, failureVerdictSink };
 }
 
 function directOptions(options: ToolOptions = {}) {
@@ -80,13 +82,13 @@ async function expectStreamParity(events: AdapterEvent[], options: ToolOptions =
 
 /** The Chat ingress's non-stream mapping over the legacy collector. */
 async function legacyFold(events: AdapterEvent[], options: ToolOptions = {}): Promise<Response> {
-  const { stream, translatorBudget } = legacyChatStream(events, options);
+  const { stream, translatorBudget, failureVerdictSink } = legacyChatStream(events, options);
   try {
-    const completion = await collectChatCompletion(stream, "client-model", translatorBudget);
+    const completion = await collectChatCompletion(stream, "client-model", translatorBudget, failureVerdictSink);
     return new Response(JSON.stringify(completion), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (err) {
-    if (isChatCompletionsStreamError(err)) return chatCompletionsErrorResponse(err.status, err.message, err.type, err.code);
-    return chatCompletionsErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
+    if (isChatCompletionsStreamError(err)) return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored);
+    return ownedChatErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
   }
 }
 

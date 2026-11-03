@@ -82,6 +82,8 @@ ocx start --socks5-off
 
 ### `ocx stop [--json]`
 
+An unsupervised Link Child handling a shutdown signal restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
+
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
 On a connected hub client, `ocx stop` leaves Codex routing, its
@@ -538,7 +540,24 @@ See [v2 outcomes](/reference/cli/agents/#explicit-v2-target-and-outcome) and
 for target, scope and spending boundaries. A reset-grant status read can contact
 upstream status but never consumes or resumes a grant.
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+On a Remote Link Home, a successfully committed current catalog is also synced to eligible linked
+Children. `--local-only` disables this fan-out. `--json` prints one `ocx.sync.fanout/1` result with
+the Home outcome and each Child's state. A skipped Child is identified by its reason. The Home's
+own nonzero exit code is returned unchanged. When the Home exits 0, a failed or timed-out Child or
+an unreadable link store produces exit 6; otherwise the command exits 0, including when Children
+are skipped. An unreadable link store produces a path-free error in human output. Exit 7 is reserved
+for an update in flight.
+If the Home sync throws in JSON mode, stdout still contains one result document and stderr gives a
+sanitized failure message.
+
+Fan-out never requests a Codex app or app-server restart on a Child. Use GOAT or run
+`ocx sync --restart-codex` on that Child if a Codex restart is needed. The Child's pinned sync may
+still restart its own OpenCodex client runtime after applying changed Home settings. If the Home
+times out and stops its local SSH process, a remote sync already running may continue on the Child.
+
+If an update is in flight or the shared update/sync mutex cannot be determined, sync changes nothing, reports `update-in-flight`, and exits 7. If another sync holds the mutex, it reports `sync-in-progress` and exits 1; a Home counts that Child as failed and exits 6 when its own sync succeeded. With `--json`, either refusal prints one result document with the Home skipped and the refusal reason in `fanout.reason`.
 
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
@@ -1144,6 +1163,45 @@ with bounded, read-only provenance inspection. `ocx system codex-cli-update chec
 package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
+
+#### Orchestrated update
+
+Automation can discover support with `ocx capabilities --contracts --json`; the
+`contracts` array contains `update.orchestrated/1`. The contracts-only option
+cannot be combined with `--route` or `--mutating-only`.
+
+```bash
+ocx update --plan --json [--tag latest|preview | --version <version>]
+ocx update --yes --json [--version <version>] [--expect-plan <token>] [--not-after <unix-ms>]
+```
+
+Plan emits one `ocx.update.plan/1` JSON object: `currentVersion`, `targetVersion`,
+`installer`, `runtimeOwner`, `servingPath`, `cliPath`, `canApply`, optional `reason`,
+`restartRequired`, `planToken`, `updateInFlight`, and `mutationBoundMs`. A plan is
+read-only. Reasons are `desktop-app-owned`, `source-checkout`, `mise-managed`,
+`installer-unknown`, `plan-unavailable`, `serving-install-unknown`,
+`cli-not-serving-install`, `runtime-ownership-refused`, `target-unresolved`,
+`downgrade-refused`, and `up-to-date`. `desktop-app-owned` directs updates to the
+Desktop app; uncertain serving identity refuses rather than guessing. Run `ocx start`
+or `ocx stop` to settle a stale runtime record before planning again.
+
+Apply emits one `ocx.update.result/1` object with `applied`, `fromVersion`,
+`toVersion`, `installer`, `restarted`, `healthy`, `rolledBack`, and an optional
+`error`. Pass the plan's `planToken` as `--expect-plan` to refuse with
+`plan-changed` if the selected install or runtime identity changes. `--not-after`
+is a positive safe integer Unix timestamp in milliseconds; mutation is refused with
+`deadline-passed` after that time. `mutationBoundMs` is 900000 (15 minutes): an
+overrun reports an uncertain result without killing an in-progress transaction.
+`updateInFlight` remains true while an update may still mutate, including when its
+state cannot be determined; a sync alone does not set it. A concurrent sync can
+refuse apply with `sync-in-progress`, and another update with `update-in-flight`.
+
+Orchestrated apply exits 0 when verified or already up to date, 10 on refusal,
+11 when the update failed but the previous version is verified active (including
+the runtime when required), 12 when the outcome is unverified or still running,
+and 64 for invalid usage. `rolledBack` is true only when an actual installer
+rollback and its verification succeeded. A plan command emits its plan with exit 0;
+the `canApply` and `reason` fields describe eligibility.
 
 Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
 

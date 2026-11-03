@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -760,6 +760,28 @@ test("a registry-only discovered owner vetoes shared writes end to end", async (
   expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
 }, 30_000);
 
+test("startup readiness follows the child signal across a wall-clock jump", async () => {
+  let stdout!: ReadableStreamDefaultController<Uint8Array>;
+  const out = new ReadableStream<Uint8Array>({ start(controller) { stdout = controller; } });
+  const err = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+  const capture = captureStartupChildOutput(out, err);
+  const child = { pid: 123, exitCode: null, exited: new Promise<number>(() => {}) };
+  const startedAt = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(startedAt);
+  try {
+    const ready = capture.waitForStartup(child);
+    clock.mockReturnValue(startedAt + 90_000);
+    await Promise.resolve();
+    stdout.enqueue(new TextEncoder().encode("Client startup work complete.\n"));
+    stdout.close();
+    await ready;
+    expect(capture.snapshot().startupComplete).toBe(true);
+  } finally {
+    clock.mockRestore();
+    await capture.finish();
+  }
+});
+
 test("startup diagnostics drain both pipes before runtime publication", async () => {
   const fx = fixture();
   const runtimePath = join(fx.ocx, "runtime-port.json");
@@ -806,7 +828,24 @@ test("startup diagnostics include both child tails and exit state on publication
   expect(failure).toContain('"exitCode":2');
   expect(failure).toContain(`"pid":${child.pid}`);
   expect(failure).toContain("lastOutputAgoMs");
+  await expect(capturedChildren.get(child)!.waitForStartup(child)).rejects.toThrow('"exitCode":2');
 });
+
+for (const failure of ["stdout EOF", "stdout read failure"] as const) {
+  test(`startup readiness rejects ${failure} without a completion signal`, async () => {
+    const stdout = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode("before-startup"));
+      if (failure === "stdout EOF") controller.close();
+      else controller.error(new Error("fixture pipe failure"));
+    } });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const output = captureStartupChildOutput(stdout, stderr);
+    const child = { pid: 123, exitCode: null, exited: new Promise<number>(() => {}) };
+    await expect(output.waitForStartup(child)).rejects.toThrow("child ended before live client startup");
+    expect(output.snapshot().startupComplete).toBe(false);
+    expect(output.snapshot().stdout.readFailed).toBe(failure === "stdout read failure");
+  });
+}
 
 test("startup diagnostics preserve split UTF-8 and startup markers before tail eviction", async () => {
   const bytes = new TextEncoder().encode("한글 Client startup work complete.");
@@ -823,7 +862,9 @@ test("startup diagnostics preserve split UTF-8 and startup markers before tail e
       controller.close();
     },
   });
-  const output = await captureStartupChildOutput(stdout, stderr).finish();
+  const capture = captureStartupChildOutput(stdout, stderr);
+  await capture.waitForStartup({ pid: 123, exitCode: null, exited: new Promise<number>(() => {}) });
+  const output = await capture.finish();
   expect(output.startupComplete).toBe(true);
   expect(output.stdout.tail).toBe("z".repeat(8192));
   expect(output.stderr.tail).toBe("오류");

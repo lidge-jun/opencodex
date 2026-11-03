@@ -552,13 +552,13 @@ test("noncanonical Responses preserves provider-owned safety-buffering hints", a
         adapter: "openai-responses",
         baseUrl: "https://fixture.test/v1",
         authMode: "key" as const,
-        apiKey: "fixture-key",
+        apiKey: "fixture-key", models: ["model", "provider-model"],
       },
       {
         adapter: "openai-responses",
         baseUrl: "https://fixture.test/v1",
         authMode: "forward" as const,
-        headers: { authorization: "Bearer provider-static" },
+        headers: { authorization: "Bearer provider-static" }, models: ["model", "provider-model"],
       },
     ]) {
       const config = {
@@ -575,7 +575,7 @@ test("noncanonical Responses preserves provider-owned safety-buffering hints", a
       }), config, { model: "", provider: "" });
 
       expect(response.headers.get("x-codex-safety-buffering-enabled")).toBe("provider-owned");
-      expect(response.headers.get("x-codex-safety-buffering-faster-model")).toBe("provider-model");
+      expect(response.headers.get("x-codex-safety-buffering-faster-model")).toBe("provider-model"); // a configured model of this provider
       expect(await response.text()).toBe(upstream);
     }
   } finally {

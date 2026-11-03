@@ -159,6 +159,13 @@ budget until emitted, discarded, or cancelled; replay collectors are released af
 retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
 progress from an answer and therefore still require validation. Normal private completion
 and real tool calls need no completion retry.
+Validation also fires when the held text already was the answer: claude-sonnet-5 answers a
+trivial request in plain text with `END_TURN`, where the 5.5 models call the completion tool.
+The retry instruction (`KIRO_COMPLETION_RETRY_MESSAGE`) therefore states that ordinary text has
+not reached the user and asks for an already complete reply to be resubmitted unchanged through
+the completion tool, rather than telling the model to continue an existing task, which it read as
+the user's next message and answered with "no active task to continue" in place of the real answer.
+Coverage: `tests/providers/kiro/kiro-completion-retry-wording.test.ts`.
 The retry snapshots cloneable request fields without top-level runtime callbacks, leaving the original request intact.
 
 A turn can carry a real tool call and the private completion call together, in either order.
@@ -172,7 +179,14 @@ Coverage: `tests/providers/kiro/kiro-single-final.test.ts`,
 `tests/providers/kiro/kiro-completion-with-real-tools.test.ts` and
 `tests/server/server-kiro-completion-e2e.test.ts`.
 
-`src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
+## Content-filter stops
+
+A `metadataEvent` `stopReason` of `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` is mapped in every completion mode (`disabled`, `required`, and the bounded `text_fallback` retry) before any empty-stream or fallback classification. For Claude models it is the model's own safety classifier, deterministic for that context, so the adapter ends the turn with the non-retryable `content_filter` incomplete and never starts a completion retry. Claude outbound renders it as `stop_reason: "refusal"`; Responses delivers a terminal `response.failed` with `invalid_prompt` (`src/bridge/terminal-refusal.ts`); the empty-completion guard passes it through. Text that streamed before the filter is not promoted to a final answer. A validated final answer and a real tool call keep their precedence over the stop. When the bounded retry is the attempt that gets filtered, neither attempt produced an accepted answer, so the first attempt's held progress is released (retry text normally supersedes it) and the retry's partial text follows as commentary.
+
+Kiro attaches `stopDetails.refusal` (`category`, `explanation`) to the stop. `src/adapters/kiro-events.ts` reads it leniently, so a malformed shape drops only the details, and bounds both fields. The incomplete message carries them: `Kiro stopped with CONTENT_FILTERED, category BIO: <explanation>`. Before this, a tool-less turn (`disabled` mode carries no content when refused) fell through to the replay-safe `empty_kiro_stream`, which Claude clients saw as a retryable 502 overload. A stream with no content and no stop reason is still `empty_kiro_stream` and stays retryable.
+Coverage: `tests/providers/kiro/kiro-content-filter.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`.
+
+`src/adapters/kiro-retry.ts` names exhausted-budget destinations only through the [bounded error-label contract](../data-planes/error-detail.md#client-error-bodies-chat); the shared constructor removes configured URL userinfo, path, query and fragment. It uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
 
 When a first Kiro stream needs a completion fallback, the fallback response's non-success
 body is read through the shared display-safe bounded reader with the attempt's abort signal.

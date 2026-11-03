@@ -45,7 +45,10 @@ test("5xx entry persists failure diagnostics to usage.jsonl (survives the ring b
   expect(row.errorCode).toBe("upstream_server_error");
   expect(row.terminalStatus).toBe("failed");
   expect(row.closeReason).toBe("terminal");
-  expect(row.upstreamError).toContain("request ID test-42");
+  // The persisted row keeps the classified condition, never the provider's words.
+  expect(row.upstreamError).toBeUndefined();
+  expect(row.upstreamCondition).toBe("upstream_failed");
+  expect(JSON.stringify(row)).not.toContain("test-42");
 });
 
 test("successful entry keeps the existing persisted shape (no diagnostic fields)", () => {

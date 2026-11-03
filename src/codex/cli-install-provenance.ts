@@ -9,8 +9,9 @@ import {
   readSync,
   realpathSync,
   statSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 import { posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
 import { parseStrictSemver } from "../lib/strict-semver";
@@ -503,10 +504,10 @@ function readBoundedFile(
   // injected stat/read behavior.
   const inspectLexical = deps.lstat
     ?? (deps.stat === undefined && deps.readFile === undefined ? lstatSync : null);
-  let lexicalBefore: ReturnType<typeof lstatSync> | null = null;
+  let lexicalBefore: BigIntStats | null = null;
   if (inspectLexical) {
     try {
-      lexicalBefore = inspectLexical(path);
+      lexicalBefore = inspectLexical(path, { bigint: true });
       if (lexicalBefore.isSymbolicLink() || !lexicalBefore.isFile()) return null;
     } catch {
       return null;
@@ -520,9 +521,9 @@ function readBoundedFile(
         ? fsConstants.O_RDONLY
         : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
       fd = openSync(path, flags);
-      const before = fstatSync(fd);
+      const before = fstatSync(fd, { bigint: true });
       if (!before.isFile() || before.size > maxBytes) return null;
-      const bytes = Buffer.allocUnsafe(before.size);
+      const bytes = Buffer.allocUnsafe(Number(before.size));
       let offset = 0;
       while (offset < bytes.length) {
         const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
@@ -531,16 +532,16 @@ function readBoundedFile(
       }
       const extra = Buffer.allocUnsafe(1);
       if (readSync(fd, extra, 0, 1, offset) !== 0) return null;
-      const after = fstatSync(fd);
-      const lexicalAfter = inspectLexical ? inspectLexical(path) : null;
+      const after = fstatSync(fd, { bigint: true });
+      const lexicalAfter = inspectLexical ? inspectLexical(path, { bigint: true }) : null;
       if (lexicalAfter?.isSymbolicLink()) return null;
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      if (!sameFileIdentity(before, after) || before.size !== after.size
+        || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs) || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
         || (lexicalBefore !== null && (lexicalAfter === null || lexicalAfter.isSymbolicLink()
-          || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
-          || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino
-          || lexicalAfter.size !== after.size || lexicalAfter.mtimeMs !== after.mtimeMs
-          || lexicalAfter.ctimeMs !== after.ctimeMs))) return null;
+          || !sameFileIdentity(lexicalBefore, before)
+          || !sameFileIdentity(lexicalAfter, after)
+          || lexicalAfter.size !== after.size || statTimeMs(lexicalAfter.mtimeNs) !== statTimeMs(after.mtimeNs)
+          || statTimeMs(lexicalAfter.ctimeNs) !== statTimeMs(after.ctimeNs)))) return null;
       return bytes;
     } catch {
       return null;
@@ -552,20 +553,19 @@ function readBoundedFile(
   const stat = deps.stat;
   const read = deps.readFile;
   try {
-    const before = stat(path);
+    const before = stat(path, { bigint: true });
     if (!before.isFile() || before.size > maxBytes) return null;
     const bytes = read(path);
-    const after = stat(path);
-    const lexicalAfter = inspectLexical ? inspectLexical(path) : null;
+    const after = stat(path, { bigint: true });
+    const lexicalAfter = inspectLexical ? inspectLexical(path, { bigint: true }) : null;
     if (
-      bytes.byteLength !== before.size
-      || before.dev !== after.dev
-      || before.ino !== after.ino
+      BigInt(bytes.byteLength) !== before.size
+      || !sameFileIdentity(before, after)
       || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs
+      || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)
       || (lexicalBefore !== null && (lexicalAfter === null || lexicalAfter.isSymbolicLink()
-        || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
-        || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino))
+        || !sameFileIdentity(lexicalBefore, before)
+        || !sameFileIdentity(lexicalAfter, after)))
     ) return null;
     return bytes;
   } catch {
@@ -830,16 +830,16 @@ function observeHeldFileSet(
     const read = deps.readFile;
     if (!stat || !read) return null;
     const results = new Map<string, ObservedContentFile>();
-    const identities: { before: Stats; req: InstallContentFile }[] = [];
+    const identities: { before: BigIntStats; req: InstallContentFile }[] = [];
     try {
       for (const req of requests) {
-        const before = stat(req.path);
+        const before = stat(req.path, { bigint: true });
         if (!before.isFile() || before.size > req.maxBytes) return null;
         const bytes = read(req.path);
-        const after = stat(req.path);
-        if (bytes.byteLength !== before.size
-          || before.dev !== after.dev || before.ino !== after.ino
-          || before.size !== after.size || before.mtimeMs !== after.mtimeMs) return null;
+        const after = stat(req.path, { bigint: true });
+        if (BigInt(bytes.byteLength) !== before.size
+          || !sameFileIdentity(before, after)
+          || before.size !== after.size || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)) return null;
         identities.push({ before, req });
         results.set(req.role, {
           digest: sha256(fileContentDomain(req.role), bytes),
@@ -848,9 +848,9 @@ function observeHeldFileSet(
       }
       // A replacement that slipped in after a file's own read still failed.
       for (const { before, req } of identities) {
-        const now = stat(req.path);
-        if (before.dev !== now.dev || before.ino !== now.ino
-          || before.size !== now.size || before.mtimeMs !== now.mtimeMs) return null;
+        const now = stat(req.path, { bigint: true });
+        if (!sameFileIdentity(before, now)
+          || before.size !== now.size || statTimeMs(before.mtimeNs) !== statTimeMs(now.mtimeNs)) return null;
       }
       if (finalize && !finalize()) return null;
       return results;
@@ -858,7 +858,7 @@ function observeHeldFileSet(
       return null;
     }
   }
-  const held: { fd: number; req: InstallContentFile; before: Stats }[] = [];
+  const held: { fd: number; req: InstallContentFile; before: BigIntStats }[] = [];
   const openedFds: number[] = [];
   try {
     const flags = process.platform === "win32"
@@ -870,7 +870,7 @@ function observeHeldFileSet(
       // The descriptor joins the close set before any check that can bail, so
       // an fstat failure or a refused type/size cannot leak it.
       openedFds.push(fd);
-      const before = fstatSync(fd);
+      const before = fstatSync(fd, { bigint: true });
       // O_NONBLOCK keeps a FIFO open nonblocking, so the type check must come
       // first: anything that is not a regular file is refused before a read.
       if (!before.isFile() || before.size > req.maxBytes) return null;
@@ -881,11 +881,12 @@ function observeHeldFileSet(
       const hasher = createHash("sha256")
         .update(fileContentDomain(req.role), "utf8")
         .update("\0", "utf8");
-      const bytes = keepBytes(req.role) ? Buffer.allocUnsafe(before.size) : null;
-      const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(HELD_READ_CHUNK_BYTES, before.size)));
+      const size = Number(before.size);
+      const bytes = keepBytes(req.role) ? Buffer.allocUnsafe(size) : null;
+      const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(HELD_READ_CHUNK_BYTES, size)));
       let offset = 0;
-      while (offset < before.size) {
-        const count = readSync(fd, chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+      while (offset < size) {
+        const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - offset), offset);
         if (count <= 0) return null;
         hasher.update(chunk.subarray(0, count));
         if (bytes) chunk.copy(bytes, offset, 0, count);
@@ -896,15 +897,15 @@ function observeHeldFileSet(
       results.set(req.role, { digest: hasher.digest("hex"), bytes });
     }
     for (const { fd, req, before } of held) {
-      const after = fstatSync(fd);
-      const lexical = lstatSync(req.path);
-      const followed = statSync(req.path);
-      if (before.dev !== after.dev || before.ino !== after.ino
-        || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-        || before.ctimeMs !== after.ctimeMs
+      const after = fstatSync(fd, { bigint: true });
+      const lexical = lstatSync(req.path, { bigint: true });
+      const followed = statSync(req.path, { bigint: true });
+      if (!sameFileIdentity(before, after)
+        || before.size !== after.size || statTimeMs(before.mtimeNs) !== statTimeMs(after.mtimeNs)
+        || statTimeMs(before.ctimeNs) !== statTimeMs(after.ctimeNs)
         || lexical.isSymbolicLink() || !lexical.isFile()
-        || lexical.dev !== before.dev || lexical.ino !== before.ino
-        || followed.dev !== before.dev || followed.ino !== before.ino) return null;
+        || !sameFileIdentity(lexical, before)
+        || !sameFileIdentity(followed, before)) return null;
     }
     if (finalize && !finalize()) return null;
     return results;

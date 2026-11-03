@@ -28,6 +28,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+監督プロセスのない Link Child は終了シグナル時、各書き込みで接続を再確認し、リスナーを閉じる前に Codex と管理対象 Grok を復元します。サービス・Desktop、sibling、再起動の引き継ぎ、親 stop 記録がある場合は設定を保持します。終了中の再起動は `409 runtime_stopping` です。強制終了はシグナル処理を省略する場合があり、親 `ocx stop` の復元も必要です。
+
 実行中のプロキシを (PID によって) 停止し、PID ファイルを削除します。スタンドアロンの所有者ではネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
 
 接続済みの hub クライアントでは、`ocx stop`（成功した API 停止を含む）は接続が所有する Codex のルーティング、モデルカタログ、Grok 設定を保持します。`ocx start` はルーティングを再注入せず、その設定で再び処理します。Codex を自身のアカウントへ戻すには `ocx disconnect`、既にネイティブルーティングへ戻した後の再適用には `ocx sync --restart-codex` を使います。
@@ -164,7 +166,11 @@ ocx status --json
 
 ## カタログの同期
 
-### `ocx sync [--restart-codex] [--restart-app-server-only]`
+### `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]` <span id="ocx-sync---restart-codex---restart-app-server-only"></span>
+
+Remote Link の Home では、最新のカタログが正常にコミットされた後、`ocx sync` は対象となるリンク済み Child にも同期を伝播します。`--local-only` はこの伝播を無効にします。`--json` は Home の結果と各 Child の状態を含む単一の `ocx.sync.fanout/1` 文書を出力し、スキップされた Child の理由も示します。Home 自体の終了コードが 0 以外の場合は、そのコードを変更せずに返します。Home が成功した場合、Child の失敗やタイムアウト、またはリンクストアの読み取り不能は終了コード 6 となり、それ以外は Child がスキップされた場合も含めて 0 で終了します。リンクストアを読み取れない場合、テキスト表示ではパスを含まないエラーを出します。コード 7 は更新処理中のために予約されています。JSON モードで Home の同期が例外を送出した場合も、stdout は単一の結果文書を保ち、stderr に無害化された診断を出力します。
+
+伝播は Child の Codex アプリや app-server の再起動を要求しません。必要な場合は GOAT を使うか、その Child で `ocx sync --restart-codex` を実行してください。ただし、Child の固定先同期は、変更された Home 設定を適用した後、自身の OpenCodex クライアントランタイムを再起動することがあります。Home がタイムアウトしてローカルの SSH プロセスを停止しても、すでに開始されたリモート同期は Child 上で続くことがあります。
 
 > **Remote Link Child:** `ocx sync` は Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は、再起動フラグなしでもランタイムを再起動します。再起動に失敗した場合は以前のランタイムが動作し続け、コマンドは 0 以外で終了します。`ocx status --json` と `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
 
