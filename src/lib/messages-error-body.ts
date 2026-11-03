@@ -10,6 +10,17 @@ const STATUS_TYPES: ReadonlyMap<number, string> = new Map([
   [404, "not_found_error"], [409, "conflict_error"], [413, "request_too_large"],
   [429, "rate_limit_error"], [504, "timeout_error"], [529, "overloaded_error"],
 ]);
+type MessagesOverflowPresentation =
+  | { lane: "passthrough"; message: string }
+  | { lane: "native" | "translated" | "converter" | "direct"; baselineOverflow: boolean };
+
+/** Select the owned sentence using the existing decision for this Messages path. */
+export function messagesOverflowPresentation(input: MessagesOverflowPresentation): boolean {
+  if (input.lane !== "passthrough") return input.baselineOverflow;
+  const message = input.message.toLowerCase();
+  return message.includes("prompt is too long") || message.includes("input is too long for requested model");
+}
+
 export interface OwnedAnthropicErrorOptions {
   status: number;
   type?: string;

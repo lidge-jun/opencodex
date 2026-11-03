@@ -1030,9 +1030,9 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
 }
 
 test.each([
-  "prompt is too long: 213000 tokens > 200000 maximum",
-  "This model's maximum context length is 200000 tokens. Your messages resulted in 213000 tokens.",
-])("an upstream error response is normalized and its original condition reaches the request log and usage.jsonl (%s)", async message => {
+  ["prompt is too long: 213000 tokens > 200000 maximum", true],
+  ["This model's maximum context length is 200000 tokens. Your messages resulted in 213000 tokens.", false],
+] as const)("an upstream error response is normalized and its original condition reaches the request log and usage.jsonl (%s)", async (message, compacts) => {
   const sentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
   const errorBody = { type: "error", error: { type: "invalid_request_error", message: `${message} ${sentinel}` }, request_id: "req_fixture" };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
@@ -1041,8 +1041,8 @@ test.each([
     expect(res.status).toBe(400);
     expect(text.length).toBeGreaterThan(0);
     expect(text).not.toContain(sentinel);
-    expect(text).toContain("prompt is too long");
-    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: "invalid_request_error", message: CLAUDE_CONTEXT_OVERFLOW_MESSAGE } });
+    expect(text.includes("prompt is too long")).toBe(compacts);
+    expect(JSON.parse(text)).toEqual({ type: "error", error: { type: "invalid_request_error", message: compacts ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "The request exceeds the model's context window." } });
     expect(row.status).toBe(400);
     expect(row.failureDetail).toEqual({ code: "provider_error", type: "invalid_request_error" });
     // The condition is classified from the message where it is read; only the closed member is kept.

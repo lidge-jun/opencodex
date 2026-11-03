@@ -1,5 +1,5 @@
 import type { UpstreamConditionEvidence } from "../../lib/upstream-condition";
-import { ownedAnthropicErrorPayload } from "../../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../../lib/messages-error-body";
 import { markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import { admitMessagesFailure, type MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 /**
@@ -196,14 +196,14 @@ function createAnthropicMessageWriter(
     terminalDelivered = true;
   };
   // Transient upstream statuses become overloaded_error so Anthropic SDK clients back off.
-  const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", overflow = false, evidence?: UpstreamConditionEvidence) => {
+  const fail = (status: number, message: string, upstreamDerived = false, code?: string, local = false, contract?: "stream_incomplete" | "transport_failed", baselineOverflow = false, evidence?: UpstreamConditionEvidence) => {
     if (terminated && (code !== "translation_buffer_limit" || terminalDelivered)) return;
     terminated = true;
     const type = code === "translation_buffer_limit" ? "request_too_large"
       : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
     const legacy = anthropicErrorBody(status, message, type, code);
     const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message }, contract,
-      overflow: overflow && !isThroughputLimitText(message),
+      overflow: messagesOverflowPresentation({ lane: "direct", baselineOverflow }),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined,
       ...(local ? { localError: markProxyError({ message }) } : {}),
     });
@@ -412,7 +412,7 @@ function createAnthropicMessageWriter(
       const original = encoderOriginalErrorEvidence(terminal);
       fail(anthropicFailedStatus(error, message), message, !deterministic,
         deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined,
-        hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), isEncoderTransportFailure(terminal) ? "transport_failed" : undefined, original !== undefined && isContextOverflowError(original, original.message) && !isThroughputLimitText(original.message),
+        hasProxyErrorMessage(options.proxyErrorContext, message, { type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), isEncoderTransportFailure(terminal) ? "transport_failed" : undefined, isContextOverflowError(error, message) && !isThroughputLimitText(message),
         { ...(original ?? { message, type: typeof error.type === "string" ? error.type : undefined, code: typeof error.code === "string" ? error.code : undefined }), status: original?.status ?? anthropicFailedStatus(error, message) });
     },
     overflow() {
@@ -471,7 +471,8 @@ export async function collectAnthropicMessageResponse(
       "translation_buffer_limit",
     );
   }
-  const status = isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200;
+  const baselineOverflow = isError && translatedError?.code === "context_length_exceeded";
+  const status = isError ? (baselineOverflow ? 400 : 502) : 200;
   if (collectorVerdictSink.collected && !collectorVerdictSink.collectedProjection) {
     const error = (message.error ?? {}) as Rec;
     const originalMessage = typeof error.message === "string" ? error.message : "";
@@ -479,12 +480,12 @@ export async function collectAnthropicMessageResponse(
     message = ownedAnthropicErrorPayload({ status, type: typeof error.type === "string" ? error.type : undefined,
       code: typeof error.code === "string" ? error.code : undefined,
       evidence: { status, message: originalMessage },
-      overflow: isContextOverflowError(error, originalMessage) && !throughput,
+      overflow: messagesOverflowPresentation({ lane: "direct", baselineOverflow }),
       ...(error.code === "context_length_exceeded" && throughput ? { condition: "rate_limited" as const } : {}),
     });
   }
   return new Response(JSON.stringify(message), {
-    status: isError ? (translatedError?.code === "context_length_exceeded" ? 400 : 502) : 200,
+    status,
     headers: { "Content-Type": "application/json" },
   });
 }

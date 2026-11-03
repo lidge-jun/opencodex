@@ -1,6 +1,6 @@
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
-import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload } from "../lib/messages-error-body";
+import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib/messages-error-body";
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
@@ -42,7 +42,7 @@ import {
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
 import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
-import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowError, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
+import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
@@ -989,8 +989,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           ]).get(logCtx.failureDetail?.code ?? "");
           if (localMessage !== undefined) return fail(502, localMessage, "api_error");
         }
-        const overflow = isContextOverflowError(error, text) && !isThroughputLimitText(text);
-        if (isNativeOverflowError(error, text)) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error);
+        const baselineOverflow = isNativeOverflowError(error, text);
+        const overflow = messagesOverflowPresentation({ lane: "native", baselineOverflow });
+        if (baselineOverflow) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error);
         return failEvidence(502, text, "api_error", undefined, overflow, error);
       }
       finishLog(200);
@@ -1088,14 +1089,12 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   let upstreamType: string | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
-  let originalUpstreamMessage: string | undefined;
   try {
     const parsed = JSON.parse(bodyText) as Rec;
     const details = isRec(parsed.error) ? parsed.error : parsed;
     if (typeof details.type === "string") upstreamType = details.type;
     if (typeof details.code === "string") upstreamCode = details.code;
     if (typeof details.message === "string" && details.message.trim()) {
-      originalUpstreamMessage = details.message;
       upstreamMessage = redactSecretString(details.message.trim());
     }
   } catch { /* keep generic classification */ }
@@ -1149,10 +1148,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     && !isThroughputLimitText(safeMessage)
     && (classified.code === "context_length_exceeded" || upstreamCode === "context_length_exceeded"
       || isContextOverflowText(safeMessage));
-  const originalEvidence = { status: response.status, type: upstreamType, code: upstreamCode };
-  const originalMessage = originalUpstreamMessage ?? bodyText;
-  const overflow = !replayRefusal && isContextOverflowError(originalEvidence, originalMessage)
-    && !isThroughputLimitText(originalMessage);
+  const overflow = messagesOverflowPresentation({ lane: "native", baselineOverflow: legacyOverflow });
   const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
     status, type: transient ? "overloaded_error" : upstreamType,
     code: replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,

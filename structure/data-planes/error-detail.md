@@ -338,14 +338,18 @@ sentences individually; rejected roles and tool-block prefixes use fixed placeho
 model selectors use the brand in `src/lib/error-destination.ts`; configured destination strings do not
 supply client error text. Local pre-handler, admission and thread-refusal envelope shapes stay intact.
 
-Status, retry, overflow, rotation, quota and logging decisions run on original evidence. Overflow uses
-`CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after the lane's overflow-versus-throughput decision on the original
-message using `isContextOverflowError` and an explicit throughput exclusion. Quoted, negated,
-conditional and validation mentions do not select the compaction sentence. The original status and
-type gates apply to uncoded verdicts; an explicit context code counts unless throughput wording
-excludes compaction. The direct encoder retains original adapter fields by terminal identity,
-independently of shared classification. Buffered passthrough and count_tokens preserve the upstream
-status and closed type/code. The type chosen
+Status, retry, overflow, rotation, quota and logging decisions retain their original evidence.
+`messagesOverflowPresentation` in `src/lib/messages-error-body.ts` selects only the owned compaction
+sentence. Native HTTP reuses its existing overflow verdict, and native fold reuses its existing
+sized-error decision. Translated replies, the converter and direct encoder retain their established
+code/shared-predicate decisions and throughput handling. Raw direct collection reuses the context
+code check that decides its status. Passthrough Messages/count_tokens use the case-insensitive
+Claude Code phrase check on the original message: "prompt is too long" or "input is too long for
+requested model". The shared `isContextOverflowError` source and its #8128 suite remain unchanged;
+`tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their source bytes.
+The direct encoder retains original adapter fields by terminal identity independently of shared
+classification. Buffered passthrough and count_tokens preserve the upstream status and closed
+type/code. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
 records into the collector without serializing them; publication follows successful frame admission.
@@ -384,4 +388,7 @@ Successful buffered passthrough bodies retain their bytes. Their media type is r
 application/json, text/plain or text/event-stream, with only utf-8/us-ascii charset parameters; other
 media types use application/octet-stream. Rebuilt error bodies always use literal application/json.
 `tests/claude-integration/messages-success-media-types.test.ts` checks both buffered entry points;
-`tests/claude-integration/messages-overflow-verdicts.test.ts` checks all owned overflow writers.
+`tests/claude-integration/messages-overflow-verdicts.test.ts` compares every owned path with
+`tests/fixtures/messages-overflow-decisions.json`. Its explicit baseline generator observes the
+existing branch verdicts without changing their results or client bytes. Normal tests run head only
+and require no git history; all compared overflow decisions must match.

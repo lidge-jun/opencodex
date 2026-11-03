@@ -1,5 +1,5 @@
 import type { UpstreamConditionEvidence } from "../lib/upstream-condition";
-import { ownedAnthropicErrorPayload } from "../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib/messages-error-body";
 import { markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
 import { admitMessagesFailure, collectMessagesFailure, type MessagesFailureVerdictSink } from "./failure-verdict";
 import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
@@ -604,7 +604,7 @@ export function responsesSseToAnthropicSse(
           : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
         const legacy = anthropicErrorBody(status, message, type, code);
         const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
-          overflow: isContextOverflowError(evidence ?? { code, status }, message) && !isThroughputLimitText(message),
+          overflow: messagesOverflowPresentation({ lane: "converter", baselineOverflow: code === "context_length_exceeded" && !isThroughputLimitText(message) }),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
           ...(local ? { localError: markProxyError({ message }) } : {}),
         });
