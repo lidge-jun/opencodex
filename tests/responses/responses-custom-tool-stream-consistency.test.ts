@@ -1,5 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { bridgeToResponsesSSE } from "../../src/bridge";
 import * as patchEnvelope from "../../src/responses/apply-patch-envelope";
+import type { AdapterEvent } from "../../src/types";
 import {
   createRoutedCustomToolRestoreBlockRewrite,
   RoutedCustomToolProgressError,
@@ -109,6 +111,67 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[], 
 }
 
 describe("routed Responses custom-tool stream consistency", () => {
+  test.each(["exec", "apply_patch"])("object-leading %s body streams progressively on both transports", async tool => {
+    const input = '{ const o = { a: 1, b: "two" };\ntext(o.b); }';
+    const args = JSON.stringify({ input });
+    const fragments = Array.from(args);
+    const routed = restoreExecStream(args, fragments, tool);
+    expect(routed.preview).toBe(input);
+    expect(routed.previews.filter(preview => preview.length > 0 && preview.length < input.length).length)
+      .toBeGreaterThan(input.length / 2);
+    expect([routed.doneInput, routed.itemInput, routed.terminalInput]).toEqual([input, input, input]);
+
+    async function* events(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_object", name: tool };
+      for (const argumentsPart of fragments) yield { type: "tool_call_delta", arguments: argumentsPart };
+      yield { type: "tool_call_end", id: "call_object" };
+      yield { type: "done" };
+    }
+    const wire = await new Response(bridgeToResponsesSSE(events(), "routed/model", undefined, new Set([tool]))).text();
+    const frames = wire.split("\n\n")
+      .filter(block => block.includes("data:") && !block.includes("data: [DONE]"))
+      .map(dataPayload);
+    const deltas = frames
+      .filter(frame => frame.type === "response.custom_tool_call_input.delta")
+      .map(frame => String(frame.delta));
+    expect(deltas.length).toBeGreaterThan(input.length / 2);
+    expect(deltas.join("")).toBe(input);
+    expect(frames.find(frame => frame.type === "response.custom_tool_call_input.done")?.input).toBe(input);
+  });
+
+  test.each([
+    ["exec", 'text("nested");'],
+    ["apply_patch", "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch"],
+  ])("double-wrapped %s agrees across direct and routed completion", async (tool, input) => {
+    const args = JSON.stringify({ input: JSON.stringify({ input }) });
+    for (let split = 0; split <= args.length; split++) {
+      const fragments = [args.slice(0, split), args.slice(split)];
+      const routed = restoreExecStream(args, fragments, tool);
+      expect(routed.preview, "routed split " + split).toBe("");
+      expect([routed.doneInput, routed.itemInput, routed.terminalInput]).toEqual([input, input, input]);
+
+      async function* events(): AsyncGenerator<AdapterEvent> {
+        yield { type: "tool_call_start", id: "call_nested", name: tool };
+        for (const argumentsPart of fragments) yield { type: "tool_call_delta", arguments: argumentsPart };
+        yield { type: "tool_call_end", id: "call_nested" };
+        yield { type: "done" };
+      }
+      const wire = await new Response(bridgeToResponsesSSE(
+        events(), "routed/model", undefined, new Set([tool]),
+      )).text();
+      const frames = wire.split("\n\n")
+        .filter(block => block.includes("data:") && !block.includes("data: [DONE]"))
+        .map(dataPayload);
+      const deltas = frames.filter(frame => frame.type === "response.custom_tool_call_input.delta");
+      // Both transports hold the ambiguous preview; completed input is authoritative.
+      expect(deltas, "direct split " + split).toEqual([]);
+      const done = frames.find(frame => frame.type === "response.custom_tool_call_input.done");
+      const item = frames.find(frame => frame.type === "response.output_item.done")?.item as { input: string };
+      const terminal = frames.find(frame => frame.type === "response.completed")?.response as { output: Array<{ input: string }> };
+      expect([done?.input, item.input, terminal.output[0]?.input]).toEqual([input, input, input]);
+    }
+  });
+
   test.each([
     ["late-invalid wrapper", ['{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch', '\\q"}']],
     ["duplicate input key", ['{"input":"*** Begin Patch\\n*** Add File: a\\n+x\\n*** End Patch",', '"input":"replacement"}']],

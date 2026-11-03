@@ -14,6 +14,7 @@ import {
   normalizeDeclaredToolName,
 } from "../types";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { TOOL_SEARCH_FUNCTION_NAME } from "../responses/tool-search-compat";
 
 /** Item types the client executes through a request-declared wire name. */
 export const CLIENT_EXECUTED_CALL_TYPES: ReadonlySet<string> = new Set([
@@ -186,6 +187,28 @@ export function collectDeclaredWireToolNames(body: unknown, options?: { canonica
   }
   const ambiguousDottedAliases = collectAmbiguousDottedAliases(specGroups);
   for (const specs of specGroups) addWireToolSpecs(names, specs, ambiguousDottedAliases, options?.canonicalOnly);
+  return names;
+}
+
+/**
+ * Function names that translated adapters give to nameless hosted declarations in this catalog.
+ * The parser exposes a declared `{type:"tool_search"}` to Chat-style providers as the function
+ * `tool_search`, so only a declaration present in this (current-turn) body authorizes that name.
+ */
+export function collectTranslatedHostedToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!isPlainObject(body)) return names;
+  const specGroups: unknown[] = [body.tools];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (isPlainObject(item) && item.type === "additional_tools") specGroups.push(item.tools);
+    }
+  }
+  for (const specs of specGroups) {
+    if (Array.isArray(specs) && specs.some(spec => isPlainObject(spec) && spec.type === "tool_search")) {
+      names.add(TOOL_SEARCH_FUNCTION_NAME);
+    }
+  }
   return names;
 }
 

@@ -274,7 +274,8 @@ For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsuppor
 `output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
 request before inference. `reasoning.encrypted_content` and other include entries remain
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
-applies to xAI; unrelated Responses destinations keep their original include list.
+applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
+(`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
@@ -602,6 +603,8 @@ retry cannot recurse: an empty or reasoning-only retry is returned as retryable 
 real client tool call keeps the turn open. A completion-tool answer is always emitted as
 `final_answer`, even when it exactly repeats prior commentary, because phase correctness is more
 important than cosmetic de-duplication. Tool-free requests retain normal text completion behavior.
+
+The continuation's instruction tells the model that its ordinary text has not reached the user, and asks it to call `codex_kiro_final_answer` with the complete final answer if the task is complete, submitting its previous reply unchanged when that reply already was the answer. A model that answered a trivial request in plain text therefore keeps its answer, instead of being told to continue a task it had already finished.
 
 ### Reasoning effort
 
