@@ -173,6 +173,13 @@ export function normalizeStructuralWhitespace(content: string): string {
 
 type MultilineStringKind = "basic" | "literal" | null;
 
+/** Length of a closing multiline delimiter: TOML allows a run of three to five quotes. */
+function quoteRunLength(text: string, index: number, quote: string): number {
+  let end = index;
+  while (end < text.length && text[end] === quote && end - index < 5) end += 1;
+  return end - index;
+}
+
 /**
  * TOML table-looking text inside a multiline string is data, not syntax. Keep
  * a deliberately small lexical state machine so the format-preserving editor
@@ -190,8 +197,9 @@ function markStructuralLines(lines: SourceLine[]): void {
     for (let index = 0; index < line.text.length;) {
       if (multiline === "basic") {
         if (line.text.startsWith('"""', index)) {
+          // A closing delimiter may carry up to two content quotes before it.
           multiline = null;
-          index += 3;
+          index += quoteRunLength(line.text, index, '"');
         } else if (line.text[index] === "\\") {
           index += 2;
         } else {
@@ -202,7 +210,7 @@ function markStructuralLines(lines: SourceLine[]): void {
       if (multiline === "literal") {
         if (line.text.startsWith("'''", index)) {
           multiline = null;
-          index += 3;
+          index += quoteRunLength(line.text, index, "'");
         } else {
           index += 1;
         }

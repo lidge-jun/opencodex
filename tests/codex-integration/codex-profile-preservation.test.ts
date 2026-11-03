@@ -76,6 +76,15 @@ describe("carried assignments keep their original bytes", () => {
   });
 });
 
+describe("multiline strings that close with extra quotes", () => {
+  test.each(["arr = [\"\"\"hello\"\"\"\"]","arr = [\"\"\"hello\"\"\"\"\"]","arr = ['''hello'''']","arr = ['''hello''''']","tbl = { s = \"\"\"x\"\"\"\" }","arr = [\n  \"\"\"a\nb\"\"\"\",\n]"])("the next root key survives (%s)", assignment => {
+    const generated = buildProfileFileForTarget(loopback, null);
+    const merged = preserveUnmanagedProfileKeys(`${assignment}\nstream_max_retries = 8\n`, generated);
+    expect(merged).toContain(`${assignment}\nstream_max_retries = 8`);
+    expect(Bun.TOML.parse(merged)).toMatchObject({ stream_max_retries: 8 });
+  });
+});
+
 describe("a carried key never redefines a generated table", () => {
   // Every key that can collide with something a template writes, plus ordinary ones.
   const previous = [
