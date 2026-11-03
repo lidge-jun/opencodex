@@ -145,6 +145,7 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
         "transition-[background-color] duration-150 ease-soft hover:bg-accent-soft active:cursor-grabbing",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-60",
+        drag !== null && zone === "stop" && "ocx-tremble",
       )}
     >
       {/* The slot, with a notch mark at each of the three stops. It charges sky while a reload runs. */}
@@ -158,7 +159,7 @@ export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled 
         className={cn(
           "pointer-events-none absolute top-[5px] h-[5px] w-3 rounded-[2px] shadow-sm",
           zone === "stop" ? "bg-danger" : zone === "restart" ? "bg-highlight" : settled ? "bg-success" : "bg-fg-muted group-hover:bg-fg",
-          restarting && drag === null && "shadow-[0_0_0_3px_var(--ocx-highlight-soft)]",
+          ((restarting && drag === null) || (drag !== null && zone === "restart")) && "shadow-[0_0_0_3px_var(--ocx-highlight-soft)]",
         )}
         style={{
           transform: `translateY(${pos * TRAVEL}px)`,

@@ -68,18 +68,26 @@ export function ProxyControls({
     : preview === "hover" ? leverText.hover
     : preview === "rest" ? leverText.cancel
     : leverText[preview];
+  // "rest", "restart" and "stop" only come from a drag in progress.
+  const held = !busy && (preview === "rest" || preview === "restart" || preview === "stop");
 
   return (
     <div className={cn("ui-v2 relative flex h-8 items-center gap-[9px] overflow-hidden px-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
-      {/* Each animation plays once when its state begins: a reload runs a band of sky light across
-          the row; a stop lurches the row and slows the rails under it to a halt. */}
-      {restarting && !stopping && <span className="ocx-sweep" aria-hidden />}
+      {/* While the lever is held the row already moves: rails run under it as soon as it is pulled,
+          a held reload keeps a band of sky light sweeping across, and a held stop slows the rails to a
+          red crawl and makes the row shudder like a braking train. Once an action starts, its own
+          motion plays once: a reload sweeps the row, a stop lurches it and brings the rails to a halt. */}
+      {held && <span className={cn("ocx-rails-run", preview === "stop" && "is-braking")} aria-hidden />}
+      {(preview === "restart" || (restarting && !stopping)) && (
+        <span className={cn("ocx-sweep", preview === "restart" && "ocx-sweep-loop")} aria-hidden />
+      )}
       {stopping && <span className="ocx-rails" aria-hidden />}
-      <span className={cn("flex min-w-0 flex-1 items-center gap-[9px]", stopping && "ocx-halt")}>
+      <span className={cn("relative flex min-w-0 flex-1 items-center gap-[9px]", stopping ? "ocx-halt" : preview === "stop" && "ocx-tremble")}>
       {/* The dot sits in the same 16px slot as the globe and GitHub marks below, so every label starts
           on one line. While the proxy stops it is a brake light. */}
       <span className="grid size-4 shrink-0 place-items-center" aria-hidden>
-        <span className={cn("size-2 rounded-full transition-colors duration-300", stopping ? "bg-danger" : live ? "bg-success" : "bg-fg-subtle")} />
+        <span className={cn("size-2 rounded-full transition-colors duration-300",
+          stopping || preview === "stop" ? "bg-danger" : preview === "restart" ? "bg-highlight" : live ? "bg-success" : "bg-fg-subtle")} />
       </span>
       {previewText !== null ? (
         <span aria-hidden className={cn(

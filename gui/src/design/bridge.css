@@ -267,7 +267,7 @@
    sweep, so the one action that keeps the proxy up is noticed. Stills to plain sky for reduced motion. */
 .ocx-shine {
   color: var(--ocx-highlight);
-  background: linear-gradient(100deg, var(--ocx-highlight) 40%, color-mix(in oklab, var(--ocx-highlight) 35%, white) 50%, var(--ocx-highlight) 60%) 0 0 / 250% 100%;
+  background: linear-gradient(100deg, var(--ocx-highlight) 40%, light-dark(#0ea5e9, color-mix(in oklab, var(--ocx-highlight) 35%, white)) 50%, var(--ocx-highlight) 60%) 0 0 / 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -331,8 +331,35 @@
   from { background-position: 0 100%; }
   to { background-position: 0 -150%; }
 }
+/* While the lever is held: rails run under the row (fast and grey, a red crawl once a release
+   would stop the proxy), a held reload sweeps sky light on a loop, and a held stop shudders. */
+.ocx-rails-run {
+  position: absolute;
+  inset: auto 10px 2px 35px;
+  height: 1px;
+  pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--ocx-line-strong) 0 6px, transparent 6px 12px);
+  animation: ocx-rails-run 240ms linear infinite;
+}
+.ocx-rails-run.is-braking {
+  background-image: repeating-linear-gradient(90deg, color-mix(in oklab, var(--ocx-danger) 60%, transparent) 0 6px, transparent 6px 12px);
+  animation-duration: 1100ms;
+}
+@keyframes ocx-rails-run {
+  from { background-position: 12px 0; }
+  to { background-position: 0 0; }
+}
+.ocx-sweep-loop { animation: ocx-sweep 1000ms cubic-bezier(0.3, 0, 0.2, 1) infinite; }
+.ocx-tremble { animation: ocx-tremble 120ms linear infinite; }
+@keyframes ocx-tremble {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(1.1px, -0.4px); }
+  50% { transform: translate(-1px, 0.4px); }
+  75% { transform: translate(0.6px, 0.3px); }
+  100% { transform: translate(0, 0); }
+}
 @media (prefers-reduced-motion: reduce) {
-  :is(.ocx-halt, .ocx-brake, .ocx-rails, .ocx-sweep, .ocx-charge) { animation: none; }
+  :is(.ocx-halt, .ocx-brake, .ocx-rails, .ocx-sweep, .ocx-charge, .ocx-rails-run, .ocx-tremble) { animation: none; }
   .ocx-sweep { display: none; }
 }
 .sidebar-pref-row > .lang-toggle { flex: 1 1 auto; min-width: 0; }
