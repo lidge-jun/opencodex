@@ -125,11 +125,20 @@ export function startServiceLogging(
     };
     restore.push(() => { console[method] = original; });
   }
-  try {
-    for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
-  } catch { /* ownership bookkeeping must not break logging */ }
-  rotateServiceLog(path);
-  const timer = setInterval(() => { rotateServiceLog(path); }, intervalMs);
+  // Rotation creates the .1/.2 files, so it waits until they are registered for uninstall; a
+  // refusal (uninstall in progress, busy ownership lock) skips rotation and retries next tick.
+  let rotationOwned = false;
+  const rotate = () => {
+    if (!rotationOwned) {
+      try {
+        for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
+        rotationOwned = true;
+      } catch { return; /* ownership bookkeeping must not break logging */ }
+    }
+    rotateServiceLog(path);
+  };
+  rotate();
+  const timer = setInterval(rotate, intervalMs);
   timer.unref();
   return () => { clearInterval(timer); for (const reset of restore) reset(); };
 }

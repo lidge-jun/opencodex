@@ -124,6 +124,22 @@ const ownershipCache = new Map<string, {
   manifest: ConfigUninstallManifest;
 } | null>();
 let lastReconciledGeneration = 0;
+/**
+ * Manifest identity (dev:ino:size:mtime) this process last observed under the ownership lock.
+ * A cached path returns without locking only while the manifest is still that file, so a
+ * tombstone written by another process sends even an already-recorded path to the locked check.
+ */
+const lockedManifestIdentity = new Map<string, string>();
+const warnedFullManifest = new Set<string>();
+
+function manifestIdentity(configDir: string): string | undefined {
+  try {
+    const entry = lstatSync(join(configDir, CONFIG_UNINSTALL_MANIFEST), { bigint: true });
+    return entry.isFile() ? `${entry.dev}:${entry.ino}:${entry.size}:${entry.mtimeNs}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function listLiveConfigOwnershipRoots(currentConfigDir: string): ReadonlySet<string> {
   const currentRoot = ownershipCacheKey(currentConfigDir);
@@ -408,30 +424,52 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const cacheKey = ownershipCacheKey(configDir);
   const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
-  if (ownership.manifest.paths.includes(rel)) return true;
+  if (ownership.manifest.paths.includes(rel)) {
+    const seen = lockedManifestIdentity.get(cacheKey);
+    if (seen !== undefined && seen === manifestIdentity(configDir)) return true;
+  }
   // Read-modify-write against the manifest on disk, never the cache: another process may have
-  // recorded paths since this one cached it (#8093).
+  // recorded paths or started an uninstall since this one cached it (#8093).
   const locked = withOwnershipLock(configDir, () => {
     const current = loadOwnership(configDir);
     if (!current) return null;
     if (current.manifest.uninstallStartedAt !== undefined) throw new ConfigUninstallInProgressError(configDir);
-    if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true };
+    if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
     // A manifest over the cap would fail validation and strand every recorded path.
-    if (current.manifest.paths.length >= MANIFEST_MAX_PATHS) return { ownership: current, recorded: false };
+    if (current.manifest.paths.length >= MANIFEST_MAX_PATHS) {
+      return { ownership: current, recorded: false, identity: manifestIdentity(configDir) };
+    }
     const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
     writeManifest(configDir, manifest);
-    return { ownership: { owner: current.owner, manifest }, recorded: true };
+    return { ownership: { owner: current.owner, manifest }, recorded: true, identity: manifestIdentity(configDir) };
   });
   if (!locked?.value) {
     ownershipCache.delete(cacheKey);
+    lockedManifestIdentity.delete(cacheKey);
     return false;
   }
   ownershipCache.set(cacheKey, locked.value.ownership);
+  if (locked.value.identity === undefined) lockedManifestIdentity.delete(cacheKey);
+  else lockedManifestIdentity.set(cacheKey, locked.value.identity);
+  if (!locked.value.recorded && !warnedFullManifest.has(cacheKey)) {
+    warnedFullManifest.add(cacheKey);
+    // Uninstall still reports such a file as a residual path; it just cannot remove it.
+    console.warn("[opencodex] The config ownership manifest is full; new files will not be removed by uninstall.");
+  }
   return locked.value.recorded;
+}
+
+/** The only names a finished uninstall can leave behind when a lock file could not be unlinked. */
+function onlyOwnershipLockFilesRemain(configDir: string): boolean {
+  const names = readdirSync(configDir);
+  const lockNames = new Set([CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
+  return names.length > 0 && names.every(name => lockNames.has(name)
+    && lstatSync(join(configDir, name)).isFile() && !lstatSync(join(configDir, name)).isSymbolicLink());
 }
 
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   ownershipCache.delete(ownershipCacheKey(configDir));
+  lockedManifestIdentity.delete(ownershipCacheKey(configDir));
   if (!existsSync(configDir)) return { status: "absent", residualPaths: [] };
   const root = lstatSync(configDir);
   if (!root.isDirectory() || root.isSymbolicLink()) {
@@ -442,6 +480,22 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
   if (!loadOwnership(configDir)) {
+    // A rerun after the metadata was deleted but a lock file could not be unlinked (Windows keeps
+    // a file another process has open): nothing but lock files remains, so finish the removal.
+    if (!existsSync(join(configDir, CONFIG_OWNER_FILE)) && !existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))
+      && onlyOwnershipLockFilesRemain(configDir)) {
+      try {
+        removeOwnershipLockFile(configDir);
+        rmdirSync(configDir);
+        return { status: "removed", residualPaths: [] };
+      } catch (error) {
+        return {
+          status: "partial",
+          reason: `could not remove the ownership lock: ${error instanceof Error ? error.message : String(error)}`,
+          residualPaths: readdirSync(configDir).map(name => join(configDir, name)),
+        };
+      }
+    }
     return {
       status: "refused",
       reason: "config ownership metadata is missing or invalid",
