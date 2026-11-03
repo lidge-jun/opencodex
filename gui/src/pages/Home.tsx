@@ -4,6 +4,7 @@ import type { Page } from "../app-routing";
 import { IconRefresh } from "../icons";
 import { Button } from "@/components/ui-v2/button";
 import { cn } from "@/lib/utils";
+import { recentFailures, type HomeLogRow } from "./home-failures";
 
 /*
  * Design system v2 landing page. It answers the two questions people open the dashboard
@@ -24,7 +25,7 @@ interface UsageDay { requests?: number; totalTokens?: number }
 interface UsageBody { summary?: { requests?: number; totalTokens?: number }; days?: UsageDay[] }
 interface ConfigBody { providers?: Record<string, unknown> }
 interface StartupBody { protection?: string; serviceInstalled?: boolean; shimInstalled?: boolean }
-interface LogRow { timestamp: number; model?: string; provider?: string; status: number; errorCode?: string; upstreamError?: string }
+interface LogRow extends HomeLogRow { model?: string; provider?: string; errorCode?: string; upstreamError?: string }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -52,8 +53,7 @@ export default function Home({ apiBase, navigate, onReloadCodex, reloadingCodex 
   const failures = useKeyedClientResource(`home-failures:${apiBase}`, [apiBase],
     async signal => {
       const rows = (await getJson<{ logs?: LogRow[] }>(`${apiBase}/api/logs?limit=500`, signal))?.logs ?? [];
-      const since = Date.now() - DAY_MS;
-      return rows.filter(row => row.status >= 400 && row.timestamp >= since);
+      return recentFailures(rows, Date.now() - DAY_MS);
     },
     { pollMs: 30_000 }).data ?? [];
 
