@@ -30,11 +30,12 @@ const date: Normalize = value => {
   const zoneMinute = zone.length === 1 ? 0 : Number(zone.slice(4, 6));
   if (year < 1970 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59
     || zoneHour > 23 || zoneMinute > 59 || zone === "-00:00") return undefined;
-  const local = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const milliseconds = Number((match[7] ?? "").padEnd(3, "0").slice(0, 3));
+  const local = new Date(Date.UTC(year, month - 1, day, hour, minute, second, milliseconds));
   if (local.getUTCFullYear() !== year || local.getUTCMonth() !== month - 1 || local.getUTCDate() !== day) return undefined;
   const offset = (zoneHour * 60 + zoneMinute) * 60_000 * (zone[0] === "-" ? -1 : 1);
   const utc = local.getTime() - offset;
-  if (utc < 0 || utc > MAX_EPOCH * 1000) return undefined;
+  if (utc < 0 || utc > MAX_EPOCH * 1000 + 999) return undefined;
   return new Date(utc).toISOString().replace(".000Z", "Z");
 };
 const EXACT: ReadonlyMap<string, Normalize> = new Map([

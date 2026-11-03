@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { repoPath, repoRoot } from "./repo-root";
-import { messagesOverflowFixtures, messagesOverflowLanes } from "./messages-overflow-cases";
+import { applicableMessagesOverflowFixtures, messagesOverflowLanes } from "./messages-overflow-cases";
 const [mode, scratch, output] = process.argv.slice(2) as [string, string, string];
 if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
 const base = mode === "--generate-base";
@@ -56,7 +56,7 @@ const { runMessagesOverflowCase } = await import("./messages-overflow-case");
 const { upstreamMessagesRequestIdHeaders } = await import("../../src/server/messages-response-headers");
 if (base && upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture" }))["request-id"] !== "req_fixture") throw new Error("Baseline modules were not loaded");
 const rows = [];
-for (const lane of messagesOverflowLanes) for (const input of messagesOverflowFixtures) {
+for (const lane of messagesOverflowLanes) for (const input of applicableMessagesOverflowFixtures(lane)) {
   const observations = new Map<string, boolean[]>();
   (globalThis as any).__messagesOverflowRecord = (tag: string, value: boolean) => {
     const values = observations.get(tag) ?? []; values.push(value); observations.set(tag, values);
@@ -64,7 +64,7 @@ for (const lane of messagesOverflowLanes) for (const input of messagesOverflowFi
   };
   const result = await runMessagesOverflowCase(lane, input);
   const passthrough = lane === "passthrough" || lane === "count_tokens";
-  if (!passthrough && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
+  if (!passthrough && input.rawBody === undefined && observations.size === 0) throw new Error(`Missing baseline observation for ${lane}/${input.id}`);
   const internalDecisions: Record<string, boolean> = {};
   for (const [tag, values] of observations) {
     if (values.some(value => value !== values[0])) throw new Error(`Inconsistent ${tag} decisions for ${lane}/${input.id}`);
@@ -73,4 +73,4 @@ for (const lane of messagesOverflowLanes) for (const input of messagesOverflowFi
   rows.push({ lane, input, [base ? "base" : "head"]: { ...result, internalDecisions } });
 }
 delete (globalThis as any).__messagesOverflowRecord;
-await Bun.write(output, JSON.stringify({ schemaVersion: 2, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");
+await Bun.write(output, JSON.stringify({ schemaVersion: 3, ...(base ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), rows }) + "\n");

@@ -1,4 +1,4 @@
-import { ownedAnthropicErrorPayload, boundedMessagesDisplayCount, messagesOverflowPresentation } from "../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, boundedMessagesDisplayCount, messagesOverflowPresentation, messagesRelayedOverflowPresentation, isMessagesErrorEnvelope } from "../lib/messages-error-body";
 import { isProxyError, markProxyError, carryProxyError, attachComboFailureEvidence, comboFailureEvidence } from "../lib/client-error-body";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { clientFacingModelLabel, clientFacingModelText } from "../lib/error-destination";
@@ -449,10 +449,10 @@ async function anthropicNativePassthrough(
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { /* a non-JSON success retains its original body */ }
   const error = isRec(parsed) && isRec(parsed.error) ? parsed.error : isRec(parsed) ? parsed : {};
-  const isError = !upstream.ok || (isRec(parsed) && (parsed.type === "error" || Object.hasOwn(parsed, "error")));
+  const isError = !upstream.ok || isMessagesErrorEnvelope(parsed);
   const originalMessage = typeof error.message === "string" ? error.message : "";
   const throughput = isThroughputLimitText(originalMessage);
-  const overflow = messagesOverflowPresentation(originalMessage);
+  const overflow = messagesRelayedOverflowPresentation(text, parsed);
   const clientBody = isError ? JSON.stringify(ownedAnthropicErrorPayload({ status: upstream.status,
     overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
     type: typeof error.type === "string" ? error.type : undefined,

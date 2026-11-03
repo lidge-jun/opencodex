@@ -1,6 +1,6 @@
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
 import { upstreamErrorIsLocal } from "./request-log-failure-detail";
-import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib/messages-error-body";
+import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation, isMessagesErrorEnvelope } from "../lib/messages-error-body";
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
@@ -973,6 +973,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           finishLog(502, toolRefusal, { closeReason: "terminal", terminalStatus: "failed" });
           return fail(502, toolRefusal, "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
         }
+        const baselineOverflow = isNativeOverflowError(error, text);
         // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
         // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
         const tapMeta = tapState.meta;
@@ -989,7 +990,6 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           ]).get(logCtx.failureDetail?.code ?? "");
           if (localMessage !== undefined) return fail(502, localMessage, "api_error");
         }
-        const baselineOverflow = isNativeOverflowError(error, text);
         const legacy = anthropicErrorBody(baselineOverflow ? 400 : 502,
           redactSecretString(baselineOverflow ? claudePromptTooLongMessage(text) : text),
           baselineOverflow ? "invalid_request_error" : "api_error");
@@ -1000,8 +1000,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       finishLog(200);
       const collected = collectorVerdictSink.collected;
       const originalError = collected && isRec(collected.error) ? collected.error : {};
-      const clientMessage = collected ? ownedAnthropicErrorPayload({ status: 200,
+      const clientMessage = collected && isMessagesErrorEnvelope(collected) ? ownedAnthropicErrorPayload({ status: 200,
         type: typeof originalError.type === "string" ? originalError.type : undefined,
+        code: typeof originalError.code === "string" ? originalError.code : undefined,
+        overflow: messagesRelayedOverflowPresentation(JSON.stringify(collected), collected),
         evidence: { status: 200, message: typeof originalError.message === "string" ? originalError.message : undefined },
       }) : message;
       return retainUpstreamMessagesRequestId(Response.json(clientMessage), response.headers);

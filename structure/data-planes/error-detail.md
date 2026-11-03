@@ -345,7 +345,12 @@ path previously delivered: "prompt is too long" or "input is too long for reques
 Native HTTP retains its existing overflow verdict and formatter; native fold retains its sized-error
 branch, formatter and redaction. Translated replies, converter and direct encoder use their legacy
 formatter's message. Buffered passthrough Messages/count_tokens and raw direct collection use the
-original message they previously relayed. Internal overflow decisions and HTTP status stay separate
+SDK diagnostic from the original relayed body: a truthy top-level message wins, otherwise parsed JSON is serialized;
+non-JSON errors use their raw text. Successful metadata with null, false, empty or non-string error
+members stays a success; real error envelopes retain their existing status. Completed native folds
+also preserve non-error records. Incomplete translated JSON uses its original formatter message
+before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
+status stay separate
 from this client-message check: a coded raw-collector throughput refusal still answers 400 without
 selecting the compaction sentence. The shared `isContextOverflowError` source and its #8128 suite
 remain unchanged; `tests/claude-integration/messages-overflow-baseline-contract.test.ts` binds their
@@ -373,10 +378,13 @@ The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.
 
-`src/server/anthropic-rate-limit-headers.ts` renders an exact-name union: requests, tokens, input-tokens
+`src/server/anthropic-rate-limit-headers.ts` preserves RFC 3339 reset instants to millisecond
+precision in UTC. Whole seconds omit the fraction; sub-millisecond digits are truncated to the
+Date representation, while numeric epoch resets retain their separate decimal rounding contract.
+It renders an exact-name union: requests, tokens, input-tokens
 and output-tokens each have limit/remaining/reset, plus unified status/reset and 5h/7d/7d_oi window
 status/reset/utilization. Counts are integers in 0..10^12. Documented resets validate Gregorian RFC 3339
-calendar components and offsets, then render UTC whole seconds. Unified resets accept strict decimal
+calendar components and offsets, then render canonical UTC to millisecond precision. Unified resets accept strict decimal
 seconds through 253402300799, at most six input fractional digits and three output digits. Decimal
 utilization stays on its original scale (0.62 remains 0.62), bounded to 0..100 with four output digits.
 Rounding cannot exceed the maximum. Only the closed status values `allowed` and `rejected` survive;

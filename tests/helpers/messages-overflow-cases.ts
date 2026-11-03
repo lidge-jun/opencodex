@@ -1,6 +1,6 @@
 export const messagesOverflowLanes = ["passthrough", "count_tokens", "native-http", "native-fold", "translated-http", "translated-fold", "translated-json", "converter", "direct-stream", "direct-fold", "direct-collector"] as const;
 export type MessagesOverflowLane = typeof messagesOverflowLanes[number];
-export interface MessagesOverflowFixture { id: string; status?: number; type?: string; message: string; code?: string | null }
+export interface MessagesOverflowFixture { id: string; status?: number; type?: string; message: string; code?: string | null; rawBody?: string; mediaType?: string; lanes?: readonly MessagesOverflowLane[] }
 export const messagesOverflowFixtures: MessagesOverflowFixture[] = [
   {"id": "lane-compaction wording-invalid_request_error", "status": 400, "type": "invalid_request_error", "message": "prompt is too long: 210000 tokens > 200000 maximum", "code": "context_length_exceeded"},
   {"id": "lane-compaction wording-request_too_large", "status": 400, "type": "request_too_large", "message": "prompt is too long: 210000 tokens > 200000 maximum", "code": "context_length_exceeded"},
@@ -79,3 +79,51 @@ export const messagesOverflowFixtures: MessagesOverflowFixture[] = [
   {"id": "normalization-4", "message": "too many tokens per minute", "type": "rate_limit_error", "code": "rate_limit_exceeded", "status": 429},
   {"id": "normalization-5", "message": "", "type": "rate_limit_error"},
 ];
+
+const buffered = ["passthrough", "count_tokens", "native-http", "translated-http", "translated-json"] as const;
+const framed = ["native-fold", "translated-fold", "converter", "direct-collector"] as const;
+const phrase = "prompt is too long zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+const envelopes: [string, unknown][] = [
+  ["typed-string", { type: "error", error: phrase }],
+  ["flat-string", { error: phrase }],
+  ["top-message", { message: phrase }],
+  ["nested-message", { error: { message: phrase } }],
+  ["nested-type", { error: { type: "invalid_request_error" }, detail: phrase }],
+  ["top-message-precedence", { type: "error", message: "ordinary refusal", error: { message: phrase } }],
+  ["whole-body-metadata", { type: "error", error: { message: "ordinary refusal" }, detail: phrase }],
+  ["message-object", { type: "error", message: { detail: phrase } }],
+  ["message-array", { type: "error", message: [phrase] }],
+  ["json-string", phrase], ["json-array", [phrase]], ["json-null", null],
+  ["json-false", false], ["json-true", true], ["json-number", 42], ["json-empty-string", ""],
+  ["non-string-metadata", { input_tokens: 42, error: { type: 1, message: false } }],
+  ["top-empty-message", { type: "error", message: "", error: phrase }],
+  ["typed-array", { type: "error", error: [phrase] }],
+  ["typed-nested-object", { type: "error", error: { message: { detail: phrase } } }],
+  ["null-metadata", { input_tokens: 42, error: null }],
+  ["false-metadata", { input_tokens: 42, error: false }],
+  ["empty-string-metadata", { input_tokens: 42, error: "" }],
+  ["empty-object-metadata", { input_tokens: 42, error: {} }],
+  ["number-metadata", { input_tokens: 42, error: 0 }],
+  ["array-metadata", { input_tokens: 42, error: [] }],
+  ["typed-null", { type: "error", error: null, detail: phrase }],
+  ["typed-false", { type: "error", error: false, detail: phrase }],
+];
+for (const [shape, body] of envelopes) {
+  for (const status of [200, 400]) messagesOverflowFixtures.push({ id: `shape-${shape}-${status}`, message: "fixture", status, rawBody: JSON.stringify(body), lanes: buffered });
+  if (body && typeof body === "object" && !Array.isArray(body)) messagesOverflowFixtures.push({ id: `frame-${shape}`, message: "fixture", rawBody: JSON.stringify(body), lanes: framed });
+  if (body && typeof body === "object" && !Array.isArray(body)) messagesOverflowFixtures.push({ id: `frame-complete-${shape}`, message: "fixture", rawBody: JSON.stringify(body), lanes: ["native-fold", "direct-collector"] });
+}
+for (const status of [200, 400]) for (const [shape, rawBody, mediaType] of [
+  ["plain-text", phrase, "text/plain"],
+  ["escaped-json", '{"type":"error","error":"prompt\\u0020is too long"}', "application/json"],
+] as const) messagesOverflowFixtures.push({ id: `shape-${shape}-${status}`, message: "fixture", status, rawBody, mediaType, lanes: buffered });
+for (const [shape, details] of [
+  ["phrase", { reason: "other", message: phrase }],
+  ["ordinary", { reason: "other", message: "ordinary incomplete" }],
+  ["reason-phrase", { reason: phrase }],
+  ["missing", undefined], ["empty", {}], ["null", null], ["array", []], ["number", 42],
+  ["blank-message", { reason: "other", message: "  " }],
+  ["max-output", { reason: "max_output_tokens", message: phrase }],
+  ["content-filter", { reason: "content_filter", message: phrase }],
+] as const) messagesOverflowFixtures.push({ id: `incomplete-${shape}`, message: "fixture", rawBody: JSON.stringify({ status: "incomplete", incomplete_details: details }), lanes: ["translated-json"] });
+export const applicableMessagesOverflowFixtures = (lane: MessagesOverflowLane) => messagesOverflowFixtures.filter(input => !input.lanes || input.lanes.includes(lane));

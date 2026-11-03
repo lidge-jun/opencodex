@@ -17,6 +17,22 @@ export function messagesOverflowPresentation(baselineMessage: unknown): boolean 
   return message.includes("prompt is too long") || message.includes("input is too long for requested model");
 }
 
+export function isMessagesErrorEnvelope(value: unknown): value is Rec {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const body = value as Rec;
+  const error = body.error;
+  return body.type === "error" || (error !== null && typeof error === "object" && !Array.isArray(error)
+    && (typeof (error as Rec).type === "string" || typeof (error as Rec).message === "string"));
+}
+/** Match the SDK's diagnostic selection on the parsed body or non-JSON response text. */
+export function messagesRelayedOverflowPresentation(text: string, parsed: unknown): boolean {
+  const message = parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "message")
+    ? (parsed as Rec).message : undefined;
+  const diagnostic = message ? typeof message === "string" ? message : JSON.stringify(message)
+    : parsed ? JSON.stringify(parsed) : text;
+  return messagesOverflowPresentation(diagnostic);
+}
+
 export interface OwnedAnthropicErrorOptions {
   status: number;
   type?: string;

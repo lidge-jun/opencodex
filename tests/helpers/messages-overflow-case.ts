@@ -14,7 +14,18 @@ export const clientRecognizesOverflow = (message: string) => {
   const text = message.toLowerCase();
   return text.includes("prompt is too long") || text.includes("input is too long for requested model");
 };
+// APIError.makeMessage selects a top-level message before JSON-stringifying the body.
+function sdkMessage(text: string, parsed: any): string {
+  return parsed?.message ? typeof parsed.message === "string" ? parsed.message : JSON.stringify(parsed.message)
+    : parsed ? JSON.stringify(parsed) : text;
+}
+function realEnvelope(parsed: any): boolean {
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    && (parsed.type === "error" || (parsed.error !== null && typeof parsed.error === "object" && !Array.isArray(parsed.error)
+      && (typeof parsed.error.type === "string" || typeof parsed.error.message === "string")));
+}
 export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixture: MessagesOverflowFixture) {
+  const tail = fixture.id.startsWith("frame-complete-") ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const error = { ...(fixture.type ? { type: fixture.type } : {}), ...(fixture.status !== undefined ? { status: fixture.status } : {}), message: `${fixture.message} ${overflowSentinel}`, ...(fixture.code !== undefined ? { code: fixture.code } : {}) };
   let response: Response;
   let upstream: ReturnType<typeof Bun.serve> | undefined;
@@ -25,9 +36,9 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       const events = () => (async function* () { yield { ...error, type: "error", errorType: fixture.type } as AdapterEvent; })();
       translatorBudget = createTranslatorBudget();
       if (lane === "direct-fold") response = await foldAnthropicMessage(events(), { model: "fixture", translatorBudget });
-      else if (lane === "direct-collector") response = await collectAnthropicMessageResponse(new Response(`event: error\ndata: ${JSON.stringify({ type: "error", error })}\n\n`).body!, "fixture", translatorBudget);
+      else if (lane === "direct-collector") response = await collectAnthropicMessageResponse(new Response(`event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error })}\n\n${tail}`).body!, "fixture", translatorBudget);
       else response = new Response(lane === "converter"
-        ? responsesSseToAnthropicSse(new Response(`event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { error } })}\n\n`).body!, "fixture", { translatorBudget, pingIntervalMs: 0 })
+        ? responsesSseToAnthropicSse(new Response(`event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: fixture.rawBody ? JSON.parse(fixture.rawBody) : { error } })}\n\n`).body!, "fixture", { translatorBudget, pingIntervalMs: 0 })
         : encodeAnthropicMessageSse(events(), { model: "fixture", translatorBudget }));
     } else {
       const passthrough = lane === "passthrough" || lane === "count_tokens";
@@ -35,8 +46,9 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       release = acquireOwnedSpendHome(); clearKeyCooldowns();
       upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
         if (lane.endsWith("fold")) return new Response(native
-          ? `event: error\ndata: ${JSON.stringify({ type: "error", error })}\n\n`
-          : `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { error } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+          ? `event: error\ndata: ${fixture.rawBody ?? JSON.stringify({ type: "error", error })}\n\n${tail}`
+          : `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: fixture.rawBody ? JSON.parse(fixture.rawBody) : { error } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+        if (fixture.rawBody !== undefined) return new Response(fixture.rawBody, { status: fixture.status ?? 200, headers: { "content-type": fixture.mediaType ?? "application/json" } });
         if (lane === "translated-json") return Response.json({ status: "failed", error });
         return Response.json({ type: "error", error }, { status: fixture.status ?? 400 });
       } });
@@ -46,11 +58,17 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
       const request = new Request(`http://localhost/v1/messages${lane === "count_tokens" ? "/count_tokens" : ""}`, { method: "POST", headers: { "content-type": "application/json", ...(passthrough ? { authorization: "Bearer sk-ant-oat01-fixture" } : {}) }, body: JSON.stringify({ model: passthrough ? "claude-sonnet-4-6" : "fixture/wire-model", max_tokens: 16, stream: false, messages: [{ role: "user", content: "fixture" }] }) });
       response = lane === "count_tokens" ? await handleClaudeCountTokens(request, config) : await handleClaudeMessages(request, config, { model: "fixture", provider: "fixture" });
     }
-    const text = await response.text();
-    const payload = lane === "converter" || lane === "direct-stream" ? JSON.parse(text.split("data: ").at(-1)!) : JSON.parse(text);
-    if (typeof payload.error?.message !== "string") throw new Error(`Missing error message for ${lane}/${fixture.id}`);
-    return { status: response.status, type: payload.error.type as string, code: payload.error.code as string | undefined,
-      text, message: payload.error.message as string, clientRecognizes: clientRecognizesOverflow(payload.error.message),
-      compactionSentence: payload.error.message === compactionSentence };
+    const text = (await response.text()).replace(/msg_(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g, "msg_fixture");
+    const stream = lane === "converter" || lane === "direct-stream";
+    let payload: any;
+    try { payload = JSON.parse(stream ? text.split("data: ").at(-1)! : text); } catch { /* non-JSON bodies are observed as text */ }
+    const success = response.ok && !realEnvelope(payload) && !(stream && text.includes("event: error\n"));
+    const message = success ? "" : sdkMessage(text, payload);
+    return { status: response.status, success, mediaType: response.headers.get("content-type"),
+      type: typeof payload?.error?.type === "string" ? payload.error.type : undefined,
+      code: payload?.error?.code as string | undefined, text, message,
+      clientRecognizes: !success && clientRecognizesOverflow(message),
+      compactionSentence: payload?.error?.message === compactionSentence };
+
   } finally { translatorBudget?.dispose(); release?.(); await upstream?.stop(true); }
 }

@@ -1151,7 +1151,9 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
     const message = typeof details.message === "string" && details.message.trim()
       ? details.message
       : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
-    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529, message }, contract: "stream_incomplete" });
+    const legacy = anthropicErrorBody(529, message, "overloaded_error");
+    return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529, message },
+      overflow: messagesOverflowPresentation((legacy.error as Rec).message), contract: "stream_incomplete" });
   }
   if (body.status === "completed" && body.end_turn === false && !sawToolUse) {
     return ownedAnthropicErrorPayload({ status: 529, type: "overloaded_error", evidence: { status: 529 }, localError: markProxyError({ message: "upstream turn ended without a final answer" }) });

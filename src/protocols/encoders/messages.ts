@@ -1,5 +1,5 @@
 import type { UpstreamConditionEvidence } from "../../lib/upstream-condition";
-import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../../lib/messages-error-body";
+import { ownedAnthropicErrorPayload, messagesOverflowPresentation, messagesRelayedOverflowPresentation, isMessagesErrorEnvelope } from "../../lib/messages-error-body";
 import { markProxyError, isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import { admitMessagesFailure, type MessagesFailureVerdictSink } from "../../claude/failure-verdict";
 /**
@@ -472,14 +472,14 @@ export async function collectAnthropicMessageResponse(
   }
   const baselineOverflow = isError && translatedError?.code === "context_length_exceeded";
   const status = isError ? (baselineOverflow ? 400 : 502) : 200;
-  if (collectorVerdictSink.collected && !collectorVerdictSink.collectedProjection) {
+  if (collectorVerdictSink.collected && !collectorVerdictSink.collectedProjection && (isError || isMessagesErrorEnvelope(message))) {
     const error = (message.error ?? {}) as Rec;
     const originalMessage = typeof error.message === "string" ? error.message : "";
     const throughput = isThroughputLimitText(originalMessage);
     message = ownedAnthropicErrorPayload({ status, type: typeof error.type === "string" ? error.type : undefined,
       code: typeof error.code === "string" ? error.code : undefined,
       evidence: { status, message: originalMessage },
-      overflow: messagesOverflowPresentation(originalMessage),
+      overflow: messagesRelayedOverflowPresentation(JSON.stringify(message), message),
       ...(error.code === "context_length_exceeded" && throughput ? { condition: "rate_limited" as const } : {}),
     });
   }

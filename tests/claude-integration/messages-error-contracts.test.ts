@@ -168,7 +168,7 @@ test("C1/C2 ingress constructors have explicit producer rows and local identity"
   expect(local.message).toBe("Claude Desktop model mapping is unavailable; refresh model discovery or reapply the connected hub profile");
 });
 const envelopeWriterRows = [
-  ["src/claude/outbound.ts", 4, "shared baseline helpers and original verdict construction"],
+  ["src/claude/outbound.ts", 5, "shared baseline helpers, original verdict and incomplete presentation construction"],
   ["src/protocols/encoders/messages.ts", 4, "original verdict construction and fixed local collection failures"],
   ["src/server/messages-native.ts", 3, "mapped local fail, original combo and fold presentation envelopes"],
   ["src/server/claude-messages.ts", 30, "mapped local ingress/bypass constructors, original combo and defensive JSON presentation envelopes"],
