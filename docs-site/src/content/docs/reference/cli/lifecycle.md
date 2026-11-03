@@ -290,6 +290,19 @@ opencodex local config only if all restore steps succeeded. `remove` is an alias
 Config cleanup requires ownership metadata created by a fresh install; legacy or shared directories
 are left in place.
 
+When `ocx uninstall` runs as root or from an elevated (administrator) Windows prompt, it first
+checks that no other account can change the config directory, the directories above it, or any
+directory inside it, and that no link inside the config directory leads outside it (on Windows, that it holds no links at all). If either check
+fails, uninstall stops before it changes anything and says why. Run `ocx uninstall` as the account
+that owns the config directory, without `sudo` or administrator rights, or restrict those directories
+to that account and remove such links, then run it again. On Windows ARM64, where opencodex cannot
+tell whether the prompt is elevated, the same check applies; if it cannot be completed, stop opencodex
+and remove the config directory yourself.
+
+A recorded entry whose parent directory inside the config directory is a link (a symlink or junction)
+is left in place and listed as a remaining path, and the run ends as a partial uninstall. Replace that
+link with the real directory or remove it, then run `ocx uninstall` again to finish.
+
 Both commands accept no arguments. Unsupported flags (including `--dry-run` and `--yes`)
 exit with usage status 2 before preflight or teardown; no changes are made.
 For help, run `ocx help uninstall` or `ocx help remove`.

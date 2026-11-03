@@ -466,7 +466,7 @@ the backup itself is not rewritten. See the [catalog contract](catalog.md#shared
 Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
-and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
+and removes only normalized manifest entries, resolved from the canonical root without passing through a linked directory ([removal rules](config-ownership.md#removal-stays-inside-the-root)). Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
 remain in place and make the command report a partial uninstall with their exact paths. Manifest updates and the uninstall tombstone are in [config ownership](config-ownership.md).
 

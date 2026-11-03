@@ -121,14 +121,20 @@ try {
 `;
 const ENCODED_ACL_SCRIPT = Buffer.from(ACL_SCRIPT, "utf16le").toString("base64");
 
+/** Above this many paths the script reads them from stdin, keeping one process for a whole tree. */
+const ACL_ENV_PATH_LIMIT = 16;
+
 function defaultWindowsOwnerAclRunner(entries: readonly WindowsPrivateEntry[], timeoutMs: number): WindowsOwnerAclResult {
-  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: "0" };
-  for (let i = 0; i < entries.length; i++) env[`OCX_ACL_PATH_${i}`] = entries[i]!.path;
+  const viaStdin = entries.length > ACL_ENV_PATH_LIMIT;
+  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: viaStdin ? "1" : "0" };
+  if (!viaStdin) for (let i = 0; i < entries.length; i++) env[`OCX_ACL_PATH_${i}`] = entries[i]!.path;
+  // Base64 lines are data, as in the async runner; no path text becomes PowerShell source.
+  const input = viaStdin ? Buffer.from(entries.map(entry => Buffer.from(entry.path, "utf8").toString("base64")).join("\n") + "\n") : undefined;
   const result = Bun.spawnSync([
     resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive",
     "-ExecutionPolicy", "Bypass", "-EncodedCommand", ENCODED_ACL_SCRIPT,
   ], {
-    env, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+    env, stdin: input ?? "ignore", stdout: "pipe", stderr: "ignore",
     timeout: timeoutMs, windowsHide: true,
   });
   return { success: result.success, timedOut: result.exitedDueToTimeout ?? false, stdout: result.stdout ?? new Uint8Array() };

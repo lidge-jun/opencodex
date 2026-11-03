@@ -121,6 +121,20 @@ opencodex yerel yapılandırmasını kaldırın. `remove`, `uninstall`'ın bir t
 adıdır. Yapılandırma temizliği yeni bir yükleme tarafından oluşturulan sahiplik
 meta verilerini gerektirir; eski veya paylaşılan dizinler yerinde bırakılır.
 
+`ocx uninstall` root olarak veya yükseltilmiş (yönetici) bir Windows isteminden çalıştığında,
+önce başka hiçbir hesabın yapılandırma dizinini, üstündeki dizinleri veya içindeki herhangi bir dizini
+değiştiremediğini ve yapılandırma dizinindeki hiçbir bağlantının dizinin dışına çıkmadığını (Windows'ta hiç bağlantı bulunmadığını) denetler.
+Denetimlerden biri başarısız olursa kaldırma işlemi hiçbir şeyi değiştirmeden durur ve nedenini bildirir.
+`ocx uninstall` komutunu yapılandırma dizininin sahibi olan hesapla, `sudo` veya yönetici hakları
+olmadan çalıştırın ya da bu dizinleri yalnızca o hesapla sınırlayıp bu tür bağlantıları kaldırdıktan
+sonra yeniden çalıştırın. İstemin yükseltilmiş olup olmadığının anlaşılamadığı Windows ARM64'te de aynı
+denetim uygulanır; denetim tamamlanamazsa opencodex'i durdurup yapılandırma dizinini kendiniz kaldırın.
+
+Yapılandırma dizini içindeki üst dizini bir bağlantı (sembolik bağlantı veya junction) olan kayıtlı
+bir girdi yerinde bırakılır ve kalan yol olarak listelenir; çalıştırma kısmi kaldırma olarak biter.
+O bağlantıyı gerçek dizinle değiştirin veya kaldırın, ardından tamamlamak için `ocx uninstall`
+komutunu yeniden çalıştırın.
+
 ## Durum ve sağlık
 
 ### `ocx status [--json]`
