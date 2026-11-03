@@ -141,7 +141,11 @@ const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
  * CONTEXT_OVERFLOW_TEXT_RE on purpose: without a code, a message that only mentions the context
  * window (for example a configuration failure) must not make Claude Code compact.
  */
-const DEFINITE_OVERFLOW_TEXT_RE = /prompt is too long|input is too long|maximum context length is \d+|\b(?:input|prompt|request|messages?|conversation)\b[^.\n]{0,60}\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
+// A stated maximum counts only beside a stated request size, and quoted text (a field value or a
+// tool name) never counts, so a validation error that merely mentions the limit stays itself.
+const DEFINITE_OVERFLOW_TEXT_RE = /(?<!['"`])\b(?:prompt|input) is too long\b(?!['"`])|maximum context length is \d+[^]{0,200}?\b(?:resulted in|you requested|requested) \d+ tokens|\b(?:input|prompt|request|messages?|conversation)\b[^.\n]{0,60}\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
+/** A quoted value inside a message (a field, enum or tool name); an apostrophe inside a word does not open one. */
+const QUOTED_SPAN_RE = /(?<!\w)(['"`])[^'"`\n]{1,200}\1(?!\w)/g;
 
 /**
  * Whether a translated refusal is an oversized-input refusal. A coded context_length_exceeded
@@ -158,7 +162,7 @@ export function isContextOverflowError(error: { type?: unknown; code?: unknown }
   if (typeof error.type === "string" && NON_OVERFLOW_ERROR_TYPES.has(error.type)) return false;
   const status = (error as { status?: unknown }).status;
   if (typeof status === "number" && NON_OVERFLOW_STATUSES.has(status)) return false;
-  return DEFINITE_OVERFLOW_TEXT_RE.test(message) && !isThroughputLimitText(message);
+  return DEFINITE_OVERFLOW_TEXT_RE.test(message.replace(QUOTED_SPAN_RE, " ")) && !isThroughputLimitText(message);
 }
 
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
