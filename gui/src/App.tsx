@@ -311,6 +311,10 @@ export default function App() {
 
   const themeSwitch = <ThemeSwitch theme={theme} onChange={setTheme} />;
   const displayedVersion: string = healthPoll.data?.version ?? __APP_VERSION__;
+  // The sidebar status follows the health check: a failed or refused /healthz is "Offline",
+  // never a default "Online". Before the first answer it stays Online, as the page itself
+  // loaded from this proxy.
+  const proxyOnline = !(healthPoll.data === null || (healthPoll.data === undefined && healthPoll.error != null));
   const uptime = healthPoll.data?.uptime ?? null;
   // The sidebar row is narrow, so it shows the time alone; the status word is its tooltip.
   const uptimeLabel = uptime === null ? undefined : t("shellV2.uptimeValue", { h: String(Math.floor(uptime / 3600)), m: String(Math.floor((uptime % 3600) / 60)) });
@@ -535,7 +539,8 @@ export default function App() {
         <div className="sidebar-foot">
           <ProxyControls
             label={t("dash.actions")}
-            statusLabel={t("dash.online")}
+            statusLabel={t(proxyOnline ? "dash.online" : "dash.offline")}
+            online={proxyOnline}
             detail={uptimeLabel}
             stopLabel={t(targets.connected ? "connection.disconnect" : "dash.stop")}
             stoppingLabel={t("dash.stopping")}
