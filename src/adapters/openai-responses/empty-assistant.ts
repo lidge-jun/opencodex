@@ -16,11 +16,23 @@ function isEmptyAssistantMessage(item: unknown): boolean {
   return item.content === "" || (Array.isArray(item.content) && item.content.every(isEmptyTextPart));
 }
 
+/** Exactly Kimi Code's native Responses endpoint; lookalike hosts and other Kimi paths do not match. */
+export function isKimiCodingResponsesUrl(responseUrl: string): boolean {
+  let url: URL;
+  try { url = new URL(responseUrl); } catch { return false; }
+  return url.hostname === "api.kimi.com" && /^\/coding\/v1\/responses\/?$/.test(url.pathname);
+}
+
+/** The same endpoint over HTTPS on the default port only, for request rewrites scoped to Kimi Code itself. */
+export function isKimiCodingResponsesHttpsUrl(responseUrl: string): boolean {
+  if (!isKimiCodingResponsesUrl(responseUrl)) return false;
+  const url = new URL(responseUrl);
+  return url.protocol === "https:" && url.port === "";
+}
+
 /** Kimi Code rejects content-empty assistant messages even on its native Responses endpoint. */
 export function stripKimiEmptyAssistantMessages(body: unknown, responseUrl: string): unknown {
-  let url: URL;
-  try { url = new URL(responseUrl); } catch { return body; }
-  if (url.hostname !== "api.kimi.com" || !/^\/coding\/v1\/responses\/?$/.test(url.pathname)) return body;
+  if (!isKimiCodingResponsesUrl(responseUrl)) return body;
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const referencedIds = new Set<string>();
   for (const item of body.input) {
