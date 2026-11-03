@@ -711,13 +711,13 @@ async function handleClaudeMessagesWithBudget(
     // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
     // silently skipped. Translation reaches the adapter, which owns both.
     const messagesBody = anthropicBody;
-    nativeComboSource = isRec(messagesBody) && typeof messagesBody.model === "string"
+    // An effort override rewrites the body below, so only an unrewritten body is a replay source;
+    // the envelope then keeps it by reference and charges no ingress copy.
+    nativeComboSource = !effortOverride && isRec(messagesBody) && typeof messagesBody.model === "string"
       && resolveComboId(config, resolveInboundModel(messagesBody.model, cc)) !== null
       && Object.keys(config.providers).some(name => resolveProtocolSettings(config, name).rollout.managedMessagesNative);
     if (isRec(messagesBody) && (resolveProtocolSettings(config).unrepresentable === "reject" || nativeComboSource)) {
-      // Keep the replay source independent of later ingress effort rewrites.
       envelope = createProtocolEnvelope({ inbound: "messages", body: messagesBody, translatorBudget });
-      if (nativeComboSource) envelope = createProtocolEnvelope({ inbound: "messages", body: envelope.freshBody(), translatorBudget });
     }
     const sourceEnvelope = envelope;
     // The bridge entry mark below reads these before an effort override rewrites `thinking`,
@@ -1232,7 +1232,7 @@ async function handleClaudeMessagesWithBudget(
     // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
   }, logCtx, {
-    ...(nativeComboSource && !effortOverride && envelope && settledRoute?.combo ? {
+    ...(nativeComboSource && envelope && settledRoute?.combo ? {
       protocolSource: (await import("./messages-native")).createNativeMessagesComboSource({
         req, config, logCtx, envelope, requestedModel, translatorBudget, selector: nativeSelector,
         modelScope: resolveAdmissionModelScope(config, logIds?.admission),

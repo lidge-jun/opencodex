@@ -152,6 +152,8 @@ any other event returns to the ordinary combo failure classifier unless a later 
 a tool start), unknown/malformed payload (a named event without data included; comment-only blocks are skipped), terminal or byte/chunk cap commits conservatively.
 Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable, while first output waits for a content frame the tap has seen.
 Preflight retention is charged to the translator budget and released on delivery/cancellation.
+The Messages ingress offers its parsed body as that source by reference, with no ingress copy, and
+only when no effort override rewrites it.
 Native plans enforce the captured caller model scope, including internal calls with broad host admission. The same native executor binds the accepted stream to the parent's held lease, carries observed
 usage on cancellation, and reports terminal errors without treating them as successful rows.
 

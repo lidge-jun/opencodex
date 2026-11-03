@@ -408,6 +408,15 @@ describe("native Messages candidates in a combo", () => {
     expect(lanes.nativeChild(targets[0]!, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget())).toBeDefined();
     expect(translatorBudget.snapshot().currentBytes).toBe(jsonUtf8Bytes(body));
   });
+  test("a large body on a combo without a native child is not charged a replay copy", async () => {
+    // 7 MiB fits the translated path's budget but not one extra retained copy of the body.
+    for (const on of [false, true]) {
+      const settings = config(on);
+      settings.combos!.waterfall!.targets = [{ provider: "backup", model: "fallback" }];
+      const { response } = await send({ config: settings, stream: false, messages: [{ role: "user", content: "x".repeat(7 * 1024 * 1024) }] });
+      expect(response.status).toBe(200);
+    }
+  });
   test("native disabled keeps existing translated path", async () => {
     const { response } = await send({ config: config(false) });
     expect(response.status).toBe(200);
