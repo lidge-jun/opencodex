@@ -12,7 +12,8 @@ import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./code
 import { codexLaunchHomeIsOwned, codexLaunchProjectAliasIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
 import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
-export type CodexRuntimeAttestation = Readonly<{ origin: string }>;
+/** role is the listener's self-reported role for the same pid/port the challenge proved. */
+export type CodexRuntimeAttestation = Readonly<{ origin: string; role?: "client" }>;
 
 /** Retain the exact dial endpoint that answered the ownership challenge, not just its verdict. */
 export async function attestCodexRuntime(
@@ -22,7 +23,8 @@ export async function attestCodexRuntime(
   const snapshot = Object.freeze({ ...live });
   try {
     const origin = new URL(`http://${probeHostname(snapshot.probeHostname ?? snapshot.hostname)}:${snapshot.port}`).origin;
-    return await prove(snapshot) === "proven" ? Object.freeze({ origin }) : null;
+    if (await prove(snapshot) !== "proven") return null;
+    return Object.freeze(snapshot.role === "client" ? { origin, role: "client" as const } : { origin });
   } catch { return null; }
 }
 
@@ -72,6 +74,9 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
       const connection = readClientConnectionState();
       if (connection.kind !== "connected" || connection.value.transport === "link") return refuse("connection");
       target = validateCodexRoutingTarget({ baseUrl: `${connection.value.serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
+      // Only this home's client machine listener may vouch for a direct client; a leftover
+      // standalone or hub listener from the same home proves the home, not the client.
+      if (runtimeAttestation?.role !== "client") return refuse("destination");
       destinationIsProvenListener = false;
     }
     const url = new URL(target.baseUrl);
