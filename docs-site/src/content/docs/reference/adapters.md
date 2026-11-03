@@ -536,7 +536,8 @@ MiMo model Command Code serves.
 
   Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
   levels deep), including `const`/`enum` comparisons and every pass over `required` lists, object
-  entries and long strings. An answer that needs more counts as not
+  entries, long strings and long numbers. A strict format without a JSON object schema is refused,
+  and so is a `type` list that repeats a type. An answer that needs more counts as not
   matching the format. A strict schema with more than 10,000 nodes, or more than 10,000 values in
   its `const`/`enum` literals, is refused. Error messages name the failed check only, never a
   property name or path from the answer or the schema.

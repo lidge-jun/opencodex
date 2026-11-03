@@ -165,14 +165,15 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   when it fits the injected-instruction budget, and is otherwise sent without it.
 - The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
   call. The direct form relays the model's bytes; the wrapped form relays the original bytes of
-  `value`, so numbers past 2^53 or the double range are never rewritten. Only a document past the
-  reader's 512-level nesting limit is re-serialized, without `strict: true`.
+  `value`, so numbers past 2^53 or the double range are never rewritten. A value past the reader's
+  512-level nesting limit is refused rather than re-serialized.
   Without `strict: true`, validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
   root's `required` keys are present. With `strict: true`, `src/adapters/kiro/structured-output-schema.ts`
   prepares the original schema into a validation graph once, at the boundary, and validates the whole
-  value exactly and in bounded work. Anything outside this subset is refused before anything is sent,
+  value exactly and in bounded work. A strict format whose schema is missing or not a JSON object
+  (such as `false`) is refused. Anything outside this subset is refused before anything is sent,
   with the same refusal structured output had before emulation:
-  - `type` (a known type or a non-empty array of them), `properties`, `required`,
+  - `type` (a known type or a non-empty array of them) with no repeated type, `properties`, `required`,
     `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
     A `const` or `enum` literal that contains a number is refused: the request arrives parsed, so
     `1.0000000000000001` is already `1`, and exact equality could accept a value the caller excluded.
@@ -200,7 +201,7 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   reader stops at 512 levels of nesting. A value that needs more is non-conforming (it takes the
   bounded retry like any invalid answer), so a recursive `anyOf` cannot branch exponentially and a
   deep value cannot exhaust the stack. `const`/`enum` comparisons, each pass over a `required`
-  list or an object's entries, and string length checks are charged to the same budget, long strings
+  list or an object's entries, string length checks and number comparisons (each number parsed once) are charged to the same budget, long strings
   in proportion to their length. Preparation is bounded too: a schema with more than
   10,000 nodes, or more than 10,000 JSON values across its `const`/`enum` literals, is refused, and
   the reference-cycle check is linear in nodes and edges. Validation problems and refusals are fixed

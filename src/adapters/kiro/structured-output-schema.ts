@@ -219,7 +219,9 @@ function prepare(schema: JsonRecord): PreparedSchema {
           throw new Unsupported(key);
         case "type": {
           const types = Array.isArray(arg) ? arg : [arg];
-          if (types.length === 0 || !types.every(t => typeof t === "string" && KNOWN_TYPES.has(t))) throw new Unsupported(key);
+          // Distinct known types only, so a type list is at most seven entries long.
+          if (types.length === 0 || new Set(types).size !== types.length
+            || !types.every(t => typeof t === "string" && KNOWN_TYPES.has(t))) throw new Unsupported(key);
           node.types = types as string[];
           break;
         }
@@ -326,13 +328,24 @@ export function assertKiroStrictSchemaSupported(schema: JsonRecord): void {
 }
 
 /** Whether a parsed JSON value has the given JSON Schema type. */
+/** A number value's decimal, parsed once per value however many nodes inspect it. */
+const decimals = new WeakMap<KiroJsonValue, KiroDecimal>();
+function decimalOf(value: KiroJsonValue & { kind: "number" }): KiroDecimal {
+  let decimal = decimals.get(value);
+  if (!decimal) {
+    decimal = kiroDecimal(value.lexeme);
+    decimals.set(value, decimal);
+  }
+  return decimal;
+}
+
 function hasType(value: KiroJsonValue, type: string): boolean {
   switch (type) {
     case "object": return value.kind === "object";
     case "array": return value.kind === "array";
     case "string": return value.kind === "string";
     case "number": return value.kind === "number";
-    case "integer": return value.kind === "number" && isKiroDecimalInteger(kiroDecimal(value.lexeme));
+    case "integer": return value.kind === "number" && isKiroDecimalInteger(decimalOf(value));
     case "boolean": return value.kind === "boolean";
     case "null": return value.kind === "null";
     default: return false;
@@ -414,7 +427,11 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
       const problem = check(node.ref, value, depth + 1);
       if (problem) return problem;
     }
-    if (node.types && !node.types.some(type => hasType(value, type))) return `expected a JSON ${node.types.join(" or ")}`;
+    if (node.types) {
+      // An integer check walks the number's digits; long lexemes are charged in proportion.
+      if (value.kind === "number" && node.types.includes("integer")) spend(Math.floor(value.lexeme.length / 256));
+      if (!node.types.some(type => hasType(value, type))) return `expected a JSON ${node.types.join(" or ")}`;
+    }
     if (node.enumValues && !node.enumValues.some(option => literalEquals(option, value, spend))) return "expected one of the enum values";
     if (node.constValue && !literalEquals(node.constValue.value, value, spend)) return "expected the const value";
     if (node.anyOf && !node.anyOf.some(branch => check(branch, value, depth + 1) === undefined)) {
@@ -430,8 +447,10 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
         if (node.maxLength !== undefined && length > node.maxLength) return "a string is longer than maxLength";
       }
     }
-    if (value.kind === "number") {
-      const number = kiroDecimal(value.lexeme);
+    if (value.kind === "number" && (node.minimum || node.maximum || node.exclusiveMinimum || node.exclusiveMaximum)) {
+      // Bound comparisons walk the digits too: parsed once per value, charged on every use.
+      spend(Math.floor(value.lexeme.length / 256));
+      const number = decimalOf(value);
       if (node.minimum && compareKiroDecimal(number, node.minimum) < 0) return "a number is below minimum";
       if (node.maximum && compareKiroDecimal(number, node.maximum) > 0) return "a number is above maximum";
       if (node.exclusiveMinimum && compareKiroDecimal(number, node.exclusiveMinimum) <= 0) return "a number is not above exclusiveMinimum";
@@ -508,6 +527,9 @@ export function rewriteKiroWrappedRefs(schema: unknown): unknown {
 /** One reference rewritten for the wrapped document. */
 function movedRef(ref: string): string {
   if (ref !== "#" && !ref.startsWith("#/")) return ref;
-  if (ref.startsWith("#/$defs/") || ref.startsWith("#/definitions/")) return ref;
+  // Judge the decoded pointer: `#/%24defs/item` names the hoisted `$defs` as surely as `#/$defs/item`.
+  let decoded = ref;
+  try { decoded = decodeURIComponent(ref); } catch { /* an undecodable pointer is moved like any other */ }
+  if (decoded.startsWith("#/$defs/") || decoded.startsWith("#/definitions/")) return ref;
   return `#/properties/value${ref.slice(1)}`;
 }

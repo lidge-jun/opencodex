@@ -69,8 +69,13 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
     ...(format?.type === "json_schema" && format.description ? { description: format.description } : {}),
   };
   const schema = format?.type === "json_schema" && isRecord(format.schema) ? format.schema : undefined;
-  if (!schema) return { toolSchema: { type: "object" }, wrapped: false, ...meta };
   const strict = format?.type === "json_schema" && format.strict === true;
+  // A strict format promises conformance to its schema; without an object schema (absent, or a
+  // boolean such as `false`) there is nothing this emulation can enforce, so it is refused.
+  if (!schema && strict) {
+    throw new Error("Kiro does not support Responses structured output: a strict format needs a JSON object schema");
+  }
+  if (!schema) return { toolSchema: { type: "object" }, wrapped: false, ...meta };
   if (strict) assertKiroStrictSchemaSupported(schema);
   const contract = { schema, ...(strict ? { strict } : {}) };
   const sanitized = sanitizeKiroSchema(schema) as JsonRecord;
@@ -78,11 +83,14 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   // `#/$defs/...` references resolve against the document root, which is now the wrapper. Hoist the
   // definitions with them so a referenced schema still resolves after it moves under `value`, and
   // re-point `#` and other root-relative references at `#/properties/value`, the original root.
-  const { $defs, definitions, ...inner } = rewriteKiroWrappedRefs(sanitized) as JsonRecord;
+  // A root `$id` stays at the wrapper root with the hoisted definitions, so references keep the
+  // same base; moved under `value` it would start a new resource.
+  const { $defs, definitions, $id, ...inner } = rewriteKiroWrappedRefs(sanitized) as JsonRecord;
   return {
     ...contract,
     wrapped: true,
     toolSchema: {
+      ...($id !== undefined ? { $id } : {}),
       type: "object",
       properties: { value: inner },
       required: ["value"],
@@ -255,14 +263,21 @@ export function parseKiroStructuredToolInput(
   }
   const problem = structuredValueProblem(spec, value);
   if (problem) return { error: `${FAILURE_PREFIX}: ${problem}` };
-  return { json: spec.wrapped ? wrappedValueText(text, value) : text };
+  if (!spec.wrapped) return { json: text };
+  const wrappedText = wrappedValueText(text);
+  return wrappedText === undefined
+    ? { error: `${FAILURE_PREFIX}: the value nests deeper than the proxy can relay exactly` }
+    : { json: wrappedText };
 }
 
-/** The original bytes of the wrapper's `value`; only a document past the reader's nesting limit is re-serialized. */
-function wrappedValueText(text: string, value: unknown): string {
+/**
+ * The original bytes of the wrapper's `value`, or undefined past the reader's nesting limit. Such a
+ * value is refused rather than re-serialized, because re-serializing rewrites large numbers.
+ */
+function wrappedValueText(text: string): string | undefined {
   const root = readKiroJson(text)?.value;
   const span = root?.kind === "object" ? root.entries.get("value") : undefined;
-  return span ? text.slice(span.start, span.end) : JSON.stringify(value);
+  return span ? text.slice(span.start, span.end) : undefined;
 }
 
 const WHOLE_FENCE = /^```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/;
