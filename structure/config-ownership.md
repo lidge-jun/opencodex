@@ -106,7 +106,9 @@ before the tombstone can still create its file afterwards; see the last item bel
 
 `removeOwnedConfigState` resolves the config root to its realpath once, at the start, and every later
 step of the run (the lock, metadata, temp files, entries and the final rmdir) uses that canonical
-path; residual paths are reported in the spelling the caller passed. A root reached through an
+path and never resolves it again: before temp cleanup, before the metadata unlinks and before the
+final rmdir it confirms the root is still a real directory resolving to itself, and ends partial
+otherwise. Residual paths are reported in the spelling the caller passed. A root reached through an
 aliased ancestor, such as macOS `/var` for `/private/var`, therefore still works, and a root that is
 itself a link is refused as before. `src/lib/config-ownership-removal.ts` resolves every manifest
 entry from that root. Immediately before
@@ -128,8 +130,9 @@ The config path as given, which the teardown steps before the remover use, must 
 directories no other account can change and links owned by the running account or root, following
 each link target the way the kernel does; on Windows it may contain no link at all. A root that does
 not exist yet needs its nearest existing directory closed to every other account. Then the canonical
-root and its ancestors, each recorded parent directory, and every directory inside a recorded
-directory are checked. On POSIX the root and those
+root, its ancestors and every directory in its tree are checked, because teardown steps before the
+remover read and write files anywhere in the tree; a link anywhere in the tree, to a file or a
+directory, must resolve inside the root. On POSIX the root and those
 directories must be owned by the effective uid with no group or other write bit, and each ancestor
 must be owned by it or by root and not shared-writable unless sticky; on macOS no listed directory
 or link, including every one the walk of the given path passed, may carry an ACL allow entry. On

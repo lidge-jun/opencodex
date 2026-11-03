@@ -92,6 +92,59 @@ describe("owned path removal stays inside the config root", () => {
     }
   });
 
+  posix("an elevated run refuses a config tree with a link that leads outside it, before any teardown", () => {
+    const { parent, dir } = ownedHome("ocx-removal-tree-link-");
+    const external = join(parent, "external");
+    try {
+      mkdirSync(external, { mode: 0o700 });
+      writeFileSync(join(external, "records.json"), "keep");
+      // An unrecorded directory that teardown steps before the remover read and write through.
+      symlinkSync(external, join(dir, "integrations"), "dir");
+      setUninstallElevationProbeForTests(() => true);
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(removeOwnedConfigState(dir).status).toBe("refused");
+      expect(readFileSync(join(external, "records.json"), "utf8")).toBe("keep");
+      unlinkSync(join(dir, "integrations"));
+      symlinkSync(join(external, "records.json"), join(dir, "records.json"), "file");
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      unlinkSync(join(dir, "records.json"));
+      symlinkSync(join(parent, "missing"), join(dir, "dangling"), "file");
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      unlinkSync(join(dir, "dangling"));
+      // A link that stays inside the root is fine.
+      mkdirSync(join(dir, "inner"), { mode: 0o700 });
+      symlinkSync(join(dir, "inner"), join(dir, "inner-alias"), "dir");
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  posix("a root replaced by a link once removal has started is never followed", () => {
+    const { parent, dir } = ownedHome("ocx-removal-root-swap-");
+    const decoy = join(parent, "decoy");
+    try {
+      mkdirSync(decoy, { mode: 0o700 });
+      writeFileSync(join(decoy, "config.json"), "keep");
+      chmodSync(dir, 0o700);
+      let calls = 0;
+      // The third elevation read happens under the lock, after the root was resolved once.
+      setUninstallElevationProbeForTests(() => {
+        calls += 1;
+        if (calls === 3) {
+          renameSync(dir, join(parent, "moved"));
+          symlinkSync(decoy, dir, "dir");
+        }
+        return true;
+      });
+      const result = removeOwnedConfigState(dir);
+      expect(result.status).not.toBe("removed");
+      expect(readFileSync(join(decoy, "config.json"), "utf8")).toBe("keep");
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
   posix("removal through an aliased spelling stays on the root it resolved first", () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-removal-lexical-"));
     const real = join(parent, "real");
@@ -154,10 +207,10 @@ describe("owned path removal stays inside the config root", () => {
       setWindowsOwnerAclRunnerForTests(() => ({ success: false, timedOut: false, stdout: "" }));
       withPlatform("win32", "arm64", () => {
         expect(uninstallRunsElevated()).toBe(true);
-        expect(elevatedRemovalRefusal(dir, [])).toBe(UNKNOWN_ELEVATION_UNINSTALL_REFUSAL);
+        expect(elevatedRemovalRefusal(dir)).toBe(UNKNOWN_ELEVATION_UNINSTALL_REFUSAL);
       });
       setWindowsElevationProbeForTests(() => false);
-      withPlatform("win32", "arm64", () => expect(elevatedRemovalRefusal(dir, [])).toBeNull());
+      withPlatform("win32", "arm64", () => expect(elevatedRemovalRefusal(dir)).toBeNull());
     } finally {
       removeTreeWithRetry(parent);
     }
@@ -227,7 +280,7 @@ describe("owned path removal stays inside the config root", () => {
         calls.push(entries.length);
         return { success: false, timedOut: true, stdout: "" };
       });
-      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir, ["artifacts"]))).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir))).toBe(ELEVATED_UNINSTALL_REFUSAL);
     } finally {
       removeTreeWithRetry(parent);
     }
@@ -340,7 +393,7 @@ describe("owned path removal stays inside the config root", () => {
   test("a run that is not elevated does not check who else can write the home", () => {
     setUninstallElevationProbeForTests(() => false);
     setWindowsOwnerAclRunnerForTests(() => { throw new Error("no ACL read expected"); });
-    expect(elevatedRemovalRefusal(tmpdir(), ["nested/owned.txt"])).toBeNull();
+    expect(elevatedRemovalRefusal(tmpdir())).toBeNull();
   });
 
   test("a recorded path whose parent is stored in another case is removed on a case-insensitive volume", () => {
@@ -416,7 +469,7 @@ describe("owned path removal stays inside the config root", () => {
         return { success: false, timedOut: false, stdout: "" };
       });
       Object.defineProperty(process, "platform", { ...original, value: "win32" });
-      expect(elevatedRemovalRefusal(dir, ["nested/owned.txt", "artifacts"])).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(elevatedRemovalRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
     } finally {
       Object.defineProperty(process, "platform", original);
       removeTreeWithRetry(parent);
@@ -514,7 +567,7 @@ describe("owned path removal stays inside the config root", () => {
         aclReads += 1;
         return { success: false, timedOut: false, stdout: "" };
       });
-      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(join(parent, "alias", "config"), []))).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(join(parent, "alias", "config")))).toBe(ELEVATED_UNINSTALL_REFUSAL);
       expect(aclReads).toBe(0);
       expect(existsSync(dir)).toBe(true);
     } finally {

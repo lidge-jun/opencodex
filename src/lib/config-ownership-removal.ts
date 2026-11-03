@@ -27,8 +27,9 @@ export class OwnedPathRedirectedError extends Error {
 }
 
 export const ELEVATED_UNINSTALL_REFUSAL = "ocx uninstall is running with elevated privileges, but another account can change "
-  + "the config directory or a directory uninstall would remove from. Run 'ocx uninstall' as the account that owns the "
-  + "config directory, without sudo or administrator rights, or restrict those directories to that account first.";
+  + "the config directory, a directory above it or a directory inside it, or the config directory holds a link that leads "
+  + "outside it. Run 'ocx uninstall' as the account that owns the config directory, without sudo or administrator rights, "
+  + "or restrict those directories to that account and remove such links first.";
 
 /** Windows without the native token probe (Bun cannot run `bun:ffi` on ARM64): the run is treated as elevated. */
 export const UNKNOWN_ELEVATION_UNINSTALL_REFUSAL = "ocx uninstall could not determine whether it is running with elevated "
@@ -194,6 +195,16 @@ function isInsideRoot(rootPath: string, candidate: string): boolean {
     : candidate.startsWith(prefix);
 }
 
+/** Whether the canonical root is still a real directory that resolves to itself. */
+export function canonicalRootUnchanged(rootPath: string): boolean {
+  try {
+    assertRealDirectoryChain(rootPath, [], undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether the recorded entry `parts` exists below `rootPath`. Absent means a real directory on the
  * way, or the entry itself, does not exist (or a regular file sits where a directory would be). A link
@@ -243,33 +254,33 @@ export function removeOwnedEntry(rootPath: string, parts: readonly string[], opt
   rmdirSync(path);
 }
 
-/** Real directories below `path`, without entering links. */
-function collectDirectoryTree(path: string, into: Set<string>): void {
-  into.add(path);
-  for (const name of readdirSync(path)) {
-    const child = join(path, name);
-    const entry = lstatSync(child);
-    if (entry.isDirectory() && !isLinkEntry(child, entry)) collectDirectoryTree(child, into);
-  }
-}
-
-/** Existing directories removal would pass through or empty: the root, recorded parents and every directory inside a recorded directory. */
-function removalDirectories(rootPath: string, manifestPaths: readonly string[]): string[] {
-  const directories = new Set<string>([rootPath]);
-  for (const rel of manifestPaths) {
-    const parts = rel.split("/");
-    let current = rootPath;
-    for (const [index, part] of parts.entries()) {
-      current = join(current, part);
-      let entry: Stats;
-      try { entry = lstatSync(current); } catch { break; }
-      // A link or file is never descended into; removal unlinks it or reports the entry.
-      if (!entry.isDirectory() || isLinkEntry(current, entry)) break;
-      if (index === parts.length - 1) collectDirectoryTree(current, directories);
-      else directories.add(current);
+/**
+ * Every real directory in the root's tree, and every link in it, for the ownership checks. The
+ * teardown steps before the remover read and write files anywhere in the tree, so a link at any
+ * depth, to a file or a directory, must resolve to a place inside the root; one that leads outside
+ * it, or does not resolve, makes the tree unacceptable and the result is null.
+ */
+function rootTree(rootPath: string): { directories: string[]; links: string[] } | null {
+  const directories: string[] = [];
+  const links: string[] = [];
+  const pending = [rootPath];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    directories.push(directory);
+    for (const name of readdirSync(directory)) {
+      const child = join(directory, name);
+      const entry = lstatSync(child);
+      if (isLinkEntry(child, entry)) {
+        let target: string;
+        try { target = realpathSync.native(child); } catch { return null; }
+        if (!isInsideRoot(rootPath, target)) return null;
+        links.push(child);
+      } else if (entry.isDirectory()) {
+        pending.push(child);
+      }
     }
   }
-  return [...directories];
+  return { directories, links };
 }
 
 function rootAncestors(rootPath: string): string[] {
@@ -298,23 +309,23 @@ function darwinAclsDenyOnly(paths: readonly string[]): boolean {
 
 /**
  * When uninstall runs elevated, a reason to refuse the whole run if another account can change the
- * spelling it was given, the canonical root, one of its ancestors, or any directory removal passes
- * through or empties. Null when the run is not elevated or every one of them belongs to the elevated
- * account alone. `manifestPaths` are the validated relative entries. A missing root is checked
- * through its nearest existing directory. A run whose elevation is unknown is checked as elevated.
+ * spelling it was given, the canonical root, one of its ancestors, or any directory in the root's
+ * tree, or if a link in that tree leads outside it. Null when the run is not elevated or all of it
+ * belongs to the elevated account alone. A missing root is checked through its nearest existing
+ * directory. A run whose elevation is unknown is checked as elevated.
  */
-export function elevatedRemovalRefusal(configDir: string, manifestPaths: readonly string[]): string | null {
+export function elevatedRemovalRefusal(configDir: string): string | null {
   const elevation = uninstallElevation();
   if (elevation === "unelevated") return null;
   const refusal = elevation === "unknown" ? UNKNOWN_ELEVATION_UNINSTALL_REFUSAL : ELEVATED_UNINSTALL_REFUSAL;
   try {
-    return onlyThisAccountCanChange(configDir, manifestPaths) ? null : refusal;
+    return onlyThisAccountCanChange(configDir) ? null : refusal;
   } catch {
     return refusal;
   }
 }
 
-function onlyThisAccountCanChange(configDir: string, manifestPaths: readonly string[]): boolean {
+function onlyThisAccountCanChange(configDir: string): boolean {
   if (process.platform === "win32") {
     const nearest = windowsSpellingNearest(configDir);
     if (nearest === null) return false;
@@ -325,10 +336,12 @@ function onlyThisAccountCanChange(configDir: string, manifestPaths: readonly str
       ], WINDOWS_OWNER_ACL_TIMEOUT_MS);
     }
     const rootPath = realpathSync.native(configDir);
+    const tree = rootTree(rootPath);
+    if (tree === null) return false;
     // One read for the whole tree: the ACL reader takes a large batch over stdin.
     return verifyWindowsEntriesAcl([
       ...rootAncestors(rootPath).map(path => ({ path, directory: true, policy: "trusted-ancestry" as const })),
-      ...removalDirectories(rootPath, manifestPaths).map(path => ({ path, directory: true, policy: "write-private" as const })),
+      ...tree.directories.map(path => ({ path, directory: true, policy: "write-private" as const })),
     ], WINDOWS_OWNER_ACL_TIMEOUT_MS);
   }
   const euid = process.geteuid?.();
@@ -338,9 +351,10 @@ function onlyThisAccountCanChange(configDir: string, manifestPaths: readonly str
   const darwin = process.platform === "darwin";
   if (!existsSync(configDir)) return !darwin || darwinAclsDenyOnly(visited);
   const rootPath = realpathSync.native(configDir);
-  const directories = removalDirectories(rootPath, manifestPaths);
+  const tree = rootTree(rootPath);
+  if (tree === null) return false;
   const ancestors = rootAncestors(rootPath);
   if (!ancestors.every(path => posixTrustedAncestor(lstatSync(path), euid))) return false;
-  if (directories.some(path => posixSharedWritable(lstatSync(path), euid))) return false;
-  return !darwin || darwinAclsDenyOnly([...new Set([...visited, ...ancestors, ...directories])]);
+  if (tree.directories.some(path => posixSharedWritable(lstatSync(path), euid))) return false;
+  return !darwin || darwinAclsDenyOnly([...new Set([...visited, ...ancestors, ...tree.directories, ...tree.links])]);
 }

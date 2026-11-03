@@ -291,12 +291,13 @@ Config cleanup requires ownership metadata created by a fresh install; legacy or
 are left in place.
 
 When `ocx uninstall` runs as root or from an elevated (administrator) Windows prompt, it first
-checks that no other account can change the config directory, the directories above it, or the
-directories it removes from. If another account can, uninstall stops before it changes anything and
-says why. Run `ocx uninstall` as the account that owns the config directory, without `sudo` or
-administrator rights, or restrict the config directory and its parent directories to that account,
-then run it again. On Windows ARM64, where opencodex cannot tell whether the prompt is elevated, the
-same check applies; if it cannot be completed, stop opencodex and remove the config directory yourself.
+checks that no other account can change the config directory, the directories above it, or any
+directory inside it, and that no link inside the config directory leads outside it. If either check
+fails, uninstall stops before it changes anything and says why. Run `ocx uninstall` as the account
+that owns the config directory, without `sudo` or administrator rights, or restrict those directories
+to that account and remove such links, then run it again. On Windows ARM64, where opencodex cannot
+tell whether the prompt is elevated, the same check applies; if it cannot be completed, stop opencodex
+and remove the config directory yourself.
 
 A recorded entry whose parent directory inside the config directory is a link (a symlink or junction)
 is left in place and listed as a remaining path, and the run ends as a partial uninstall. Replace that

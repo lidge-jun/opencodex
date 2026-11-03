@@ -14,7 +14,7 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
-import { elevatedRemovalRefusal, ownedEntryPresent, removeOwnedEntry, uninstallRunsElevated } from "./config-ownership-removal";
+import { canonicalRootUnchanged, elevatedRemovalRefusal, ownedEntryPresent, removeOwnedEntry, uninstallRunsElevated } from "./config-ownership-removal";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
@@ -752,13 +752,10 @@ function removeIdleLockFiles(configDir: string): "removed" | "busy" {
   return "removed";
 }
 
-/** The elevated-run check over the manifest as read without the lock; null when not elevated. */
-function privilegeCheck(configDir: string): { refusal: string | null; paths: string[] } | null {
+/** The elevated-run check; null when the run is not elevated. */
+function privilegeCheck(configDir: string): { refusal: string | null } | null {
   if (!uninstallRunsElevated()) return null;
-  if (!existsSync(configDir)) return { refusal: elevatedRemovalRefusal(configDir, []), paths: [] };
-  const paths = (loadOwnershipForUninstall(configDir)?.manifest.paths ?? [])
-    .filter(rel => manifestRelativePath(configDir, join(configDir, ...rel.split("/"))) === rel);
-  return { refusal: elevatedRemovalRefusal(configDir, paths), paths };
+  return { refusal: elevatedRemovalRefusal(configDir) };
 }
 
 /**
@@ -800,6 +797,13 @@ function callerSpelling(path: string, canonical: string, configDir: string): str
 }
 
 function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult {
+  // `configDir` is the canonical root resolved once by the caller. It is never resolved again: each
+  // step below that acts on it first confirms it is still a real directory resolving to itself.
+  const rootMoved: ConfigRemovalResult = {
+    status: "partial",
+    reason: "the config directory changed while uninstall ran; run 'ocx uninstall' again",
+    residualPaths: [configDir],
+  };
   ownershipCache.delete(ownershipCacheKey(configDir));
   lockedManifestIdentity.delete(ownershipCacheKey(configDir));
   // Before the lock exists or anything is written, so a refused elevated run changes nothing.
@@ -850,13 +854,14 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
       }
       // Checked again under the lock and before the tombstone: the manifest, ownership, modes and the
       // tree may all have changed since the unlocked check.
-      const lockedRefusal = privilege ? elevatedRemovalRefusal(configDir, ownership.manifest.paths) : null;
+      const lockedRefusal = privilege ? elevatedRemovalRefusal(configDir) : null;
       if (lockedRefusal) return { status: "refused", reason: lockedRefusal, residualPaths: [configDir] };
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
+      if (!canonicalRootUnchanged(configDir)) return rootMoved;
       removeAbandonedMetadataTemps(configDir, ownership.owner);
-      const rootPath = canonicalRoot(configDir);
+      const rootPath = configDir;
       const elevatedUid = process.platform !== "win32" && uninstallRunsElevated() ? process.geteuid?.() : undefined;
       for (const rel of ownership.manifest.paths) {
         const parts = rel.split("/");
@@ -874,6 +879,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
         }
       }
       uninstallStepHookForTests?.("snapshot-removed");
+      if (!canonicalRootUnchanged(configDir)) return rootMoved;
       try {
         // Owner marker first, manifest last: until the end the tombstoned manifest stays as the record
         // a rerun resumes from, and creation (manifest first) never leaves that state.
@@ -901,6 +907,7 @@ function removeCanonicalOwnedConfigState(configDir: string): ConfigRemovalResult
     };
   }
   if (outcome.status !== "removed") return outcome;
+  if (!canonicalRootUnchanged(configDir)) return rootMoved;
   // The lock holder retired its own lock file on release; one that remains (Windows) is reported.
   const residualPaths = readdirSync(configDir).map(name => join(configDir, name));
   if (residualPaths.length > 0) {
