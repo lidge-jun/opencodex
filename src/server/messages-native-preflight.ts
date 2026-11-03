@@ -31,7 +31,8 @@ export async function preflightNativeMessagesResponse(
       const lines = decoder.decode(block).split(/\r\n|\r|\n/);
       const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null) ?? null;
       const data = lines.map(line => sseFieldValue(line, "data")).filter(value => value !== null).join("\n");
-      if (!data) return;
+      // A named event without a payload is malformed and commits; a comment-only block is skipped.
+      if (!data) { if (event !== null) committed = true; return; }
       let payload: unknown;
       try { payload = JSON.parse(data); } catch { committed = true; return; }
       // Match the native log tap: the last, untrimmed event field is authoritative. A payload

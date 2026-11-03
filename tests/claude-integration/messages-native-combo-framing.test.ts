@@ -100,3 +100,17 @@ for (const [name, after, failed] of [
     else await result.response.body?.cancel();
   });
 }
+
+for (const [name, block, failed] of [
+  ["a named event without data commits", "event: content_block_start\n\n", false],
+  ["a named event with an empty data line commits", "event: content_block_start\ndata:\n\n", false],
+  ["a comment-only block stays skipped", ": keepalive\n\n", true],
+] as const) {
+  test(`native combo preflight prelude rule: ${name}`, async () => {
+    const raw = prelude + block + `event: error\ndata: ${refusal}\n\n`;
+    const result = await preflightNativeMessagesResponse(oneChunk(raw), { model: "fixture", provider: "anth" }, createTestTranslatorBudget());
+    expect(result.kind).toBe(failed ? "failed" : "accepted");
+    if (!failed) expect(await result.response.text()).toBe(raw);
+    else await result.response.body?.cancel();
+  });
+}
