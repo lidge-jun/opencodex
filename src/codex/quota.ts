@@ -978,7 +978,9 @@ export function withWhamShortWindowAbsence(
       || (tertiary === undefined && data.rate_limit?.allowed === true))) {
     // The same complete topology also proves the account has no monthly window when no
     // window declares a monthly duration and no supplementary tertiary window is present.
-    const monthlyAbsent = !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null;
+    // An explicit denial is never evidence that a monthly block ended, on any writer path.
+    const monthlyAbsent = data.rate_limit?.allowed !== false
+      && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null;
     return { ...quota, shortWindowAbsent: true, ...(monthlyAbsent ? { monthlyWindowAbsent: true as const } : {}) };
   }
   return quota;

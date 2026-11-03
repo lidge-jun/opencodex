@@ -3,11 +3,13 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capturePoolQuotaWriter, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
 import { resetCodexCreditsForTests } from "../../src/codex/credits";
+import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import {
-  applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, isCodexQuotaExhausted,
-  parseUsageQuota, poolWhamPolicyObservation, type WhamUsageResponse,
+  applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, getMainPolicyQuota, isCodexQuotaExhausted,
+  parseMainPolicyUsageQuota, parseUsageQuota, poolWhamPolicyObservation, setAccountQuotaFromParsed, type WhamUsageResponse,
 } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
@@ -54,12 +56,14 @@ beforeEach(() => {
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   globalThis.fetch = (async () => { throw new Error("unexpected fixture network request"); }) as typeof fetch;
   clearAccountQuota();
+  clearMainAccountInfoCache();
   resetLifecycleDrainStateForTests();
   resetCodexCreditsForTests();
   resetQuotaQueryBackoffForTests();
 });
 afterEach(() => {
   clearAccountQuota();
+  clearMainAccountInfoCache();
   resetLifecycleDrainStateForTests();
   resetCodexCreditsForTests();
   resetQuotaQueryBackoffForTests();
@@ -123,6 +127,40 @@ describe("pool WHAM monthly-window retirement (#8067)", () => {
     expect(evidence({ ...weeklyOnly, rate_limit: { ...weeklyOnly.rate_limit, tertiary_window: monthly(5) } })?.monthlyWindowAbsent).toBeUndefined();
     expect(evidence({ plan_type: "team", rate_limit: { allowed: true, primary_window: monthly(5), secondary_window: weekly() } })?.monthlyWindowAbsent).toBeUndefined();
     expect(evidence({ plan_type: "prolite", rate_limit: { primary_window: weekly() } })?.monthlyWindowAbsent).toBeUndefined();
+  });
+});
+
+describe("main monthly-window retirement keeps denial semantics", () => {
+  const mainIdentity = "monthly-retire-main-fixture";
+  const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined,
+    captureMainQuotaWriter(mainIdentity), parseMainPolicyUsageQuota(data));
+  const caches = () => [getAccountQuota(MAIN), getMainPolicyQuota()];
+
+  test("an explicit denial with null secondary and tertiary keeps the monthly tuple in both caches", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    publish({ plan_type: "free", rate_limit: { allowed: false, primary_window: monthly(), secondary_window: null } });
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    const denied = { plan_type: "prolite", rate_limit: {
+      allowed: false, primary_window: weekly(), secondary_window: null, tertiary_window: null,
+    } };
+    expect(parseMainPolicyUsageQuota(denied)?.monthlyWindowAbsent).toBeUndefined();
+    publish(denied);
+    for (const quota of caches()) {
+      expect(quota?.monthlyPercent).toBe(100);
+      expect(quota?.monthlyIsPrimaryWindow).toBe(true);
+    }
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "prolite")).toBe(true);
+  });
+
+  test("an allowed weekly-only snapshot retires the monthly tuple in both caches", () => {
+    observeMainQuotaIdentity(mainIdentity);
+    publish({ plan_type: "free", rate_limit: { allowed: false, primary_window: monthly(), secondary_window: null } });
+    publish({ plan_type: "prolite", rate_limit: { allowed: true, primary_window: weekly(), secondary_window: null } });
+    for (const quota of caches()) {
+      expect(quota?.weeklyPercent).toBe(0);
+      expect(quota?.monthlyPercent).toBeUndefined();
+      expect(quota).not.toHaveProperty("monthlyWindowAbsent");
+    }
   });
 });
 
