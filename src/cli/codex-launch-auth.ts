@@ -7,6 +7,7 @@ import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { buildProviderTableBlockForTarget } from "../codex/inject/config-toml";
 import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../codex/inject/routing-target";
 import { readClientConnectionState } from "../client/state";
+import { normalizeBindHostname } from "../server/bind-host";
 import { probeHostname, proveLiveProxyOwnedByHome, type LiveProxy } from "../server/proxy-liveness";
 import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./codex-launch-policy";
 import { codexLaunchHomeIsOwned, codexLaunchProjectAliasIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
@@ -19,9 +20,11 @@ export async function attestCodexRuntime(
   live: LiveProxy,
   prove: typeof proveLiveProxyOwnedByHome = proveLiveProxyOwnedByHome,
 ): Promise<CodexRuntimeAttestation | null> {
-  const snapshot = Object.freeze({ ...live });
+  // Probe the address the listener actually binds: a configured localhost binds 127.0.0.1,
+  // which is also what the standalone Codex target dials.
+  const snapshot = Object.freeze({ ...live, probeHostname: normalizeBindHostname(live.probeHostname ?? live.hostname) });
   try {
-    const origin = new URL(`http://${probeHostname(snapshot.probeHostname ?? snapshot.hostname)}:${snapshot.port}`).origin;
+    const origin = new URL(`http://${probeHostname(snapshot.probeHostname)}:${snapshot.port}`).origin;
     return await prove(snapshot) === "proven" ? Object.freeze({ origin }) : null;
   } catch { return null; }
 }

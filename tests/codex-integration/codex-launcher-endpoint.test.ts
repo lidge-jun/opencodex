@@ -50,6 +50,14 @@ describe("Codex runtime endpoint binding", () => {
     }
   });
 
+  test("a configured localhost listener is proven at the 127.0.0.1 origin it binds", async () => {
+    let probed: LiveProxy | undefined;
+    const proof = await attestCodexRuntime({ ...live, hostname: "localhost" }, async snapshot => { probed = snapshot; return "proven"; });
+    expect(probed?.probeHostname).toBe("127.0.0.1");
+    expect(proof).toEqual({ origin });
+    expect(codexRuntimeAttestationMatchesTarget(standaloneCodexRoutingTarget(12199, { hostname: "localhost" }).baseUrl, proof)).toBe(true);
+  });
+
   test("direct-client destination matching is independent of the local machine port", () => {
     const local = standaloneCodexRoutingTarget(12200, { hostname: "0.0.0.0" });
     const direct = validateCodexRoutingTarget({ baseUrl: `${origin}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
