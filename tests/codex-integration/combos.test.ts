@@ -485,13 +485,12 @@ describe("combo request cloning", () => {
     expect(debug).toHaveBeenCalledTimes(1);
     expect(debug.mock.calls[0]?.[1]).toEqual({
       provider: "a",
-      model: "m1",
       requestedEffort: "high",
       capability: "unsupported",
     });
     concreteComboRequestBody({ model: "combo/x" }, target, "medium", undefined);
     concreteComboRequestBody({ model: "combo/x" }, target, "medium", undefined);
-    expect(debug).toHaveBeenCalledTimes(2);
+    expect(debug).toHaveBeenCalledTimes(2); expect(debug.mock.calls[0]?.[1]).not.toHaveProperty("model"); expect(debug.mock.calls[1]?.[1]).not.toHaveProperty("model");
     expect(debug.mock.calls[1]?.[1]).toMatchObject({
       requestedEffort: "medium",
       capability: "unknown",
@@ -796,7 +795,7 @@ describe("combo target cooldowns", () => {
       expect(sleeps).toEqual([3_000]);
       expect(pick?.target).toMatchObject({ provider: "b", model: "m2" });
       expect(warning).toHaveBeenCalledWith(
-        "[combo] free: all targets cooling, waiting 3000ms for b/m2",
+        "[combo] combo 1: all targets cooling, waiting 3000ms for target 2 (b)",
       );
     } finally {
       warning.mockRestore();

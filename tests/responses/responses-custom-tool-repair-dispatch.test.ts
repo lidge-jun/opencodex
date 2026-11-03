@@ -596,7 +596,7 @@ describe("routed Responses custom-tool repair through handleResponses", () => {
           // a custom_tool_call.
           expect(response.status).toBe(502);
           const body = await response.json() as { error: { message: string } };
-          expect(body.error.message).toContain('undeclared client tool "exec"');
+          expect(body.error.message).toContain("undeclared client tool"); expect(body.error.message).not.toContain("exec");
         } else {
           const body = await response.json() as { output: Array<Record<string, unknown>> };
           expect(body.output[0]).toEqual(upstreamItem);

@@ -9,7 +9,7 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { createPhysicalSendReporter, createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal, type SpendReservationPolicy } from "../../src/lib/spend-reservation-ledger";
-import { SendBudgetExhaustedError, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { SendBudgetExhaustedError, providerErrorDestinationLabel, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
@@ -119,7 +119,7 @@ test("enforced spend counts a local refusal after beforeSend as one started send
   const booking = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true });
   if (!booking.allowed) throw new Error("fixture reservation refused");
   const report = createPhysicalSendReporter(f.budget, () => ({ poolId: "a" }), booking.permit);
-  await expect(fetchWithTransientRetry(async () => { throw new SendBudgetExhaustedError("fixture"); },
+  await expect(fetchWithTransientRetry(async () => { throw new SendBudgetExhaustedError(providerErrorDestinationLabel("fixture")); },
     { attempts: 1, onSendsConsumed: report })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
   expect(f.budget.physicalStarted).toBe(1);
   expect(f.budget.used).toBe(1);

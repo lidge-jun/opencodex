@@ -15,13 +15,13 @@ test("only Artificial Analysis is requested and missing keys produce unattribute
   const requests: string[] = [];
   globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
     requests.push(String(input));
-    return Response.json({ data: [{ name: "Fixture model", evaluations: { artificial_analysis_coding_index: 42 } }] });
+    return Response.json({ pagination: { page: 1, page_size: 200, total_pages: 1, has_more: false }, data: [{ name: "Fixture model", evaluations: { artificial_analysis_intelligence_index: 42 } }] });
   }, { preconnect: originalFetch.preconnect }) as typeof fetch;
   const empty = await loadCapabilityTable(config(undefined));
   expect(empty).toMatchObject({ source: null, domains: {}, fallbackReason: "benchmark data was unavailable: no Artificial Analysis key is configured" });
   expect(requests).toEqual([]);
   const table = await loadCapabilityTable(config({ artificialAnalysis: { apiKey: "aa-consent-fixture" } }));
-  expect(requests).toEqual(["https://artificialanalysis.ai/api/v2/data/llms/models"]);
+  expect(requests).toEqual(["https://artificialanalysis.ai/api/v2/language/models/free?page=1"]);
   expect(table.source?.name).toBe("Artificial Analysis");
   expect(table.domains.coding?.get("fixture-model")).toBe(42);
 });
