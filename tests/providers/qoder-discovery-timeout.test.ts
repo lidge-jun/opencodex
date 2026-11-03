@@ -9,9 +9,10 @@ import {
 import { clearQoderBinaryCache, QODER_GLOBAL_PROFILE } from "../../src/adapters/qoder/profiles";
 import { collectDefaultModelExposure } from "../../src/cli/doctor";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-fetch";
+import { clearGatherRoutedModelsInflight, gatherRoutedModels } from "../../src/codex/catalog/routed-gather";
 import { clearModelCache, getProviderDiscoveryStatus, providerCacheGenerations } from "../../src/codex/model-cache";
 import { probeQoderProvider } from "../../src/server/management/qoder-provider-probe";
-import type { OcxProviderConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // #8115: qoder --list-models took 14.5 s on a working install, past the former 8 s bound.
@@ -143,9 +144,11 @@ describe("qoder connection test (#8115)", () => {
     const cli = gatedCli();
     let resyncs = 0;
     let resynced: Promise<string[]> | undefined;
-    const response = await probeQoderProvider(NAME, provider, "pat", () => {
+    const response = await probeQoderProvider(NAME, provider, "pat", async () => {
       resyncs += 1;
       resynced = fetchProviderModels(NAME, provider, 0).then(models => models.map(model => model.id));
+      await resynced;
+      return { status: "committed" };
     }, { deadlineMs: 20 });
     expect(await read(response)).toMatchObject({ ok: true, discovering: true });
     expect(resyncs).toBe(0);
@@ -162,8 +165,10 @@ describe("qoder connection test (#8115)", () => {
     clearQoderDiscoveryFlightsForTests();
     const cli = gatedCli();
     let resynced: Promise<string[]> | undefined;
-    const response = await probeQoderProvider(NAME, provider, "pat", () => {
+    const response = await probeQoderProvider(NAME, provider, "pat", async () => {
       resynced = fetchProviderModels(NAME, provider, 60_000).then(models => models.map(model => model.id));
+      await resynced;
+      return { status: "committed" };
     }, { deadlineMs: 20 });
     expect(await read(response)).toMatchObject({ ok: true, discovering: true });
     await cli.release();
@@ -174,7 +179,7 @@ describe("qoder connection test (#8115)", () => {
   test("a cache invalidation revokes a run in flight: no join, no late re-sync", async () => {
     const cli = gatedCli([{ ok: true, models: ["Previous-Account"] }, { ok: true, models: ["Current-Account"] }]);
     let resyncs = 0;
-    const response = await probeQoderProvider(NAME, provider, "pat", () => { resyncs += 1; }, { deadlineMs: 20 });
+    const response = await probeQoderProvider(NAME, provider, "pat", async () => { resyncs += 1; return { status: "committed" }; }, { deadlineMs: 20 });
     expect(await read(response)).toMatchObject({ ok: true, discovering: true });
     clearModelCache(NAME);
     const gathered = fetchProviderModels(NAME, provider, 60_000);
@@ -200,7 +205,7 @@ describe("qoder connection test (#8115)", () => {
   test("a run that fails after the deadline does not re-sync", async () => {
     const cli = gatedCli([{ ok: false, error: "auth" }]);
     let resyncs = 0;
-    const response = await probeQoderProvider(NAME, provider, "pat", () => { resyncs += 1; }, { deadlineMs: 20 });
+    const response = await probeQoderProvider(NAME, provider, "pat", async () => { resyncs += 1; return { status: "committed" }; }, { deadlineMs: 20 });
     expect(await read(response)).toMatchObject({ ok: true, discovering: true });
     await cli.release();
     expect(resyncs).toBe(0);
@@ -208,11 +213,11 @@ describe("qoder connection test (#8115)", () => {
 
   test("a run inside the deadline reports its result as before", async () => {
     setFetchQoderModelsForTests(async () => ({ ok: true, models: ["A", "B"] }));
-    expect(await read(await probeQoderProvider(NAME, provider, "pat", () => {}, { deadlineMs: 1_000 })))
+    expect(await read(await probeQoderProvider(NAME, provider, "pat", async () => ({ status: "committed" }), { deadlineMs: 1_000 })))
       .toMatchObject({ ok: true, models: 2, message: "Connected. 2 models." });
     clearQoderDiscoveryFlightsForTests();
     setFetchQoderModelsForTests(async () => ({ ok: false, error: "cli_not_found", detail: "install it" }));
-    expect(await read(await probeQoderProvider(NAME, provider, "pat", () => {}, { deadlineMs: 1_000 })))
+    expect(await read(await probeQoderProvider(NAME, provider, "pat", async () => ({ status: "committed" }), { deadlineMs: 1_000 })))
       .toMatchObject({ ok: false, error: "qoder discovery cli_not_found: install it" });
   });
 });
@@ -241,5 +246,73 @@ describe("shared flight retention (#8115)", () => {
     // Any later call past the reuse window sweeps every expired success, not only its own key.
     await discoverQoderModels(QODER_GLOBAL_PROFILE, "fresh", "scope\0new", Date.now() + QODER_DISCOVERY_REUSE_MS + 1);
     expect(qoderDiscoveryFlightCountForTests()).toBe(1);
+  });
+});
+
+describe("late re-sync publication (#8115)", () => {
+  const SECOND = "qoder-second";
+  const config = {
+    port: 10100,
+    defaultProvider: NAME,
+    providers: { [NAME]: provider, [SECOND]: { ...provider, apiKey: "pat-second" } },
+  } as unknown as OcxConfig;
+  afterEach(() => { clearModelCache(SECOND); providerCacheGenerations.delete(SECOND); clearGatherRoutedModelsInflight(); });
+
+  test("a gather another provider holds open since before the eviction is not reused", async () => {
+    const gates = new Map<string, () => void>();
+    const roster: Record<string, string[]> = { pat: ["Old-Model"], "pat-second": ["Second-Model"] };
+    let gated = false;
+    setFetchQoderModelsForTests(async (_profile, apiKey) => {
+      if (gated) await new Promise<void>(resolve => gates.set(apiKey, resolve));
+      return { ok: true, models: roster[apiKey]! };
+    });
+    expect((await fetchProviderModels(NAME, provider, 60_000)).map(model => model.id)).toEqual(["Old-Model"]);
+    clearQoderDiscoveryFlightsForTests();
+    gated = true;
+    roster.pat = ["Account-Model"];
+    // The aggregate gather reads the fresh cached roster for NAME and waits on the second provider.
+    const held = gatherRoutedModels(config);
+    while (!gates.has("pat-second")) await Bun.sleep(1);
+    const published: string[][] = [];
+    const response = await probeQoderProvider(NAME, provider, "pat", async () => {
+      const rows = await gatherRoutedModels(config);
+      published.push(rows.filter(row => row.provider === NAME).map(row => row.id));
+      return { status: "committed" };
+    }, { deadlineMs: 20 });
+    expect((await response.json() as { discovering?: boolean }).discovering).toBe(true);
+    while (!gates.has("pat")) await Bun.sleep(1);
+    gates.get("pat")!();
+    await Bun.sleep(20);
+    gates.get("pat-second")!();
+    await held;
+    const until = Date.now() + 5_000;
+    while (published.length === 0 && Date.now() < until) await Bun.sleep(5);
+    expect(published).toEqual([["Account-Model"]]);
+  });
+
+  test("a busy convergence is retried while the generation is current", async () => {
+    setFetchQoderModelsForTests(async () => { await Bun.sleep(40); return { ok: true, models: ["Account-Model"] }; });
+    const outcomes = [{ status: "skipped", reason: "busy", retryable: true }, { status: "committed" }];
+    let attempts = 0;
+    let clears = 0;
+    const sleeps: number[] = [];
+    await probeQoderProvider(NAME, provider, "pat", async () => outcomes[attempts++], {
+      deadlineMs: 5, sleep: async ms => { sleeps.push(ms); }, clearGatherInflight: () => { clears += 1; },
+    });
+    const until = Date.now() + 5_000;
+    while (attempts < 2 && Date.now() < until) await Bun.sleep(5);
+    await Bun.sleep(20);
+    expect(attempts).toBe(2);
+    expect(clears).toBe(2);
+    expect(sleeps).toEqual([2_000]);
+  });
+
+  test("no re-sync runs once the cache generation was invalidated", async () => {
+    setFetchQoderModelsForTests(async () => { await Bun.sleep(40); return { ok: true, models: ["Account-Model"] }; });
+    let attempts = 0;
+    await probeQoderProvider(NAME, provider, "pat", async () => { attempts += 1; return { status: "committed" }; }, { deadlineMs: 5 });
+    clearModelCache(NAME);
+    await Bun.sleep(80);
+    expect(attempts).toBe(0);
   });
 });

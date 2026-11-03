@@ -1701,8 +1701,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (prov.adapter === "qoder") {
       // A late success re-syncs the catalog through the same convergence every mutation uses.
-      return (await import("./qoder-provider-probe")).probeQoderProvider(name, prov, apiKey,
-        () => { void convergeCodexCatalog().catch(() => undefined); });
+      return (await import("./qoder-provider-probe")).probeQoderProvider(name, prov, apiKey, convergeCodexCatalog);
     }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {

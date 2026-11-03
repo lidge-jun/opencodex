@@ -1,11 +1,48 @@
 import { discoverQoderModels, QODER_INTERACTIVE_DEADLINE_MS } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { captureModelCacheGeneration, clearModelCache, isModelCacheGenerationCurrent } from "../../codex/model-cache";
+import { clearGatherRoutedModelsInflight } from "../../codex/catalog/routed-gather";
 import type { OcxProviderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 
 export interface QoderProbeDeps {
   deadlineMs?: number;
+  /** Waits between re-sync attempts; the first attempt runs at once. */
+  resyncDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+  clearGatherInflight?: () => void;
+}
+
+/** Re-sync attempts after a late success: at once, then while a busy or stale convergence clears. */
+export const QODER_LATE_RESYNC_DELAYS_MS = [0, 2_000, 5_000, 10_000] as const;
+
+function retryable(disposition: unknown): boolean {
+  const outcome = disposition as { status?: unknown; retryable?: unknown } | null | undefined;
+  return (outcome?.status === "skipped" || outcome?.status === "failed") && outcome.retryable === true;
+}
+
+/**
+ * Publish a late roster. Each attempt first drops in-flight aggregate gathers, as a provider reload
+ * does: one that started before the eviction may already have read the old roster for this
+ * provider and would hand it to the convergence that joins it. A busy or stale convergence is
+ * retried; an invalidated cache generation ends the attempts.
+ */
+async function resyncAfterLateSuccess(
+  name: string,
+  generation: string,
+  converge: () => Promise<unknown>,
+  deps: QoderProbeDeps,
+): Promise<void> {
+  const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms).unref?.(); }));
+  for (const delay of deps.resyncDelaysMs ?? QODER_LATE_RESYNC_DELAYS_MS) {
+    if (delay > 0) await sleep(delay);
+    if (!isModelCacheGenerationCurrent(name, generation)) return;
+    (deps.clearGatherInflight ?? clearGatherRoutedModelsInflight)();
+    clearModelCache(name, "eviction");
+    let disposition: unknown;
+    try { disposition = await converge(); } catch { continue; }
+    if (!retryable(disposition)) return;
+  }
 }
 
 /**
@@ -16,15 +53,16 @@ export interface QoderProbeDeps {
  * the shared background discovery (the same run the catalog gather uses, with its longer bound)
  * and waits only its own short deadline. Past it, the provider is reported as still discovering
  * rather than failed. A later success evicts the provider's cached roster (keeping its generation,
- * so the finished run stays joinable) and runs `onLateSuccess`, the management catalog
- * convergence, whose gather reads that run and publishes the models without a restart. Nothing
- * happens when the cache was invalidated meanwhile: the run belongs to the previous generation.
+ * so the finished run stays joinable) and runs `converge`, the management catalog convergence,
+ * whose gather reads that run and publishes the models without a restart (see
+ * {@link resyncAfterLateSuccess}). Nothing happens when the cache was invalidated meanwhile: the run
+ * belongs to the previous generation.
  */
 export async function probeQoderProvider(
   name: string,
   prov: OcxProviderConfig,
   apiKey: string | undefined,
-  onLateSuccess: () => void,
+  converge: () => Promise<unknown>,
   deps: QoderProbeDeps = {},
 ): Promise<Response> {
   const started = Date.now();
@@ -42,10 +80,8 @@ export async function probeQoderProvider(
   const latencyMs = Date.now() - started;
   if (live === null) {
     void run.then(result => {
-      if (!result.ok || !isModelCacheGenerationCurrent(name, generation)) return;
-      clearModelCache(name, "eviction");
-      onLateSuccess();
-    }, () => undefined);
+      if (result.ok) return resyncAfterLateSuccess(name, generation, converge, deps);
+    }).catch(() => undefined);
     return jsonResponse({
       ok: true,
       discovering: true,
