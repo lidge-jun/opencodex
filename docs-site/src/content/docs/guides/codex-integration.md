@@ -26,6 +26,16 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+When Pool selects an added account, OpenCodex replaces installation identifiers already present in
+the request headers or client metadata with a stable identifier for that account and OpenCodex home.
+Token refresh keeps the identifier; switching accounts changes it. Direct mode and the native main
+account keep your original values. Missing installation metadata stays absent. OpenCodex does not
+change Codex's own `installation_id` file when switching native profiles. If the local installation
+secret cannot be read safely, the request returns a retryable 503 before reaching ChatGPT.
+The same isolation covers authenticated live call sessions and subsequent realtime/sideband
+WebSocket frames. Pool turn metadata above 32 KiB is refused before sending (503 for HTTP,
+connection closure for WebSocket frames); Direct and native main values remain unchanged.
+
 Within Pool mode, a request carrying a validated native Codex login can use that login when the
 selected stored account is cooling down and no eligible stored alternative or recovery probe is
 available. This also covers a new request blocked before sending, following the same caller
@@ -1303,6 +1313,23 @@ When cancelling main-account device reauthentication, a temporary DELETE or netw
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
+
+### Request-owned conversation affinity
+
+`codexPool.requestOwnedAffinity` is an optional boolean, defaulting to `false`. Set it to `true`
+to keep a conversation carrying its own ChatGPT bearer on one eligible account within each quota
+scope. Releases and model detours can still move it. The binding is process-local; restarting the
+proxy or rotating the bearer starts a new binding. Session-less multi-generation subagent chains
+may bind per thread.
+
+Affinity labels describe the binding when selection returns. `unbound` means no binding was stored;
+`request_owned` means the caller-owned credential did not opt in, and `no_conversation` means no
+conversation key was available. A later eligibility change can release a binding after selection.
+
+With or without the option, a request that carries its own bearer records which account served each
+turn under a key scoped to that bearer. When a later turn is served by a different account, including
+after you switch accounts manually, OpenCodex removes `previous_response_id` before sending and
+rejects carried uploaded `file_id` references with HTTP 400, because the new account cannot read them.
 
 ### Optional idle-window steering
 

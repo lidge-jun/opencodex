@@ -27,6 +27,15 @@ export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
       "Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No Claude transport, native lifecycle mutation or skill installation."],
   },
   {
+    command: ["message", "mcp"], usage: "ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home>",
+    summary: "Serve opt-in MCP tools for stored Codex metadata and queued text delivery over stdio.",
+    routes: [], mutates: true, json: "none",
+    flags: [{ name: "--codex", value: "string", required: true, summary: "Explicit local Codex CLI executable." },
+      { name: "--codex-home", value: "string", required: true, summary: "Explicit existing Codex home; no creation or login." }],
+    details: ["macOS/Linux only. No proxy/control socket required. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.",
+      "Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. No daemon start, thread resume, steer, automatic replies or registration."],
+  },
+  {
     command: ["advisor"],
     summary: "Inspect and configure the advisor sidecar (expert consultation for routed workers).",
     routes: [

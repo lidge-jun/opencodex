@@ -3,7 +3,7 @@ import { fetchArtificialAnalysisTable, loadCapabilityTable } from "../../src/cod
 import type { OcxConfig } from "../../src/types";
 
 const nativeFetch = globalThis.fetch;
-const analysisUrl = "https://artificialanalysis.ai/api/v2/data/llms/models";
+const analysisUrl = "https://artificialanalysis.ai/api/v2/language/models/free?page=1";
 afterEach(() => { globalThis.fetch = nativeFetch; });
 
 for (const status of [302, 307]) {

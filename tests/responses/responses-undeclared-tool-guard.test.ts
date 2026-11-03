@@ -370,7 +370,7 @@ describe("undeclared tool call guard", () => {
     const out = await relay(upstream, declared);
     expect(out).toContain("event: response.failed");
     expect(out).toContain(`"code":"${UNDECLARED_TOOL_CALL_ERROR_CODE}"`);
-    expect(out).toContain('routed provider emitted undeclared client tool \\"other_tool\\"');
+    expect(out).toContain("undeclared client tool"); expect(out).not.toContain("other_tool");
     expect(out).toEndWith("data: [DONE]\n\n");
   });
 
@@ -736,14 +736,14 @@ describe("undeclared tool call guard", () => {
     expect(await relay(upstream, declared)).toBe(upstream);
   });
 
-  test("bounds a hostile tool name before it reaches the error message", async () => {
+  test("omits an undeclared tool name from the error message", async () => {
     const upstream = sse("response.output_item.added", {
       output_index: 0,
       item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "x".repeat(5_000), arguments: "{}" },
     });
 
     const out = await relay(upstream, declared);
-    expect(out).toContain(`\\"${"x".repeat(100)}\\"`);
+    expect(out).toContain("undeclared client tool"); expect(out).not.toContain("x".repeat(100));
     expect(out).not.toContain("x".repeat(101));
   });
 });
@@ -1280,7 +1280,7 @@ describe("real relay and continuation caller normalization (#4176 / #4181)", () 
 
       expect(response.status).toBe(502);
       const body = await response.json() as { error: { message: string } };
-      expect(body.error.message).toContain('undeclared client tool "default.view_image"');
+      expect(body.error.message).toContain("undeclared client tool"); expect(body.error.message).not.toContain("default.view_image");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1522,7 +1522,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const topLevelEmptyBody = await response.json() as { error: { message: string } };
-    expect(topLevelEmptyBody.error.message).toContain('undeclared client tool "apply_patch"');
+    expect(topLevelEmptyBody.error.message).toContain("undeclared client tool"); expect(topLevelEmptyBody.error.message).not.toContain("apply_patch");
   });
 
   test("streaming, tools: [] — refuses an upstream client tool call", async () => {
@@ -1538,7 +1538,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const embeddedEmptyBody = await response.json() as { error: { message: string } };
-    expect(embeddedEmptyBody.error.message).toContain('undeclared client tool "apply_patch"');
+    expect(embeddedEmptyBody.error.message).toContain("undeclared client tool"); expect(embeddedEmptyBody.error.message).not.toContain("apply_patch");
   });
 
   test("streaming, additional_tools.tools: [] — refuses an upstream client tool call", async () => {
@@ -1560,7 +1560,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const rewrittenCatalogBody = await response.json() as { error: { message: string } };
-    expect(rewrittenCatalogBody.error.message).toContain('undeclared client tool "apply_patch"');
+    expect(rewrittenCatalogBody.error.message).toContain("undeclared client tool"); expect(rewrittenCatalogBody.error.message).not.toContain("apply_patch");
   });
 
   test("streaming, a rewritten-away additional_tools catalog remains authoritative", async () => {
@@ -1592,7 +1592,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const localShellBody = await response.json() as { error: { message: string } };
-    expect(localShellBody.error.message).toContain('undeclared client tool "local_shell"');
+    expect(localShellBody.error.message).toContain("undeclared client tool"); expect(localShellBody.error.message).not.toContain("local_shell");
   });
 
   test("streaming, additional_tools.tools: [] — refuses a client tool-search call", async () => {
@@ -1618,7 +1618,7 @@ describe("empty and absent tool catalogs", () => {
     const toolSearchBody = await response.text();
 
     expect(toolSearchBody).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-    expect(toolSearchBody).toContain('undeclared client tool \\"tool_search\\"');
+    expect(toolSearchBody).toContain("undeclared client tool"); expect(toolSearchBody).not.toContain("tool_search");
     expect(toolSearchBody).not.toContain("response.completed");
   });
 
@@ -1680,7 +1680,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const historySearchBody = await response.json() as { error: { message: string } };
-    expect(historySearchBody.error.message).toContain('undeclared client tool "tool_search"');
+    expect(historySearchBody.error.message).toContain("undeclared client tool"); expect(historySearchBody.error.message).not.toContain("tool_search");
   });
 
   test("a replayed named catalog cannot authorize a deny-all continuation", async () => {
@@ -1718,7 +1718,7 @@ describe("empty and absent tool catalogs", () => {
 
     expect(response.status).toBe(502);
     const namedBody = await response.json() as { error: { message: string } };
-    expect(namedBody.error.message).toContain('undeclared client tool "exec"');
+    expect(namedBody.error.message).toContain("undeclared client tool"); expect(namedBody.error.message).not.toContain("exec");
   });
 
   test("a replayed nameless catalog cannot authorize a deny-all continuation", async () => {
@@ -1763,7 +1763,7 @@ describe("empty and absent tool catalogs", () => {
 
     const namelessBody = await response.text();
     expect(namelessBody).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
-    expect(namelessBody).toContain('undeclared client tool \\"local_shell\\"');
+    expect(namelessBody).toContain("undeclared client tool"); expect(namelessBody).not.toContain("local_shell");
     expect(namelessBody).not.toContain("response.completed");
   });
 
@@ -2001,7 +2001,7 @@ describe("empty and absent tool catalogs", () => {
     );
     expect(refused.status).toBe(502);
     const refusedBody = await refused.json() as { error: { message: string } };
-    expect(refusedBody.error.message).toContain('undeclared client tool "apply_patch"');
+    expect(refusedBody.error.message).toContain("undeclared client tool"); expect(refusedBody.error.message).not.toContain("apply_patch");
   });
 
   test("a bare tool_choice restores only its unambiguous namespaced exec", async () => {
@@ -2057,7 +2057,7 @@ describe("empty and absent tool catalogs", () => {
       );
       expect(refused.status).toBe(502);
       const body = await refused.json() as { error: { message: string } };
-      expect(body.error.message).toContain(`undeclared client tool "${name}"`);
+      expect(body.error.message).toContain("undeclared client tool"); expect(body.error.message).not.toContain(name);
     }
   });
 
@@ -2366,6 +2366,6 @@ describe("xAI hosted-call authorization through handleResponses", () => {
 
     expect(response.status).toBe(502);
     const body = await response.json() as { error: { message: string } };
-    expect(body.error.message).toContain('undeclared client tool "x_keyword_search"');
+    expect(body.error.message).toContain("undeclared client tool"); expect(body.error.message).not.toContain("x_keyword_search");
   });
 });

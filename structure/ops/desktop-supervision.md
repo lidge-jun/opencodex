@@ -109,6 +109,8 @@ plain `unknown` or `unsupported` cannot clear a prior block. Without a prior blo
 unknown and unsupported preserve the existing durable-owner and liveness decisions.
 Service install, repair, start and restart refuse before mutation, including registration staging.
 Update gates re-read supervision before stop, package replacement, restoration and recovery;
+Orchestrated plans classify a Desktop-owned installation as `desktop-app-owned` and
+refuse apply; the package launcher handles orchestrated requests before Desktop handoff.
 they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
 Desktop before updating the CLI install. Service stop and uninstall remain available.
 `src/service/desktop-command-guard.ts` carries that refusal for `src/service/cli.ts`,

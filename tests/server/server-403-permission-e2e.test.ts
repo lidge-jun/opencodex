@@ -113,7 +113,8 @@ describe("upstream 401/403 classification (end-to-end)", () => {
       status: 403,
       errorCode: "subscription_required",
     });
-    expect(result.log.upstreamError).toContain(SUBSCRIPTION_MESSAGE);
+    expect(result.log.upstreamCondition).toBe("access_denied");
+    expect(JSON.stringify(result.log)).not.toContain(SUBSCRIPTION_MESSAGE);
   });
 
   test("the same subscription body under authoritative 401 stays invalid_api_key", async () => {
