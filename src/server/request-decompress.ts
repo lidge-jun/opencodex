@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { updateInboundBodyReservation } from "./inbound-body-budget";
+import { serializedJsonByteLength } from "./json-serialized-bytes";
 
 /**
  * Request-body decompression for the /v1/responses data plane.
@@ -333,8 +334,9 @@ export async function readBoundedJsonRequestBody(
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
-    // Keep the serialized-size contract: normalization can expand numeric literals.
-    const parsedBytes = budget ? Buffer.byteLength(JSON.stringify(parsed), "utf8") : decoded.byteLength;
+    // Keep the serialized-size contract: normalization can expand numeric literals. The
+    // measurement walks iteratively, so a deeply nested valid body cannot overflow the stack.
+    const parsedBytes = serializedJsonByteLength(parsed);
     budget?.observeAcceptedRequestCopy(parsedBytes);
     updateInboundBodyReservation(req, Math.max(raw.byteLength, decoded.byteLength, parsedBytes));
     return parsed;

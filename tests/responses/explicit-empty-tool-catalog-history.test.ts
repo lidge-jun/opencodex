@@ -21,6 +21,7 @@ const REFUSAL_CODE = "undeclared_tool_call";
 const userInput = { role: "user", content: [{ type: "input_text", text: "fixture request" }] };
 const tool = (name: string) => ({ type: "function", name, parameters: { type: "object", properties: {} } });
 const additional = (names: string[]) => ({ type: "additional_tools", role: "developer", tools: names.map(tool) });
+const hostedToolSearch = { type: "additional_tools", role: "developer", tools: [{ type: "tool_search" }] };
 
 let home: ReturnType<typeof createTempHome>;
 let releaseHome: (() => void) | undefined;
@@ -158,6 +159,29 @@ describe("explicit empty catalog current-turn and continuation boundaries", () =
         expect(dispatched[1]!.tools).toContain("shell");
         if (partial) expect(dispatched[1]!.tools).toContain("benign_tool");
         assertRefusedAndUncached(response);
+      });
+    }
+  }
+
+  for (const lane of ["adapter", "runTurn"] as const) for (const wire of [undefined, "chat"] as const) {
+    for (const current of [false, true]) {
+      test(`${lane}, ${wire ?? "responses"}: ${current ? "current" : "replayed"} hosted tool_search ${current ? "authorizes" : "cannot authorize"} its translated call`, async () => {
+        const config = setup(lane);
+        const prior = await post(config, wire, false, { input: [hostedToolSearch, userInput] });
+        expect(prior.status).toBe("completed");
+        expect(dispatched[0]!.tools).toContain("tool_search");
+        nextCall = "tool_search";
+        const response = await post(config, wire, false, {
+          previous_response_id: prior.id, tools: [], input: [...(current ? [hostedToolSearch] : []), userInput],
+        });
+        expect(dispatched[1]!.replayPrefix).toBeGreaterThan(0);
+        expect(dispatched[1]!.tools).toContain("tool_search");
+        if (!current) assertRefusedAndUncached(response);
+        else {
+          expect(response.status).toBe("completed");
+          expect(response.error).toBeUndefined();
+          expect(JSON.stringify(response.output)).toContain("tool_search");
+        }
       });
     }
   }
