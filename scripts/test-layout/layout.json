@@ -1330,7 +1330,7 @@
     "ocx-launcher-desktop-handoff.test.ts": "cli", "cli-path-diagnostics.test.ts": "cli",
     "ocx-launcher-source.test.ts": "cli",
     "ocx-run.test.ts": "cli",
-    "ollama-native-parser.test.ts": "providers/ollama", "ollama-native-reasoning-wire.test.ts": "providers/ollama", "ollama-native-structured-output.test.ts": "providers/ollama", "ollama-native-tool-continuations.test.ts": "providers/ollama",
+    "ollama-native-parser.test.ts": "providers/ollama", "ollama-native-cached-usage.test.ts": "providers/ollama", "ollama-native-reasoning-wire.test.ts": "providers/ollama", "ollama-native-structured-output.test.ts": "providers/ollama", "ollama-native-tool-continuations.test.ts": "providers/ollama",
     "ollama-native-v4.test.ts": "providers/ollama", "ollama-native-scaling.test.ts": "providers/ollama", "ollama-native.test.ts": "providers/ollama", "ollama-show-enrichment-v7.test.ts": "providers/ollama", "ollama-show-enrichment.test.ts": "providers/ollama",
     "ollama-show-ignore-abort.test.ts": "providers/ollama",
     "opaque-blob-wrapped-rejection.test.ts": "responses", "openai-api-virtual-models.test.ts": "adapters/openai", "openai-chat-bounded-tool-names.test.ts": "adapters/openai", "openai-chat-dangling-toolcalls.test.ts": "adapters/openai",
