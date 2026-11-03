@@ -468,7 +468,7 @@ root-bound owner marker and an uninstall manifest before its first atomic config
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
-remain in place and make the command report a partial uninstall with their exact paths. New ownership entries use a dedicated bounded SQLite writer lock and reload the manifest before recording the entry and lock files. A lock failure reports the unsuccessful registration without overwriting the manifest; cached entries need no lock. Uninstall removes the owned lock database and journal.
+remain in place and make the command report a partial uninstall with their exact paths. Paths recorded after home creation are each also written as a private record file under `.opencodex-uninstall.d/`, named by the hash of the path and published by atomic rename, so two processes that share a home cannot erase each other's entry by rewriting the manifest from a stale cache (#8093). The manifest is rewritten as the union of disk state for older readers; uninstall reads manifest and records together, fails closed on a record this module did not write, and never writes through a linked record directory.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the

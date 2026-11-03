@@ -9,14 +9,19 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Database } from "bun:sqlite";
 import type { GenerationContext } from "./state-store-sweeper";
 import { renameAtomicFile } from "./windows-atomic-replace";
 
 export const CONFIG_OWNER_FILE = ".opencodex-owner.json";
 export const CONFIG_UNINSTALL_MANIFEST = ".opencodex-uninstall.json";
+/**
+ * Paths recorded after home creation (#8093). Each path gets its own record file, named by the
+ * hash of the path, so two processes can never erase each other's entry by rewriting one shared
+ * manifest from a stale cache. Uninstall reads the base manifest together with these records.
+ */
+export const CONFIG_UNINSTALL_RECORDS = ".opencodex-uninstall.d";
 
 export type ConfigRemovalResult = {
   status: "absent" | "removed" | "partial" | "refused";
@@ -36,9 +41,11 @@ type ConfigUninstallManifest = ConfigOwner & {
 
 const METADATA_MAX_BYTES = 64 * 1024;
 const MANIFEST_MAX_PATHS = 1024;
-const OWNERSHIP_LOCK_PATHS = ["ownership-mutation.sqlite", "ownership-mutation.sqlite-journal"] as const;
+const RECORD_MAX_BYTES = 4 * 1024;
+const RECORD_SUFFIX = ".path";
+// Concurrent first recordings can each pass the cap check, so reading tolerates a small overshoot.
+const RECORD_READ_SLACK = 64;
 const INITIAL_OWNED_PATHS = [
-  ...OWNERSHIP_LOCK_PATHS,
   ".star-prompted",
   "artifacts",
   "auth.json",
@@ -191,7 +198,48 @@ function manifestRelativePath(configDir: string, candidatePath: string): string 
     return null;
   }
   if (normalized === CONFIG_OWNER_FILE || normalized === CONFIG_UNINSTALL_MANIFEST) return null;
+  if (normalized === CONFIG_UNINSTALL_RECORDS || normalized.startsWith(`${CONFIG_UNINSTALL_RECORDS}/`)) return null;
   return normalized;
+}
+
+function recordFileName(rel: string): string {
+  return `${createHash("sha256").update(rel, "utf8").digest("hex")}${RECORD_SUFFIX}`;
+}
+
+/** The record directory when it is a real directory inside the root; undefined when absent. */
+function recordDirectory(configDir: string, create: boolean): string | undefined {
+  const path = join(configDir, CONFIG_UNINSTALL_RECORDS);
+  if (!existsSync(path) && !create) return undefined;
+  if (!existsSync(path)) {
+    try { mkdirSync(path, { mode: 0o700 }); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  const entry = lstatSync(path);
+  if (!entry.isDirectory() || entry.isSymbolicLink() || !isWithinRoot(canonicalRoot(configDir), realpathSync.native(path))) {
+    throw new Error("ownership records are not a real directory inside the config root");
+  }
+  return path;
+}
+
+/** Recorded relative paths; throws on any record that is not exactly what this module writes. */
+function readOwnershipRecords(configDir: string): string[] {
+  const dir = recordDirectory(configDir, false);
+  if (!dir) return [];
+  const names = readdirSync(dir).filter(name => name.endsWith(RECORD_SUFFIX));
+  if (names.length > MANIFEST_MAX_PATHS + RECORD_READ_SLACK) throw new Error("too many ownership records");
+  const paths: string[] = [];
+  for (const name of names) {
+    const path = join(dir, name);
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.size > RECORD_MAX_BYTES) throw new Error("invalid ownership record");
+    const rel = readFileSync(path, "utf8");
+    if (recordFileName(rel) !== name || manifestRelativePath(configDir, join(configDir, ...rel.split("/"))) !== rel) {
+      throw new Error("invalid ownership record");
+    }
+    paths.push(rel);
+  }
+  return paths;
 }
 
 function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
@@ -209,7 +257,8 @@ function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: Confi
       || !samePath(owner.root, root)
       || !samePath(manifest.root, root)
     ) return null;
-    return { owner, manifest };
+    const paths = [...new Set([...manifest.paths, ...readOwnershipRecords(configDir)])].sort();
+    return { owner, manifest: { ...manifest, paths } };
   } catch {
     return null;
   }
@@ -257,6 +306,39 @@ function writeManifest(configDir: string, manifest: ConfigUninstallManifest): vo
   }
 }
 
+/**
+ * Publish one record without locks: the content is complete before the atomic rename makes it
+ * visible, and a concurrent writer of the same path writes identical bytes under the same name,
+ * so a replacement loses nothing. Rename replaces a link at the name instead of following it.
+ */
+function writeOwnershipRecord(configDir: string, rel: string): boolean {
+  let dir: string;
+  try {
+    dir = recordDirectory(configDir, true)!;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== undefined) throw error;
+    // A linked or foreign record directory is never written through.
+    console.warn("Config ownership records are not a real directory; a path was not recorded for uninstall.");
+    return false;
+  }
+  const final = join(dir, recordFileName(rel));
+  if (!existsSync(final) && readdirSync(dir).filter(name => name.endsWith(RECORD_SUFFIX)).length >= MANIFEST_MAX_PATHS) {
+    console.warn("Config ownership records are full; a path was not recorded for uninstall.");
+    return false;
+  }
+  const temp = join(dir, `.${process.pid}.${randomUUID()}.tmp`);
+  writeFileSync(temp, rel, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    // Same Windows sharing-violation tolerance the config writer has: a scanner holding the
+    // record must not turn uninstall bookkeeping into a hard failure.
+    renameAtomicFile(temp, final, undefined, "config-ownership");
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* best effort */ }
+    throw error;
+  }
+  return true;
+}
+
 function removeOwnedEntry(root: string, path: string): void {
   const entry = lstatSync(path);
   if (entry.isSymbolicLink()) {
@@ -301,32 +383,16 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
   if (ownership.manifest.paths.includes(rel)) return true;
-  let database: Database | undefined;
-  try {
-    database = new Database(join(configDir, OWNERSHIP_LOCK_PATHS[0]), { create: true });
-    database.exec("PRAGMA busy_timeout = 1000; BEGIN IMMEDIATE");
-  } catch {
-    database?.close();
-    // Never write unlocked after the bounded wait: that can erase another writer's
-    // entry. Callers often ignore the boolean, so report the failed registration.
-    console.warn("Could not lock the config ownership manifest; a path was not recorded for uninstall.");
-    return false;
-  }
-  try {
-    const current = loadOwnership(configDir);
-    if (!current || current.owner.ownerId !== ownership.owner.ownerId) return false;
-    const paths = [...new Set([...current.manifest.paths, ...OWNERSHIP_LOCK_PATHS, rel])].sort();
-    if (paths.length > MANIFEST_MAX_PATHS) {
-      console.warn("Config ownership manifest is full; a path was not recorded for uninstall.");
-      return false;
-    }
-    const manifest = { ...current.manifest, paths };
-    writeManifest(configDir, manifest);
-    ownershipCache.set(cacheKey, { owner: current.owner, manifest });
-    return true;
-  } finally {
-    try { database.exec("ROLLBACK"); } finally { database.close(); }
-  }
+  if (!writeOwnershipRecord(configDir, rel)) return false;
+  // The record alone makes the path durable. The manifest is also rewritten as the union of what
+  // is on disk now, so readers of the manifest file (older versions included) see a complete list
+  // whenever no other process is recording at the same moment, and it converges on the next write.
+  const current = loadOwnership(configDir);
+  const base = current && current.owner.ownerId === ownership.owner.ownerId ? current : ownership;
+  const manifest = { ...base.manifest, paths: [...new Set([...base.manifest.paths, rel])].sort() };
+  if (manifest.paths.length <= MANIFEST_MAX_PATHS) writeManifest(configDir, manifest);
+  ownershipCache.set(cacheKey, { owner: ownership.owner, manifest });
+  return true;
 }
 
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
@@ -376,6 +442,9 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
   }
 
   try {
+    // Records go before the manifest, so an interrupted uninstall still has its base list.
+    const records = join(configDir, CONFIG_UNINSTALL_RECORDS);
+    if (existsSync(records)) removeOwnedEntry(rootPath, records);
     unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST));
     unlinkSync(join(configDir, CONFIG_OWNER_FILE));
   } catch (error) {

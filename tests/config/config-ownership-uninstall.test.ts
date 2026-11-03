@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,71 +17,6 @@ function manifestPaths(dir: string): string[] {
 }
 
 describe("owned config uninstall", () => {
-  test("cached entries do not read or rewrite the manifest", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ownership-fast-"));
-    try {
-      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
-      rmSync(join(dir, CONFIG_UNINSTALL_MANIFEST));
-      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
-      expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(false);
-      expect(existsSync(join(dir, "ownership-mutation.sqlite"))).toBe(false);
-    } finally { removeTreeWithRetry(dir); }
-  });
-
-  test("older owned homes record and remove the lock database", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ownership-upgrade-"));
-    try {
-      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
-      const path = join(dir, CONFIG_UNINSTALL_MANIFEST);
-      const manifest = JSON.parse(readFileSync(path, "utf8")) as { paths: string[] };
-      manifest.paths = manifest.paths.filter(p => !p.startsWith("ownership-mutation.sqlite"));
-      writeFileSync(path, JSON.stringify(manifest));
-      expect(recordOwnedConfigPath(dir, join(dir, "new-entry"))).toBe(true);
-      expect(manifestPaths(dir)).toContain("ownership-mutation.sqlite");
-      expect(existsSync(join(dir, "ownership-mutation.sqlite"))).toBe(true);
-      expect(removeOwnedConfigState(dir).status).toBe("removed");
-      expect(existsSync(dir)).toBe(false);
-    } finally { removeTreeWithRetry(dir); }
-  });
-
-  test("lock contention reports failure without overwriting the manifest", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ownership-busy-"));
-    let db: Database | undefined;
-    try {
-      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
-      db = new Database(join(dir, "ownership-mutation.sqlite"));
-      db.exec("BEGIN IMMEDIATE");
-      const before = readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8");
-      expect(recordOwnedConfigPath(dir, join(dir, "blocked"))).toBe(false);
-      expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
-    } finally {
-      db?.exec("ROLLBACK");
-      db?.close();
-      removeTreeWithRetry(dir);
-    }
-  });
-
-  test("preserves paths recorded by another process with a stale local cache", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-ownership-concurrent-"));
-    try {
-      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
-      const modulePath = join(import.meta.dir, "../../src/lib/config-ownership.ts");
-      const script = `import { recordOwnedConfigPath } from ${JSON.stringify(modulePath)};\n` +
-        `if (!recordOwnedConfigPath(${JSON.stringify(dir)}, ${JSON.stringify(join(dir, "other"))})) process.exit(1);`;
-      const child = Bun.spawnSync([process.execPath, "-e", script]);
-      expect(child.exitCode).toBe(0);
-      writeFileSync(join(dir, "other"), "other");
-      expect(recordOwnedConfigPath(dir, join(dir, "local"))).toBe(true);
-      writeFileSync(join(dir, "local"), "local");
-      expect(manifestPaths(dir)).toContain("other");
-      expect(manifestPaths(dir)).toContain("local");
-      expect(removeOwnedConfigState(dir).status).toBe("removed");
-      expect(existsSync(dir)).toBe(false);
-    } finally {
-      removeTreeWithRetry(dir);
-    }
-  });
-
   test("first owned write creates a missing config root and its metadata", () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-config-first-owned-path-"));
     const dir = join(parent, "config");

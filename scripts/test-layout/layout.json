@@ -775,7 +775,7 @@
     "protocol-settings.test.ts": "config",
     "config-mutation-lock.test.ts": "config",
     "config-non-object-backup.test.ts": "config",
-    "config-ownership-uninstall.test.ts": "config",
+    "config-ownership-uninstall.test.ts": "config", "config-ownership-concurrent-record.test.ts": "config",
     "config-rebase-provenance-writers.test.ts": "config",
     "config-save-boundary.test.ts": "config",
     "config-spend-ceilings.test.ts": "config",
