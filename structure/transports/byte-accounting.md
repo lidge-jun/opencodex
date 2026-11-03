@@ -151,6 +151,13 @@ The turn limit and transport-read accounting remain in force. `tests/providers/c
 covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
 one-byte overflow, another retained owner, consumer return and upstream cancellation.
 
+Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
+and truncates the queue, or clears it when no bytes remain. No deleted-chunk
+result array is allocated. Partial head slices and later
+frames retain their order without one `shift()` per chunk. `tests/providers/devin-stream-queue.test.ts`
+bounds prefix-removal calls and discarded-array slots on fragmented frames and covers split/coalesced headers and payloads,
+Unicode, empty frames and gzip. Existing frame/inflation caps, EOS handling and teardown remain in force.
+
 Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
 allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
 only a fragment containing a newline triggers splitting of the accumulated record. Complete
@@ -232,10 +239,15 @@ inspection consumes it without creating an event. The text rewrite relay keeps t
 outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
-their charge/release lifecycle while it asks the pure progressive decoder in
-`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
-charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+their charge/release lifecycle while it asks a per-call progressive reader from
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The reader holds only
+parse position and decoded text, and it neither charges nor releases translator budget; extracting
+it from `src/bridge/sse.ts` does not create a
 second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+Both callers keep one reader per open call, in their own call state, and feed it the growing
+arguments. It resumes where the previous delta stopped, so the canonical value is decoded and
+checked for a nested executable wrapper once per call; rescanning both on every delta made
+one-character deltas quadratic in the body length.
 Canonical routed `apply_patch` progress is also tracked by that owner. If authoritative completion
 does not extend the emitted stable prefix, the owner releases every retained call and pending block
 before raising the rewrite failure; the relay emits a failed terminal and never exposes a successful
