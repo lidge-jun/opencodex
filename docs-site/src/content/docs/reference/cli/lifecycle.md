@@ -780,6 +780,8 @@ rather than expanding the task's runtime profile variables. Repair also refreshe
 if the old executable was already deleted, reinstall opencodex before repairing. Linux service
 starts then follow the launcher; macOS repair writes the new package and home paths into the launchd
 definition.
+On macOS, install and repair refuse a home or proxy environment value that contains a control
+character an XML plist cannot hold (for example U+0001); the error names the variable to fix.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
 than the running proxy, run `ocx service restart` so the new build serves. On macOS, `repair` is not
 enough there: the definition did not change, and a repair that changes nothing reloads nothing.

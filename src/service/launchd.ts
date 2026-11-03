@@ -15,15 +15,10 @@ import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLaunche
 import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
+import { encodePlistString, plistKeyedString } from "./plist-xml";
 
-function plistString(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+/** Encode a plist value; `field` names it if it holds a character XML cannot carry. */
+const plistString = encodePlistString;
 
 /**
  * Render the launchd plist from the package-local Bun + CLI pair. Unlike systemd, launchd
@@ -51,13 +46,13 @@ export function buildPlist(
     // the dashboard-stop refusal below can tell a real launchd job from an ordinary child.
     `    <key>${SERVICE_MANAGED_ENV}</key><string>1</string>`,
     `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
-    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
-    `    <key>PATH</key><string>${plistString(path)}</string>`,
-    codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
-    codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
-    opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
+    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun, BUN_RUNTIME_PATH_ENV)}</string>`,
+    `    <key>PATH</key><string>${plistString(path, "PATH")}</string>`,
+    codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome, "CODEX_HOME")}</string>` : null,
+    codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome, "CODEX_SQLITE_HOME")}</string>` : null,
+    opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome, "OPENCODEX_HOME")}</string>` : null,
     ...proxyEnv.map(({ name, value }) =>
-      `    <key>${name}</key><string>${plistString(value)}</string>`),
+      `    <key>${name}</key><string>${plistString(value, name)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
   const command = launchdServiceCommand(runtime, resolveServiceListenPort(), homes);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -69,7 +64,7 @@ export function buildPlist(
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>${plistString(command)}</string>
+    <string>${plistString(command, "the service command")}</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -77,8 +72,8 @@ export function buildPlist(
   <dict>
 ${envLines}
   </dict>
-  <key>StandardOutPath</key><string>${plistString(log)}</string>
-  <key>StandardErrorPath</key><string>${plistString(log)}</string>
+  <key>StandardOutPath</key><string>${plistString(log, "the service log path")}</string>
+  <key>StandardErrorPath</key><string>${plistString(log, "the service log path")}</string>
 </dict>
 </plist>
 `;
@@ -140,6 +135,18 @@ function currentLaunchdPinnedHomes(): LaunchdPinnedHomes {
 }
 
 /**
+ * The homes the installed plist pins, or null when it cannot be read or does not pin both.
+ * The plist path does not follow either home, so this answers the same from any shell.
+ */
+function installedLaunchdPinnedHomes(readPlist: () => string): LaunchdPinnedHomes | null {
+  let plist: string;
+  try { plist = readPlist(); } catch { return null; }
+  const codexHome = plistKeyedString(plist, "CODEX_HOME");
+  const opencodexHome = plistKeyedString(plist, "OPENCODEX_HOME");
+  return codexHome && opencodexHome ? { codexHome, opencodexHome } : null;
+}
+
+/**
  * The complete exec line {@link buildPlist} bakes, for the runtime a single install already
  * resolved. Shared so `installLaunchd` can verify the live job against the exact string it
  * just wrote instead of re-deriving it from install state that has not been written yet
@@ -167,13 +174,27 @@ function launchdServiceCommand(
  * stateless install runs the Bun + CLI pair. `start` and `status` compare the live job
  * against this, so both must follow the launcher or a healthy launcher-backed job reads as
  * "an OLDER plist" (#3464). PATH is deliberately NOT re-walked here.
+ *
+ * The pinned homes follow the same rule. A status run from a shell that exports another
+ * CODEX_HOME must still recognise a job loaded from the plist on disk, so the homes come from
+ * that plist, then from the recorded install state, and from the current environment only
+ * when neither records them. A fresh install bakes its own line through
+ * {@link launchdServiceCommand} and does not come through here.
  */
 export function expectedLaunchdCommand(
   port: number,
-  deps: { state?: ServiceInstallState | null; entry?: { bun: string; cli: string | null }; homes?: LaunchdPinnedHomes } = {},
+  deps: {
+    state?: ServiceInstallState | null;
+    entry?: { bun: string; cli: string | null };
+    homes?: LaunchdPinnedHomes;
+    readPlist?: () => string;
+  } = {},
 ): string {
   const state = deps.state === undefined ? readServiceInstallState() : deps.state;
-  const homes = deps.homes ?? currentLaunchdPinnedHomes();
+  const homes = deps.homes
+    ?? installedLaunchdPinnedHomes(deps.readPlist ?? (() => readFileSync(plistPath(), "utf8")))
+    ?? (state?.codexHome && state.opencodexHome ? { codexHome: state.codexHome, opencodexHome: state.opencodexHome } : null)
+    ?? currentLaunchdPinnedHomes();
   const pinned = pinnedServiceHomeShellAssignments(homes.codexHome, homes.opencodexHome);
   if (state?.launcherPath) return `${pinned} ${buildServiceLauncherShellCommand(state.launcherPath, port)}`;
   const entry = deps.entry ?? cliEntry();

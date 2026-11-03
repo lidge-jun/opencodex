@@ -4,7 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as serviceState from "../../src/service/state";
@@ -125,6 +126,94 @@ describe("launchd live-job comparison", () => {
       expect(outcome.reloaded).toBe(true);
       expect(argv.map(args => args[0])).toContain("bootstrap");
     });
+  });
+});
+
+/**
+ * The values a plist parser returns. plutil keeps a literal CR, but a conforming XML 1.0
+ * parser (Python's plistlib, for one) normalizes it to LF, so every value is checked with a
+ * minimal XML reader that applies that line-end rule and the predefined and numeric entity
+ * references, and also with plutil when the host has it.
+ */
+type PlistParser = "xml" | "plutil";
+const PLIST_PARSERS: PlistParser[] = existsSync("/usr/bin/plutil") ? ["xml", "plutil"] : ["xml"];
+
+function parsePlistStrings(plist: string, parser: PlistParser = "xml"): { env: Record<string, string>; args: string[] } {
+  if (parser === "plutil") {
+    const file = join(mkdtempSync(join(tmpdir(), "ocx-plist-parse-")), "job.plist");
+    writeFileSync(file, plist, "utf8");
+    const parsed = JSON.parse(execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", file], { encoding: "utf8" }));
+    return { env: parsed.EnvironmentVariables, args: parsed.ProgramArguments };
+  }
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  const text = (raw: string): string => raw.replace(/\r\n?/g, "\n").replace(/&(#x[0-9a-fA-F]+|#\d+|\w+);/g, (_m, ref: string) =>
+    ref.startsWith("#x") ? String.fromCodePoint(parseInt(ref.slice(2), 16))
+      : ref.startsWith("#") ? String.fromCodePoint(Number(ref.slice(1)))
+        : named[ref]!);
+  const envBlock = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(plist)?.[1] ?? "";
+  const env = Object.fromEntries([...envBlock.matchAll(/<key>([^<]*)<\/key><string>([^<]*)<\/string>/g)].map(m => [text(m[1]!), text(m[2]!)]));
+  const argBlock = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(plist)?.[1] ?? "";
+  return { env, args: [...argBlock.matchAll(/<string>([^<]*)<\/string>/g)].map(m => text(m[1]!)) };
+}
+
+describe("launchd plist string encoding", () => {
+  test("homes and proxy values with CR, tab, LF and XML punctuation parse back unchanged", () => {
+    const codexHome = "/tmp/a\rb";
+    const opencodexHome = "/tmp/o\tp\nq & <r> \"s\" 't'";
+    const proxyValue = "http://proxy\r\n.example:8080/?a=1&b=<2>";
+    const plist = withHomes(codexHome, opencodexHome, () => buildPlist([{ name: "HTTPS_PROXY", value: proxyValue }]));
+    for (const parser of PLIST_PARSERS) {
+      const { env, args } = parsePlistStrings(plist, parser);
+      expect({ parser, env: [env.CODEX_HOME, env.OPENCODEX_HOME, env.HTTPS_PROXY] })
+        .toEqual({ parser, env: [codexHome, opencodexHome, proxyValue] });
+      // The exec line keeps the same homes once launchd hands it to /bin/sh.
+      const pins = args[2]!.slice(0, args[2]!.indexOf(PIN_END) + PIN_END.length);
+      const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\0%s" "$CODEX_HOME" "$OPENCODEX_HOME"'], { encoding: "utf8" });
+      expect({ parser, homes: output.split("\0") }).toEqual({ parser, homes: [codexHome, opencodexHome] });
+    }
+  });
+
+  test("a value XML 1.0 cannot carry is refused by name", () => {
+    for (const bad of ["/tmp/a\u0001b", "/tmp/a\u000bb", "/tmp/a\ufffeb", "/tmp/a\ud800b"]) {
+      expect(() => withHomes(bad, "/tmp/o", () => buildPlist([]))).toThrow(/CODEX_HOME.*XML/);
+    }
+    expect(() => withHomes("/tmp/c", "/tmp/o", () => buildPlist([{ name: "HTTPS_PROXY", value: "secret\u001fvalue" }])))
+      .toThrow(/HTTPS_PROXY/);
+    expect(() => withHomes("/tmp/c", "/tmp/o", () => buildPlist([{ name: "HTTPS_PROXY", value: "secret\u001fvalue" }])))
+      .not.toThrow(/secret/);
+    // A valid surrogate pair is an ordinary character.
+    expect(() => withHomes("/tmp/\u{1F600}", "/tmp/o", () => buildPlist([]))).not.toThrow();
+  });
+});
+
+describe("launchd status from a shell with other homes", () => {
+  test("a job matching the installed plist reads as current, not stale", () => {
+    const installedCodex = "/installed/codex & home";
+    const installedOpencodex = "/installed/opencodex";
+    const plist = withHomes(installedCodex, installedOpencodex, () => buildPlist([]));
+    const liveCommand = parsePlistStrings(plist).args[2]!;
+    const launchdPath = serviceState.plistPath();
+    const original = fs.readFileSync;
+    const read = spyOn(fs, "readFileSync").mockImplementation(((path: any, ...args: any[]) =>
+      path === launchdPath ? plist : original(path, ...args)) as typeof fs.readFileSync);
+    try {
+      // The status shell exports different homes; only the plist on disk describes the job.
+      const verdict = withHomes("/status-shell/codex", "/status-shell/opencodex", () => probeLaunchdLoadState({
+        uid: 501,
+        launchctl: () => ({ ok: true, stdout: "arguments = {\n  /bin/sh\n  -lc\n  " + liveCommand + "\n}", stderr: "", status: 0 }),
+      }));
+      expect(verdict).toEqual({ state: "loaded-current", domain: "gui/501" });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test("recorded install state supplies the homes when the plist carries none", () => {
+    const entry = { bun: "/b/bun", cli: "/c/cli.ts" };
+    const state = { version: 2 as const, codexHome: "/recorded/codex", opencodexHome: "/recorded/opencodex", backend: "scheduler" as const };
+    const command = withHomes("/status-shell/codex", "/status-shell/opencodex", () =>
+      expectedLaunchdCommand(14001, { state, entry, readPlist: () => "<plist/>" }));
+    expect(command).toStartWith("CODEX_HOME='/recorded/codex' OPENCODEX_HOME='/recorded/opencodex' ");
   });
 });
 
