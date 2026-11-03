@@ -8,6 +8,15 @@ import { captureAntigravityModelObservation, recordAntigravityAccountRoster } fr
 import type { OcxProviderConfig } from "../../types";
 import { materializeCapturedHeaders, type CapturedModelsRequest } from "./gather-capture";
 
+/** True while the active account still holds the exact usable credential discovery sent. */
+export function antigravityActiveAccountCurrent(
+  name: string, accountId: string, accessToken: string | undefined, generation: string | undefined,
+): boolean {
+  const row = getAccountCredentialWithStatus(name, accountId);
+  return !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
+    && row.credential.access === accessToken && credentialGeneration(row.credential) === generation;
+}
+
 /** A sibling contributes only while the exact snapshot sent is still usable. */
 export async function discoverAntigravitySiblings(
   name: string, provider: OcxProviderConfig, activeAccountId: string,

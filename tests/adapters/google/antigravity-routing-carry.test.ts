@@ -6,6 +6,7 @@ import { gatherRoutedModels } from "../../../src/codex/catalog";
 import { clearModelCache } from "../../../src/codex/model-cache";
 import * as outbound from "../../../src/lib/provider-outbound";
 import * as oauth from "../../../src/oauth";
+import type { OAuthProviderDef } from "../../../src/oauth";
 import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredentialWithStatus } from "../../../src/oauth/store";
 import { preferredInitialAccount, routeAntigravityModel, clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import {
@@ -101,6 +102,37 @@ test("revoking discovery authority stops later sibling bearer sends", async () =
     await pending;
     expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
     expect(resolver.mock.calls.some(([, accountId]) => accountId === "c")).toBe(false);
+    expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
+  } finally { releaseSibling(); await pending; resolver.mockRestore(); }
+});
+
+test("a terminal refresh failure on the active account stops later sibling bearer sends", async () => {
+  const { cfg } = setup();
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount");
+  let releaseSibling!: () => void;
+  let siblingSent!: () => void;
+  const atSibling = new Promise<void>(resolve => { siblingSent = resolve; });
+  const held = new Promise<void>(resolve => { releaseSibling = resolve; });
+  const sends: string[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    const auth = new Headers(init?.headers).get("authorization")!;
+    sends.push(auth);
+    if (auth.endsWith("-b")) { siblingSent(); await held; }
+    return Response.json(payload("model-before-reauth"));
+  }) as typeof fetch;
+  const pending = gatherRoutedModels(cfg);
+  try {
+    await atSibling;
+    // The real terminal-refresh path marks needsReauth without touching the model cache.
+    const revoked = { refresh: async () => { throw new Error("invalid_grant"); } } as unknown as OAuthProviderDef;
+    const active = getAccountCredentialWithStatus(provider, "a")!.credential;
+    await expect(oauth.refreshGenericAccountWithLock(provider, "a", revoked, active)).rejects.toBeInstanceOf(oauth.OAuthLoginRequiredError);
+    expect(getAccountCredentialWithStatus(provider, "a")!.needsReauth).toBe(true);
+    releaseSibling();
+    const rows = await pending;
+    expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
+    expect(resolver.mock.calls.some(([, accountId]) => accountId === "c")).toBe(false);
+    expect(rows.some(row => row.id === "model-before-reauth")).toBe(false);
     expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
   } finally { releaseSibling(); await pending; resolver.mockRestore(); }
 });
