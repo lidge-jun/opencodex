@@ -165,7 +165,8 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   when it fits the injected-instruction budget, and is otherwise sent without it.
 - The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
   call. The direct form relays the model's bytes; the wrapped form relays the original bytes of
-  `value` under `strict: true` and `JSON.stringify(value)` otherwise.
+  `value`, so numbers past 2^53 or the double range are never rewritten. Only a document past the
+  reader's 512-level nesting limit is re-serialized, without `strict: true`.
   Without `strict: true`, validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
   root's `required` keys are present. With `strict: true`, `src/adapters/kiro/structured-output-schema.ts`
   prepares the original schema into a validation graph once, at the boundary, and validates the whole
@@ -179,6 +180,8 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
     `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
     references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`
     edges that consumes none of the value are refused. Recursion through properties or items is allowed.
+    A `$ref` beside an assertion keyword is refused, because drafts disagree on whether those
+    siblings apply; annotations and root `$defs`/`definitions` beside it are fine.
   - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
   - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` must be a safe integer or a
     non-integer with at most 15 significant digits. This is a heuristic: a bound written with more
@@ -194,7 +197,12 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   depth limit of 128 schema levels spans references, `anyOf` branches, properties and items; the
   reader stops at 512 levels of nesting. A value that needs more is non-conforming (it takes the
   bounded retry like any invalid answer), so a recursive `anyOf` cannot branch exponentially and a
-  deep value cannot exhaust the stack.
+  deep value cannot exhaust the stack. `const`/`enum` comparisons are charged to the same budget,
+  long strings in proportion to their length. Preparation is bounded too: a schema with more than
+  10,000 nodes, or more than 10,000 JSON values across its `const`/`enum` literals, is refused, and
+  the reference-cycle check is linear in nodes and edges. Validation problems and refusals are fixed
+  categories: they never quote a path, a property name, or a schema key outside the JSON Schema
+  vocabulary, because they reach the caller.
 - A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
   JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
   input that fails validation (including truncated JSON), takes the one bounded `text_fallback` retry with a structured-output

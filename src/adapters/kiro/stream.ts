@@ -959,8 +959,10 @@ async function* parseKiroAttemptEvents(
       // the first attempt's held progress is released rather than superseded (retry text normally
       // replaces it), and the filtered retry text follows as the commentary it was staged as.
       if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
-        if (priorAttempt) yield* priorAttempt.drainDeferred(false);
-        yield* emitRetained(fallbackEvents);
+        // A structured-output caller never receives prose: text from either attempt is dropped and
+        // only their non-text events and the filter terminal remain.
+        if (priorAttempt) yield* priorAttempt.drainDeferred(structuredOutput !== undefined);
+        yield* structuredOutput ? consumeSupersededByCompletion(fallbackEvents) : emitRetained(fallbackEvents);
         return {
           assistantText,
           sawReasoning,

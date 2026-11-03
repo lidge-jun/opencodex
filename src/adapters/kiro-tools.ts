@@ -67,25 +67,23 @@ const SCHEMA_LITERAL_KEYS = new Set(["const", "enum", "default", "examples"]);
 
 function sanitizeSchemaMap(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return sanitizeKiroSchema(value);
-  const out: Record<string, unknown> = {};
-  for (const [name, child] of Object.entries(value as Record<string, unknown>)) {
-    out[name] = sanitizeKiroSchema(child);
-  }
-  return out;
+  // fromEntries defines own properties: a property named "__proto__" stays a property instead of
+  // hitting the prototype setter and vanishing from the advertised schema.
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, sanitizeKiroSchema(child)]));
 }
 
 /** Strip the keywords Kiro's tool-spec validator rejects, everywhere in a schema tree. */
 export function sanitizeKiroSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeKiroSchema);
   if (!value || typeof value !== "object") return value;
-  const out: Record<string, unknown> = {};
+  const out: Array<[string, unknown]> = [];
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (KIRO_REJECTED_SCHEMA_KEYS.has(key)) continue;
     if (key === "required" && Array.isArray(child) && child.length === 0) continue;
-    if (SCHEMA_LITERAL_KEYS.has(key)) out[key] = child;
-    else out[key] = SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(child) : sanitizeKiroSchema(child);
+    if (SCHEMA_LITERAL_KEYS.has(key)) out.push([key, child]);
+    else out.push([key, SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(child) : sanitizeKiroSchema(child)]);
   }
-  return out;
+  return Object.fromEntries(out);
 }
 
 function ensureRootObjectType(schema: unknown): Record<string, unknown> {

@@ -200,7 +200,8 @@ function structuredValueProblem(spec: KiroStructuredOutputSpec, value: unknown):
   const required = spec.schema?.required;
   if (isRecord(value) && Array.isArray(required)) {
     const missing = required.find(key => typeof key === "string" && !Object.hasOwn(value, key));
-    if (missing !== undefined) return `missing required property ${JSON.stringify(missing)}`;
+    // No property name: diagnostics carry fixed categories, never schema or answer text.
+    if (missing !== undefined) return "the root is missing a required property";
   }
   return undefined;
 }
@@ -214,7 +215,7 @@ function structuredValueProblem(spec: KiroStructuredOutputSpec, value: unknown):
  */
 function strictStructuredJson(schema: JsonRecord, text: string, wrapped: boolean): { json: string } | { problem: string } {
   const document = readKiroJson(text);
-  if (!document) return { problem: "$: the value nests deeper than strict validation allows" };
+  if (!document) return { problem: "the value nests deeper than strict validation allows" };
   const root = document.value;
   const value = wrapped && root.kind === "object" ? root.entries.get("value") : root;
   if (!value) return { problem: "missing `value`" };
@@ -228,9 +229,9 @@ const FAILURE_PREFIX = "Kiro structured output did not match the requested forma
 /**
  * Validate the structured-output tool's input and return the JSON text to relay.
  *
- * The direct form relays the model's own bytes rather than a re-serialization, so integers beyond
- * 2^53 and key order survive exactly as written. The wrapped form extracts `value`: a strict format
- * relays its original bytes, and a non-strict one re-serializes it.
+ * Both forms relay the model's own bytes rather than a re-serialization, so integers beyond 2^53,
+ * numbers past the double range and key order survive exactly as written. The wrapped form relays
+ * the original bytes of `value`.
  */
 export function parseKiroStructuredToolInput(
   spec: KiroStructuredOutputSpec,
@@ -254,7 +255,14 @@ export function parseKiroStructuredToolInput(
   }
   const problem = structuredValueProblem(spec, value);
   if (problem) return { error: `${FAILURE_PREFIX}: ${problem}` };
-  return { json: spec.wrapped ? JSON.stringify(value) : text };
+  return { json: spec.wrapped ? wrappedValueText(text, value) : text };
+}
+
+/** The original bytes of the wrapper's `value`; only a document past the reader's nesting limit is re-serialized. */
+function wrappedValueText(text: string, value: unknown): string {
+  const root = readKiroJson(text)?.value;
+  const span = root?.kind === "object" ? root.entries.get("value") : undefined;
+  return span ? text.slice(span.start, span.end) : JSON.stringify(value);
 }
 
 const WHOLE_FENCE = /^```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/;

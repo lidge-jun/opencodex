@@ -33,10 +33,10 @@ describe("Kiro strict structured output validation", () => {
 
   test("a wrong property type and an extra property are refused under strict", () => {
     expect(parseKiroStructuredToolInput(spec, '{"title":42,"extra":true}')).toEqual({
-      error: `${FAIL}: $.title: expected a JSON string`,
+      error: `${FAIL}: expected a JSON string`,
     });
     expect(parseKiroStructuredToolInput(spec, '{"title":"x","extra":true}')).toEqual({
-      error: `${FAIL}: $: unexpected property "extra"`,
+      error: `${FAIL}: an object has a property the schema does not allow`,
     });
     expect(parseKiroStructuredText(spec, '{"title":"x","extra":1}')).toBeUndefined();
     expect(parseKiroStructuredToolInput(spec, '{"title":"x"}')).toEqual({ json: '{"title":"x"}' });
@@ -66,13 +66,13 @@ describe("Kiro strict structured output validation", () => {
   test.each([
     [good, undefined],
     [{ ...good, choice: 3 }, undefined],
-    [{ ...good, kind: "c" }, "$.kind: expected one of the enum values"],
-    [{ ...good, version: "v3" }, "$.version: expected the const value"],
-    [{ ...good, note: 1 }, "$.note: expected a JSON string or null"],
-    [{ ...good, tags: ["t", 1] }, "$.tags[1]: expected a JSON string"],
-    [{ ...good, item: { id: "i", more: 1 } }, '$.item: unexpected property "more"'],
-    [{ ...good, choice: 1.5 }, "$.choice: matched no anyOf branch"],
-    [{ ...good, tags: undefined }, '$: missing required property "tags"'],
+    [{ ...good, kind: "c" }, "expected one of the enum values"],
+    [{ ...good, version: "v3" }, "expected the const value"],
+    [{ ...good, note: 1 }, "expected a JSON string or null"],
+    [{ ...good, tags: ["t", 1] }, "expected a JSON string"],
+    [{ ...good, item: { id: "i", more: 1 } }, "an object has a property the schema does not allow"],
+    [{ ...good, choice: 1.5 }, "matched no anyOf branch"],
+    [{ ...good, tags: undefined }, "an object is missing a required property"],
   ])("%j -> %j", (value, problem) => {
     const raw = JSON.stringify(value);
     expect(parseKiroStructuredToolInput(richSpec, raw)).toEqual(problem === undefined ? { json: raw } : { error: `${FAIL}: ${problem}` });
@@ -119,7 +119,7 @@ describe("Kiro structured-output wrapping keeps references on the original root"
     }))!;
     expect(parseKiroStructuredToolInput(spec, '{"value":["a",["b"]]}')).toEqual({ json: '["a",["b"]]' });
     expect(parseKiroStructuredToolInput(spec, '{"value":["a",[1]]}')).toEqual({
-      error: `${FAIL}: $: matched no anyOf branch`,
+      error: `${FAIL}: matched no anyOf branch`,
     });
   });
 });
@@ -150,7 +150,7 @@ describe("Kiro strict validation stays bounded", () => {
   test("one depth limit spans items and properties, so a deep value cannot exhaust the stack", () => {
     const list = { $ref: "#/$defs/l", $defs: { l: { type: "array", items: { $ref: "#/$defs/l" } } } };
     const spec = kiroStructuredOutputSpec(request(list))!;
-    const tooDeep = { error: expect.stringMatching(/^Kiro structured output did not match the requested format: \S+: the value nests deeper than strict validation allows$/) };
+    const tooDeep = { error: expect.stringMatching(/^Kiro structured output did not match the requested format: the value nests deeper than strict validation allows$/) };
     // 200 levels pass the reader but not the validator; 100,000 levels stop at the reader.
     for (const depth of [200, 100_000]) {
       expect(parseKiroStructuredToolInput(spec, `{"value":${nested(depth, "")}}`)).toEqual(tooDeep);
@@ -205,8 +205,8 @@ describe("Kiro strict numbers", () => {
       additionalProperties: false,
     }))!;
     expect(parseKiroStructuredToolInput(spec, '{"kind":"pdf","mode":{"x":"y"}}')).toEqual({ json: '{"kind":"pdf","mode":{"x":"y"}}' });
-    expect(parseKiroStructuredToolInput(spec, '{"kind":"png"}')).toEqual({ error: `${FAIL}: $.kind: expected the const value` });
-    expect(parseKiroStructuredToolInput(spec, '{"mode":"b"}')).toEqual({ error: `${FAIL}: $.mode: expected one of the enum values` });
+    expect(parseKiroStructuredToolInput(spec, '{"kind":"png"}')).toEqual({ error: `${FAIL}: expected the const value` });
+    expect(parseKiroStructuredToolInput(spec, '{"mode":"b"}')).toEqual({ error: `${FAIL}: expected one of the enum values` });
   });
 
   test("bounds accept safe integers and decimals up to 15 significant digits, and refuse past that edge", () => {
@@ -226,9 +226,9 @@ describe("Kiro strict numbers", () => {
       additionalProperties: false,
     }))!;
     expect(parseKiroStructuredToolInput(spec, '{"m":10.0}')).toEqual({ json: '{"m":10.0}' });
-    expect(parseKiroStructuredToolInput(spec, '{"m":10.0000000000000001}')).toEqual({ error: `${FAIL}: $.m: above maximum` });
-    expect(parseKiroStructuredToolInput(spec, '{"i":-0.0000000000000001}')).toEqual({ error: `${FAIL}: $.i: expected a JSON integer` });
-    expect(parseKiroStructuredToolInput(spec, '{"i":1.0000000000000001}')).toEqual({ error: `${FAIL}: $.i: expected a JSON integer` });
+    expect(parseKiroStructuredToolInput(spec, '{"m":10.0000000000000001}')).toEqual({ error: `${FAIL}: a number is above maximum` });
+    expect(parseKiroStructuredToolInput(spec, '{"i":-0.0000000000000001}')).toEqual({ error: `${FAIL}: expected a JSON integer` });
+    expect(parseKiroStructuredToolInput(spec, '{"i":1.0000000000000001}')).toEqual({ error: `${FAIL}: expected a JSON integer` });
     expect(parseKiroStructuredText(spec, '{"m":1e400}')).toBeUndefined();
   });
 
@@ -281,5 +281,66 @@ describe("Kiro schema sanitization keeps literal values", () => {
         name: { type: "string" },
       },
     });
+  });
+});
+
+describe("Kiro strict schema hardening", () => {
+  test("a $ref beside an assertion has no single meaning and is refused; annotations and root $defs are fine", () => {
+    const defs = { $defs: { n: { type: "integer" } } };
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { a: { $ref: "#/$defs/n", type: "string" } }, ...defs })))
+      .toThrow(REFUSED + ' "$ref" cannot be enforced');
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { a: { $ref: "#/$defs/n", description: "count" } }, ...defs }))).not.toThrow();
+    expect(() => kiroStructuredOutputSpec(request({ $ref: "#/$defs/n", ...defs }))).not.toThrow();
+  });
+
+  test("a schema past the node cap is refused quickly, and a wide accepted anyOf prepares in linear time", () => {
+    const wide = (n: number) => ({ type: "object", properties: { a: { anyOf: Array.from({ length: n }, () => true) } } });
+    let started = performance.now();
+    expect(() => kiroStructuredOutputSpec(request(wide(64_000)))).toThrow(REFUSED);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    started = performance.now();
+    expect(() => kiroStructuredOutputSpec(request(wide(9_000)))).not.toThrow();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("literal comparisons are charged to the validation budget", () => {
+    const big = Array.from({ length: 5_000 }, () => "x");
+    const schema = {
+      type: "object",
+      properties: { a: { anyOf: Array.from({ length: 2_000 }, () => ({ $ref: "#/$defs/big" })) } },
+      $defs: { big: { const: big } },
+    };
+    const raw = JSON.stringify({ a: [...big.slice(1), "y"] });
+    const document = readKiroJson(raw)!;
+    const started = performance.now();
+    const result = validateKiroStrictValue(schema, document.value, document.nodes);
+    expect(result.problem).toContain("needs more work than strict validation allows");
+    expect(result.visits).toBeLessThanOrEqual(result.budget + 1);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("a literal larger than the schema-wide cap is refused before sending", () => {
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { a: { const: Array.from({ length: 20_000 }, () => "x") } } })))
+      .toThrow(REFUSED + ' "const" cannot be enforced');
+  });
+
+  test("diagnostics and refusals carry no schema or answer text", () => {
+    const spec = kiroStructuredOutputSpec(request(titleSchema))!;
+    const result = parseKiroStructuredToolInput(spec, '{"title":"t","secret-model-key-123":1}');
+    expect(result).toEqual({ error: FAIL + ": an object has a property the schema does not allow" });
+    let message = "";
+    try { kiroStructuredOutputSpec(request({ type: "object", "caller-key-xyz": true })); } catch (error) { message = String(error); }
+    expect(message).toContain("uses a keyword that cannot be enforced");
+    expect(message).not.toContain("caller-key-xyz");
+  });
+});
+
+describe("Kiro schema sanitization keeps a __proto__ property", () => {
+  test("a property or definition named __proto__ stays an own key", () => {
+    const schema = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"],"$defs":{"__proto__":{"type":"string"}}}');
+    const out = sanitizeKiroSchema(schema) as { properties: object; $defs: object };
+    expect(Object.keys(out.properties)).toEqual(["__proto__"]);
+    expect(Object.keys(out.$defs)).toEqual(["__proto__"]);
+    expect(JSON.stringify(out)).toContain('"properties":{"__proto__":{"type":"string"}}');
   });
 });

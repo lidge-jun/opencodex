@@ -56,6 +56,10 @@ export const KIRO_STRICT_VISITS_PER_VALUE_NODE = 16;
 export const KIRO_STRICT_MAX_DEPTH = 128;
 /** Deepest schema nesting accepted at the boundary. */
 const MAX_SCHEMA_DEPTH = 64;
+/** Schema nodes accepted at the boundary; preparation work is linear in this. */
+const MAX_SCHEMA_NODES = 10_000;
+/** JSON values accepted across every `const`/`enum` literal of one schema. */
+const MAX_LITERAL_NODES = 10_000;
 
 const KNOWN_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const ANNOTATIONS = new Set([
@@ -93,9 +97,26 @@ function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * JSON Schema keyword names a refusal may name. Any other key is the caller's own text and is not
+ * echoed: a refusal names a keyword only from this fixed vocabulary.
+ */
+const NAMEABLE_KEYWORDS = new Set([
+  "schema", "type", "properties", "required", "additionalProperties", "items", "enum", "const", "anyOf",
+  "oneOf", "allOf", "not", "if", "then", "else", "$ref", "$defs", "definitions", "$anchor", "$dynamicRef",
+  "$dynamicAnchor", "$recursiveRef", "$recursiveAnchor", "multipleOf", "pattern", "patternProperties",
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "minItems",
+  "maxItems", "minProperties", "maxProperties", "uniqueItems", "contains", "minContains", "maxContains",
+  "prefixItems", "additionalItems", "unevaluatedItems", "unevaluatedProperties", "propertyNames",
+  "dependentRequired", "dependentSchemas", "dependencies", "format", "contentEncoding",
+  "contentMediaType", "contentSchema",
+]);
+
 class Unsupported extends Error {
-  constructor(readonly keyword: string) {
-    super(keyword);
+  readonly keyword: string | undefined;
+  constructor(keyword: string) {
+    super("unsupported strict schema keyword");
+    this.keyword = NAMEABLE_KEYWORDS.has(keyword) ? keyword : undefined;
   }
 }
 
@@ -106,16 +127,21 @@ function isFaithfulNumber(value: unknown): value is number {
   return kiroDecimal(String(value)).digits.length <= 15;
 }
 
-/** Whether a const/enum literal contains a number anywhere. Iterative, so a deep literal is safe. */
-function containsNumber(literal: unknown): boolean {
+/**
+ * The JSON values in a `const`/`enum` literal, or -1 when it contains a number. Iterative, so a deep
+ * literal is safe; it stops counting at `limit`.
+ */
+function literalNodes(literal: unknown, limit: number): number {
   const stack = [literal];
-  while (stack.length > 0) {
+  let count = 0;
+  while (stack.length > 0 && count <= limit) {
     const item = stack.pop();
-    if (typeof item === "number") return true;
+    count += 1;
+    if (typeof item === "number") return -1;
     if (Array.isArray(item)) for (const child of item) stack.push(child);
     else if (isRecord(item)) for (const child of Object.values(item)) stack.push(child);
   }
-  return false;
+  return count;
 }
 
 /** A prepared strict schema: the root node of its validation graph. */
@@ -138,6 +164,13 @@ function prepare(schema: JsonRecord): PreparedSchema {
     }
   }
   const nodes: StrictNode[] = [];
+  let literalBudget = MAX_LITERAL_NODES;
+  /** Charge a literal against the schema-wide cap; a number or an oversized literal is refused. */
+  const admitLiteral = (literal: unknown, key: string): void => {
+    const count = literalNodes(literal, literalBudget);
+    if (count < 0 || count > literalBudget) throw new Unsupported(key);
+    literalBudget -= count;
+  };
 
   const resolve = (ref: unknown): StrictNode => {
     const match = typeof ref === "string" ? REF.exec(ref) : null;
@@ -154,11 +187,17 @@ function prepare(schema: JsonRecord): PreparedSchema {
   };
 
   const build = (raw: unknown, depth: number, keyword: string, node: StrictNode = {}, root = false): StrictNode => {
-    if (depth > MAX_SCHEMA_DEPTH) throw new Unsupported(keyword);
+    if (depth > MAX_SCHEMA_DEPTH || nodes.length >= MAX_SCHEMA_NODES) throw new Unsupported(keyword);
     nodes.push(node);
     if (raw === false) node.never = true;
     if (typeof raw === "boolean") return node;
     if (!isRecord(raw)) throw new Unsupported("schema");
+    // Drafts disagree on whether keywords beside `$ref` apply (draft-07 ignores them, 2019-09 and
+    // later apply them), so a `$ref` with an assertion beside it has no single meaning to enforce.
+    if (Object.hasOwn(raw, "$ref")
+      && Object.keys(raw).some(key => key !== "$ref" && key !== "$defs" && key !== "definitions" && !ANNOTATIONS.has(key))) {
+      throw new Unsupported("$ref");
+    }
     for (const [key, arg] of Object.entries(raw)) {
       if (ANNOTATIONS.has(key)) continue;
       switch (key) {
@@ -189,11 +228,12 @@ function prepare(schema: JsonRecord): PreparedSchema {
           node.items = build(arg, depth + 1, key);
           break;
         case "enum":
-          if (!Array.isArray(arg) || containsNumber(arg)) throw new Unsupported(key);
+          if (!Array.isArray(arg)) throw new Unsupported(key);
+          admitLiteral(arg, key);
           node.enumValues = arg;
           break;
         case "const":
-          if (containsNumber(arg)) throw new Unsupported(key);
+          admitLiteral(arg, key);
           node.constValue = { value: arg };
           break;
         case "anyOf":
@@ -228,21 +268,22 @@ function prepare(schema: JsonRecord): PreparedSchema {
  */
 function assertNoEmptyCycle(nodes: StrictNode[]): void {
   const state = new Map<StrictNode, 1 | 2>();
+  // Each frame builds its node's edge list once, so the walk is linear in nodes plus edges.
   const edges = (node: StrictNode): StrictNode[] => [...(node.ref ? [node.ref] : []), ...(node.anyOf ?? [])];
   for (const start of nodes) {
     if (state.has(start)) continue;
-    const stack: Array<[StrictNode, number]> = [[start, 0]];
+    const stack: Array<[StrictNode, StrictNode[], number]> = [[start, edges(start), 0]];
     state.set(start, 1);
     while (stack.length > 0) {
       const frame = stack[stack.length - 1]!;
-      const next = edges(frame[0])[frame[1]++];
+      const next = frame[1][frame[2]++];
       if (next === undefined) {
         state.set(frame[0], 2);
         stack.pop();
       } else if (state.get(next) === 1) throw new Unsupported("$ref");
       else if (!state.has(next)) {
         state.set(next, 1);
-        stack.push([next, 0]);
+        stack.push([next, edges(next), 0]);
       }
     }
   }
@@ -266,7 +307,9 @@ export function assertKiroStrictSchemaSupported(schema: JsonRecord): void {
     preparedFor(schema);
   } catch (error) {
     if (!(error instanceof Unsupported)) throw error;
-    throw new Error(`Kiro does not support Responses structured output: strict schema keyword ${JSON.stringify(error.keyword)} cannot be enforced`);
+    throw new Error(error.keyword === undefined
+      ? "Kiro does not support Responses structured output: the strict schema uses a keyword that cannot be enforced"
+      : `Kiro does not support Responses structured output: strict schema keyword ${JSON.stringify(error.keyword)} cannot be enforced`);
   }
 }
 
@@ -285,29 +328,29 @@ function hasType(value: KiroJsonValue, type: string): boolean {
 }
 
 /** Whether the model's value equals a schema literal, comparing numbers exactly by their decimal value. */
-function literalEquals(literal: unknown, value: KiroJsonValue): boolean {
+function literalEquals(literal: unknown, value: KiroJsonValue, charge: (cost: number) => void): boolean {
+  // Every comparison step is charged, so one large literal referenced from many places cannot
+  // multiply work past the validation budget. Long strings cost in proportion to their length.
+  charge(1);
   switch (value.kind) {
     case "null": return literal === null;
-    case "boolean":
-    case "string": return literal === value.value;
+    case "boolean": return literal === value.value;
+    case "string":
+      charge(Math.floor(value.value.length / 256));
+      return literal === value.value;
     case "number":
       return typeof literal === "number"
         && compareKiroDecimal(kiroDecimal(String(literal)), kiroDecimal(value.lexeme)) === 0;
     case "array":
       return Array.isArray(literal) && literal.length === value.items.length
-        && value.items.every((item, i) => literalEquals(literal[i], item));
+        && value.items.every((item, i) => literalEquals(literal[i], item, charge));
     case "object": {
       if (!isRecord(literal)) return false;
       const keys = Object.keys(literal);
       return keys.length === value.entries.size
-        && keys.every(key => value.entries.has(key) && literalEquals(literal[key], value.entries.get(key)!));
+        && keys.every(key => value.entries.has(key) && literalEquals(literal[key], value.entries.get(key)!, charge));
     }
   }
-}
-
-/** `path` extended by an object key, dotted when the key is an identifier. */
-function childPath(path: string, key: string): string {
-  return /^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
 }
 
 class OverBudget extends Error {
@@ -323,64 +366,65 @@ export interface KiroStrictValidation {
   budget: number;
 }
 
-/** Validate `value` (holding `valueNodes` JSON values) against the strict `schema`. */
+/**
+ * Validate `value` (holding `valueNodes` JSON values) against the strict `schema`.
+ *
+ * Problems are fixed categories. They never quote a property name, a path or any other text from
+ * the model's answer or the caller's schema, because they reach the caller and diagnostics.
+ */
 export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue, valueNodes: number): KiroStrictValidation {
   const { root } = preparedFor(schema);
   const budget = KIRO_STRICT_BASE_VISITS + KIRO_STRICT_VISITS_PER_VALUE_NODE * valueNodes;
   let visits = 0;
-  const spend = (path: string, cost = 1): void => {
+  const spend = (cost = 1): void => {
     visits += cost;
-    if (visits > budget) throw new OverBudget(`${path}: validating the value needs more work than strict validation allows`);
+    if (visits > budget) throw new OverBudget("validating the value needs more work than strict validation allows");
   };
 
-  const check = (node: StrictNode, value: KiroJsonValue, path: string, depth: number): string | undefined => {
-    spend(path);
-    if (depth > KIRO_STRICT_MAX_DEPTH) throw new OverBudget(`${path}: the value nests deeper than strict validation allows`);
-    if (node.never) return `${path}: no value is allowed here`;
+  const check = (node: StrictNode, value: KiroJsonValue, depth: number): string | undefined => {
+    spend();
+    if (depth > KIRO_STRICT_MAX_DEPTH) throw new OverBudget("the value nests deeper than strict validation allows");
+    if (node.never) return "a value is present where none is allowed";
     if (node.ref) {
-      const problem = check(node.ref, value, path, depth + 1);
+      const problem = check(node.ref, value, depth + 1);
       if (problem) return problem;
     }
-    if (node.types && !node.types.some(type => hasType(value, type))) return `${path}: expected a JSON ${node.types.join(" or ")}`;
-    if (node.enumValues) {
-      spend(path, node.enumValues.length);
-      if (!node.enumValues.some(option => literalEquals(option, value))) return `${path}: expected one of the enum values`;
-    }
-    if (node.constValue && !literalEquals(node.constValue.value, value)) return `${path}: expected the const value`;
-    if (node.anyOf && !node.anyOf.some(branch => check(branch, value, path, depth + 1) === undefined)) {
-      return `${path}: matched no anyOf branch`;
+    if (node.types && !node.types.some(type => hasType(value, type))) return `expected a JSON ${node.types.join(" or ")}`;
+    if (node.enumValues && !node.enumValues.some(option => literalEquals(option, value, spend))) return "expected one of the enum values";
+    if (node.constValue && !literalEquals(node.constValue.value, value, spend)) return "expected the const value";
+    if (node.anyOf && !node.anyOf.some(branch => check(branch, value, depth + 1) === undefined)) {
+      return "matched no anyOf branch";
     }
     if (value.kind === "string") {
       const length = [...value.value].length;
-      if (node.minLength !== undefined && length < node.minLength) return `${path}: shorter than minLength`;
-      if (node.maxLength !== undefined && length > node.maxLength) return `${path}: longer than maxLength`;
+      if (node.minLength !== undefined && length < node.minLength) return "a string is shorter than minLength";
+      if (node.maxLength !== undefined && length > node.maxLength) return "a string is longer than maxLength";
     }
     if (value.kind === "number") {
       const number = kiroDecimal(value.lexeme);
-      if (node.minimum && compareKiroDecimal(number, node.minimum) < 0) return `${path}: below minimum`;
-      if (node.maximum && compareKiroDecimal(number, node.maximum) > 0) return `${path}: above maximum`;
-      if (node.exclusiveMinimum && compareKiroDecimal(number, node.exclusiveMinimum) <= 0) return `${path}: not above exclusiveMinimum`;
-      if (node.exclusiveMaximum && compareKiroDecimal(number, node.exclusiveMaximum) >= 0) return `${path}: not below exclusiveMaximum`;
+      if (node.minimum && compareKiroDecimal(number, node.minimum) < 0) return "a number is below minimum";
+      if (node.maximum && compareKiroDecimal(number, node.maximum) > 0) return "a number is above maximum";
+      if (node.exclusiveMinimum && compareKiroDecimal(number, node.exclusiveMinimum) <= 0) return "a number is not above exclusiveMinimum";
+      if (node.exclusiveMaximum && compareKiroDecimal(number, node.exclusiveMaximum) >= 0) return "a number is not below exclusiveMaximum";
     }
     if (value.kind === "array") {
-      if (node.minItems !== undefined && value.items.length < node.minItems) return `${path}: fewer than minItems`;
-      if (node.maxItems !== undefined && value.items.length > node.maxItems) return `${path}: more than maxItems`;
+      if (node.minItems !== undefined && value.items.length < node.minItems) return "an array has fewer than minItems";
+      if (node.maxItems !== undefined && value.items.length > node.maxItems) return "an array has more than maxItems";
       if (node.items) {
-        for (const [index, item] of value.items.entries()) {
-          const problem = check(node.items, item, `${path}[${index}]`, depth + 1);
+        for (const item of value.items) {
+          const problem = check(node.items, item, depth + 1);
           if (problem) return problem;
         }
       }
     }
     if (value.kind === "object") {
-      const missing = node.required?.find(key => !value.entries.has(key));
-      if (missing !== undefined) return `${path}: missing required property ${JSON.stringify(missing)}`;
+      if (node.required?.some(key => !value.entries.has(key))) return "an object is missing a required property";
       for (const [key, child] of value.entries) {
         const declared = node.properties?.get(key);
-        if (!declared && node.closed) return `${path}: unexpected property ${JSON.stringify(key)}`;
+        if (!declared && node.closed) return "an object has a property the schema does not allow";
         const childNode = declared ?? node.additional;
         if (!childNode) continue;
-        const problem = check(childNode, child, childPath(path, key), depth + 1);
+        const problem = check(childNode, child, depth + 1);
         if (problem) return problem;
       }
     }
@@ -388,7 +432,7 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
   };
 
   try {
-    const problem = check(root, value, "$", 0);
+    const problem = check(root, value, 0);
     return { ...(problem !== undefined ? { problem } : {}), visits, budget };
   } catch (error) {
     if (!(error instanceof OverBudget)) throw error;
@@ -416,15 +460,15 @@ const SCHEMA_MAPS = new Set(["properties", "$defs", "definitions"]);
 export function rewriteKiroWrappedRefs(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(rewriteKiroWrappedRefs);
   if (!isRecord(schema)) return schema;
-  const out: JsonRecord = {};
-  for (const [key, child] of Object.entries(schema)) {
+  // fromEntries defines own properties, so a key such as "__proto__" stays a key.
+  return Object.fromEntries(Object.entries(schema).map(([key, child]): [string, unknown] => {
     if (SCHEMA_MAPS.has(key) && isRecord(child)) {
-      out[key] = Object.fromEntries(Object.entries(child).map(([name, sub]) => [name, rewriteKiroWrappedRefs(sub)]));
-    } else if (LITERAL_KEYS.has(key)) out[key] = child;
-    else if (key === "$ref" && typeof child === "string") out[key] = movedRef(child);
-    else out[key] = rewriteKiroWrappedRefs(child);
-  }
-  return out;
+      return [key, Object.fromEntries(Object.entries(child).map(([name, sub]) => [name, rewriteKiroWrappedRefs(sub)]))];
+    }
+    if (LITERAL_KEYS.has(key)) return [key, child];
+    if (key === "$ref" && typeof child === "string") return [key, movedRef(child)];
+    return [key, rewriteKiroWrappedRefs(child)];
+  }));
 }
 
 /** One reference rewritten for the wrapped document. */

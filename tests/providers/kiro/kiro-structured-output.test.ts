@@ -239,7 +239,7 @@ describe("Kiro structured-output stream", () => {
     expect(bodies).toHaveLength(2);
     expect(texts).toEqual([]);
     expect(terminal).toMatchObject({
-      type: "error", code: "invalid_kiro_structured_output", message: expect.stringContaining('missing required property "title"'),
+      type: "error", code: "invalid_kiro_structured_output", message: expect.stringContaining("the root is missing a required property"),
     });
   });
 
@@ -417,5 +417,27 @@ describe("Kiro structured-output stop reasons", () => {
       retryable: false,
       message: expect.stringContaining("produced no answer"),
     });
+  });
+});
+
+describe("Kiro structured output after a filtered retry", () => {
+  test.each([false, true])("prose from either attempt never reaches the caller when the retry is filtered (buffered=%p)", async buffered => {
+    const { texts, terminal, bodies } = await runWith(
+      structuredRequest(),
+      buffered,
+      [text("Here is a nice title for you."), stop("END_TURN")],
+      [text("Sure, the title is"), stop("CONTENT_FILTERED")],
+    );
+    expect(bodies).toHaveLength(2);
+    expect(texts).toEqual([]);
+    expect(terminal).toMatchObject({ type: "incomplete", reason: "content_filter", retryable: false });
+  });
+});
+
+describe("Kiro wrapped structured output keeps the model's number bytes", () => {
+  test("a non-strict wrapped value relays large and overflowing numbers exactly", () => {
+    const spec = kiroStructuredOutputSpec(structuredRequest({ type: "json_schema", name: "response", schema: { type: "array", items: { type: "number" } } }))!;
+    expect(spec.wrapped).toBe(true);
+    expect(parseKiroStructuredToolInput(spec, '{"value":[9007199254740993, 1e400]}')).toEqual({ json: "[9007199254740993, 1e400]" });
   });
 });
