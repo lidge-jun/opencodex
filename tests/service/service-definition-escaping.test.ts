@@ -11,6 +11,7 @@ import { join } from "node:path";
 import * as serviceState from "../../src/service/state";
 import { buildPlist, buildUnit, buildWindowsServiceScript, expectedLaunchdCommand, installLaunchd, probeLaunchdLoadState, resolvedProxyEnv, runLaunchctl } from "../../src/service";
 import { buildServiceShellCommand, resolveServiceListenPort } from "../../src/service/definition";
+import { parseSystemdUnitHomes } from "../../src/service/systemd-env";
 
 const previousOpenCodexHome = process.env.OPENCODEX_HOME;
 beforeEach(() => {
@@ -87,6 +88,22 @@ describe("systemd unit escaping", () => {
     // Environment= performs no variable expansion, so "$$" there would reach the proxy as two dollars.
     expect(unit).toContain('Environment="CODEX_HOME=/tmp/a${HOME}b $USER %%h dir"');
     expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/o$$x %%n\\\\q"');
+  });
+
+  test("a unit whose values carry tab, CR and LF reads back through the ownership parser", () => {
+    // The ownership probe validates every Environment= line, so one value the writer escapes but
+    // the parser cannot decode would make the whole unit unknown and fence native-main admission.
+    const tabbedCodexHome = "/tmp/codex\thome\rx";
+    const tabbedOpenCodexHome = "/tmp/open\ncodex %h";
+    const unit = withHomes(tabbedCodexHome, tabbedOpenCodexHome, () => buildUnit(
+      [{ name: "HTTPS_PROXY", value: "http://proxy.test:8080/\tpath" }],
+      { launcher: "/usr/local/bin/ocx" },
+    ));
+    expect(unit).toContain('Environment="HTTPS_PROXY=http://proxy.test:8080/\\tpath"');
+    expect(parseSystemdUnitHomes(unit)).toEqual({
+      kind: "parsed",
+      homes: { codexHome: tabbedCodexHome, opencodexHome: tabbedOpenCodexHome },
+    });
   });
 });
 
