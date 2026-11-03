@@ -213,7 +213,9 @@ describe("multi-account auth store", () => {
     }
   });
 
-  test.each(["false", "throw"] as const)("recovery survives registration %s and warns without exposing credentials", async (failure) => {
+  // A false result (an unowned home) keeps the recovery copy; a thrown refusal removes it, because an
+  // unlisted credential copy would survive uninstall.
+  test.each(["false", "throw"] as const)("recovery handles registration %s and warns without exposing credentials", async (failure) => {
     const path = join(TEST_DIR, "auth.json");
     const backup = `${path}.pre-multiauth`;
     const original = JSON.stringify({ xai: cred({ email: "old@example.test" }) });
@@ -228,9 +230,12 @@ describe("multi-account auth store", () => {
     try {
       await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
       expect(registration).toHaveBeenCalledWith(TEST_DIR, backup);
-      expect(readFileSync(backup, "utf8")).toBe(original);
+      if (failure === "false") expect(readFileSync(backup, "utf8")).toBe(original);
+      else expect(existsSync(backup)).toBe(false);
       expect(getCredential("xai")?.access).toBe("new-access");
-      expect(warning.mock.calls).toEqual([["[oauth] Recovery backup created, but uninstall ownership registration failed."]]);
+      expect(warning.mock.calls).toEqual([[failure === "false"
+        ? "[oauth] Recovery backup created, but uninstall ownership registration failed."
+        : "[oauth] Recovery backup removed: uninstall ownership registration failed."]]);
     } finally {
       warning.mockRestore();
       registration.mockRestore();

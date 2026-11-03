@@ -154,7 +154,7 @@ describe("serialized ownership manifest (#8093)", () => {
       // SQLite's busy wait is off, so a held lock fails within the short bounded retry.
       const started = Date.now();
       expect(() => recordOwnedConfigPath(dir, join(dir, "blocked"))).toThrow(ConfigOwnershipLockError);
-      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(Date.now() - started).toBeLessThan(500);
     } finally { release(); }
     expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")).toBe(before);
     expect(recordOwnedConfigPath(dir, join(dir, "blocked"))).toBe(true);
@@ -403,23 +403,52 @@ describe("rerun after the manifest was already deleted (#8093)", () => {
 });
 
 describe("paths recorded after the uninstall snapshot (#8093)", () => {
-  test("a path recorded after the snapshot keeps the manifest, and a rerun removes it", withHome(async dir => {
-    const { beginConfigOwnershipTeardown, setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
+  test("while uninstall holds the lock, a second uninstall and any registration are refused", withHome(async dir => {
+    const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     writeFileSync(join(dir, "seed"), "x");
-    // Another uninstaller's teardown records a path between this run's snapshot and its metadata deletion.
+    const uninstallScript = "import { removeOwnedConfigState } from " + JSON.stringify(modulePath) + ";\n"
+      + "console.log(removeOwnedConfigState(" + JSON.stringify(dir) + ").status);";
+    const seen: Record<string, unknown> = {};
     setUninstallStepHookForTests(step => {
-      if (step !== "snapshot-removed") return;
-      const end = beginConfigOwnershipTeardown();
-      try { expect(recordOwnedConfigPath(dir, join(dir, "late"))).toBe(true); } finally { end(); }
-      writeFileSync(join(dir, "late"), "x");
+      if (step === "snapshot-removed") {
+        seen.secondUninstall = Bun.spawnSync([process.execPath, "-e", uninstallScript]).stdout.toString().trim();
+        // A listed path is read without the lock and refused by the tombstone; a new path needs the lock.
+        seen.listed = Bun.spawnSync([process.execPath, "-e", childScript(dir, "config.json")]).exitCode;
+      }
+      if (step === "manifest-deleted") {
+        // Only the owner marker, flagged by this run, remains: that is an uninstall finishing.
+        seen.betweenUnlinks = Bun.spawnSync([process.execPath, "-e", childScript(dir, "fresh-between")]).exitCode;
+      }
     });
     let result;
     try { result = removeOwnedConfigState(dir); } finally { setUninstallStepHookForTests(undefined); }
-    expect(result).toMatchObject({ status: "partial", residualPaths: [join(dir, "late")] });
-    expect(manifest(dir).paths).toContain("late");
-    expect(existsSync(join(dir, "seed"))).toBe(false);
+    expect(seen).toEqual({ secondUninstall: "refused", listed: 3, betweenUnlinks: 3 });
+    expect(result).toEqual({ status: "removed", residualPaths: [] });
+  }), 60_000);
+
+  test("an abandoned owner-marker temp file does not block uninstall", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, ".opencodex-owner.json.4242." + crypto.randomUUID() + ".tmp"), "{}");
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+  }));
+
+  test("a home cached as unowned picks up an owner marker written later", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const ownerText = readFileSync(join(dir, ".opencodex-owner.json"), "utf8");
+    removeTreeWithRetry(join(dir, ".opencodex-owner.json"));
+    // A fresh process sees the manifest without the owner marker, waits out the creation deadline and
+    // caches the home as unowned; the marker then appears and its next registration must succeed.
+    const script = [
+      "import { writeFileSync } from \"node:fs\";",
+      "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+      "const first = recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "early")) + ");",
+      "writeFileSync(" + JSON.stringify(join(dir, ".opencodex-owner.json")) + ", " + JSON.stringify(ownerText) + ");",
+      "const second = recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "late-owner")) + ");",
+      "console.log(JSON.stringify([first, second]));",
+    ].join("\n");
+    expect(Bun.spawnSync([process.execPath, "-e", script]).stdout.toString().trim()).toBe("[false,true]");
+    expect(manifest(dir).paths).toContain("late-owner");
   }));
 
   test("rotation on a full manifest still rotates, and uninstall reports the unrecorded generation", withHome(async dir => {

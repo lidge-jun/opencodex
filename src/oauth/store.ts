@@ -476,7 +476,10 @@ function backupLegacyOnce(): void {
         console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
       }
     } catch {
-      console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
+      // A thrown registration (uninstall in progress, busy ownership lock) would leave an unlisted
+      // credential copy. This call created it exclusively, so remove it; a later load retries.
+      try { unlinkSync(backup); } catch { /* best-effort */ }
+      console.warn("[oauth] Recovery backup removed: uninstall ownership registration failed.");
     }
   } catch { /* best-effort */ }
 }

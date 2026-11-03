@@ -335,13 +335,15 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
   return { owner, manifest };
 }
 
-/** Temporary names `writeManifest` uses; one left behind means a write stopped before its rename. */
-const MANIFEST_TEMP_PATTERN = new RegExp(`^${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`);
+/** Temporary names the manifest and owner-marker writers use; one left behind means a write stopped before its rename. */
+const METADATA_TEMP_PATTERN = new RegExp(
+  `^(?:${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}|${CONFIG_OWNER_FILE.replace(/\./g, "\\.")})\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`,
+);
 
-/** Under the lock no manifest write is in progress, so any such temporary file is abandoned. */
-function removeAbandonedManifestTemps(configDir: string): void {
+/** Under the lock no metadata write is in progress, so any such temporary file is abandoned. */
+function removeAbandonedMetadataTemps(configDir: string): void {
   for (const name of readdirSync(configDir)) {
-    if (!MANIFEST_TEMP_PATTERN.test(name)) continue;
+    if (!METADATA_TEMP_PATTERN.test(name)) continue;
     const path = join(configDir, name);
     const entry = lstatSync(path);
     if (entry.isFile() && !entry.isSymbolicLink()) unlinkSync(path);
@@ -441,10 +443,12 @@ function lockFileChanged(path: string, before: string): boolean {
 }
 
 /**
- * `BEGIN IMMEDIATE` with SQLite's own busy wait off, retried only briefly. The section under the lock
- * is a few file operations, so a cooperating holder releases within milliseconds; a holder that is
- * paused or stuck makes this throw after {@link OWNERSHIP_LOCK_WAIT_MS} instead of stalling the
- * event loop, and the caller reports the registration or uninstall as busy.
+ * `BEGIN IMMEDIATE` with SQLite's own busy wait off, retried only briefly. A registration's section
+ * under the lock is a few file operations, so a cooperating holder usually releases within
+ * milliseconds. The retry is synchronous: while another process holds the lock (a paused holder, or
+ * an uninstall removing files) it blocks the calling thread for at most
+ * {@link OWNERSHIP_LOCK_WAIT_MS}, then throws, and the caller reports the registration or uninstall
+ * as busy.
  */
 function acquireImmediate(database: Database): void {
   database.exec("PRAGMA busy_timeout = 0");
@@ -514,8 +518,25 @@ export function initializeConfigOwnership(configDir: string): boolean {
   if (ownership === undefined) {
     ownership = loadOrCreateOwnership(configDir);
     ownershipCache.set(cacheKey, ownership);
+  } else if (ownership === null) {
+    // A home cached as unowned may have finished being created by another process since: re-read
+    // the metadata (no waiting, no creation) so a late owner marker is picked up.
+    ownership = loadOwnership(configDir);
+    ownershipCache.set(cacheKey, ownership);
   }
   return ownership !== null;
+}
+
+/** Whether the owner marker records that an uninstall already removed its snapshot. */
+function ownerMarkerRecordsUninstall(configDir: string): boolean {
+  const path = join(configDir, CONFIG_OWNER_FILE);
+  if (!existsSync(path)) return false;
+  try {
+    const owner = readBoundedJson(path);
+    return isOwner(owner) && Number.isSafeInteger((owner as Record<string, unknown>).uninstallSnapshotRemovedAt);
+  } catch {
+    return false;
+  }
 }
 
 /** How long a first registration waits for another process that is creating the same home. */
@@ -553,7 +574,12 @@ type RecordOutcome = {
 export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
   const rel = manifestRelativePath(configDir, candidatePath);
   if (!rel) return false;
-  if (!initializeConfigOwnership(configDir)) return false;
+  if (!initializeConfigOwnership(configDir)) {
+    // Between uninstall's two final unlinks only the owner marker remains, flagged with
+    // `uninstallSnapshotRemovedAt`. That is an uninstall finishing, not an unowned home.
+    if (teardownDepth === 0 && ownerMarkerRecordsUninstall(configDir)) throw new ConfigUninstallInProgressError();
+    return false;
+  }
   const cacheKey = ownershipCacheKey(configDir);
   const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
@@ -686,73 +712,69 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
 
-  // Under the lock: validate, write the tombstone, snapshot. A registration either committed before
-  // this point and is in the snapshot, or it sees the tombstone and refuses. An interrupted
-  // uninstall leaves the tombstone in place, so registrations keep refusing until a rerun finishes.
-  let snapshot: { paths: string[] } | { refused: string };
+  // One lock hold covers the whole run: validate, tombstone, snapshot, remove the snapshot, record
+  // the evidence on the owner marker, delete the metadata. While it is held no other process can
+  // record a path (a listed path read without the lock sees the tombstone and refuses, a new path
+  // needs the lock), and a second uninstall is refused as busy, so nothing can be recreated behind
+  // this run. An interrupted run leaves the tombstone, and a rerun finishes from the same manifest.
+  let outcome: ConfigRemovalResult;
   try {
-    const locked = withOwnershipLock(configDir, (): { paths: string[] } | { refused: string } => {
+    const locked = withOwnershipLock(configDir, (): ConfigRemovalResult => {
       const ownership = loadOwnership(configDir);
-      if (!ownership) return { refused: "config ownership metadata is missing or invalid" };
+      if (!ownership) {
+        return { status: "refused", reason: "config ownership metadata is missing or invalid", residualPaths: [configDir] };
+      }
       for (const rel of ownership.manifest.paths) {
         if (manifestRelativePath(configDir, join(configDir, ...rel.split("/"))) !== rel) {
-          return { refused: "config ownership manifest contains an unsafe path" };
+          return { status: "refused", reason: "config ownership manifest contains an unsafe path", residualPaths: [configDir] };
         }
       }
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
-      removeAbandonedManifestTemps(configDir);
-      return { paths: [...ownership.manifest.paths] };
+      removeAbandonedMetadataTemps(configDir);
+      const rootPath = canonicalRoot(configDir);
+      for (const rel of ownership.manifest.paths) {
+        const path = join(configDir, ...rel.split("/"));
+        if (!existsSync(path)) continue;
+        try {
+          removeOwnedEntry(rootPath, path);
+        } catch (error) {
+          return {
+            status: "partial",
+            reason: `could not remove owned path ${rel}: ${error instanceof Error ? error.message : String(error)}`,
+            residualPaths: [path],
+          };
+        }
+      }
+      uninstallStepHookForTests?.("snapshot-removed");
+      try {
+        // Durable evidence for a rerun, and for registrations that arrive between the two unlinks:
+        // the owner marker records that this run removed its snapshot before the manifest goes.
+        writeOwnerMarker(configDir, { ...ownership.owner, uninstallSnapshotRemovedAt: Date.now() });
+        unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST));
+        uninstallStepHookForTests?.("manifest-deleted");
+        unlinkSync(join(configDir, CONFIG_OWNER_FILE));
+      } catch (error) {
+        return {
+          status: "partial",
+          reason: `could not remove ownership metadata: ${error instanceof Error ? error.message : String(error)}`,
+          residualPaths: readdirSync(configDir).map(name => join(configDir, name)),
+        };
+      }
+      return { status: "removed", residualPaths: [] };
     });
-    snapshot = locked?.value ?? { refused: "config ownership metadata is missing or invalid" };
+    outcome = locked?.value
+      ?? { status: "refused", reason: "config ownership metadata is missing or invalid", residualPaths: [configDir] };
   } catch (error) {
-    snapshot = { refused: `could not record uninstall in the ownership manifest: ${error instanceof Error ? error.message : String(error)}` };
+    outcome = {
+      status: "refused",
+      reason: `could not lock the ownership manifest: ${error instanceof Error ? error.message : String(error)}`,
+      residualPaths: [configDir],
+    };
   }
-  if ("refused" in snapshot) {
-    return { status: "refused", reason: snapshot.refused, residualPaths: [configDir] };
-  }
-
-  const rootPath = canonicalRoot(configDir);
-  for (const rel of snapshot.paths) {
-    const path = join(configDir, ...rel.split("/"));
-    if (!existsSync(path)) continue;
-    try {
-      removeOwnedEntry(rootPath, path);
-    } catch (error) {
-      return {
-        status: "partial",
-        reason: `could not remove owned path ${rel}: ${error instanceof Error ? error.message : String(error)}`,
-        residualPaths: [path],
-      };
-    }
-  }
-
+  if (outcome.status !== "removed") return outcome;
   try {
-    uninstallStepHookForTests?.("snapshot-removed");
-    // Re-read under the lock before deleting: an uninstaller's own teardown may record a path after
-    // this run's snapshot (two uninstalls at once). Such a path keeps the manifest, so a rerun
-    // removes it instead of losing its entry.
-    const known = new Set(snapshot.paths);
-    let late: string[] = [];
-    withOwnershipLock(configDir, () => {
-      const current = loadOwnership(configDir);
-      late = current?.manifest.paths.filter(rel => !known.has(rel)) ?? [];
-      if (late.length > 0) return;
-      // Durable evidence for a rerun: the owner marker records that this run removed its snapshot
-      // before the manifest goes. Only with it may a rerun claim initially owned names it finds.
-      if (current) writeOwnerMarker(configDir, { ...current.owner, uninstallSnapshotRemovedAt: Date.now() });
-      unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST));
-      uninstallStepHookForTests?.("manifest-deleted");
-      unlinkSync(join(configDir, CONFIG_OWNER_FILE));
-    });
-    if (late.length > 0) {
-      return {
-        status: "partial",
-        reason: "paths were recorded while uninstall ran; run ocx uninstall again to remove them",
-        residualPaths: late.map(rel => join(configDir, ...rel.split("/"))),
-      };
-    }
     removeOwnershipLockFile(configDir);
   } catch (error) {
     return {
