@@ -282,3 +282,35 @@ describe("interrupted metadata writes (#8093)", () => {
     expect(create.indexOf("CONFIG_UNINSTALL_MANIFEST")).toBeLessThan(create.indexOf("CONFIG_OWNER_FILE"));
   });
 });
+
+describe("rerunning ocx uninstall through its cleanup flow (#8093)", () => {
+  test("the uninstaller's own cleanup steps can register state, and the rerun finishes", withHome(async dir => {
+    const { removeOwnedConfigAfterDesktopCleanup } = await import("../../src/cli/uninstall-client-state");
+    const { withClientLifecycle } = await import("../../src/client/lifecycle-lock");
+    const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, "config.json"), "{}");
+    // An earlier uninstall stopped after its tombstone.
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify({ ...manifest(dir), uninstallStartedAt: Date.now() }, null, 2) + "\n");
+    // Outside the uninstaller, registrations keep refusing.
+    expect(() => recordOwnedConfigPath(dir, join(dir, "config-mutation.sqlite"))).toThrow(ConfigUninstallInProgressError);
+    const lockPath = join(dirname(dir), "runtime", "lifecycle.sqlite");
+    const result = await removeOwnedConfigAfterDesktopCleanup(
+      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false },
+      {
+        readConnection: () => ({ kind: "disconnected" }),
+        inspectDesktop: () => ({ kind: "absent" }),
+        readReceipt: () => ({ kind: "absent" }),
+        disconnect: async () => undefined,
+        withLifecycle: work => withClientLifecycle(work, { lockPath }),
+        cleanupIntegrations: async () => ({ attempted: 0, changed: 0 }),
+        remove: () => removeOwnedConfigState(dir),
+        aclReapPending: () => false,
+        // Picker cleanup takes the config mutation lock, which records its database.
+        removePickerArtifacts: async () => { withConfigMutationLockSync(() => undefined, dir); return { ok: true }; },
+      } as never,
+    );
+    expect(result).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+});

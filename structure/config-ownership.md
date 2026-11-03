@@ -39,7 +39,10 @@ then deletes the manifest and owner marker under the lock and removes the lock f
   and its file is reported as a residual path if it exists when uninstall lists what remains (a file
   created after that point is not seen by that run).
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
-  keep refusing, and the next `ocx uninstall` finishes from the same manifest. Under the lock it also
+  keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
+  steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
+  process's registrations skip the tombstone check: its remover snapshots the manifest under the lock
+  afterwards, so whatever they add is removed in the same run. Under the lock it also
   removes manifest temporary files a stopped write left behind.
 - Creation writes the manifest before the owner marker and uninstall deletes them in the reverse
   order, so a root holding only the owner marker is always a stopped uninstall, never a home being

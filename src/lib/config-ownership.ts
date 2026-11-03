@@ -132,6 +132,25 @@ let lastReconciledGeneration = 0;
  */
 const lockedManifestIdentity = new Map<string, string>();
 const warnedFullManifest = new Set<string>();
+/**
+ * Open while this process runs `ocx uninstall` itself. Its own registrations then skip the
+ * tombstone check: the same process runs removeOwnedConfigState afterwards, whose locked snapshot
+ * includes whatever they add, so nothing it records is orphaned. Without this, a rerun after an
+ * interrupted uninstall would refuse its own teardown steps (the config mutation lock records
+ * its database) before it reached the remover that finishes the job. Other processes still refuse.
+ */
+let teardownDepth = 0;
+
+/** Mark this process as the uninstaller until the returned release runs. */
+export function beginConfigOwnershipTeardown(): () => void {
+  teardownDepth += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    teardownDepth -= 1;
+  };
+}
 
 function manifestIdentity(configDir: string): string | undefined {
   try {
@@ -469,7 +488,7 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const locked = withOwnershipLock(configDir, () => {
     const current = loadOwnership(configDir);
     if (!current) return null;
-    if (current.manifest.uninstallStartedAt !== undefined) throw new ConfigUninstallInProgressError();
+    if (current.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
     if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
     const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
     // A manifest over either cap would fail validation and strand every recorded path. The byte
