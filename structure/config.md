@@ -468,7 +468,7 @@ root-bound owner marker and an uninstall manifest before its first atomic config
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
-remain in place and make the command report a partial uninstall with their exact paths.
+remain in place and make the command report a partial uninstall with their exact paths. Manifest updates and the uninstall tombstone are in [config ownership](config-ownership.md).
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
