@@ -38,7 +38,7 @@ type QuotaDiskFile = {
 
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
-type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true };
+type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -343,9 +343,12 @@ export function setAccountQuotaFromParsed(
   // Retiring a short tuple releases a routing block, so it needs the same writer proof as
   // history: a live main writer for main, a live captured pool writer for pool requests.
   const mayRetireShort = isMain ? mainWriter !== undefined : livePoolEvidence;
-  const displayQuota: MainPolicyQuotaObservation = mayRetireShort && policyQuota?.shortWindowAbsent === true
-    ? { ...quota, shortWindowAbsent: true }
-    : quota;
+  // Monthly-window absence (#8067) comes from the same complete topology and needs the same proof.
+  const displayQuota: MainPolicyQuotaObservation = {
+    ...quota,
+    ...(mayRetireShort && policyQuota?.shortWindowAbsent === true ? { shortWindowAbsent: true as const } : {}),
+    ...(mayRetireShort && policyQuota?.monthlyWindowAbsent === true ? { monthlyWindowAbsent: true as const } : {}),
+  };
   const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
   accountQuota.set(accountId, next);
   if (isMain) {
@@ -448,8 +451,11 @@ function mergeAccountQuota(
     // while silently dropping `monthlyIsPrimaryWindow` would look like tertiary-only data to
     // any future reader, and that failure would be invisible.
     if (quota.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
-  } else if ((snapshotHasWeekly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota))
+  } else if (quota.monthlyWindowAbsent !== true
+      && (snapshotHasWeekly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota))
       && existing?.monthlyPercent !== undefined) {
+    // A complete topology with no monthly-length window retires the carried tuple, so a plan
+    // change away from a monthly primary (Free to Pro Lite) cannot keep its old exhausted reading.
     next.monthlyPercent = existing.monthlyPercent;
     if (existing.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
@@ -991,7 +997,17 @@ export function poolWhamPolicyObservation(
   }
   const malformed = readings.some(window => window?.used_percent != null
     && normalizeUsagePercent(window.used_percent) === undefined);
-  return data.rate_limit?.allowed === false || malformed ? quota : withWhamShortWindowAbsence(data, quota);
+  if (data.rate_limit?.allowed === false || malformed) return quota;
+  const observation = withWhamShortWindowAbsence(data, quota);
+  // #8067: the same complete topology proves a pool account has no monthly window when no window
+  // declares a monthly duration and no tertiary window is present, so a plan change away from a
+  // monthly primary (Free to Pro Lite) retires the carried tuple. Pool-only: main observations
+  // keep their existing retention rules.
+  const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  return observation.shortWindowAbsent === true
+    && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
+    ? { ...observation, monthlyWindowAbsent: true }
+    : observation;
 }
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {

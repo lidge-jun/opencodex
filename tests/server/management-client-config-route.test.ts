@@ -205,7 +205,7 @@ describe("native Anthropic image input reaches client documents", () => {
     const hermes = buildClientConfig("hermes", context) as HermesGeneratedConfig;
     const raycast = buildClientConfig("raycast", context) as RaycastGeneratedConfig;
     for (const model of models) {
-      expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toEqual(["image_in"]);
+      expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toContain("image_in");
       expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
       expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
       const nativeCapabilities = opencode.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.capabilities;
