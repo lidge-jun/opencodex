@@ -49,15 +49,18 @@ or recreated behind the snapshot.
   still holds other files records nothing, and its file is reported as a residual path if it exists
   when uninstall lists what remains (a file created after that point is not seen by that run). One
   that arrives when the root is missing or empty creates new metadata and records its path there.
-  Between the two final unlinks only the tombstoned manifest remains; a registration that finds it
-  is refused as an uninstall in progress, not treated as an unowned home. A home cached as unowned is
-  re-read on later registrations, so an owner marker another process writes late is picked up.
+  Between the two final unlinks only the tombstoned manifest remains; a registration that finds it,
+  including one from a process that cached the ownership earlier, is refused as an uninstall in
+  progress, not treated as an unowned home. A home cached as unowned is re-read on later
+  registrations, so an owner marker another process writes late is picked up.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
   process's registrations skip the tombstone check: its remover snapshots the manifest under the lock
   afterwards, so whatever they add is removed in the same run. Under the lock it also
-  removes manifest temporary files a stopped write left behind.
+  removes manifest temporary files a stopped write left behind. When only the tombstoned manifest is
+  left, the same scope records into it a path that does not exist yet (the config mutation database
+  an older snapshot lacks), and never adopts an existing entry the snapshot does not list.
 - Creation writes the manifest before the owner marker, and uninstall deletes the owner marker
   before the manifest. Both pass through a manifest without an owner marker; only uninstall's carries
   the tombstone, so a home being created is never taken for a stopped uninstall. A run that stops
@@ -70,10 +73,14 @@ or recreated behind the snapshot.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
   rotation, so a tombstone written while the service runs stops it. The OAuth store's one-time
-  legacy backup is removed and its migration deferred when registration throws, so the legacy store
-  stays for a later attempt to back up again.
+  legacy backup is registered before it is copied (`registerOwnedConfigPath` tells an unowned home
+  from a full manifest): a thrown registration defers the migration so the legacy store stays for a
+  later attempt, and a full manifest skips the copy rather than leave credentials uninstall cannot
+  remove.
 - The guarantee covers manifest entries. A process that recorded a path before the snapshot can still
-  create that file after uninstall removed it, which is why uninstall stops the service first.
+  create that file after uninstall removed it, which is why uninstall stops the service first. A run
+  removes whatever is at a listed name when it gets there, and a resumed run does the same; it keeps
+  no per-file identity.
 
 `tests/config/config-ownership-concurrent-record.test.ts` covers concurrent registrations, a
 registration racing uninstall, the tombstone refusal for cached paths, a rerun after an interrupted

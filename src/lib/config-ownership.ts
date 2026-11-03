@@ -573,29 +573,62 @@ type RecordOutcome = {
   identity: string | undefined;
 };
 
+/** What a registration did: recorded the path, found no ownership to record it in, or found the manifest full. */
+export type OwnedPathRegistration = "recorded" | "unowned" | "full";
+
 export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
+  return registerOwnedConfigPath(configDir, candidatePath) === "recorded";
+}
+
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * {@link recordOwnedConfigPath} with the reason a path was not recorded, for callers that must tell
+ * an unowned home (keep working as before) from an owned home whose manifest is full (whatever they
+ * create there survives uninstall).
+ */
+export function registerOwnedConfigPath(configDir: string, candidatePath: string): OwnedPathRegistration {
   const rel = manifestRelativePath(configDir, candidatePath);
-  if (!rel) return false;
-  if (!initializeConfigOwnership(configDir)) {
+  if (!rel) return "unowned";
+  const cacheKey = ownershipCacheKey(configDir);
+  if (initializeConfigOwnership(configDir)) {
+    const ownership = ownershipCache.get(cacheKey);
+    if (!ownership) return "unowned";
+    if (ownership.manifest.paths.includes(rel)) {
+      const seen = lockedManifestIdentity.get(cacheKey);
+      if (seen !== undefined && seen === manifestIdentity(configDir)) return "recorded";
+    }
+  } else if (!tombstonedManifestWithoutOwner(configDir)) {
+    return "unowned";
+  } else if (teardownDepth === 0) {
     // Between uninstall's two final unlinks only the tombstoned manifest remains. That is an
     // uninstall finishing (or stopped there), not an unowned home.
-    if (teardownDepth === 0 && tombstonedManifestWithoutOwner(configDir)) throw new ConfigUninstallInProgressError();
-    return false;
-  }
-  const cacheKey = ownershipCacheKey(configDir);
-  const ownership = ownershipCache.get(cacheKey);
-  if (!ownership) return false;
-  if (ownership.manifest.paths.includes(rel)) {
-    const seen = lockedManifestIdentity.get(cacheKey);
-    if (seen !== undefined && seen === manifestIdentity(configDir)) return true;
+    throw new ConfigUninstallInProgressError();
   }
   // Read-modify-write against the manifest on disk, never the cache: another process may have
   // recorded paths or started an uninstall since this one cached it (#8093).
   let locked: { value: RecordOutcome | null } | undefined;
   try {
     locked = withOwnershipLock(configDir, (): RecordOutcome | null => {
-      const current = loadOwnership(configDir);
-      if (!current) return null;
+      let current = loadOwnership(configDir);
+      if (!current) {
+        // A process that cached the ownership before uninstall deleted the owner marker lands here.
+        const stopped = tombstonedManifestWithoutOwner(configDir);
+        if (!stopped) return null;
+        if (teardownDepth === 0) throw new ConfigUninstallInProgressError();
+        // This process's own uninstall rerun records a path it is about to create, so its remover
+        // takes that path too. An existing entry the snapshot does not list is never adopted.
+        if (!stopped.manifest.paths.includes(rel) && entryExists(join(configDir, ...rel.split("/")))) return null;
+        current = stopped;
+      }
       if (current.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
       if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
       const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
@@ -613,29 +646,32 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     // A busy lock blocks nothing for a path the manifest already lists. The manifest is replaced
     // atomically, so an unlocked read is a consistent version: accept the path unless that version
     // carries an uninstall tombstone. Only a new path needs the lock, and it still fails here.
-    const current = loadOwnership(configDir);
+    const current = loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
     if (current?.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
-    if (current?.manifest.paths.includes(rel)) return true;
+    if (current?.manifest.paths.includes(rel)) return "recorded";
     throw error;
   }
   if (!locked?.value) {
     ownershipCache.delete(cacheKey);
     lockedManifestIdentity.delete(cacheKey);
-    return false;
+    return "unowned";
   }
-  ownershipCache.set(cacheKey, locked.value.ownership);
-  // A tombstoned manifest is never remembered for the fast path: only the teardown scope may
-  // register under it, and once that scope ends every call must see the tombstone again.
-  if (locked.value.identity === undefined || locked.value.ownership.manifest.uninstallStartedAt !== undefined) {
+  // A tombstoned manifest is never cached or remembered for the fast path: only the teardown scope
+  // may register under it, and once that scope ends every call must see the tombstone again.
+  if (locked.value.ownership.manifest.uninstallStartedAt !== undefined) {
+    ownershipCache.delete(cacheKey);
     lockedManifestIdentity.delete(cacheKey);
+  } else {
+    ownershipCache.set(cacheKey, locked.value.ownership);
+    if (locked.value.identity === undefined) lockedManifestIdentity.delete(cacheKey);
+    else lockedManifestIdentity.set(cacheKey, locked.value.identity);
   }
-  else lockedManifestIdentity.set(cacheKey, locked.value.identity);
   if (!locked.value.recorded && !warnedFullManifest.has(cacheKey)) {
     warnedFullManifest.add(cacheKey);
     // Uninstall still reports such a file as a residual path; it just cannot remove it.
     console.warn("[opencodex] The config ownership manifest is full; new files will not be removed by uninstall.");
   }
-  return locked.value.recorded;
+  return locked.value.recorded ? "recorded" : "full";
 }
 
 /**

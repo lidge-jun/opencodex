@@ -569,3 +569,47 @@ describe("a busy ownership lock (#8093)", () => {
     }
   }));
 });
+
+describe("an uninstall stopped after deleting the owner marker (#8093)", () => {
+  /** Uninstall in another process that stops right after deleting the owner marker. */
+  const stopAfterOwnerDeleted = (dir: string) => Bun.spawnSync([process.execPath, "-e", [
+    "import { removeOwnedConfigState, setUninstallStepHookForTests } from " + JSON.stringify(modulePath) + ";",
+    "setUninstallStepHookForTests(step => { if (step === \"owner-deleted\") throw new Error(\"stopped\"); });",
+    "console.log(removeOwnedConfigState(" + JSON.stringify(dir) + ").status);",
+  ].join("\n")]).stdout.toString().trim();
+
+  test("a process that cached the ownership earlier is refused, listed and new paths alike", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+    expect(stopAfterOwnerDeleted(dir)).toBe("partial");
+    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(false);
+    expect(() => recordOwnedConfigPath(dir, join(dir, "late-credential.json"))).toThrow(ConfigUninstallInProgressError);
+    expect(() => recordOwnedConfigPath(dir, join(dir, "config.json"))).toThrow(ConfigUninstallInProgressError);
+    expect(manifest(dir).paths).not.toContain("late-credential.json");
+  }));
+
+  test("the rerun's cleanup records a file the snapshot lacks, and never adopts an existing one", withHome(async dir => {
+    const { beginConfigOwnershipTeardown } = await import("../../src/lib/config-ownership");
+    const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    // An older snapshot without the config mutation database.
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify({
+      ...manifest(dir), paths: manifest(dir).paths.filter(path => !path.startsWith("config-mutation.sqlite")),
+    }, null, 2) + "\n");
+    expect(stopAfterOwnerDeleted(dir)).toBe("partial");
+    writeFileSync(join(dir, "user-file"), "keep");
+    const end = beginConfigOwnershipTeardown();
+    let result;
+    try {
+      withConfigMutationLockSync(() => undefined, dir);
+      expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
+      expect(manifest(dir).paths).toContain("config-mutation.sqlite");
+      expect(recordOwnedConfigPath(dir, join(dir, "user-file"))).toBe(false);
+      expect(manifest(dir).paths).not.toContain("user-file");
+      result = removeOwnedConfigState(dir);
+    } finally { end(); }
+    expect(result).toEqual({ status: "partial", reason: "unowned files remain in the config directory", residualPaths: [join(dir, "user-file")] });
+    expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(false);
+    expect(readFileSync(join(dir, "user-file"), "utf8")).toBe("keep");
+  }));
+});
