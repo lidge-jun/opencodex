@@ -201,6 +201,36 @@ describe("Ark Kimi Responses replay (exact configured model)", () => {
       expect(body.input[prefix.length].encrypted_content).toBeUndefined();
     }
   });
+  test("projects developer boundaries only after a matching tool pair, preserving both tool and developer messages", () => {
+    for (const content of [undefined, null]) {
+      const item = content === undefined ? { ...orphan } : { ...orphan, content };
+      if (content === undefined) delete (item as Partial<typeof orphan>).content;
+      const developer = { type: "message", role: "developer", content: "Fixture policy." };
+      const body = wire([user, call, result, item, developer, developer, user]);
+      expect(body.input).toEqual([user, call, result,
+        { type: "reasoning", id: orphan.id, summary: [] }, developer, developer, user]);
+      expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    }
+  });
+  test("does not extend developer cleanup to unpaired, referenced, meaningful or other-role histories", () => {
+    const developer = { type: "message", role: "developer", content: "Fixture policy." };
+    const inputs = [
+      [user, orphan, developer],
+      [call, { ...result, call_id: "mismatch" }, orphan, developer],
+      [call, result, orphan, { ...developer, role: "system" }],
+      [call, result, orphan, { ...developer, type: "future_message" }],
+      [call, result, { ...orphan, summary: [{ type: "summary_text", text: "keep" }] }, developer],
+      [call, result, { ...orphan, content: [{ type: "reasoning_text", text: "keep" }] }, developer],
+      [call, result, { ...orphan, future_field: null }, developer],
+      [call, result, orphan, developer, { type: "item_reference", id: orphan.id }],
+    ];
+    for (const input of inputs) {
+      expect(wire(input).input.find((x: { type: string }) => x.type === "reasoning").encrypted_content).toBe(cipher);
+    }
+    const other = wire([call, result, orphan, developer], ["other"]);
+    expect(other.input[2].encrypted_content).toBe(cipher);
+    expect(other.include).toContain("output.encrypted_content");
+  });
   test("preserves other models, referenced reasoning, unknown fields, mismatches and tool-adjacent reasoning", () => {
     const other = wire([user, orphan, user], ["other"]);
     expect(other.include).toContain("output.encrypted_content");

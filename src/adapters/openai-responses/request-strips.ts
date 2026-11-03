@@ -23,7 +23,7 @@ export function stripUnsupportedOutputInclude(body: unknown): unknown {
   return { ...body, include };
 }
 
-/** Drop only the opaque field of an unreferenced, otherwise empty reasoning item before a user message. */
+/** 仅移除已验证孤立边界中无摘要、未被引用的推理项密文，保留整条历史项。 */
 export function stripArkKimiOrphanCipher(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
@@ -37,7 +37,11 @@ export function stripArkKimiOrphanCipher(body: unknown): unknown {
     const afterTool = isPlainObject(call) && call.type === "function_call"
       && isPlainObject(result) && result.type === "function_call_output"
       && typeof call.call_id === "string" && call.call_id.length > 0 && result.call_id === call.call_id;
-    if ((!isUser(result) && !afterTool) || !isUser(input[i + 1]) || !isPlainObject(item)
+    // 仅放宽已配对工具结果之后的 developer 边界，其他角色仍保留密文。
+    const following = input[i + 1];
+    const developerAfterTool = afterTool && isPlainObject(following) && following.role === "developer"
+      && (following.type === undefined || following.type === "message");
+    if ((!isUser(result) && !afterTool) || (!isUser(following) && !developerAfterTool) || !isPlainObject(item)
       || item.type !== "reasoning" || !Array.isArray(item.summary) || item.summary.length
       || typeof item.encrypted_content !== "string" || !item.encrypted_content
       || (item.id !== undefined && referenced.has(item.id))
