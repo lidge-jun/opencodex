@@ -80,6 +80,84 @@ import {
   fetchBoundLocalManagementRead,
   type LocalManagementReadDeps,
 } from "../server/local-management-read-client";
+
+/** The live proxy’s native-main admission report, or why it could not be read. */
+export type NativeMainAdmissionBlockReason =
+  | "foreign-ownership"
+  | "ownership-unknown"
+  | "recovery-pending"
+  | "manual-recovery"
+  | "owner-conflict"
+  | "owner-unavailable"
+  | "stage-cleanup-required";
+
+export type NativeMainAdmissionReport =
+  | { status: "ready" }
+  | { status: "blocked"; reason: NativeMainAdmissionBlockReason }
+  | { status: "unavailable"; reason: string };
+
+const NATIVE_MAIN_ADMISSION_BLOCK_REASONS: ReadonlySet<string> = new Set([
+  "foreign-ownership", "ownership-unknown", "recovery-pending", "manual-recovery",
+  "owner-conflict", "owner-unavailable", "stage-cleanup-required",
+]);
+
+function isNativeMainAdmissionBlockReason(value: unknown): value is NativeMainAdmissionBlockReason {
+  return typeof value === "string" && NATIVE_MAIN_ADMISSION_BLOCK_REASONS.has(value);
+}
+
+/**
+ * Read native-main admission from the running proxy, never this doctor process.
+ *
+ * A separate `ocx doctor` run has its own process-global gate, usually `ready`, while the
+ * proxy answering native traffic can be fenced. The proxy's side-effect-free admission
+ * endpoint carries its own admissionStatus; the bound read stays on the existing short-lived,
+ * path-signed capability rather than exposing the admin token to doctor. An older proxy
+ * without that route answers 404, which is reported as unavailable.
+ */
+export async function fetchNativeMainAdmission(
+  target: LiveProxy,
+  deps: LocalManagementReadDeps = {},
+): Promise<NativeMainAdmissionReport> {
+  const read = await fetchBoundLocalManagementRead(
+    target,
+    LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
+    { timeoutMs: 4_000, ...deps, requireResponseProof: true },
+  );
+  if (read.kind !== "response") return { status: "unavailable", reason: read.reason };
+  if (read.response.status === 401 || read.response.status === 403) return { status: "unavailable", reason: "unauthorized" };
+  if (!read.response.ok) return { status: "unavailable", reason: `http ${read.response.status}` };
+  let payload: unknown;
+  try { payload = await read.response.json(); } catch { return { status: "unavailable", reason: "malformed" }; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { status: "unavailable", reason: "malformed" };
+  const row = payload as Record<string, unknown>;
+  if (row.admissionStatus !== "ready" && row.admissionStatus !== "blocked") return { status: "unavailable", reason: "malformed" };
+  if (row.admissionStatus === "ready") return { status: "ready" };
+  if (!isNativeMainAdmissionBlockReason(row.admissionBlockReason)) return { status: "unavailable", reason: "malformed" };
+  return { status: "blocked", reason: row.admissionBlockReason };
+}
+
+export function formatNativeMainAdmissionLines(report: NativeMainAdmissionReport): string[] {
+  if (report.status === "blocked") {
+    const homeGuidance = report.reason === "foreign-ownership"
+      ? "Repair the service definition and restart the proxy so it uses the recorded CODEX_HOME."
+      : report.reason === "ownership-unknown"
+        ? "Resolve native Codex ownership evidence, then restart the proxy."
+        : report.reason === "owner-conflict" || report.reason === "owner-unavailable"
+          ? "Ensure exactly one OpenCodex proxy owns CODEX_HOME, then restart the proxy."
+          : report.reason === "recovery-pending" || report.reason === "manual-recovery"
+            ? "Run `ocx account main recover` and inspect native-profile doctor before retrying."
+            : "Inspect native-profile doctor and clean up the pending staging state before retrying.";
+    return [
+      `  !!  native-main admission is fenced (reason: ${report.reason})`,
+      `       Native model requests return 503 until this clears. ${homeGuidance}`,
+    ];
+  }
+  if (report.status === "unavailable") {
+    return ["  --  native-main admission unavailable from the running proxy"];
+  }
+  return [];
+}
+
 export { resolveCodexHomeDir } from "../codex/home";
 
 /**
@@ -1441,6 +1519,10 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     const resolution = await resolveNativeMainRefreshMode(loadConfig());
     for (const line of formatNativeMainRefreshDoctorLines(resolution)) console.log(line);
   }
+  const admission = live
+    ? await fetchNativeMainAdmission(live)
+    : { status: "unavailable" as const, reason: "proxy-not-found" };
+  for (const line of formatNativeMainAdmissionLines(admission)) console.log(line);
 
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).
