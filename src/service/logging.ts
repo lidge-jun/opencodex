@@ -1,10 +1,12 @@
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, renameSync, statSync, writeSync, type BigIntStats } from "node:fs";
 import { formatWithOptions } from "node:util";
 import { basename, dirname, join } from "node:path";
-import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { ConfigUninstallInProgressError, recordOwnedConfigPath } from "../lib/config-ownership";
 
 export const SERVICE_LOG_MAX_BYTES = 20 * 1024 * 1024;
 export const SERVICE_LOG_CHECK_INTERVAL_MS = 60_000;
+/** Consecutive failed registrations after which rotation goes ahead unrecorded. */
+export const SERVICE_LOG_MAX_REGISTRATION_SKIPS = 3;
 
 function regularLeaf(path: string): BigIntStats | undefined {
   try {
@@ -125,11 +127,28 @@ export function startServiceLogging(
     };
     restore.push(() => { console[method] = original; });
   }
-  try {
-    for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
-  } catch { /* ownership bookkeeping must not break logging */ }
-  rotateServiceLog(path);
-  const timer = setInterval(() => { rotateServiceLog(path); }, intervalMs);
+  // Rotation creates the .1/.2 files, so every rotation registers them first. Once recorded this
+  // is one stat, and it still sees an uninstall tombstone written after logging started. A thrown
+  // uninstall refusal always skips the rotation. Any other failure (a busy or broken ownership lock)
+  // skips it and retries next tick, but only a few times in a row: a fault that persists must not
+  // let the log grow without bound, so rotation then goes ahead unrecorded.
+  // A `false` result still rotates: a home without ownership metadata has nothing to register, and
+  // on a full manifest the unrecorded generations are reported by uninstall as residual paths.
+  let failedRegistrations = 0;
+  const rotate = () => {
+    try {
+      for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
+      failedRegistrations = 0;
+    } catch (error) {
+      // Ownership bookkeeping must not break logging.
+      if (error instanceof ConfigUninstallInProgressError) return;
+      failedRegistrations += 1;
+      if (failedRegistrations < SERVICE_LOG_MAX_REGISTRATION_SKIPS) return;
+    }
+    rotateServiceLog(path);
+  };
+  rotate();
+  const timer = setInterval(rotate, intervalMs);
   timer.unref();
   return () => { clearInterval(timer); for (const reset of restore) reset(); };
 }

@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "config-ownership.md",
+      "tier": 4,
+      "title": "Config Ownership Manifest",
+      "scope": "Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone.",
+      "documents": ["src/lib/config-ownership.ts"]
+    },
+    {
       "path": "config.md",
       "tier": 2,
       "title": "Config Surface",
