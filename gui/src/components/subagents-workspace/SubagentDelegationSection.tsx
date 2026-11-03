@@ -243,9 +243,12 @@ export default function SubagentDelegationSection({
                 { value: "", label: t("sub.fallbackAdd") },
                 ...availableModels.filter(modelName => !fallbackSet.has(modelName)).map(modelName => ({ value: modelName, label: modelName })),
               ]} onChange={value => { if (value && !fallbackSet.has(value)) onFallbackChange([...fallback, value]); }} disabled={fallbackBusy} />
-              <label className="ml-auto flex items-center gap-2 text-[13px] text-fg-muted">
-                {pollLabel}
+              <div className="ml-auto flex items-center gap-2 text-[13px] text-fg-muted">
+                {/* A wrapping <label> would name the first labelable descendant, the decrement
+                    button; tie the label to the input itself instead. */}
+                <label htmlFor="subagent-fallback-poll-ms">{pollLabel}</label>
                 <StepperInput
+                  id="subagent-fallback-poll-ms"
                   min={5000} max={600000} step={1000} value={pollDraft.text}
                   onChange={e => editPoll(e.currentTarget.value)}
                   disabled={fallbackBusy} aria-invalid={!validPollMs}
@@ -257,7 +260,7 @@ export default function SubagentDelegationSection({
                   onDecrement={() => editPoll(clampNumberDraft(pollDraft.text, -1000, 5000, 600000))}
                   onIncrement={() => editPoll(clampNumberDraft(pollDraft.text, 1000, 5000, 600000))}
                 />
-              </label>
+              </div>
               <Button size="sm" variant="primary" onClick={onFallbackSave} disabled={fallbackBusy || !validPollMs}>{t("common.save")}</Button>
             </div>
             {!validPollMs && <div className="text-[12px] text-danger" role="alert">{t("sub.fallbackPollInvalid")}</div>}
