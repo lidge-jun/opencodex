@@ -57,6 +57,22 @@ export function parseQoderModelList(stdout: string): QoderModelsResult {
  */
 export const QODER_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a catalog request waits for that run before it answers from the retained or static
+ * catalog. The run keeps going and fills the cache, so a slow CLI no longer holds `/v1/models`
+ * (and its callers' own deadlines, such as `ocx doctor`'s 8 s probe) for the full bound.
+ */
+export const QODER_DISCOVERY_REQUEST_BUDGET_MS = 8_000;
+let qoderDiscoveryRequestBudgetForTests: number | null = null;
+
+export function setQoderDiscoveryRequestBudgetForTests(next: number | null): void {
+  qoderDiscoveryRequestBudgetForTests = next;
+}
+
+export function qoderDiscoveryRequestBudgetMs(): number {
+  return qoderDiscoveryRequestBudgetForTests ?? QODER_DISCOVERY_REQUEST_BUDGET_MS;
+}
+
 function execQoder(command: string, args: readonly string[], options: Parameters<QoderExecFn>[2]): Promise<QoderExecResult> {
   return new Promise((resolve, reject) => {
     execFile(command, [...args], { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
