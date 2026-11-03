@@ -57,7 +57,7 @@ import { observeOutbound } from "../../usage/cache-diagnostic";
 import { normalizeMuseToolCatalog } from "./muse-tool-catalog";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
-import { isKimiCodingResponsesUrl, stripKimiEmptyAssistantMessages } from "./empty-assistant";
+import { isKimiCodingResponsesHttpsUrl, stripKimiEmptyAssistantMessages } from "./empty-assistant";
 import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
 
 /**
@@ -364,7 +364,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
           || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
         if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses
-          || isKimiCodingResponsesUrl(url)) {
+          || isKimiCodingResponsesHttpsUrl(url)) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search

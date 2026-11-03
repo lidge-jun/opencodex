@@ -47,7 +47,7 @@ describe("Kimi Code Responses include normalization (#8075)", () => {
   test.each([
     "https://api.kimi.com/v1", "https://api.kimi.com/coding/v2",
     "https://api.kimi.com.evil.test/coding/v1", "https://kimi.example.test/coding/v1",
-    "https://api.moonshot.ai/v1",
+    "https://api.moonshot.ai/v1", "http://api.kimi.com/coding/v1", "https://api.kimi.com:444/coding/v1",
   ])("leaves other destinations untouched: %s", baseUrl => {
     const include = ["reasoning.encrypted_content", "output.encrypted_content"];
     expect(wire(include, { ...provider, baseUrl }).include).toEqual(include);

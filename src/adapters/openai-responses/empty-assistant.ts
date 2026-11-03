@@ -23,6 +23,13 @@ export function isKimiCodingResponsesUrl(responseUrl: string): boolean {
   return url.hostname === "api.kimi.com" && /^\/coding\/v1\/responses\/?$/.test(url.pathname);
 }
 
+/** The same endpoint over HTTPS on the default port only, for request rewrites scoped to Kimi Code itself. */
+export function isKimiCodingResponsesHttpsUrl(responseUrl: string): boolean {
+  if (!isKimiCodingResponsesUrl(responseUrl)) return false;
+  const url = new URL(responseUrl);
+  return url.protocol === "https:" && url.port === "";
+}
+
 /** Kimi Code rejects content-empty assistant messages even on its native Responses endpoint. */
 export function stripKimiEmptyAssistantMessages(body: unknown, responseUrl: string): unknown {
   if (!isKimiCodingResponsesUrl(responseUrl)) return body;
