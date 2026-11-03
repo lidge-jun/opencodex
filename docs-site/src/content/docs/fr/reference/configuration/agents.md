@@ -122,3 +122,10 @@ Un plafond ne peut que réduire l’effort. Le niveau retenu est le niveau annon
 Les plafonds configurés s’appliquent aussi aux tours Chat Completions natifs admissibles sans effort épinglé pour le modèle. La conversion vers la valeur du fournisseur intervient lorsqu’un épinglage est appliqué ou qu’un plafond modifie la valeur ; sinon, la valeur de l’appelant natif conserve sa forme d’origine.
 
 Pour une présentation destinée aux débutants des comportements v1, default et v2, consultez [Surfaces de sous-agents](/fr/guides/sub-agent-surface/).
+
+## Mise à jour de la CLI pendant la synchronisation v1
+
+Si la synchronisation avec `multiAgentMode: "v1"` doit désactiver la substitution v2 globale
+de Codex, une mise à jour de la CLI Codex en cours peut refuser temporairement cette
+synchronisation. Réessayez après la mise à jour. Un répertoire Codex utilisant déjà v1
+peut toujours être synchronisé, car aucune commande native de fonctionnalité n'est nécessaire.
