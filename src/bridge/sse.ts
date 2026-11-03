@@ -928,8 +928,10 @@ export function bridgeToResponsesSSE(
                   if (item.type === "message") {
                     const part = item.content![0];
                     emit("response.content_part.added", { item_id: item.id, output_index: outputIndex, content_index: 0, part: { ...part, text: "" } });
-                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: event.text });
-                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: event.text });
+                    // The visible copy is escaped; the carrier envelope above keeps the raw text.
+                    const visibleText = escapeMemoryCitationMentions(event.text);
+                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: visibleText });
+                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: visibleText });
                     emit("response.content_part.done", { item_id: item.id, output_index: outputIndex, content_index: 0, part });
                   }
                   emit("response.output_item.done", { output_index: outputIndex, item });

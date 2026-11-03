@@ -614,7 +614,7 @@ export function encodeAdapterEventStream(
               flushHiddenReasoningEnvelope();
               if (currentToolCall) closeCurrentToolCall();
               writer.progressThinking(event.text, event.anthropicThinkingSignature);
-              writer.text(event.text);
+              writer.text(escapeMemoryCitationMentions(event.text));
               writer.messageDone();
               break;
             }

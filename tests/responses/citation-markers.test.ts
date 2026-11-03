@@ -13,6 +13,8 @@ import { encodeChatCompletionSse } from "../../src/protocols/encoders/chat";
 import { bridgeToResponsesSSE } from "../../src/bridge";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { isAnthropicProgressMirror } from "../../src/responses/anthropic-progress";
+import { decodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 
 /**
  * #3150: the ChatGPT backend delimits inline citations with private-use characters
@@ -374,5 +376,37 @@ describe("non-citation directive spans pass through (#6039)", () => {
     const out = [...huge.match(/[\s\S]{1,4000}/g)!].map(piece => escaper.push(piece)).join("");
     expect(Buffer.byteLength(escaper.pending())).toBeLessThanOrEqual(16_384 + 4_000);
     expect(out + escapeMemoryCitationMentions(escaper.pending())).toBe(escapeMemoryCitationMentions(huge));
+  });
+
+  test("a block above the hold limit is a mention in the streamed and the final text alike", () => {
+    const big = `<oai-mem-citation>\n<citation_entries>\n${"MEMORY.md:1-2|note=[x]\n".repeat(900)}</citation_entries>\n`
+      + "<rollout_ids>\n0123\n</rollout_ids>\n</oai-mem-citation>";
+    expect(big.length).toBeGreaterThan(16_384);
+    const finalText = escapeMemoryCitationMentions(big);
+    expect(finalText.startsWith("&lt;oai-mem-citation>")).toBe(true);
+    expect(streamed(big.match(/[\s\S]{1,1000}/g)!)).toBe(finalText);
+  });
+
+  test("signed progress text escapes only its visible copy, and the mirror check still matches", async () => {
+    const raw = "quoted <oai-mem-citation> prose";
+    const sse = await new Response(bridgeToResponsesSSE(
+      replay([
+        { type: "text_delta", text: raw, anthropicThinkingSignature: "SyntheticProgressSignature123456==" } as AdapterEvent,
+        { type: "done" } as AdapterEvent,
+      ]), "internal/model", undefined, undefined, undefined, undefined, 2_000,
+      { translatorBudget: createTestTranslatorBudget(), enforceDeclaredToolNames: false },
+    )).text();
+    const frames = sse.split("\n\n").map(block => block.split("\n").find(line => line.startsWith("data: ")))
+      .filter(line => line && line !== "data: [DONE]").map(line => JSON.parse(line!.slice(6)) as {
+        type?: string; text?: string; delta?: string; item?: { type?: string; encrypted_content?: string; content?: unknown[] };
+      });
+    const escaped = "quoted &lt;oai-mem-citation> prose";
+    expect(frames.find(f => f.type === "response.output_text.delta")?.delta).toBe(escaped);
+    expect(frames.find(f => f.type === "response.output_text.done")?.text).toBe(escaped);
+    const items = frames.filter(f => f.type === "response.output_item.done").map(f => f.item!);
+    const carrier = items.find(item => item.type === "reasoning")!;
+    const envelope = decodeReasoningEnvelope(carrier.encrypted_content!);
+    expect(envelope?.txt).toBe(raw);
+    expect(isAnthropicProgressMirror(items.find(item => item.type === "message"), envelope)).toBe(true);
   });
 });

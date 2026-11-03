@@ -122,6 +122,9 @@ function opensRealBlock(text: string, openAt: number): number | undefined {
   if (!text.startsWith(MEMORY_CITATION_BODY_OPEN, bodyStart)) return undefined;
   const close = text.indexOf(MEMORY_CITATION_CLOSE, bodyStart);
   if (close === -1) return undefined;
+  // The streaming escaper holds at most MAX_MEMORY_CITATION_HOLD of a candidate, so a block larger
+  // than that is a mention in BOTH forms; one size rule keeps deltas and `output_text.done` equal.
+  if (close + MEMORY_CITATION_CLOSE.length - openAt > MAX_MEMORY_CITATION_HOLD) return undefined;
   return isMemoryCitationBlock(text.slice(afterOpen, close)) ? close + MEMORY_CITATION_CLOSE.length : undefined;
 }
 
