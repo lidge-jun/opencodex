@@ -50,6 +50,13 @@ export function parseQoderModelList(stdout: string): QoderModelsResult {
   return models.length > 0 ? { ok: true, models } : { ok: false, error: "empty" };
 }
 
+/**
+ * Upper bound for one `--list-models` run. The CLI starts a full agent runtime before it lists the
+ * account's roster; 14.5 s was measured on a working install (#8115), so the former 8 s bound
+ * discarded successful listings. Failures still end in the stale/static catalog and back off.
+ */
+export const QODER_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
+
 function execQoder(command: string, args: readonly string[], options: Parameters<QoderExecFn>[2]): Promise<QoderExecResult> {
   return new Promise((resolve, reject) => {
     execFile(command, [...args], { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
@@ -73,7 +80,7 @@ export async function fetchQoderModels(profile: QoderProfile, apiKey: string, de
     const result = await (deps.exec ?? execQoder)(invocation.file, invocation.args, {
       ...invocation.options,
       env,
-      timeout: deps.timeoutMs ?? 8_000,
+      timeout: deps.timeoutMs ?? QODER_MODEL_DISCOVERY_TIMEOUT_MS,
       maxBuffer: MAX_OUTPUT_BYTES,
       windowsHide: true,
     });
