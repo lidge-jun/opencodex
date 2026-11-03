@@ -31,8 +31,10 @@ test("fragmented Kiro tool arguments require linear UTF-8 measurement work", asy
   const response = responseFor([chunks]);
   const byteLength = Buffer.byteLength;
   let measurements = 0;
+  let measuredChars = 0;
   const measuring = spyOn(Buffer, "byteLength").mockImplementation((...args: Parameters<typeof byteLength>) => {
     if (args[0] === fragment) measurements++;
+    if (typeof args[0] === "string") measuredChars += args[0].length;
     return Reflect.apply(byteLength, Buffer, args);
   });
   const budget = createTranslatorBudget();
@@ -45,6 +47,8 @@ test("fragmented Kiro tool arguments require linear UTF-8 measurement work", asy
     expect(budget.snapshot().activeCalls).toBe(0);
     // One measurement for call retention and one for output accounting; leave bounded headroom.
     expect(measurements).toBeLessThanOrEqual(3 * count);
+    // Include growing-prefix measurements, with headroom for serialized adapter events.
+    expect(measuredChars).toBeLessThanOrEqual(16 * chunks.join("").length);
   } finally {
     measuring.mockRestore();
     budget.dispose();
