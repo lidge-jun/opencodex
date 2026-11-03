@@ -37,11 +37,13 @@ because it records its own database through `recordOwnedConfigPath`.
 ## Uninstall tombstone
 
 Uninstall holds the lock for its whole run: it validates every manifest path, writes an
-`uninstallStartedAt` tombstone, removes abandoned metadata temp files, removes the snapshot,
+`uninstallStartedAt` tombstone, removes abandoned metadata temp files, removes the snapshot
+(a listed symlink is unlinked even when its target is gone),
 and deletes the owner marker and then the manifest. It removes the lock file after releasing it.
 While the run holds the lock, a second uninstall is refused as busy, a new path cannot be
-registered, and a listed path read without the lock sees the tombstone, so nothing can be recorded
-or recreated behind the snapshot.
+registered, and a listed path read without the lock sees the tombstone, so nothing new can be
+recorded behind the snapshot. (A writer that registered before the tombstone can still create its
+file afterwards; see the last item below.)
 
 - A registration that acquires the lock after the tombstone throws
   `ConfigUninstallInProgressError` and writes nothing. A racing registration is therefore either in
@@ -52,15 +54,20 @@ or recreated behind the snapshot.
   Between the two final unlinks only the tombstoned manifest remains; a registration that finds it,
   including one from a process that cached the ownership earlier, is refused as an uninstall in
   progress, not treated as an unowned home. A home cached as unowned is re-read on later
-  registrations, so an owner marker another process writes late is picked up.
+  registrations, so an owner marker another process writes late is picked up, and a root that has
+  become empty is claimed like an absent one. A first registration that finds a manifest without an
+  owner marker waits up to 100 ms for the process creating the home, then records nothing; uninstall
+  reports a file it writes meanwhile as a residual path.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
   process's registrations skip the tombstone check: its remover snapshots the manifest under the lock
   afterwards, so whatever they add is removed in the same run. Under the lock it also
-  removes manifest temporary files a stopped write left behind. When only the tombstoned manifest is
-  left, the same scope records into it a path that does not exist yet (the config mutation database
-  an older snapshot lacks), and never adopts an existing entry the snapshot does not list.
+  removes manifest temporary files a stopped write left behind. Under the tombstone (with or without
+  the owner marker) the same scope records a path that does not exist yet, such as the config
+  mutation database an older snapshot lacks, and never adopts an existing entry the snapshot does
+  not list. An initially owned name may use a fixed recovery reserve past the usual caps, so an
+  older full manifest cannot strand the files the rerun's own cleanup creates.
 - Creation writes the manifest before the owner marker, and uninstall deletes the owner marker
   before the manifest. Both pass through a manifest without an owner marker; only uninstall's carries
   the tombstone, so a home being created is never taken for a stopped uninstall. A run that stops
@@ -72,7 +79,9 @@ or recreated behind the snapshot.
   refused.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
-  rotation, so a tombstone written while the service runs stops it. The OAuth store's one-time
+  rotation, so a tombstone written while the service runs stops it. Any other failed registration
+  (a busy or broken ownership lock) skips at most three rotations in a row; then the log rotates
+  unrecorded, as on a full manifest, so a lasting lock fault cannot let it grow without bound. The OAuth store's one-time
   legacy backup is registered before it is copied (`registerOwnedConfigPath` tells an unowned home
   from a full manifest): a thrown registration defers the migration so the legacy store stays for a
   later attempt, and a full manifest skips the copy rather than leave credentials uninstall cannot

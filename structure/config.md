@@ -470,8 +470,8 @@ and removes only normalized manifest entries. Manifest-owned directory links are
 traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
 remain in place and make the command report a partial uninstall with their exact paths. Manifest updates and the uninstall tombstone are in [config ownership](config-ownership.md).
 
-The newly created OAuth downgrade copy is registered after copying, so owned uninstall
-includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
+The OAuth downgrade copy is registered before the exclusive copy, so owned uninstall includes
+it (a full manifest skips it). Destructive OAuth mutations rewrite that copy without the removed provider through the
 no-follow writer variant that leaves the owner manifest untouched, so a copy an earlier install
 left unregistered stays unclaimed. Invalid-config recovery copies are deliberately NOT registered: their names carry
 a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and

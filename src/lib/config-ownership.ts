@@ -120,6 +120,14 @@ const INITIAL_OWNED_PATHS = [
   "version.json",
   "winsw",
 ] as const;
+/**
+ * Room an uninstall rerun may use past the usual caps, under its tombstone, to record the opencodex
+ * files its own cleanup recreates (the config mutation database, for one). Only initially owned
+ * names qualify, each at most once, so a full manifest from an older version cannot strand them and
+ * the manifest stays bounded.
+ */
+const RECOVERY_RESERVE_PATHS = INITIAL_OWNED_PATHS.length;
+const RECOVERY_RESERVE_BYTES = INITIAL_OWNED_PATHS.reduce((total, name) => total + Buffer.byteLength(name) + 8, 0);
 const ownershipCache = new Map<string, {
   owner: ConfigOwner;
   manifest: ConfigUninstallManifest;
@@ -241,7 +249,7 @@ function isManifest(value: unknown): value is ConfigUninstallManifest {
   if (!isOwner(value)) return false;
   const { paths, uninstallStartedAt } = value as Record<string, unknown>;
   return Array.isArray(paths)
-    && paths.length <= MANIFEST_MAX_PATHS
+    && paths.length <= MANIFEST_MAX_PATHS + (uninstallStartedAt === undefined ? 0 : RECOVERY_RESERVE_PATHS)
     && paths.every(path => typeof path === "string")
     && (uninstallStartedAt === undefined || Number.isSafeInteger(uninstallStartedAt));
 }
@@ -288,7 +296,7 @@ function loadOwnership(configDir: string): { owner: ConfigOwner; manifest: Confi
     const owner = readBoundedJson(ownerPath);
     // A tombstoned manifest may use the reserve: a home written by an older version can hold a
     // manifest up to the limit, and uninstall must still resume after adding its tombstone.
-    const read = readBoundedJsonSized(manifestPath, METADATA_MAX_BYTES + TOMBSTONE_RESERVE_BYTES);
+    const read = readBoundedJsonSized(manifestPath, TOMBSTONED_MANIFEST_MAX_BYTES);
     const manifest = read.value;
     if (isManifest(manifest) && manifest.uninstallStartedAt === undefined && read.size > METADATA_MAX_BYTES) return null;
     const root = canonicalRoot(configDir);
@@ -351,6 +359,8 @@ function removeAbandonedMetadataTemps(configDir: string): void {
 
 /** Room the `uninstallStartedAt` tombstone needs on top of a registration's manifest. */
 const TOMBSTONE_RESERVE_BYTES = 64;
+/** Largest manifest uninstall accepts once tombstoned: the tombstone and the recovery reserve on top. */
+const TOMBSTONED_MANIFEST_MAX_BYTES = METADATA_MAX_BYTES + TOMBSTONE_RESERVE_BYTES + RECOVERY_RESERVE_BYTES;
 
 function serializeManifest(manifest: ConfigUninstallManifest): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
@@ -509,8 +519,17 @@ export function initializeConfigOwnership(configDir: string): boolean {
     ownershipCache.set(cacheKey, ownership);
   } else if (ownership === null) {
     // A home cached as unowned may have finished being created by another process since: re-read
-    // the metadata (no waiting, no creation) so a late owner marker is picked up.
+    // the metadata (no waiting) so a late owner marker is picked up. A root that has become empty
+    // since is claimed like an absent one; a nonempty unowned root still never is.
     ownership = loadOwnership(configDir);
+    if (!ownership) {
+      try {
+        ownership = createOwnership(configDir);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        ownership = loadOwnership(configDir);
+      }
+    }
     ownershipCache.set(cacheKey, ownership);
   }
   return ownership !== null;
@@ -527,7 +546,7 @@ function tombstonedManifestWithoutOwner(configDir: string): { owner: ConfigOwner
   const path = join(configDir, CONFIG_UNINSTALL_MANIFEST);
   if (!existsSync(path)) return null;
   try {
-    const manifest = readBoundedJsonSized(path, METADATA_MAX_BYTES + TOMBSTONE_RESERVE_BYTES).value;
+    const manifest = readBoundedJsonSized(path, TOMBSTONED_MANIFEST_MAX_BYTES).value;
     if (!isManifest(manifest) || manifest.uninstallStartedAt === undefined || !samePath(manifest.root, canonicalRoot(configDir))) return null;
     return { owner: { version: 1, ownerId: manifest.ownerId, root: manifest.root }, manifest };
   } catch {
@@ -624,18 +643,24 @@ export function registerOwnedConfigPath(configDir: string, candidatePath: string
         const stopped = tombstonedManifestWithoutOwner(configDir);
         if (!stopped) return null;
         if (teardownDepth === 0) throw new ConfigUninstallInProgressError();
-        // This process's own uninstall rerun records a path it is about to create, so its remover
-        // takes that path too. An existing entry the snapshot does not list is never adopted.
-        if (!stopped.manifest.paths.includes(rel) && entryExists(join(configDir, ...rel.split("/")))) return null;
         current = stopped;
       }
-      if (current.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
+      const tombstoned = current.manifest.uninstallStartedAt !== undefined;
+      if (tombstoned && teardownDepth === 0) throw new ConfigUninstallInProgressError();
       if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
+      // Under a tombstone only this process's own uninstall rerun registers: it records a path it is
+      // about to create, so its remover takes that path too, and never adopts an existing entry the
+      // snapshot does not list (with or without the owner marker).
+      if (tombstoned && entryExists(join(configDir, ...rel.split("/")))) return null;
       const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
       // A manifest over either cap would fail validation and strand every recorded path. The byte
-      // check leaves room for the tombstone uninstall adds later.
-      if (manifest.paths.length > MANIFEST_MAX_PATHS
-        || Buffer.byteLength(serializeManifest(manifest)) + TOMBSTONE_RESERVE_BYTES > METADATA_MAX_BYTES) {
+      // check leaves room for the tombstone uninstall adds later. Under the tombstone, an initially
+      // owned name may use the recovery reserve instead.
+      const bytes = Buffer.byteLength(serializeManifest(manifest));
+      const withinCaps = manifest.paths.length <= MANIFEST_MAX_PATHS && bytes + TOMBSTONE_RESERVE_BYTES <= METADATA_MAX_BYTES;
+      const withinRecovery = tombstoned && (INITIAL_OWNED_PATHS as readonly string[]).includes(rel)
+        && manifest.paths.length <= MANIFEST_MAX_PATHS + RECOVERY_RESERVE_PATHS && bytes <= TOMBSTONED_MANIFEST_MAX_BYTES;
+      if (!withinCaps && !withinRecovery) {
         return { ownership: current, recorded: false, identity: manifestIdentity(configDir) };
       }
       writeManifest(configDir, manifest);
@@ -771,7 +796,8 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       const rootPath = canonicalRoot(configDir);
       for (const rel of ownership.manifest.paths) {
         const path = join(configDir, ...rel.split("/"));
-        if (!existsSync(path)) continue;
+        // lstat, not existsSync: a listed symlink whose target is gone is still ours to unlink.
+        try { lstatSync(path); } catch { continue; }
         try {
           removeOwnedEntry(rootPath, path);
         } catch (error) {

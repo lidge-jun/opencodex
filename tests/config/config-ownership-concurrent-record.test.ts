@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   ConfigUninstallInProgressError,
   recordOwnedConfigPath,
   removeOwnedConfigState,
+  setUninstallStepHookForTests,
 } from "../../src/lib/config-ownership";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -174,6 +175,26 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
+  test("service log rotation goes ahead unrecorded once the ownership lock keeps failing", { skip: process.platform === "win32" },
+    withHome(async dir => {
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      // A second link to the lock file is refused on every attempt: a lock fault that persists.
+      linkSync(join(dir, CONFIG_OWNERSHIP_LOCK), join(dirname(dir), "lock-link"));
+      expect(() => recordOwnedConfigPath(dir, join(dir, "service.log.1"))).toThrow(ConfigOwnershipLockError);
+      const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
+      const path = join(dir, "service.log");
+      writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
+      const stop = startServiceLogging(path, { OCX_SERVICE: "1" }, 10);
+      try {
+        // The first attempt skips, as it would for a busy lock; later ticks rotate anyway.
+        expect(existsSync(path + ".1")).toBe(false);
+        const deadline = Date.now() + 5_000;
+        while (!existsSync(path + ".1") && Date.now() < deadline) await Bun.sleep(10);
+      } finally { stop(); }
+      expect(existsSync(path + ".1")).toBe(true);
+      expect(manifest(dir).paths).not.toContain("service.log.1");
+    }));
+
   test("service log rotation stops creating generations once uninstall has started", withHome(async dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
@@ -611,5 +632,95 @@ describe("an uninstall stopped after deleting the owner marker (#8093)", () => {
     expect(result).toEqual({ status: "partial", reason: "unowned files remain in the config directory", residualPaths: [join(dir, "user-file")] });
     expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(false);
     expect(readFileSync(join(dir, "user-file"), "utf8")).toBe("keep");
+  }));
+});
+
+describe("ownership edge cases from review (#8093)", () => {
+  /** An older manifest without the config mutation database, optionally filled to the path cap. */
+  const olderManifest = (dir: string, fill: boolean) => {
+    const paths = manifest(dir).paths.filter(path => !path.startsWith("config-mutation.sqlite"));
+    while (fill && paths.length < 1024) paths.push("filler-" + paths.length);
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify({ ...manifest(dir), paths: paths.sort() }, null, 2) + "\n");
+  };
+  /** Stop an uninstall at `step` in this process, as a crash would (it never reports "removed"). */
+  const stopAt = (dir: string, step: "snapshot-removed" | "owner-deleted") => {
+    setUninstallStepHookForTests(seen => { if (seen === step) throw new Error("stopped"); });
+    try { expect(removeOwnedConfigState(dir).status).not.toBe("removed"); } finally { setUninstallStepHookForTests(undefined); }
+    expect(manifest(dir).uninstallStartedAt).toEqual(expect.any(Number));
+  };
+
+  test.each(["snapshot-removed", "owner-deleted"] as const)("a rerun stopped at %s records the database its cleanup creates in a full older manifest",
+    step => withHome(async dir => {
+      const { beginConfigOwnershipTeardown } = await import("../../src/lib/config-ownership");
+      const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      olderManifest(dir, true);
+      expect(manifest(dir).paths).toHaveLength(1024);
+      stopAt(dir, step);
+      const end = beginConfigOwnershipTeardown();
+      let result;
+      try {
+        withConfigMutationLockSync(() => undefined, dir);
+        expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
+        expect(manifest(dir).paths).toContain("config-mutation.sqlite");
+        // Only initially owned names may use the reserve.
+        expect(recordOwnedConfigPath(dir, join(dir, "not-initially-owned"))).toBe(false);
+        result = removeOwnedConfigState(dir);
+      } finally { end(); }
+      expect(result).toEqual({ status: "removed", residualPaths: [] });
+      expect(existsSync(dir)).toBe(false);
+    })());
+
+  test("a rerun stopped with the owner marker kept never adopts an existing unlisted database", withHome(async dir => {
+    const { beginConfigOwnershipTeardown } = await import("../../src/lib/config-ownership");
+    const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    olderManifest(dir, false);
+    // A database an older version created without listing it.
+    const db = new Database(join(dir, "config-mutation.sqlite"));
+    db.exec("CREATE TABLE kept (id INTEGER)");
+    db.close();
+    stopAt(dir, "snapshot-removed");
+    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(true);
+    const end = beginConfigOwnershipTeardown();
+    let result;
+    try {
+      withConfigMutationLockSync(() => undefined, dir);
+      expect(manifest(dir).paths).not.toContain("config-mutation.sqlite");
+      result = removeOwnedConfigState(dir);
+    } finally { end(); }
+    expect(result?.status).toBe("partial");
+    expect(result?.residualPaths).toContain(join(dir, "config-mutation.sqlite"));
+    expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
+  }));
+
+  test("a listed symlink whose target is gone is removed", { skip: process.platform === "win32" }, withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "linked"))).toBe(true);
+    symlinkSync(join(dirname(dir), "missing-target"), join(dir, "linked"));
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+
+  test("a home cached as unowned is claimed once it is empty", withHome(dir => {
+    mkdirSync(dir);
+    writeFileSync(join(dir, "foreign"), "x");
+    expect(recordOwnedConfigPath(dir, join(dir, "early"))).toBe(false);
+    removeTreeWithRetry(join(dir, "foreign"));
+    expect(recordOwnedConfigPath(dir, join(dir, "later"))).toBe(true);
+    expect(manifest(dir).paths).toContain("later");
+  }));
+
+  test("a first registration waits for a home another process is still creating", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    removeTreeWithRetry(join(dir, ".opencodex-owner.json"));
+    // A fresh process finds the manifest without the owner marker (creation in progress) and waits
+    // out the creation deadline before giving up; a lower bound on its runtime is load-independent.
+    const script = "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";\n"
+      + "const started = performance.now();\n"
+      + "const recorded = recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, "waiting")) + ");\n"
+      + "console.log(JSON.stringify({ recorded, waited: performance.now() - started }));";
+    const result = JSON.parse(Bun.spawnSync([process.execPath, "-e", script]).stdout.toString()) as { recorded: boolean; waited: number };
+    expect(result.recorded).toBe(false);
+    expect(result.waited).toBeGreaterThanOrEqual(90);
   }));
 });
