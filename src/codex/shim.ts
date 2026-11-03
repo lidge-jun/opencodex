@@ -4,8 +4,6 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
-  renameSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, join, posix, win32 } from "node:path";
@@ -60,7 +58,8 @@ import { ownedWrapperFingerprint, windowsShimContent, wrapperInodeIsOurs, writeS
 import {
   checkLegacyShimRecord,
   hostShimPathApi,
-  assertLegacyShimMutationAllowed,
+  guardedRenameSync as renameSync,
+  guardedUnlinkSync as unlinkSync,
   legacyShimBackupPath,
   legacyShimDirectoryUnchanged,
   legacyShimFilesProblem,
@@ -340,7 +339,6 @@ function primaryState(files: ShimFileState[]): ShimState {
 }
 
 function replaceOwnedBackup(sourcePath: string, backupPath: string): void {
-  assertLegacyShimMutationAllowed();
   const oldBackupPath = `${backupPath}.old-${process.pid}`;
   if (existsSync(oldBackupPath)) unlinkSync(oldBackupPath);
   if (existsSync(backupPath)) renameSync(backupPath, oldBackupPath);
@@ -464,7 +462,6 @@ function rollbackGuardedRefresh(journal: readonly GuardedRefreshJournalEntry[]):
   const rollbackErrors: Error[] = [];
   const attempt = (operation: () => void): void => {
     try {
-      assertLegacyShimMutationAllowed();
       operation();
     } catch (error) {
       rollbackErrors.push(error instanceof Error ? error : new Error(String(error)));
@@ -538,13 +535,11 @@ function applyGuardedRefreshTransaction(
     };
     journal.push(entry);
     try {
-      assertLegacyShimMutationAllowed();
       if (existsSync(operation.file.backupPath)) {
         entry.stagedOldBackupPath = `${operation.file.backupPath}.autorestore-${transactionId}-${index}`;
         if (existsSync(entry.stagedOldBackupPath)) unlinkSync(entry.stagedOldBackupPath);
         renameSync(operation.file.backupPath, entry.stagedOldBackupPath);
       }
-      assertLegacyShimMutationAllowed();
       renameSync(operation.sourcePath, operation.file.backupPath);
       entry.replacementMovedToBackup = true;
       const movedReplacement = stableShimPathProbe(operation.file.backupPath);
@@ -906,7 +901,6 @@ function installCodexShimFromState(options: InstallCodexShimInternalOptions, exi
     freshJournal.push(entry);
     try {
       if (existsSync(target.originalPath)) {
-        assertLegacyShimMutationAllowed();
         renameSync(target.originalPath, target.backupPath);
         entry.originalMovedToBackup = true;
         // Metadata-only, and before the content probe: an empty or otherwise

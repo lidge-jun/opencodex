@@ -5,7 +5,7 @@
  * pure and runs on every OS; the uninstall cases run the Windows code path against the host
  * filesystem by overriding process.platform, as codex-shim-windows-revision.test.ts does.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, win32 } from "node:path";
@@ -372,6 +372,45 @@ describe("mutations after validation stay in the validated directory", () => {
       expect(snapshot()).toEqual(before);
     } finally {
       release();
+    }
+  });
+
+  test("a directory retargeted between two refresh steps stops the later steps", () => {
+    const link = join(root, "linked-npm");
+    fs.symlinkSync(bin, link, linkType);
+    seed(elsewhere);
+    const seeded = seed(link);
+    const checked = checkLegacyShimRecord(JSON.parse(fs.readFileSync(seeded.statePath, "utf8")));
+    if (!checked.ok) throw new Error(checked.reason);
+    const observed = stableShimPathProbe(seeded.wrapperPath)!;
+    const decoy = Object.fromEntries(fs.readdirSync(elsewhere).map(name => [name, fs.readFileSync(join(elsewhere, name), "utf8")]));
+    const rename = fs.renameSync;
+    let retargeted = false;
+    const spy = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      rename(from, to);
+      if (!retargeted) { retargeted = true; fs.rmSync(link, { force: true }); fs.symlinkSync(elsewhere, link, linkType); }
+    }) as typeof fs.renameSync);
+    const release = setLegacyShimMutationGuard(checked);
+    let published: unknown;
+    try {
+      asWindows();
+      try { published = refreshObsoleteWindowsShim(seeded.wrapperPath, observed, () => "current wrapper"); } catch (error) { published = error; }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      release();
+      spy.mockRestore();
+    }
+    expect(retargeted).toBe(true);
+    expect(published).not.toBe(true);
+    expect(Object.fromEntries(fs.readdirSync(elsewhere).map(name => [name, fs.readFileSync(join(elsewhere, name), "utf8")]))).toEqual(decoy);
+  });
+
+  test("the Windows shim modules rename, unlink and link only through the guarded calls", () => {
+    for (const file of ["src/codex/shim.ts", "src/codex/shim-windows-refresh.ts"]) {
+      const source = fs.readFileSync(repoPath(file), "utf8");
+      const fsImport = source.match(/import \{([^}]*)\} from "node:fs";/)?.[1] ?? "";
+      for (const call of ["renameSync", "unlinkSync", "linkSync", "rmSync"]) expect(fsImport.split(",").map(name => name.trim())).not.toContain(call);
+      expect(source).not.toMatch(/\bfs\.(renameSync|unlinkSync|linkSync|rmSync)\(/);
     }
   });
 });

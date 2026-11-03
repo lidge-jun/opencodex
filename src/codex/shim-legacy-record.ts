@@ -1,4 +1,4 @@
-import { closeSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { closeSync, linkSync, lstatSync, openSync, readSync, realpathSync, renameSync, unlinkSync } from "node:fs";
 import { posix, sep, win32 } from "node:path";
 import { SHIM_MARKER } from "./shim-templates";
 import { fileErrorCode, type ShimFileState } from "./shim-state-file";
@@ -245,6 +245,26 @@ export function setLegacyShimMutationGuard(check: Extract<LegacyShimCheck, { ok:
 /** Throws when a guarded Windows shim operation would act outside its validated directory. */
 export function assertLegacyShimMutationAllowed(): void {
   mutationGuard?.();
+}
+
+/*
+ * The Windows shim modules import these instead of the node:fs calls, so every rename, unlink and
+ * link they make checks the active guard immediately before it runs. Without a guard they are the
+ * plain calls.
+ */
+export function guardedRenameSync(from: string, to: string): void {
+  assertLegacyShimMutationAllowed();
+  renameSync(from, to);
+}
+
+export function guardedUnlinkSync(path: string): void {
+  assertLegacyShimMutationAllowed();
+  unlinkSync(path);
+}
+
+export function guardedLinkSync(from: string, to: string): void {
+  assertLegacyShimMutationAllowed();
+  linkSync(from, to);
 }
 
 export function legacyShimManualRestoreMessage(reason: string, statePath: string, partial = false): string {
