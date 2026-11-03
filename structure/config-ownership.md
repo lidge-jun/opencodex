@@ -109,8 +109,9 @@ step of the run (the lock, metadata, temp files, entries and the final rmdir) us
 path and never resolves it again. It records the root's device and inode at that point; before the
 lock, before the tombstone, before each entry, before temp cleanup, before the metadata unlinks and
 before the final rmdir it confirms the root is still that directory, real and resolving to itself.
-A change found before the tombstone is refused with nothing written; one found later ends the run
-partial. Residual paths are reported in the spelling the caller passed. A root reached through an
+A change found before the tombstone is refused without changing owned state (a change found under
+the lock can leave the ownership lock file in place); one found later ends the run partial. Residual
+paths are reported in the spelling the caller passed. A root reached through an
 aliased ancestor, such as macOS `/var` for `/private/var`, therefore still works, and a root that is
 itself a link is refused as before. `src/lib/config-ownership-removal.ts` resolves every manifest
 entry from that root. Immediately before

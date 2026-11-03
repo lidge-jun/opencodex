@@ -369,6 +369,32 @@ describe("owned path removal stays inside the config root", () => {
     expect(calls[1]).toBe(256);
   });
 
+  test("an elevated Windows run checks every ACL batch, not only the first", () => {
+    const { parent, dir } = ownedHome("ocx-removal-windows-later-batch-");
+    const sid = "S-1-5-21-9-9-9-1001";
+    // A read every entry of the batch passes: the token user owns it with a protected DACL.
+    const passing = (count: number) => [`U|${sid}|${sid}|False`,
+      ...Array.from({ length: count }, (_, index) => [`E|${index}|${sid}|4100|1`, `A|${index}|0|3|2032127|${sid}|False`]).flat(),
+      "END", ""].join("\n");
+    const calls: number[] = [];
+    try {
+      expect(recordOwnedConfigPath(dir, join(dir, "artifacts"))).toBe(true);
+      for (let index = 0; index < 400; index += 1) mkdirSync(join(dir, "artifacts", `d${index}`), { recursive: true });
+      setUninstallElevationProbeForTests(() => true);
+      setWindowsOwnerAclRunnerForTests(entries => {
+        calls.push(entries.length);
+        return calls.length === 1
+          ? { success: true, timedOut: false, stdout: passing(entries.length) }
+          : { success: false, timedOut: true, stdout: "" };
+      });
+      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir))).toBe(ELEVATED_UNINSTALL_REFUSAL);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+    expect(calls.length).toBe(2);
+    expect(calls[0]).toBe(256);
+  });
+
   (process.platform === "linux" ? test : test.skip)("a chain of links within the kernel's limit is followed (Linux allows 40)", () => {
     const { parent, dir } = ownedHome("ocx-removal-link-chain-");
     try {
