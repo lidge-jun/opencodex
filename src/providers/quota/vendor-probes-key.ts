@@ -1145,16 +1145,19 @@ function kimiLimitLabel(item: Record<string, unknown>, detail: Record<string, un
     .toLowerCase();
 }
 
-/** Counter-derived usage, or undefined when any present counter is outside [0, limit]. */
+/**
+ * Counter-derived usage, or undefined when a counter is impossible (negative used, or
+ * remaining above the limit). An overage (used above the limit, or negative remaining)
+ * reads as exhausted: dropping it would make an over-quota account look available.
+ */
 function kimiCounterUsed(row: Record<string, unknown>): { used: number; limit: number } | undefined {
   const limit = toFiniteNumber(row.limit);
   if (limit === undefined || limit <= 0) return undefined;
   const used = toFiniteNumber(row.used);
   const remaining = toFiniteNumber(row.remaining);
-  const inRange = (value: number | undefined): boolean => value === undefined || (value >= 0 && value <= limit);
-  if (!inRange(used) || !inRange(remaining)) return undefined;
-  if (used !== undefined) return { used, limit };
-  return remaining === undefined ? undefined : { used: limit - remaining, limit };
+  if ((used !== undefined && used < 0) || (remaining !== undefined && remaining > limit)) return undefined;
+  if (used !== undefined) return { used: Math.min(used, limit), limit };
+  return remaining === undefined ? undefined : { used: Math.min(limit - remaining, limit), limit };
 }
 
 /** Parse consumed usage, preferring valid counters, then a valid [0, 1] ratio, then direct percentages. */

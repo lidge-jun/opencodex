@@ -244,6 +244,15 @@ describe("Kimi monthly quota", () => {
     expect(reports[0]?.quota.monthlyPercent).toBe(100);
   });
 
+  test.each([
+    { name: "used above limit", row: { limit: 100, used: 250 } },
+    { name: "negative remaining", row: { limit: 100, remaining: -50 } },
+  ])("an overage without a ratio reads as exhausted: $name", async ({ row }) => {
+    mockUsage({ usages: { limit_month_total: row } });
+    const { reports } = await fetchProviderQuotaReports(config(), true);
+    expect(reports[0]?.quota.monthlyPercent).toBe(100);
+  });
+
   test("drops a row whose only counters are invalid", async () => {
     mockUsage({ usages: { limit_month_total: { limit: 100, remaining: 200 }, limit_month_code: { used_ratio: 0.4 } } });
     const { reports } = await fetchProviderQuotaReports(config(), true);
