@@ -149,4 +149,3 @@ describe("translated Messages route end to end", () => {
     expect(seesPromptTooLong(JSON.parse(text).error.message)).toBe(true);
   });
 });
-
