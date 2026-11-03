@@ -32,6 +32,8 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
+Un Link Child non supervisé restaure Codex natif et Grok avant de libérer son listener lors d’un signal, en revérifiant la connexion à chaque écriture. Service/Desktop, sibling, transfert de redémarrage et reçu stop du parent préservent les intégrations. L’arrêt refuse le redémarrage avec `409 runtime_stopping`. Une terminaison forcée peut éviter le signal ; la restauration par `ocx stop` reste nécessaire.
+
 Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
 
 Sur un client hub connecté, `ocx stop`, y compris via l’API, conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion ; `ocx start` les dessert de nouveau. L’arrêt explicite d’un Remote Link Child rétablit au contraire, si la restauration partagée réussit, le routage natif de Codex, le catalogue et les métadonnées de reprise sauvegardées, et supprime la configuration Grok gérée. La connexion Home enregistrée reste conservée ; `ocx disconnect` la supprime.

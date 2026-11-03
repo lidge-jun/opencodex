@@ -139,6 +139,13 @@ describe("client listener: bound restart", () => {
     expect(body.restartCapability).toBeUndefined();
     expect((await fetch(new URL(SYSTEM_RESTART_PATH, server.url), { method: "POST" })).status).toBe(404);
   });
+
+  test("a signal-stopping runtime refuses bound restart without a success receipt", async () => {
+    const { server, secret, port } = listen(async () => ({ kind: "stopping" }));
+    const response = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), { method: "POST", headers: restartHeaders(secret, port) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ success: false, error: { code: "runtime_stopping" } });
+  });
 });
 
 function fakeIo(overrides: Partial<ClientRestartIo> = {}) {
@@ -158,6 +165,50 @@ function fakeIo(overrides: Partial<ClientRestartIo> = {}) {
 }
 
 describe("client restart controller", () => {
+  test("signal shutdown refuses new and pending restart admissions without spawning", async () => {
+    let stopping = false;
+    let admit!: (value: null) => void;
+    const { io, calls } = fakeIo({ stopping: () => stopping, supervisor: () => new Promise(resolve => { admit = resolve; }) });
+    const controller = createClientRestartController(io);
+    const pending = controller.request();
+    expect(controller.hasHandoff()).toBe(false);
+    stopping = true;
+    expect(await controller.request()).toEqual({ kind: "stopping" });
+    admit(null);
+    expect(await pending).toEqual({ kind: "stopping" });
+    expect(controller.hasHandoff()).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  test("pending admission never owns routing and refusal or failure leaves no handoff", async () => {
+    let settle!: (value: "service" | null) => void;
+    const { io } = fakeIo({ supervisor: () => new Promise(resolve => { settle = resolve; }) });
+    const controller = createClientRestartController(io);
+    expect(controller.hasHandoff()).toBe(false);
+    const pending = controller.request();
+    expect(controller.hasHandoff()).toBe(false);
+    settle("service");
+    expect(await pending).toEqual({ kind: "supervised", supervisor: "service" });
+    expect(controller.hasHandoff()).toBe(false);
+    const failed = createClientRestartController(fakeIo({ supervisor: async () => { throw new Error("unavailable"); } }).io);
+    await expect(failed.request()).rejects.toThrow("unavailable");
+    expect(failed.hasHandoff()).toBe(false);
+  });
+
+  test("accepted handoff remains owned until its asynchronous exit settles", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const atExit = new Promise<void>(resolve => { entered = resolve; });
+    const exitGate = new Promise<void>(resolve => { release = resolve; });
+    const controller = createClientRestartController(fakeIo({ exitProcess: async () => { entered(); await exitGate; } }).io);
+    await controller.request();
+    await atExit;
+    expect(controller.hasHandoff()).toBe(true);
+    release();
+    await controller.settled();
+    expect(controller.hasHandoff()).toBe(false);
+  });
+
   test("a replacement that answers ends this process", async () => {
     const { io, calls } = fakeIo();
     const controller = createClientRestartController(io);
