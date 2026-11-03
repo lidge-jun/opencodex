@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconRefresh, IconX } from "../../icons";
+import { IconX } from "../../icons";
 import { ProxyLever } from "./proxy-lever";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,8 @@ interface ProxyControlsProps {
   stoppingLabel: string;
   restartLabel: string;
   restartingLabel: string;
+  /** How far to pull the lever for each action; the lever's tooltip and accessible description. */
+  leverHint: string;
   stopping: boolean;
   restarting: boolean;
   /** May return the stop's promise so the lever can rise again if the confirmation is declined. */
@@ -28,10 +30,11 @@ interface ProxyControlsProps {
 
 /*
  * Design system v2 proxy status, as one sidebar row: a static status dot, the title and how
- * long it has been up, then restart as a bare icon (a soft plate on hover) and stop as a pull-down
- * lever (proxy-lever.tsx) whose plate turns red. No panel, beam or pulse: the row reads like the navigation above it. Restart spins while
- * in flight and shows a check for a moment when it settles. The status word stays available to
- * assistive tech and as the row's tooltip.
+ * long it has been up, then one slot lever (proxy-lever.tsx) that reloads Codex models at its
+ * middle notch and stops the proxy at the bottom. No panel, beam or pulse: the row reads like the
+ * navigation above it. While either action runs the status line says so, and the lever's handle
+ * flashes green for a moment when a reload settles. The status word stays available to assistive
+ * tech and as the row's tooltip.
  */
 export function ProxyControls({
   label,
@@ -42,6 +45,7 @@ export function ProxyControls({
   stoppingLabel,
   restartLabel,
   restartingLabel,
+  leverHint,
   stopping,
   restarting,
   onStop,
@@ -51,7 +55,8 @@ export function ProxyControls({
 }: ProxyControlsProps) {
   const done = useSettledFlash(restarting);
   const live = online && !stopping;
-  const status = stopping ? stoppingLabel : statusLabel;
+  const status = stopping ? stoppingLabel : restarting ? restartingLabel : statusLabel;
+  const busy = stopping || restarting;
 
   return (
     <div className={cn("ui-v2 flex h-[var(--ocx-control-h)] items-center gap-2 pr-1 pl-2.5", className)} title={detail ? `${status} · ${detail}` : status}>
@@ -59,8 +64,8 @@ export function ProxyControls({
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-5">
         <span className="shrink-0 font-medium text-fg">{label}</span>
         <span className="sr-only">{status}</span>
-        <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!stopping && !!detail ? undefined : true}>
-          {stopping ? stoppingLabel : detail ?? statusLabel}
+        <span className="min-w-0 truncate text-xs text-fg-subtle tabular-nums" aria-hidden={!busy && !!detail ? undefined : true}>
+          {busy ? status : detail ?? statusLabel}
         </span>
       </span>
       {session && (
@@ -69,20 +74,8 @@ export function ProxyControls({
           <IconX />
         </TrayButton>
       )}
-      <TrayButton onClick={onRestart} disabled={restarting}
-        label={restarting ? restartingLabel : restartLabel} title={restartLabel}>
-        {done ? (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-            strokeLinecap="round" strokeLinejoin="round" className="text-success" aria-hidden>
-            <path d="M5 12l5 5L20 7" />
-          </svg>
-        ) : (
-          <span className={cn("inline-flex", restarting && "animate-spin")}>
-            <IconRefresh />
-          </span>
-        )}
-      </TrayButton>
-      <ProxyLever label={stopping ? stoppingLabel : stopLabel} down={stopping} onThrow={onStop} />
+      <ProxyLever restartLabel={restarting ? restartingLabel : restartLabel} stopLabel={stopping ? stoppingLabel : stopLabel}
+        hint={leverHint} restarting={restarting} settled={done} stopping={stopping} onRestart={onRestart} onStop={onStop} />
     </div>
   );
 }

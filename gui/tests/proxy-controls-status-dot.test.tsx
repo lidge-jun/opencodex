@@ -9,7 +9,7 @@ import { ProxyControls } from "../src/components/ui-v2/proxy-controls";
 function dotClass(props: { online?: boolean; stopping?: boolean }): string {
   const html = renderToStaticMarkup(
     <ProxyControls label="Proxy" statusLabel={props.online === false ? "Offline" : "Online"}
-      stopLabel="Stop" stoppingLabel="Stopping" restartLabel="Restart" restartingLabel="Restarting"
+      stopLabel="Stop" stoppingLabel="Stopping" restartLabel="Restart" restartingLabel="Restarting" leverHint=""
       stopping={props.stopping ?? false} restarting={false} onStop={() => {}} onRestart={() => {}}
       {...(props.online === undefined ? {} : { online: props.online })} />,
   );
@@ -32,15 +32,17 @@ test("stopping: the dot goes neutral even while online", () => {
   expect(dotClass({ online: true, stopping: true })).not.toContain("bg-success");
 });
 
-test("stop is a lever named by the stop label, and it locks down while stopping", () => {
+test("one lever carries reload and stop, and it locks at the bottom while stopping", () => {
   const render = (stopping: boolean) => renderToStaticMarkup(
     <ProxyControls label="Proxy" statusLabel="Online" stopLabel="Stop" stoppingLabel="Stopping"
-      restartLabel="Restart" restartingLabel="Restarting" stopping={stopping} restarting={false}
-      onStop={() => {}} onRestart={() => {}} />,
+      restartLabel="Reload" restartingLabel="Reloading" leverHint="Pull halfway: Reload. Pull all the way down: Stop."
+      stopping={stopping} restarting={false} onStop={() => {}} onRestart={() => {}} />,
   );
-  expect(render(false)).toMatch(/<button type="button" aria-label="Stop"[^>]*>/);
-  expect(render(false)).toContain("rotate(-40deg)");
+  const idle = render(false);
+  expect(idle).toMatch(/<button type="button" aria-label="Reload · Stop" aria-description="Pull halfway[^"]*"/);
+  expect(idle).toContain("translateY(0px)");
+  expect(idle.match(/<button /g)?.length).toBe(1);
   const stoppingHtml = render(true);
-  expect(stoppingHtml).toMatch(/<button type="button" aria-label="Stopping"[^>]*disabled=""/);
-  expect(stoppingHtml).toContain("rotate(40deg)");
+  expect(stoppingHtml).toMatch(/<button type="button" aria-label="Reload · Stopping"[^>]*disabled=""/);
+  expect(stoppingHtml).toContain("translateY(14px)");
 });

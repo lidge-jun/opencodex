@@ -2,86 +2,112 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { cn } from "@/lib/utils";
 
 interface ProxyLeverProps {
-  /** Accessible name and tooltip, e.g. "Stop". */
-  label: string;
-  /** True once the stop is under way: the lever stays down and no longer moves. */
-  down: boolean;
-  /** Called when the lever is thrown. May resolve after a confirmation; the lever rises again unless `down` is set by then. */
-  onThrow: () => void | Promise<unknown>;
+  /** Action at the middle notch, e.g. "Reload Codex models". */
+  restartLabel: string;
+  /** Action at the bottom, e.g. "Stop Proxy". */
+  stopLabel: string;
+  /** Tooltip and accessible description that says how far to pull for each action. */
+  hint: string;
+  /** True while the reload runs: the handle rests in the middle notch. */
+  restarting: boolean;
+  /** True for a moment after a reload settles: the handle flashes the success colour. */
+  settled?: boolean;
+  /** True once the stop is under way: the handle stays at the bottom and no longer moves. */
+  stopping: boolean;
+  onRestart: () => void;
+  /** May resolve after a confirmation; the handle rises again unless `stopping` is set by then. */
+  onStop: () => void | Promise<unknown>;
 }
 
-// The arm swings about the pivot from UP (running) to DOWN (stopped). Positive is clockwise in SVG.
-const UP = -40;
-const DOWN = 40;
-// A drag commits once the arm is past this angle; short of it the lever springs back.
-const COMMIT = 12;
-// Pixels of downward drag that sweep the whole arc.
-const TRAVEL = 24;
-const PIVOT = { x: 8, y: 14 };
-const ARM = 14;
+// Handle travel in px inside the slot, and how far the pointer moves for the full throw.
+const TRAVEL = 14;
+const DRAG = 26;
+// Release zones as a fraction of the throw: below RESTART springs back, below STOP reloads.
+const RESTART = 0.3;
+const STOP = 0.82;
+
+type Zone = "rest" | "restart" | "stop";
+const zoneOf = (pos: number): Zone => (pos >= STOP ? "stop" : pos >= RESTART ? "restart" : "rest");
 
 /*
- * The proxy stop control as a pull-down lever, like a generator's main switch: grab the knob and
- * pull it down (or click it, or press Enter/Space) to stop. A short drag that is let go above the
- * commit angle springs back, so brushing it does nothing. The stop itself still asks for
- * confirmation; the lever rests down only while that is pending or once the stop is under way.
+ * The proxy row's one control: a slot lever with three stops, like a generator's main switch.
+ * Pull it to the middle notch and let go to reload Codex models (it springs back up when the
+ * reload settles); pull it all the way down to stop the proxy, which still asks to confirm.
+ * A short pull springs back and does nothing. A click or Enter/Space is the middle notch, the
+ * harmless one; End (or a full drag) is the stop. While dragging, the handle takes the colour of
+ * the action it will fire on release.
  */
-export function ProxyLever({ label, down, onThrow }: ProxyLeverProps) {
+export function ProxyLever({ restartLabel, stopLabel, hint, restarting, settled = false, stopping, onRestart, onStop }: ProxyLeverProps) {
   const [pulled, setPulled] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
-  const start = useRef<{ y: number; moved: boolean } | null>(null);
+  const start = useRef<{ y: number; from: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
 
-  const lowered = down || pulled;
-  const angle = drag ?? (lowered ? DOWN : UP);
+  const down = stopping || pulled;
+  const rest = down ? 1 : restarting ? 0.5 : 0;
+  const pos = drag ?? rest;
+  const zone = drag === null ? (down ? "stop" : restarting ? "restart" : "rest") : zoneOf(drag);
 
-  const fire = () => {
-    if (lowered) return;
+  const stop = () => {
+    if (down) return;
     setPulled(true);
-    void Promise.resolve(onThrow()).finally(() => setPulled(false));
+    void Promise.resolve(onStop()).finally(() => setPulled(false));
+  };
+  const restart = () => {
+    if (!down && !restarting) onRestart();
+  };
+  const release = (at: number) => {
+    const target = zoneOf(at);
+    if (target === "stop") stop();
+    else if (target === "restart") restart();
   };
 
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
-    if (lowered || event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    start.current = { y: event.clientY, moved: false };
+    if (down || event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    start.current = { y: event.clientY, from: rest, moved: false };
   };
   const onPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
     const from = start.current;
     if (!from) return;
     const dy = event.clientY - from.y;
     if (Math.abs(dy) > 3) from.moved = true;
-    if (from.moved) setDrag(Math.min(DOWN, Math.max(UP, UP + (dy / TRAVEL) * (DOWN - UP))));
+    if (from.moved) setDrag(Math.min(1, Math.max(from.from, from.from + dy / DRAG)));
   };
   const onPointerUp = () => {
     const from = start.current;
     start.current = null;
     if (!from?.moved) return;
     suppressClick.current = true;
-    const committed = (drag ?? UP) >= COMMIT;
+    const at = drag ?? from.from;
     setDrag(null);
-    if (committed) fire();
+    release(at);
   };
   const onClick = () => {
     if (suppressClick.current) {
       suppressClick.current = false;
       return;
     }
-    fire();
+    restart();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "ArrowDown") {
+    if (event.key === "End" || event.key === "PageDown") {
       event.preventDefault();
-      fire();
+      stop();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      restart();
     }
   };
 
   return (
     <button
       type="button"
-      aria-label={label}
-      title={label}
-      disabled={down}
+      aria-label={`${restartLabel} · ${stopLabel}`}
+      aria-description={hint}
+      aria-keyshortcuts="ArrowDown End"
+      title={hint}
+      disabled={stopping}
       onClick={onClick}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
@@ -89,45 +115,29 @@ export function ProxyLever({ label, down, onThrow }: ProxyLeverProps) {
       onPointerUp={onPointerUp}
       onPointerCancel={() => { start.current = null; setDrag(null); }}
       className={cn(
-        "group inline-flex h-[var(--ocx-control-h-sm)] w-8 shrink-0 cursor-grab touch-none items-center justify-center rounded-[6px] bg-transparent text-fg-subtle",
-        "transition-[background-color,color] duration-150 ease-soft active:cursor-grabbing",
-        "hover:bg-danger-soft hover:text-danger",
+        "group relative inline-flex h-[var(--ocx-control-h-sm)] w-7 shrink-0 cursor-grab touch-none justify-center rounded-[6px] bg-transparent",
+        "transition-[background-color] duration-150 ease-soft hover:bg-accent-soft active:cursor-grabbing",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-60",
       )}
     >
-      <svg viewBox="0 0 28 28" width="28" height="28" fill="none" aria-hidden>
-        {/* The knob's path with a stop at each end of the throw, and the hub housing the pivot. */}
-        <circle cx={PIVOT.x} cy={PIVOT.y} r={ARM} stroke="var(--ocx-line-strong)" strokeWidth={1.5} strokeLinecap="round"
-          strokeDasharray={`${SWEEP} ${2 * Math.PI * ARM - SWEEP}`} strokeDashoffset={SWEEP / 2} />
-        {[UP, DOWN].map(deg => <line key={deg} {...stop(deg)} stroke="var(--ocx-line-strong)" strokeWidth={1.5} strokeLinecap="round" />)}
-        <circle cx={PIVOT.x} cy={PIVOT.y} r={5} fill="var(--ocx-line-strong)" />
-        <g
-          style={{
-            transform: `rotate(${angle}deg)`,
-            transformBox: "view-box",
-            transformOrigin: `${PIVOT.x}px ${PIVOT.y}px`,
-            transition: drag === null ? "transform 260ms cubic-bezier(0.34, 1.36, 0.64, 1)" : "none",
-          }}
-        >
-          <line x1={PIVOT.x} y1={PIVOT.y} x2={PIVOT.x + ARM} y2={PIVOT.y} stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" />
-          <circle cx={PIVOT.x + ARM} cy={PIVOT.y} r={3.5} fill="currentColor" />
-        </g>
-        <circle cx={PIVOT.x} cy={PIVOT.y} r={2.2} fill="currentColor" />
-      </svg>
+      {/* The slot, with a notch mark at each of the three stops. */}
+      <span className="pointer-events-none absolute top-[4px] h-5 w-[5px] rounded-full bg-line-strong" aria-hidden />
+      {[0, 0.5, 1].map(at => (
+        <span key={at} className="pointer-events-none absolute left-[21px] h-px w-[3px] bg-line-strong" style={{ top: 7 + at * TRAVEL }} aria-hidden />
+      ))}
+      {/* The handle: a grip bar across the slot. */}
+      <span
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute top-[5px] h-[5px] w-3 rounded-[2px] shadow-sm",
+          zone === "stop" ? "bg-danger" : zone === "restart" ? "bg-fg" : settled ? "bg-success" : "bg-fg-muted group-hover:bg-fg",
+        )}
+        style={{
+          transform: `translateY(${pos * TRAVEL}px)`,
+          transition: drag === null ? "transform 240ms cubic-bezier(0.34, 1.4, 0.64, 1), background-color 150ms" : "background-color 150ms",
+        }}
+      />
     </button>
   );
-}
-
-/** Length of the arc the knob travels along; the throw is symmetric about 3 o'clock, where a circle's stroke starts. */
-const SWEEP = ((DOWN - UP) / 180) * Math.PI * ARM;
-
-/** A short radial stop across the knob's path at `deg`. */
-function stop(deg: number) {
-  const cos = Math.cos((deg * Math.PI) / 180);
-  const sin = Math.sin((deg * Math.PI) / 180);
-  return {
-    x1: PIVOT.x + (ARM - 2.5) * cos, y1: PIVOT.y + (ARM - 2.5) * sin,
-    x2: PIVOT.x + (ARM + 2.5) * cos, y2: PIVOT.y + (ARM + 2.5) * sin,
-  };
 }

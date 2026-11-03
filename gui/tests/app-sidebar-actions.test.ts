@@ -20,10 +20,10 @@ test("the sidebar foot pairs stop with restart-Codex", () => {
   const card = src.slice(src.indexOf("<ProxyControls"), src.indexOf("/>", src.indexOf("<ProxyControls")));
   expect(card).toContain("handleStop");
   expect(card).toContain("handleCodexRestart");
-  expect(proxyControls).toContain("IconRefresh");
-  // Stop is a pull-down lever, and it keeps its danger marking: its plate turns red on hover.
-  expect(proxyControls).toMatch(/<ProxyLever [^>]*onThrow=\{onStop\}/);
-  expect(proxyLever).toContain('"hover:bg-danger-soft hover:text-danger"');
+  // Both actions live on one lever: the middle notch reloads, the bottom stops. The stop keeps its
+  // danger marking: the handle turns red once a pull will stop the proxy on release.
+  expect(proxyControls).toMatch(/<ProxyLever [^>]*onRestart=\{onRestart\} onStop=\{onStop\}/);
+  expect(proxyLever).toContain('zone === "stop" ? "bg-danger"');
 });
 
 test("the mobile top bar carries the same pair", () => {
@@ -48,11 +48,13 @@ test("every action orb carries an accessible name", () => {
   for (const orb of orbs) expect(orb.slice(0, 400)).toContain("aria-label");
   // The sidebar card's icon buttons are tray buttons; each call passes a name, and the tray
   // button turns it into the aria-label.
-  const buttons = proxyControls.split(/<(?:TrayButton|ProxyLever) /).slice(1);
-  expect(buttons.length).toBeGreaterThanOrEqual(3);
+  const buttons = proxyControls.split("<TrayButton ").slice(1);
+  expect(buttons.length).toBeGreaterThanOrEqual(1);
   for (const button of buttons) expect(button.slice(0, 400)).toMatch(/\blabel=\{/);
   expect(proxyControls).toContain("aria-label={label}");
-  expect(proxyLever).toContain("aria-label={label}");
+  // The lever is named by both of its actions and described by how far to pull for each.
+  expect(proxyLever).toContain("aria-label={`${restartLabel} · ${stopLabel}`}");
+  expect(proxyLever).toContain("aria-description={hint}");
 });
 
 test("the restart action comes from the shared hook, not an inline duplicate", () => {

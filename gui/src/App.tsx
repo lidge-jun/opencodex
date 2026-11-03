@@ -546,6 +546,7 @@ export default function App() {
             stoppingLabel={t("dash.stopping")}
             restartLabel={t("dash.codexRestart")}
             restartingLabel={t("dash.codexRestarting")}
+            leverHint={t("shellV2.leverHint", { restart: t("dash.codexRestart"), stop: t(targets.connected ? "connection.disconnect" : "dash.stop") })}
             stopping={stopping}
             restarting={codexRestarting}
             onStop={handleStop}
