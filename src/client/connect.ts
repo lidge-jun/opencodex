@@ -18,7 +18,8 @@ import {
   withClientLifecycle, withClientLifecycleSync,
   type ClientLifecycleHeld, type ClientLifecycleLockDeps,
 } from "./lifecycle-lock";
-import { invalidateCodexModelsCache } from "../codex/catalog/sync";
+import { invalidateCodexModelsCache, invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
+import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import {
   injectCodexConfig,
   currentExternalCodexModelProvider,
@@ -30,7 +31,7 @@ import {
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
-import { DEFAULT_CATALOG_PATH } from "../codex/paths";
+import { DEFAULT_CATALOG_PATH, getCodexHome } from "../codex/paths";
 import {
   readServiceApiTokenState,
   readTokenBackupState,
@@ -95,6 +96,7 @@ import {
 import { hubStateCachePath } from "./hub-state";
 import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from "./link-state";
 import { isLinkPort } from "../link/ports";
+import { clientSyncRuntimeGuard, ClientSyncRuntimeError } from "./sync-runtime";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -901,7 +903,15 @@ async function syncConnectedClientUnlocked(
     if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("client_sync_unavailable");
     const token = readServiceApiTokenState();
     if (token.kind !== "present" || token.fingerprint !== state.value.tokenFingerprint) throw new Error("client_token_changed");
-    return { connection: state.value, token };
+    let assertRuntimeCurrent = () => {};
+    try { if (isLinkConnection(state.value)) assertRuntimeCurrent = clientSyncRuntimeGuard(); }
+    catch (error) {
+      if (options.expect && error instanceof ClientSyncRuntimeError && error.code === "client_runtime_stopping") {
+        throw new ClientSyncExpectationError(options.expect, "pending_operation");
+      }
+      throw error;
+    }
+    return { connection: state.value, token, assertRuntimeCurrent };
   }), deps.lifecycleLockDeps);
   let downloaded: Awaited<ReturnType<typeof downloadClientCatalog>> | undefined;
   let stale = false;
@@ -918,6 +928,7 @@ async function syncConnectedClientUnlocked(
   // they were, which is the known-good state.
   if (downloaded) assertClientCatalogCompatible(downloaded.body, deps.catalogCompatibility);
   const next = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    initial.assertRuntimeCurrent();
     assertClientConnectionUnchanged(initial.connection);
     const token = readServiceApiTokenState();
     if (token.kind !== "present" || token.fingerprint !== initial.token.fingerprint) throw new Error("client_token_changed");
@@ -933,10 +944,12 @@ async function syncConnectedClientUnlocked(
   }), deps.lifecycleLockDeps);
   // Read-only: injection invokes this while N/C are held. Acquiring L here would invert C→L.
   const beforeClientWrite = () => {
+    initial.assertRuntimeCurrent();
     assertClientConnectionUnchanged(next);
     const token = readServiceApiTokenState();
     if (next.pendingOperation || token.kind !== "present" || token.fingerprint !== next.tokenFingerprint) throw new Error("client_token_changed");
   };
+  const withClientWrite = <T>(write: () => T): T => withConfigMutationLockSync(() => { beforeClientWrite(); return write(); });
   let injected = false;
   let homeSettings: HomeCodexSettingsSource | undefined;
   let appliedRecord: HomeCodexSettingsRecord | undefined;
@@ -945,12 +958,15 @@ async function syncConnectedClientUnlocked(
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
     if (isLinkConnection(next)) {
-      homeSettings = await resolveHomeCodexSettings(next, initial.token.token, deps.linkHome);
+      homeSettings = await resolveHomeCodexSettings(next, initial.token.token, { ...deps.linkHome, withWriteGuard: withClientWrite });
       if (homeSettings.source !== "local") config = overlayHomeCodexSettings(config, homeSettings.document.settings);
       // About to write different settings: until their record commits, report no applied digest
       // rather than the previous one (OCX-6). A failed injection then reads "unknown", never a
       // digest of values Codex no longer has or never got.
-      if (homeSettings.source === "home" && next.link) withdrawChangingHomeCodexSettingsRecord(next.link.linkId, homeSettings.document);
+      if (homeSettings.source === "home" && next.link) {
+        const { linkId } = next.link, { document } = homeSettings;
+        withClientWrite(() => withdrawChangingHomeCodexSettingsRecord(linkId, document));
+      }
     }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
@@ -962,23 +978,24 @@ async function syncConnectedClientUnlocked(
       const linkId = next.link.linkId;
       const settings = homeSettings;
       try {
-        appliedRecord = withClientLifecycleSync(() => {
-          beforeClientWrite();
-          return recordHomeCodexSettings(linkId, settings, deps.now) ?? readHomeCodexSettingsRecord(linkId) ?? undefined;
-        }, deps.lifecycleLockDeps);
+        appliedRecord = withClientLifecycleSync(() => withClientWrite(() =>
+          recordHomeCodexSettings(linkId, settings, deps.now) ?? readHomeCodexSettingsRecord(linkId) ?? undefined), deps.lifecycleLockDeps);
       } catch (error) {
         // An ownership change is not a disk problem: report it as itself.
-        if (error instanceof Error && (error.message === "client_token_changed" || error.message === "client_connection_changed")) throw error;
+        if (error instanceof ClientSyncRuntimeError || (error instanceof Error && (error.message === "client_token_changed" || error.message === "client_connection_changed"))) throw error;
         // The injection committed, so the cache refresh below still runs; the caller reports this.
-        try { clearHomeCodexSettingsRecord(); } catch { /* status already reads no recorded apply or reports the write */ }
+        try { withClientWrite(clearHomeCodexSettingsRecord); } catch { /* status already reads no recorded apply or reports the write */ }
         applyRecordFailed = true;
       }
     }
   }
   const cacheSynced = withClientLifecycleSync(() => {
-    beforeClientWrite();
-    // Cache invalidation acquires K itself (N -> K -> C); never call it while C is held.
-    return invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
+    // Acquire K before the guarded C commit; never acquire K from inside C.
+    const owningHome = getCodexHome();
+    const result = withCatalogWriteSerialization(owningHome, permit => withClientWrite(() =>
+      invalidateCodexModelsCacheWithPermit(permit, owningHome, { allowWhenDesiredDisabled: true })),
+    { intent: "cache", writer: "cache-invalidate" });
+    return result.kind === "completed" && result.value;
   }, deps.lifecycleLockDeps);
   return {
     catalogWritten: downloaded !== undefined, cacheSynced, injected, stale,
