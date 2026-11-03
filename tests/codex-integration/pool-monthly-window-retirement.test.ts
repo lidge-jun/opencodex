@@ -130,7 +130,7 @@ describe("pool WHAM monthly-window retirement (#8067)", () => {
   });
 });
 
-describe("main monthly-window retirement keeps denial semantics", () => {
+describe("main observations keep their monthly retention rules", () => {
   const mainIdentity = "monthly-retire-main-fixture";
   const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined,
     captureMainQuotaWriter(mainIdentity), parseMainPolicyUsageQuota(data));
@@ -152,15 +152,15 @@ describe("main monthly-window retirement keeps denial semantics", () => {
     expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "prolite")).toBe(true);
   });
 
-  test("an allowed weekly-only snapshot retires the monthly tuple in both caches", () => {
+  test("an allowed snapshot with a malformed additional window keeps the monthly tuple", () => {
     observeMainQuotaIdentity(mainIdentity);
     publish({ plan_type: "free", rate_limit: { allowed: false, primary_window: monthly(), secondary_window: null } });
-    publish({ plan_type: "prolite", rate_limit: { allowed: true, primary_window: weekly(), secondary_window: null } });
-    for (const quota of caches()) {
-      expect(quota?.weeklyPercent).toBe(0);
-      expect(quota?.monthlyPercent).toBeUndefined();
-      expect(quota).not.toHaveProperty("monthlyWindowAbsent");
-    }
+    const malformed = { plan_type: "prolite", rate_limit: { allowed: true, primary_window: weekly(), secondary_window: null },
+      additional_rate_limits: [{ rate_limit: { primary_window: { used_percent: 101, limit_window_seconds: 604_800 } } }] };
+    expect(parseMainPolicyUsageQuota(malformed)).not.toHaveProperty("monthlyWindowAbsent");
+    publish(malformed);
+    for (const quota of caches()) expect(quota?.monthlyPercent).toBe(100);
+    expect(isCodexQuotaExhausted(getAccountQuota(MAIN), "prolite")).toBe(true);
   });
 });
 

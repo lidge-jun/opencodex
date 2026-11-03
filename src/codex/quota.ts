@@ -976,12 +976,7 @@ export function withWhamShortWindowAbsence(
     && (secondary === null || isMeasuredLongWindow(secondary))
     && (tertiary === null || isMeasuredLongWindow(tertiary)
       || (tertiary === undefined && data.rate_limit?.allowed === true))) {
-    // The same complete topology also proves the account has no monthly window when no
-    // window declares a monthly duration and no supplementary tertiary window is present.
-    // An explicit denial is never evidence that a monthly block ended, on any writer path.
-    const monthlyAbsent = data.rate_limit?.allowed !== false
-      && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null;
-    return { ...quota, shortWindowAbsent: true, ...(monthlyAbsent ? { monthlyWindowAbsent: true as const } : {}) };
+    return { ...quota, shortWindowAbsent: true };
   }
   return quota;
 }
@@ -1002,7 +997,17 @@ export function poolWhamPolicyObservation(
   }
   const malformed = readings.some(window => window?.used_percent != null
     && normalizeUsagePercent(window.used_percent) === undefined);
-  return data.rate_limit?.allowed === false || malformed ? quota : withWhamShortWindowAbsence(data, quota);
+  if (data.rate_limit?.allowed === false || malformed) return quota;
+  const observation = withWhamShortWindowAbsence(data, quota);
+  // #8067: the same complete topology proves a pool account has no monthly window when no window
+  // declares a monthly duration and no tertiary window is present, so a plan change away from a
+  // monthly primary (Free to Pro Lite) retires the carried tuple. Pool-only: main observations
+  // keep their existing retention rules.
+  const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  return observation.shortWindowAbsent === true
+    && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
+    ? { ...observation, monthlyWindowAbsent: true }
+    : observation;
 }
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
