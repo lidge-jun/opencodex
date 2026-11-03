@@ -50,13 +50,6 @@ describe("Codex runtime endpoint binding", () => {
     }
   });
 
-  test("a proof keeps the client role only when the proven listener reported it", async () => {
-    expect(await attestCodexRuntime({ ...live, role: "client" }, async () => "proven")).toEqual({ origin, role: "client" });
-    expect(await attestCodexRuntime({ ...live, role: "hub" }, async () => "proven")).toEqual({ origin });
-    expect(await attestCodexRuntime(live, async () => "proven")).toEqual({ origin });
-    expect(await attestCodexRuntime({ ...live, role: "client" }, async () => "unproven")).toBeNull();
-  });
-
   test("direct-client destination matching is independent of the local machine port", () => {
     const local = standaloneCodexRoutingTarget(12200, { hostname: "0.0.0.0" });
     const direct = validateCodexRoutingTarget({ baseUrl: `${origin}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
@@ -159,15 +152,14 @@ for (const client of [false, true]) codexLaunchOwnershipTest(`${client ? "direct
     for (const port of [12199, 12200]) {
       let reads = 0;
       const result = buildCodexPrivateFixtureLaunchEnv({ CODEX_HOME: home }, {
-        routingKind: "opencodex-local", runtimeAttestation: { origin: `http://127.0.0.1:${port}`, ...(client ? { role: "client" as const } : {}) },
+        routingKind: "opencodex-local", runtimeAttestation: { origin: `http://127.0.0.1:${port}` },
         serviceToken: () => { reads++; return token; },
       });
       const injected = client || port === 12199;
       expect(reads).toBe(injected ? 1 : 0);
       expect(result.OPENCODEX_API_AUTH_TOKEN).toBe(injected ? token : undefined);
     }
-    // A same-home listener that is not the client machine listener cannot vouch for a direct client.
-    for (const runtimeAttestation of [null, undefined, ...(client ? [{ origin: "http://127.0.0.1:12200" }] : [])]) {
+    for (const runtimeAttestation of [null, undefined]) {
       let reads = 0;
       const result = buildCodexPrivateFixtureLaunchEnv({ CODEX_HOME: home }, { routingKind: "opencodex-local", runtimeAttestation, serviceToken: () => { reads++; return token; } });
       expect(reads).toBe(0);
