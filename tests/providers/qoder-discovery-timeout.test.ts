@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  clearQoderDiscoveryFlightsForTests, discoverQoderModels, fetchQoderModels, QODER_DISCOVERY_REUSE_MS,
+  clearQoderDiscoveryFlightsForTests, discoverQoderModels, fetchQoderModels, qoderDiscoveryFlightCountForTests, QODER_DISCOVERY_REUSE_MS,
   QODER_INTERACTIVE_DEADLINE_MS, QODER_MODEL_DISCOVERY_TIMEOUT_MS, setFetchQoderModelsForTests, type QoderModelsResult,
 } from "../../src/adapters/qoder/live-models";
 import { clearQoderBinaryCache, QODER_GLOBAL_PROFILE } from "../../src/adapters/qoder/profiles";
@@ -228,5 +228,18 @@ describe("doctor exposure read past its deadline (#8115)", () => {
     expect(result.status).toBe("exposed");
     expect(result.source).toBe("catalog");
     expect(result.detail).toContain("still gathering its model list after 8 s");
+  });
+});
+
+describe("shared flight retention (#8115)", () => {
+  test("successes under revoked generations or other PATs do not accumulate", async () => {
+    setFetchQoderModelsForTests(async () => ({ ok: true, models: ["M"] }));
+    for (let generation = 0; generation < 5; generation += 1) {
+      await discoverQoderModels(QODER_GLOBAL_PROFILE, "pat-" + generation, "scope\0" + generation);
+    }
+    expect(qoderDiscoveryFlightCountForTests()).toBe(5);
+    // Any later call past the reuse window sweeps every expired success, not only its own key.
+    await discoverQoderModels(QODER_GLOBAL_PROFILE, "fresh", "scope\0new", Date.now() + QODER_DISCOVERY_REUSE_MS + 1);
+    expect(qoderDiscoveryFlightCountForTests()).toBe(1);
   });
 });

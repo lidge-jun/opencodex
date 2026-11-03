@@ -83,7 +83,15 @@ function qoderDiscoveryKey(profile: QoderProfile, apiKey: string, scope: string)
   return `${scope}\0${profile.providerId}\0${createHash("sha256").update(apiKey).digest("hex")}`;
 }
 
+/** Drop every success past the reuse window, so revoked generations and old PATs leave nothing behind. */
+function sweepQoderDiscoveryFlights(now: number): void {
+  for (const [key, flight] of qoderDiscoveryFlights) {
+    if (flight.succeededAt !== undefined && now - flight.succeededAt >= QODER_DISCOVERY_REUSE_MS) qoderDiscoveryFlights.delete(key);
+  }
+}
+
 function joinableFlight(key: string, now: number): QoderDiscoveryFlight | undefined {
+  sweepQoderDiscoveryFlights(now);
   const flight = qoderDiscoveryFlights.get(key);
   if (!flight) return undefined;
   if (flight.succeededAt === undefined || now - flight.succeededAt < QODER_DISCOVERY_REUSE_MS) return flight;
@@ -106,8 +114,15 @@ export function discoverQoderModels(profile: QoderProfile, apiKey: string, scope
   if (existing) return existing.promise;
   const flight: QoderDiscoveryFlight = {
     promise: Promise.resolve().then(() => fetchQoderModels(profile, apiKey)).then(result => {
-      if (result.ok) flight.succeededAt = Date.now();
-      else if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
+      if (result.ok) {
+        flight.succeededAt = Date.now();
+        // A key whose generation was revoked is never looked up again, so the success expires on
+        // its own; the identity check keeps a newer flight under the same key.
+        const expiry = setTimeout(() => {
+          if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
+        }, QODER_DISCOVERY_REUSE_MS);
+        expiry.unref?.();
+      } else if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
       return result;
     }, error => {
       if (qoderDiscoveryFlights.get(key) === flight) qoderDiscoveryFlights.delete(key);
@@ -120,6 +135,10 @@ export function discoverQoderModels(profile: QoderProfile, apiKey: string, scope
 
 export function clearQoderDiscoveryFlightsForTests(): void {
   qoderDiscoveryFlights.clear();
+}
+
+export function qoderDiscoveryFlightCountForTests(): number {
+  return qoderDiscoveryFlights.size;
 }
 
 function execQoder(command: string, args: readonly string[], options: Parameters<QoderExecFn>[2]): Promise<QoderExecResult> {
