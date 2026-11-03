@@ -265,16 +265,16 @@ export interface HeatmapCell {
 
 export interface Heatmap {
   weeks: HeatmapCell[][];
-  months: { label: string; col: number }[];
+  /** Month index (0 = January) per column it starts in; the view formats it for the locale. */
+  months: { month: number; col: number }[];
   buckets: number[];
 }
 
 export function buildHeatmap(days: UsageDay[], customWindow = false): Heatmap {
   const buckets = quantileBuckets(days.map(d => d.totalTokens));
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   if (customWindow) {
     const weeks: HeatmapCell[][] = [];
-    const months: { label: string; col: number }[] = [];
+    const months: { month: number; col: number }[] = [];
     let week: HeatmapCell[] = [];
     let weekStart: number | undefined;
     let previousMonth = -1;
@@ -296,7 +296,7 @@ export function buildHeatmap(days: UsageDay[], customWindow = false): Heatmap {
       }
       const monthIndex = calendar.getUTCMonth();
       if (monthIndex !== previousMonth && weeks.length - lastMonthCol >= 4) {
-        months.push({ label: monthNames[monthIndex], col: weeks.length });
+        months.push({ month: monthIndex, col: weeks.length });
         previousMonth = monthIndex;
         lastMonthCol = weeks.length;
       }
@@ -316,7 +316,7 @@ export function buildHeatmap(days: UsageDay[], customWindow = false): Heatmap {
   start.setDate(start.getDate() - start.getDay());
 
   const weeks: HeatmapCell[][] = [];
-  const months: { label: string; col: number }[] = [];
+  const months: { month: number; col: number }[] = [];
   let lastMonthCol = -4;
   let prevMonthIdx = -1;
   let week: HeatmapCell[] = [];
@@ -326,7 +326,7 @@ export function buildHeatmap(days: UsageDay[], customWindow = false): Heatmap {
     const iso = isoDate(cursor);
     const m = cursor.getMonth();
     if (cursor.getDay() === 0 && m !== prevMonthIdx && weeks.length - lastMonthCol >= 4) {
-      months.push({ label: monthNames[m], col: weeks.length });
+      months.push({ month: m, col: weeks.length });
       lastMonthCol = weeks.length;
       prevMonthIdx = m;
     }

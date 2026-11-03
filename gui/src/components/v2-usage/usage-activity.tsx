@@ -127,6 +127,9 @@ function DayBars({ bars, locale, t }: { bars: UsageDay[]; locale: Locale; t: TFn
   );
 }
 
+/** Short month names in the viewer's language ("Jan", "1월", "janv.", …), not a fixed English list. */
+const monthFormat = (locale: Locale) => new Intl.DateTimeFormat(locale, { month: "short" });
+
 function CalendarHeatmap({ heatmap, locale, t }: { heatmap: Heatmap; locale: Locale; t: TFn }) {
   const heatmapRef = useRef<HTMLDivElement | null>(null);
   const cells = useMemo(() => heatmap.weeks.flat().filter(cell => cell.date), [heatmap]);
@@ -174,7 +177,9 @@ function CalendarHeatmap({ heatmap, locale, t }: { heatmap: Heatmap; locale: Loc
       <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
         <span className="heatmap-day-spacer" />
         {heatmap.months.map(month => (
-          <span key={`${month.label}-${month.col}`} className="heatmap-month" style={{ gridColumn: month.col + 2 }}>{month.label}</span>
+          <span key={`${month.month}-${month.col}`} className="heatmap-month" style={{ gridColumn: month.col + 2 }}>
+            {monthFormat(locale).format(new Date(2000, month.month, 1))}
+          </span>
         ))}
       </div>
       <div className="heatmap-body">
