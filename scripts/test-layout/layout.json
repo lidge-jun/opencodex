@@ -1537,7 +1537,7 @@
     "responses-code-mode-patch-compile.test.ts": "responses",
     "responses-code-mode-shell-compile.test.ts": "responses",
     "responses-compact-handoff-admission.test.ts": "responses",
-    "responses-compaction-override.test.ts": "responses",
+    "responses-compaction-override.test.ts": "responses", "local-checkpoint-routing.test.ts": "responses",
     "responses-compaction-policy-identity.test.ts": "responses",
     "responses-compaction-http-isolation.test.ts": "responses", "responses-compaction-routing.test.ts": "responses",
     "native-compaction-gateway.test.ts": "responses", "native-compaction-gateway-policy.test.ts": "responses", "native-compaction-provenance.test.ts": "responses", "native-compaction-oauth.test.ts": "responses", "native-compaction-gateway-credentials.test.ts": "responses", "responses-compaction.test.ts": "responses",
