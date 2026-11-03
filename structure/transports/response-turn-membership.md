@@ -24,6 +24,9 @@ tool names for output normalization. Responses enforces membership in that catal
 Chat and Messages enforce it when the caller explicitly empties a catalog, while
 omitted and partial catalogs retain deferred delivery. Declarations prepended while
 expanding `previous_response_id` remain history and cannot grant current-turn membership.
+A nameless hosted declaration that translated adapters expose as a function (`tool_search`)
+adds that function name to the snapshot only when the current turn declares it; a replayed
+declaration still grants nothing.
 Delivery intersects current names with the existing selection-filtered bridge names, so
 `tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
 delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
