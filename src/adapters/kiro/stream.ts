@@ -945,7 +945,11 @@ async function* parseKiroAttemptEvents(
       completionCalls,
       nativeCompletionStop,
       ...(structuredOutput ? { structuredOutput: true, structuredRetry } : {}),
-      ...(stopReason !== undefined ? { stopReason } : {}),
+      ...(stopReason !== undefined ? { stopReason: [
+        "END_TURN", "STOP_SEQUENCE", "MAX_TOKENS", "MODEL_CONTEXT_WINDOW_EXCEEDED",
+        "MALFORMED_TOOL_USE", "MALFORMED_MODEL_OUTPUT", "TOOL_USE",
+        "CONTENT_FILTERED", "GUARDRAIL_INTERVENED",
+      ].includes(normalizedStopReason ?? "") ? normalizedStopReason : "other" } : {}),
       assistantChars: assistantText.length,
     });
 

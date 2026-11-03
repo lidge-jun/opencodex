@@ -513,7 +513,8 @@ MiMo model Command Code serves.
   adapter advertises a private output tool whose input schema is the requested schema and returns
   that tool's input as the response text. A plain-text reply that is already the requested JSON is
   accepted as is. Any other reply, including an empty one, gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
-  with an `invalid_kiro_structured_output` error. A caller expecting JSON never receives prose.
+  with an `invalid_kiro_structured_output` error. Prose is not returned as the structured answer;
+  commentary preceding a real client tool call can still stream with that call.
   Without `strict: true` the check covers JSON syntax, the root type and the root's required
   properties. With `strict: true` the whole value is checked exactly against the schema, and a
   strict schema outside this subset is refused before the request is sent:

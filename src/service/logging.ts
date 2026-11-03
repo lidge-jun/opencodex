@@ -30,7 +30,7 @@ function matchesDescriptor(path: string, fd: number, expected: BigIntStats): boo
 }
 
 /** Preserve the manager's open append descriptor; retain at most two bounded archives. */
-export function rotateServiceLog(requestedPath: string, maxBytes = SERVICE_LOG_MAX_BYTES): boolean {
+export function rotateServiceLog(requestedPath: string, maxBytes = SERVICE_LOG_MAX_BYTES, archiveEnabled = true): boolean {
   let source: number | undefined;
   let archive: number | undefined;
   try {
@@ -61,6 +61,11 @@ export function rotateServiceLog(requestedPath: string, maxBytes = SERVICE_LOG_M
     if (!matches("", source, original)) return false;
     const size = Number(fstatSync(source, { bigint: true }).size);
     if (!Number.isSafeInteger(size) || size <= maxBytes) return false;
+    if (!archiveEnabled) {
+      if (!matches("", source, original)) return false;
+      ftruncateSync(source, 0);
+      return true;
+    }
     const previous = regularLeaf(`${path}.1`);
     const oldest = regularLeaf(`${path}.2`);
     if (!matches("", source, original)) return false;
@@ -129,7 +134,7 @@ export function startServiceLogging(
   }
   // Rotation creates the .1/.2 files, so every rotation registers them first. Once recorded this
   // is one stat, and it still sees an uninstall tombstone written after logging started. A thrown
-  // uninstall refusal always skips the rotation. Any other failure (a busy or broken ownership lock)
+  // uninstall refusal truncates only the active inode without creating archives. Any other failure (a busy or broken ownership lock)
   // skips it and retries next tick, but only a few times in a row: a fault that persists must not
   // let the log grow without bound, so rotation then goes ahead unrecorded.
   // A `false` result still rotates: a home without ownership metadata has nothing to register, and
@@ -141,7 +146,10 @@ export function startServiceLogging(
       failedRegistrations = 0;
     } catch (error) {
       // Ownership bookkeeping must not break logging.
-      if (error instanceof ConfigUninstallInProgressError) return;
+      if (error instanceof ConfigUninstallInProgressError) {
+        rotateServiceLog(path, SERVICE_LOG_MAX_BYTES, false);
+        return;
+      }
       failedRegistrations += 1;
       if (failedRegistrations < SERVICE_LOG_MAX_REGISTRATION_SKIPS) return;
     }
