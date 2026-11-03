@@ -1,3 +1,4 @@
+import { carryProxyError } from "../lib/client-error-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   cyberPolicyErrorType,
@@ -36,6 +37,7 @@ import {
 import { replaceSseDataPayload, splitSseBlock, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
 import { clientWireLogOf } from "./inference/client-wire";
+import { knownModelIdentity } from "../lib/model-identity";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
 import { nativeResponseFingerprint } from "./responses/native-response-json";
 import { nativeResponseOutput } from "./responses/native-response-output";
@@ -903,6 +905,7 @@ export function responseWithDeferredRequestLog(
   start: number,
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  inspectionSource?: string,
 ): Response {
   // A synthetic 429 is a transport verdict, not evidence that the provider declined the turn.
   if (isReplayRefusalResponse(response)) {
@@ -932,6 +935,7 @@ export function responseWithDeferredRequestLog(
         && preinspectedJsonResponses.has(response);
       const body = createBoundedResponseLogBody(response.body, {
         json: contentType.includes("application/json"),
+        ...(inspectionSource !== undefined ? { inspectionSource } : {}),
         ...(preinspectedJson ? { maxInspectionBytes: 0 } : {}),
         inspect: preinspectedJson ? () => undefined : text => inspectResponseLogJson(logCtx, text),
         finalize: reason => {
@@ -949,11 +953,11 @@ export function responseWithDeferredRequestLog(
       // Logging re-wraps the response, and an in-process verdict does not survive a re-wrap on
       // its own. A replay refusal that lost it here would read to a later quota recorder or
       // Retry-After synthesizer as a 429 some upstream produced.
-      return carryReplayRefusal(response, new Response(body, {
+      return carryReplayRefusal(response, carryProxyError(response, new Response(body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
-      }));
+      })));
     }
     if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
       logCtx.usageDebugBodyKind = response.body ? "other" : "none";
@@ -1824,13 +1828,28 @@ export function codexSafetyBufferingFilterOptions(
   return { dropCodexSafetyBuffering: config.dropCodexSafetyBuffering === true };
 }
 
-export function sanitizePassthroughHeaders(upstream: Headers, options?: CodexSafetyBufferingFilterOptions): Headers {
+/** Model ids a passthrough route knows, for the relayed model headers. */
+export interface PassthroughHeaderOptions extends CodexSafetyBufferingFilterOptions {
+  knownModels?: readonly string[];
+  provider?: string;
+}
+
+// Upstream-reported model headers: relayed only as a model id the proxy already knows (the route's
+// own ids, the bundled Codex catalog, or the selected provider's catalog), never as upstream bytes.
+const PASSTHROUGH_MODEL_HEADERS: ReadonlySet<string> = new Set(["openai-model", "x-codex-safety-buffering-faster-model"]);
+
+export function sanitizePassthroughHeaders(upstream: Headers, options?: PassthroughHeaderOptions): Headers {
   const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const out = new Headers();
   upstream.forEach((value, key) => {
     const lower = key.toLowerCase();
     if (PASSTHROUGH_DROP_HEADERS.has(lower)) return;
     if (dropSafetyBuffering && CODEX_SAFETY_BUFFERING_HEADER_SET.has(lower)) return;
+    if (PASSTHROUGH_MODEL_HEADERS.has(lower)) {
+      const known = knownModelIdentity(value.trim(), options?.knownModels, options?.provider);
+      if (known) out.set(key, known);
+      return;
+    }
     out.set(key, value);
   });
   return out;

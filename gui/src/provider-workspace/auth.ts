@@ -37,10 +37,11 @@ export function oauthAccountDisplayLabel<T extends OAuthAccountIdentity>(
   accounts: readonly T[],
   account: OAuthAccountIdentity,
   t: TFn,
+  ordinalOnly = false,
 ): string {
-  const alias = account.alias?.trim();
+  const alias = ordinalOnly ? undefined : account.alias?.trim();
   if (alias) return alias;
-  const email = account.email?.trim();
+  const email = ordinalOnly ? undefined : account.email?.trim();
   if (email) return email;
   const index = accounts.findIndex(candidate => candidate.id === account.id);
   return t("pws.accountOrdinal", { count: String(index >= 0 ? index + 1 : 1) });

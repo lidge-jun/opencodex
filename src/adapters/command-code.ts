@@ -1,3 +1,4 @@
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -542,17 +543,13 @@ function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest 
 
 /** The upstream's plan refusal prefix; `MODEL_NOT_IN_PLAN_OTHER` and later mentions do not count. */
 const COMMAND_CODE_PLAN_REFUSAL = /^MODEL_NOT_IN_PLAN(?::|$)/;
-/** A model id the message may quote; anything else is described without repeating it. */
-const DISPLAYABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-
 /**
  * Fixed client copy for a plan refusal. The upstream detail is never quoted: it is free text this
  * proxy does not control, and quota or reasoning-effort words in it would steer the downstream
  * classifiers (quota recording, effort repair) on a refusal that no resend can change.
  */
-function commandCodePlanRefusalMessage(modelId: string | undefined): string {
-  const model = modelId && DISPLAYABLE_MODEL_ID.test(modelId) ? `the model "${modelId}"` : "the requested model";
-  return `Command Code refused ${model}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
+function commandCodePlanRefusalMessage(model: ClientFacingModelLabel): string {
+  return `Command Code refused ${clientFacingModelText(model)}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
     + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.";
 }
 
@@ -584,7 +581,7 @@ async function normalizeCommandCodePlanRefusal(
     headers.set("x-opencodex-upstream-status", "403");
     headers.set("x-opencodex-refusal", MODEL_NOT_IN_PLAN_REFUSAL_MARKER);
     const refusal = new Response(JSON.stringify({ error: {
-      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(modelId),
+      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(clientFacingModelLabel(undefined)),
     } }), { status: 400, statusText: "Bad Request", headers });
     // Identity is the provenance dispatch, combo and policy fallback check; the header is diagnostic.
     markVerifiedModelNotInPlanResponse(refusal);

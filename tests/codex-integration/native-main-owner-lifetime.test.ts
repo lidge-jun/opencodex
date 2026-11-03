@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { Database } from "bun:sqlite";
 import {
   existsSync,
@@ -27,6 +29,34 @@ import { probeNativeProfileRecoveryState } from "../../src/codex/native-profile-
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../../src/codex/native-profile-types";
 import type { OcxConfig } from "../../src/types";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { assertStableLockFile, openStableLockFile } from "../../src/codex/native-main-lock-file";
+
+test("stable lock rejects adjacent large file identities", () => {
+  const scratch = join(repoRoot(), ".tmp", "ino-audit");
+  mkdirSync(scratch, { recursive: true });
+  const root = mkdtempSync(join(scratch, "lock-"));
+  const path = join(root, "lock");
+  const id = 2n ** 53n;
+  const realFstat = fs.fstatSync, realLstat = fs.lstatSync;
+  const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const value = options?.bigint ? realFstat(fd, { bigint: true }) : realFstat(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? id : Number(id) });
+  }) as typeof fs.fstatSync);
+  let replaced = false;
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
+    const ino = replaced ? id + 1n : id;
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+  }) as typeof fs.lstatSync);
+  try {
+    const handle = openStableLockFile(path);
+    try {
+      replaced = true;
+      expect(Number(id)).toBe(Number(id + 1n));
+      expect(() => assertStableLockFile(path, handle)).toThrow("identity changed");
+    } finally { handle.close(); }
+  } finally { fstat.mockRestore(); lstat.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
 
 const roots: string[] = [];
 const previousCodexHome = process.env.CODEX_HOME;
