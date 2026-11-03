@@ -242,6 +242,15 @@ describe("Codex metadata integrity", () => {
     isolateCodexPoolAccountHeaders(headers, accountA.chatgptAccountId);
     expect(headers.get("x-codex-turn-metadata")).toBe(rewritten);
   });
+  test("pooled turn metadata escapes DEL so the header stays a valid field value", () => {
+    const raw = String.raw`{"installation_id":"caller-installation","workspaces":["/tmp/a\u007fb/\ubcd1\u0001"]}`;
+    const headers = headersForCodexAuthContext(new Headers({ "x-codex-turn-metadata": raw }), poolAuthContext);
+    const rewritten = headers.get("x-codex-turn-metadata")!;
+    expect(rewritten).toMatch(/^[\x20-\x7e\t]*$/);
+    expect(JSON.parse(rewritten).workspaces).toEqual(["/tmp/a\u007fb/\ubcd1\u0001"]);
+    expect(JSON.parse(rewritten).installation_id)
+      .toBe(deriveCodexAccountInstallationId(accountA.chatgptAccountId, "caller-installation"));
+  });
   test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
     for (const provider of [
       {

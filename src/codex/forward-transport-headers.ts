@@ -29,8 +29,9 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
 /**
  * Rewrites the `installation_id` inside Codex turn metadata while preserving all other fields.
  *
- * Structure contract: the returned JSON is ASCII-safe — every non-ASCII code unit is
- * escaped as `\\uXXXX`. Both consumers of rewritten turn metadata (the
+ * Structure contract: the returned JSON is printable ASCII — every code unit outside
+ * U+0020–U+007E is escaped as `\\uXXXX` (JSON.stringify already escapes U+0000–U+001F;
+ * U+007F and above are escaped here). Both consumers of rewritten turn metadata (the
  * `x-codex-turn-metadata` HTTP header and the embedded `client_metadata` value)
  * receive this ASCII-safe form, so header setters never see literal Unicode.
  */
@@ -45,9 +46,9 @@ export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAc
   if (typeof record.installation_id !== "string" || !record.installation_id.trim()) return rawMetadata;
   const nextId = deriveCodexAccountInstallationId(chatgptAccountId, record.installation_id);
   if (nextId === record.installation_id) return rawMetadata;
-  // Turn metadata is also sent as an HTTP header, so keep JSON ASCII-safe.
+  // Turn metadata is also sent as an HTTP header; DEL and non-ASCII are invalid field-value bytes.
   return JSON.stringify({ ...record, installation_id: nextId })
-    .replace(/[\u0080-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    .replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountId: string): void {
