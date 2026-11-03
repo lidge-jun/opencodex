@@ -115,36 +115,46 @@ export function mayBecomePatchEnvelope(text: string): boolean {
 }
 
 /** Largest prefix of an exactly opened patch that completion cannot rewrite. */
-export function stableCanonicalPatchPrefix(text: string): string | null {
+export function stableCanonicalPatchPrefix(
+  text: string,
+  boundedTail = text,
+  openingValidated = false,
+): string | null {
   const lfOpening = `${PATCH_BEGIN}\n`;
   const crlfOpening = `${PATCH_BEGIN}\r\n`;
-  if (!text.startsWith(lfOpening) && !text.startsWith(crlfOpening)) {
+  if (!openingValidated && !text.startsWith(lfOpening) && !text.startsWith(crlfOpening)) {
     return lfOpening.startsWith(text) || crlfOpening.startsWith(text) ? "" : null;
   }
 
-  let core = text;
+  let coreLength = text.length;
+  let tail = boundedTail;
   let trailingBreak = "";
-  if (core.endsWith("\r\n")) {
-    core = core.slice(0, -2);
+  if (tail.endsWith("\r\n")) {
+    coreLength -= 2;
+    tail = tail.slice(0, -2);
     trailingBreak = "\r\n";
-  } else if (core.endsWith("\n")) {
-    core = core.slice(0, -1);
+  } else if (tail.endsWith("\n")) {
+    coreLength -= 1;
+    tail = tail.slice(0, -1);
     trailingBreak = "\n";
-  } else if (core.endsWith("\r")) {
+  } else if (tail.endsWith("\r")) {
     // This may become the first byte of a CRLF. It is stable for a canonical
     // closer, but must remain behind a decorated closer that may be rewritten.
-    core = core.slice(0, -1);
+    coreLength -= 1;
+    tail = tail.slice(0, -1);
     trailingBreak = "\r";
   }
-  const lineStart = Math.max(core.lastIndexOf("\n"), core.lastIndexOf("\r")) + 1;
-  const line = core.slice(lineStart);
-  if (!line.startsWith(PATCH_END)) return text;
-
-  const suffix = line.slice(PATCH_END.length);
   const decoration = " ***";
-  if (suffix === "") return core + trailingBreak;
-  if (decoration.startsWith(suffix)) {
-    return core.slice(0, lineStart + PATCH_END.length);
+  // Only a partial terminal decoration can be rewritten at completion. Match its
+  // bounded tail instead of searching the complete accumulated patch on every delta.
+  for (let suffixLength = decoration.length; suffixLength > 0; suffixLength--) {
+    const candidate = PATCH_END + decoration.slice(0, suffixLength);
+    if (!tail.endsWith(candidate)) continue;
+    const lineStart = coreLength - candidate.length;
+    const preceding = tail[tail.length - candidate.length - 1];
+    if (lineStart === 0 || preceding === "\n" || preceding === "\r") {
+      return text.slice(0, lineStart + PATCH_END.length);
+    }
   }
   return text;
 }

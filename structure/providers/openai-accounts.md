@@ -492,7 +492,7 @@ Upstream API-key usage follows the [physical-attempt account attribution contrac
 `codexAccountAutoSwitchThresholds` is persisted per-account routing metadata. Each 0..100 value
 overrides global `autoSwitchThreshold` for that source account; absence inherits global, and 0 disables
 only usage-driven switching from that account. Runtime resolves this effective value for unbound
-selection, quota/reset-first bound-task re-evaluation, fill-first, priority-tier headroom, main-account
+selection, quota/reset-first bound-task re-evaluation, fill-first, [round-robin placement](codex-round-robin-placement.md), priority-tier headroom, main-account
 pin reuse, previews and subagent quota fallback. Failure recovery remains separate. The stable
 `__main__` alias participates, deletion removes an added account's sidecar entry, and malformed maps
 degrade as a unit rather than invalidating config. Zero never disables main-account hard-lock,

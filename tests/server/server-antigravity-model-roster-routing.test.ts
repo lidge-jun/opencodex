@@ -1,14 +1,17 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearModelCache } from "../../src/codex/model-cache";
+import * as oauth from "../../src/oauth";
 import {
   antigravityModelUnlistedMessage,
   antigravitySelectedAccountUnlistedMessage,
   clearGenericFailoverHealth,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount, getAccountCredentialWithStatus, mergeAccountCredential } from "../../src/oauth/store";
+import { createOAuthRefreshIntentLock, getAccountSet, saveCredential, setAccountPaused, setActiveAccount, getAccountCredentialWithStatus, mergeAccountCredential } from "../../src/oauth/store";
 import { clearPoolRotationState } from "../../src/oauth/pool-kernel";
 import { antigravityAccountSupportsModel, clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
 import { handleResponses } from "../../src/server/responses";
@@ -108,6 +111,50 @@ async function turn(cfg: OcxConfig, options: Parameters<typeof handleResponses>[
 
 const bearer = (index: number) => `Bearer synthetic-${["one", "two", "three"][index]}`;
 
+test("an independent request retries a discovery-owned refresh cancelled before dispatch", async () => {
+  const cfg = config(true);
+  const id = ids[1]!;
+  const prior = getAccountCredentialWithStatus(provider, id)!.credential;
+  await mergeAccountCredential(provider, id, { ...prior, expires: Date.now() - 1 });
+  rosters(false, true, false);
+  const guard = await createOAuthRefreshIntentLock(provider, id).acquire();
+  let current = true, joined!: () => void;
+  const atJoin = new Promise<void>(resolve => { joined = resolve; });
+  const discovery = oauth.getValidAccessSnapshotForAccount(provider, id, {
+    requireUsableAccount: true, authorityCurrent: () => current,
+  }).catch(error => error);
+  const originalResolve = oauth.getValidAccessSnapshotForAccount;
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation((...args) => {
+    const result = originalResolve(...args);
+    if (args[1] === id && !args[2]?.authorityCurrent) joined();
+    return result;
+  });
+  let tokenRequests = 0;
+  const projects: unknown[] = [];
+  const fixtureFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.href === "https://oauth2.googleapis.com/token") tokenRequests++;
+    if (url.pathname.endsWith(":generateContent")) projects.push(JSON.parse(String(init?.body)).project);
+    return fixtureFetch(input, init);
+  }) as typeof fetch;
+  const request = turn(cfg);
+  try {
+    await atJoin;
+    expect(tokenRequests).toBe(0);
+    current = false;
+    clearModelCache(provider);
+    expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(false);
+    guard.release();
+    expect(await discovery).toBeInstanceOf(oauth.OAuthTokenRefreshStaleError);
+    expect((await request).status).toBe(200);
+    expect(tokenRequests).toBe(1);
+    expect(sends).toEqual(["Bearer synthetic-refreshed"]);
+    expect(projects).toEqual([prior.projectId]);
+    expect(getAccountCredentialWithStatus(provider, id)!.needsReauth).toBe(false);
+  } finally { guard.release(); await Promise.allSettled([request, discovery]); resolver.mockRestore(); clearModelCache(); }
+});
+
 test("an active account that lists the model, or has no roster yet, is used unchanged", async () => {
   rosters(undefined, true, true);
   expect((await turn(config(true))).status).toBe(200);
@@ -129,7 +176,7 @@ test("every usable account omitting the model refuses locally without an upstrea
   const result = await turn(config(true));
   expect(result.status).toBe(403);
   expect(result.body.error).toMatchObject({
-    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(model),
+    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)),
   });
   expect(sends).toEqual([]);
 });
@@ -139,7 +186,7 @@ test("without failover an omitting selected account is refused, not moved", asyn
   for (const enabled of [undefined, false]) {
     const result = await turn(config(enabled));
     expect(result.status).toBe(403);
-    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(model));
+    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)));
   }
   expect(sends).toEqual([]);
   expect(getAccountSet(provider)!.activeAccountId).toBe(ids[0]);

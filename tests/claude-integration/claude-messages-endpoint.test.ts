@@ -780,7 +780,7 @@ test("native openai-responses Claude route logs cyber terminals as 400 cyber_pol
       errorCode: "cyber_policy",
       terminalStatus: "failed",
       closeReason: "terminal",
-      upstreamError: "blocked",
+      upstreamCondition: "request_rejected",
     });
   } finally {
     await server.stop(true);

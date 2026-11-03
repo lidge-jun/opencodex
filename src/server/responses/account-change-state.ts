@@ -10,7 +10,9 @@
  * The issuer association lives next to thread affinity in `src/codex/routing.ts`.
  */
 
+import { conversationStateAccountId } from "../../codex/request-owned-affinity";
 import type { CodexAuthContext } from "../../codex/auth-context";
+import { CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER, peekConversationStateStoredIssuerAccount } from "../../codex/routing/thread-affinity";
 import {
   peekConversationStateIssuer,
   rememberConversationStateIssuer,
@@ -216,14 +218,20 @@ export function scrubUnportableConversationStateInPlace(body: unknown): boolean 
   return changed;
 }
 
+/** Preserve a Pool context's absent key instead of borrowing the raw request key. */
+export function compactAlternateAffinityKey(authCtx: CodexAuthContext, rawKey: () => string | undefined): string | undefined {
+  return authCtx.kind === "main" ? (authCtx.affinityKey ?? authCtx.conversationStateKey ?? rawKey()) : authCtx.affinityKey ?? authCtx.conversationStateKey;
+}
+
 export function conversationStateBindingFromAuth(
   authCtx: CodexAuthContext,
   fallbackAffinityKey?: string | null,
 ): { accountId: string; bindingKey: string } | null {
-  if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return null;
-  const bindingKey = authCtx.affinityKey ?? fallbackAffinityKey ?? undefined;
-  if (!bindingKey || !authCtx.accountId) return null;
-  return { accountId: authCtx.accountId, bindingKey };
+  const accountId = conversationStateAccountId(authCtx);
+  if (!accountId) return null;
+  const bindingKey = authCtx.affinityKey ?? authCtx.conversationStateKey ?? fallbackAffinityKey ?? undefined;
+  if (!bindingKey) return null;
+  return { accountId, bindingKey };
 }
 
 export function rememberServingConversationStateIssuer(
@@ -232,7 +240,8 @@ export function rememberServingConversationStateIssuer(
 ): void {
   const binding = conversationStateBindingFromAuth(authCtx, fallbackAffinityKey);
   if (!binding) return;
-  rememberConversationStateIssuer(binding.bindingKey, binding.accountId);
+  rememberConversationStateIssuer(binding.bindingKey, binding.accountId, undefined,
+    authCtx.kind === "pool" ? { generation: authCtx.generation, chatgptAccountId: authCtx.chatgptAccountId } : undefined);
 }
 
 export interface ApplyAccountChangeConversationStateScrubArgs {
@@ -314,7 +323,9 @@ export function accountChangeFileReferenceRefusal(
   const { body, bindingKey, servingAccountId, priorAccountId } = args;
   if (!servingAccountId || !bindingKey) return undefined;
   const issuer = peekConversationStateIssuer(bindingKey);
-  const accountChanged = (issuer != null && issuer !== servingAccountId)
+  const accountChanged = (issuer === CODEX_UNKNOWN_CONVERSATION_STATE_ISSUER
+    ? peekConversationStateStoredIssuerAccount(bindingKey) !== servingAccountId
+    : issuer != null && issuer !== servingAccountId)
     || (priorAccountId != null && priorAccountId !== servingAccountId);
   if (!accountChanged) return undefined;
   // Checked against the carriers directly rather than through the portability verdict: that

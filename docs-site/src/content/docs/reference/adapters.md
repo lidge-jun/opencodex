@@ -274,7 +274,8 @@ For Meta Responses at the exact `api.meta.ai` host, OpenCodex omits the unsuppor
 `output.encrypted_content` include requested by Codex Desktop. Meta otherwise rejects the
 request before inference. `reasoning.encrypted_content` and other include entries remain
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
-applies to xAI; unrelated Responses destinations keep their original include list.
+applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
+(`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
