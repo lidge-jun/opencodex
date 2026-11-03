@@ -1,5 +1,6 @@
 {
   "omo-responses-loop.test.ts": "clients",
+  "codex-launcher-endpoint.test.ts": "codex-integration",
   "claude-translated-tool-restrictions.test.ts": "claude-integration",
   "windows-config-root-async-writers.test.ts": "windows",
   "t3code-client-lifecycle.test.ts": "clients",
@@ -151,6 +152,7 @@
   "client-link-connect.test.ts": "clients",
   "client-link-relay.test.ts": "clients",
   "client-link-runtime.test.ts": "clients",
+  "client-link-stop.test.ts": "clients",
   "link-routes.test.ts": "clients",
   "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients",

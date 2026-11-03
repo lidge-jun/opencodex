@@ -10,6 +10,7 @@
   "codex-role-configured-credentials.test.ts": "server",
   "codex-role-capability-consent.test.ts": "routing",
   "codex-role-capability-redirects.test.ts": "routing",
+  "codex-role-capability-pages.test.ts": "routing",
   "codex-role-measured-ties.test.ts": "routing",
   "messaging-remote-port-reservation.test.ts": "codex-integration",
   "messaging-remote-forward-failure.test.ts": "codex-integration",
@@ -42,5 +43,6 @@
   "codex-stored-main-duplicate.test.ts": "codex-integration",
   "codex-account-slot-identity.test.ts": "codex-integration",
   "codex-pool-caller-fallback-policy.test.ts": "codex-integration",
-  "codex-windows-current-sid.test.ts": "codex-integration"
+  "codex-windows-current-sid.test.ts": "codex-integration",
+  "codex-profile-preservation.test.ts": "codex-integration"
 }
