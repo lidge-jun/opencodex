@@ -7,9 +7,33 @@ import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { buildProviderTableBlockForTarget } from "../codex/inject/config-toml";
 import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../codex/inject/routing-target";
 import { readClientConnectionState } from "../client/state";
+import { normalizeBindHostname } from "../server/bind-host";
+import { probeHostname, proveLiveProxyOwnedByHome, type LiveProxy } from "../server/proxy-liveness";
 import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./codex-launch-policy";
 import { codexLaunchHomeIsOwned, codexLaunchProjectAliasIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
 import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
+
+export type CodexRuntimeAttestation = Readonly<{ origin: string }>;
+
+/** Retain the exact dial endpoint that answered the ownership challenge, not just its verdict. */
+export async function attestCodexRuntime(
+  live: LiveProxy,
+  prove: typeof proveLiveProxyOwnedByHome = proveLiveProxyOwnedByHome,
+): Promise<CodexRuntimeAttestation | null> {
+  // Probe the address the listener actually binds: a configured localhost binds 127.0.0.1,
+  // which is also what the standalone Codex target dials.
+  const snapshot = Object.freeze({ ...live, probeHostname: normalizeBindHostname(live.probeHostname ?? live.hostname) });
+  try {
+    const origin = new URL(`http://${probeHostname(snapshot.probeHostname)}:${snapshot.port}`).origin;
+    return await prove(snapshot) === "proven" ? Object.freeze({ origin }) : null;
+  } catch { return null; }
+}
+
+/** IPv4 and IPv6 listeners are distinct recipients, even when their ports are equal. */
+export function codexRuntimeAttestationMatchesTarget(baseUrl: string, proof: CodexRuntimeAttestation | null | undefined): boolean {
+  try { return proof !== null && proof !== undefined && new URL(baseUrl).origin === proof.origin; }
+  catch { return false; }
+}
 
 /** Resolve once; the credential verifier and child must use this exact directory. */
 export function resolveCodexLaunchHome(env: Record<string, string | undefined>): string | null {
@@ -28,7 +52,7 @@ export function resolveCodexLaunchHome(env: Record<string, string | undefined>):
 }
 
 /** Config classification is a startup hint; credentials need an independently bound destination. */
-export function codexCredentialDestinationIsTrusted(home: string, systemNamespaceDirectory?: string, report?: CodexTokenRefusalReporter): boolean {
+export function codexCredentialDestinationIsTrusted(home: string, systemNamespaceDirectory?: string, report?: CodexTokenRefusalReporter, runtimeAttestation?: CodexRuntimeAttestation | null): boolean {
   const refuse = (reason: CodexTokenRefusal): false => { report?.(reason); return false; };
   try {
     if (!codexLaunchHomeIsOwned(home)) return refuse("ownership");
@@ -43,15 +67,20 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
     if (diagnostics.error || diagnostics.source === "fallback") return refuse("installationConfig");
     const cfg = diagnostics.config;
     let target = standaloneCodexRoutingTarget(cfg.port, cfg);
+    // A direct client's proof comes from its own machine listener, never from the hub it
+    // dials, so only a standalone destination can be compared with the proven origin.
+    let destinationIsProvenListener = true;
     if (cfg.runtimeRole === "client") {
       // Direct clients bind to persisted connection state; link clients use an authless relay.
       const connection = readClientConnectionState();
       if (connection.kind !== "connected" || connection.value.transport === "link") return refuse("connection");
       target = validateCodexRoutingTarget({ baseUrl: `${connection.value.serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
+      destinationIsProvenListener = false;
     }
     const url = new URL(target.baseUrl);
     if (!target.requiresAdmissionToken) return refuse("admission");
     if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) return refuse("loopback");
+    if (destinationIsProvenListener && !codexRuntimeAttestationMatchesTarget(target.baseUrl, runtimeAttestation)) return refuse("destination");
     const content = readBoundedCodexConfig(join(home, "config.toml"));
     if (content === null) return refuse("configRead");
     const config = Bun.TOML.parse(content) as Record<string, unknown>;

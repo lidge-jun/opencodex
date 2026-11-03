@@ -65,7 +65,7 @@ Google metadata follows the [destination-scoped replay projection](../providers/
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
-default. Exact xAI Responses destinations, including the US regional API, omit only `output.encrypted_content` from `include`; other entries remain unchanged. Meta at the exact `api.meta.ai` host shares this normalization, as do Azure adapters and resource hosts under .openai.azure.com, including when configured with openai-responses; unrelated destinations retain their include list ([request compatibility](../providers/xai-grok.md#responses-request-compatibility)). API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
+default. Exact xAI Responses destinations, including the US regional API, omit only `output.encrypted_content` from `include`; other entries remain unchanged. Meta at the exact `api.meta.ai` host shares this normalization, as do Azure adapters and resource hosts under .openai.azure.com, including when configured with openai-responses. Kimi Code shares it only at its exact HTTPS Responses endpoint (`https://api.kimi.com/coding/v1/responses`, default port; #8075); unrelated destinations retain their include list ([request compatibility](../providers/xai-grok.md#responses-request-compatibility)). API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
 `devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
@@ -316,9 +316,9 @@ input deltas are tracked separately from client-executed `tool_use` blocks.
 
 Ingress `clientDeclaredEmptyToolCatalog` (`src/server/chat-completions.ts`, `src/server/claude-messages.ts`)
 survives omission during translation. Preparation snapshots declarations after direct decoding, before hosted-tool rewrites.
-Direct Chat with `tools: []` and legacy functions reads their names from the bridge projection;
-empty and omitted catalogs need no extra projection. Explicit `tools: []` or empty `additional_tools`
-activates the restriction; replayed declarations neither activate it nor grant names. Delivery
+Direct decoders expose current function names, including legacy Chat functions, without translating
+the conversation again or duplicating retained reasoning-budget charges. Explicit `tools: []` or empty
+`additional_tools` activates the restriction; replayed declarations neither activate it nor grant names. Delivery
 normalization uses those names; direct custom `exec` helpers use the bridge compiler. Refusals keep `undeclared_tool_call` in buffered envelopes and endpoint
 projections; Messages sees `api_error`, never `overloaded_error`. Caller-forward routes retain their
 exemption; `default.` normalization remains separate.

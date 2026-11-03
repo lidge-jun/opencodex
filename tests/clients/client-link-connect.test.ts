@@ -13,6 +13,8 @@ import { connectClient, routingTarget } from "../../src/client/connect";
 import { readServiceApiTokenState } from "../../src/lib/service-secrets";
 import { isLinkConnection, readClientConnectionState } from "../../src/client/state";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -89,12 +91,23 @@ describe("client link connection contracts", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_HOME = codexHome;
+    // These are enrollment/catalog contracts. ACL enforcement has its own native tests;
+    // real PowerShell/icacls work can consume the five-second semantic test budget.
+    let aclCalls = 0;
+    const aclSuccess = () => { aclCalls += 1; return { success: true, exitCode: 0, timedOut: false, stdout: "" }; };
+    setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+    setIcaclsRunnerForTests(aclSuccess);
+    setAsyncIcaclsRunnerForTests(async () => aclSuccess());
     try {
       const config = getDefaultConfig();
       config.port = 10100;
       saveConfig(config);
       await run(home, codexHome);
+      if (process.platform === "win32") expect(aclCalls).toBeGreaterThan(0);
     } finally {
+      setIcaclsRunnerForTests(null);
+      setAsyncIcaclsRunnerForTests(null);
+      setSyntheticWindowsPrincipalForTests(null);
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

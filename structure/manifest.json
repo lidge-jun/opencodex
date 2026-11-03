@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "config-ownership.md",
+      "tier": 4,
+      "title": "Config Ownership Manifest",
+      "scope": "Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone.",
+      "documents": ["src/lib/config-ownership.ts"]
+    },
+    {
       "path": "config.md",
       "tier": 2,
       "title": "Config Surface",
@@ -812,8 +819,9 @@
       "path": "providers/kiro.md",
       "tier": 4,
       "title": "Kiro Provider",
-      "scope": "Kiro parallel-tool hints, Responses text controls, and reasoning round-trip.",
+      "scope": "Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip.",
       "documents": [
+        "src/adapters/kiro/",
         "src/responses/"
       ]
     },
