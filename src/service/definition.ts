@@ -17,6 +17,22 @@ export function shellQuote(value: string): string {
 }
 
 /**
+ * Assign the resolved service homes AFTER the login shell initializes, with shell-safe quoting.
+ *
+ * launchd and systemd run the service command through `/bin/sh -lc`. A login profile can
+ * export CODEX_HOME/OPENCODEX_HOME after the manager supplied the definition environment, and
+ * the shell assignment that runs last wins. Pinning only `<key>/Environment` therefore cannot
+ * guarantee the proxy sees the home the service install recorded. The command assigns both
+ * homes immediately before `exec`, so a profile export cannot override the pinned values.
+ */
+export function pinnedServiceHomeShellAssignments(
+  codexHome: string,
+  opencodexHome: string,
+): string {
+  return `CODEX_HOME=${shellQuote(codexHome)} OPENCODEX_HOME=${shellQuote(opencodexHome)} export CODEX_HOME OPENCODEX_HOME;`;
+}
+
+/**
  * Listen port baked into service wrappers / WinSW XML.
  * Priority: explicit override → OCX_BAKE_PORT (update restart) → config.port → 10100.
  * `config.port === 0` means ephemeral for interactive start; services need a stable pin,

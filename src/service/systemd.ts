@@ -8,7 +8,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { systemdProperty } from "../service-manager-probe";
 import { writeServiceApiTokenFile, sh } from "./guards";
-import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
+import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
 import type { ServiceInstallCleanupOps } from "./orchestration";
 import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, writeServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
@@ -63,6 +63,9 @@ export function buildUnit(
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", currentCodexHome());
   const codexSqliteHome = systemdEnvironmentAssignment("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", currentOpenCodexHome());
+  // The Environment= lines are a first pin only: ExecStart is /bin/sh -lc, so a login profile
+  // can re-export the homes after systemd supplies them. The command re-assigns both after
+  // profile initialization and before exec, with the same shell quoting the rest of the line uses.
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
     systemdEnvironmentAssignment(SERVICE_MANAGED_ENV, "1"),
@@ -82,7 +85,7 @@ export function buildUnit(
     opencodexHome,
     ...proxyEnv.map(({ name, value }) => systemdEnvironmentAssignment(name, value)),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = `${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
+  const command = `${pinnedServiceHomeShellAssignments(currentCodexHome(), currentOpenCodexHome())} ${launcher ? buildServiceLauncherShellCommand(launcher) : buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
   return `[Unit]
 Description=OpenCodex Proxy Server
 After=network-online.target

@@ -11,7 +11,7 @@ import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type D
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
-import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
+import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
 import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
@@ -43,6 +43,10 @@ export function buildPlist(
   const codexHome = currentCodexHome();
   const codexSqliteHome = currentCodexSqliteHomeAbsolute();
   const opencodexHome = currentOpenCodexHome();
+  // The EnvironmentVariables dict is supplied first, but `/bin/sh -lc` runs a login shell
+  // after launchd injects it. A profile export could otherwise overwrite the pinned homes,
+  // so the command re-assigns both immediately before exec.
+  const pinnedHomes = pinnedServiceHomeShellAssignments(codexHome, opencodexHome);
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
     // OCX_SERVICE alone cannot identify the managed job: `ocx claude` and `ocx opencode`
@@ -59,7 +63,7 @@ export function buildPlist(
     ...proxyEnv.map(({ name, value }) =>
       `    <key>${name}</key><string>${plistString(value)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = launchdServiceCommand(runtime);
+  const command = `${pinnedHomes} ${launchdServiceCommand(runtime)}`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

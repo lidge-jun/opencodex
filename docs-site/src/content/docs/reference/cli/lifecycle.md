@@ -502,9 +502,12 @@ of deleting anything.
 
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
-and pending history migration. The Codex app-home targeting section also detects the narrow Windows
-Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
-diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
+and pending history migration. The **Native main refresh** section reads admission status from the
+running proxy's authenticated native-profile doctor endpoint, so a separately launched `ocx doctor`
+reports the service's `foreign-ownership` or other fence reason; if the proxy cannot be queried it
+reports admission as unavailable. The Codex app-home targeting section also detects the narrow
+Windows Orca runtime-home mismatch and explains service migration when applicable. Paths shown by
+this diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
 
 Project-config diagnostics ignore provider examples inside TOML multiline strings, including
 `developer_instructions`. Real provider and profile settings after the closing delimiter are still
@@ -771,8 +774,9 @@ the service deliberately exits cleanly because the desktop app owns the runtime.
 `ocx service repair` once to apply this behavior to a service installed by an older version.
 
 Definitions installed before this change do not have the resolved `CODEX_HOME` and `OPENCODEX_HOME`
-baked into the service environment. After upgrading, run `ocx service repair` once so service
-restarts keep using the homes resolved at install time. Repair also refreshes old versioned paths;
+pinned for service restarts. After upgrading, run `ocx service repair` once so the generated shell
+reasserts both homes after login-profile initialization and Task Scheduler keeps absolute home paths
+rather than expanding the task's runtime profile variables. Repair also refreshes old versioned paths;
 if the old executable was already deleted, reinstall opencodex before repairing. Linux service
 starts then follow the launcher; macOS repair writes the new package and home paths into the launchd
 definition.

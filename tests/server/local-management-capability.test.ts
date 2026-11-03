@@ -53,6 +53,41 @@ describe("local management read capability", () => {
   const now = 1_800_000_000_000;
   const expiresAt = now + LOCAL_MANAGEMENT_CAPABILITY_TTL_MS;
 
+  test("allowlists the native-profile doctor read used for startup admission diagnostics", () => {
+    const capability = createLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor,
+      pid,
+      port,
+      expiresAt,
+    );
+    expect(capability).toHaveLength(43);
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(true);
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      `${LOCAL_MANAGEMENT_READ_PATHS.nativeProfileDoctor}?unexpected=1`,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(false);
+  });
+
   test("binds one allowlisted GET to its nonce, path, PID, and port", () => {
     const capability = createLocalManagementReadCapability(
       secret,

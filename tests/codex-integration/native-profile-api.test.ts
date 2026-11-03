@@ -44,6 +44,29 @@ describe("native main profile management API", () => {
     }
   });
 
+  test("the doctor owner-guard 503 still reports the startup gate", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    const context = { homeId: "home-owner-busy", codexHome: "\\\\server\\share" };
+    // Model a live server whose owner lease is unavailable on an unsupported filesystem.
+    // The real `assertNativeMainOwner` then throws its own 503 BEFORE doctor() runs, and the
+    // endpoint must preserve that error plus its admission fields.
+    const { retainNativeMainOwner } = await import("../../src/codex/native-main-owner");
+    const owner = retainNativeMainOwner(context as never, { retryMs: 10, platform: "win32" });
+    const manager = { context, doctor: async () => { throw new Error("doctor must not run under a busy owner"); } } as unknown as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/doctor");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(503);
+      const body = await response?.json() as Record<string, unknown>;
+      expect(body?.code).toBe("NATIVE_MAIN_OWNER_UNAVAILABLE");
+      expect(body?.admissionStatus).toBe("blocked");
+      expect(body?.admissionBlockReason).toBe("foreign-ownership");
+    } finally {
+      await owner.release();
+      await fence.release();
+    }
+  });
+
   test("long Direct/non-main work does not block switch while new main selection is fenced", async () => {
     const longPoolTurn = tryAdmitTurn();
     expect(longPoolTurn).not.toBeNull();

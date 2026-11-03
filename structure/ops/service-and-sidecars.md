@@ -179,8 +179,7 @@ records the same single resolution in the service definition and service state. 
 construction (`buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
 fallback, keeping diagnostics and tests independent of the host PATH. Launchd always uses the
 package-local Bun and CLI pair selected by the trusted install or repair invocation; it never hands
-credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
-older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
+credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an older install is reported stale so `ocx service repair` re-bakes trusted package paths. Launchd and systemd repeat shell-quoted resolved homes after login-profile initialization; Task Scheduler embeds absolute homes instead of runtime profile-variable references; WinSW uses the canonical default-home resolver so `~/.codex` junctions match service state.
 
 Service launchers reject recorded and newly discovered paths inside shell-local `fnm`, `nvm`,
 `mise`, `asdf`, or `volta` multishell directories. Systemd, launchd, Windows Task Scheduler,

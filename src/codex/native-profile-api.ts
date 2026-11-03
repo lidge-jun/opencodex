@@ -74,6 +74,13 @@ async function withMainRequestDrain<T>(deps: NativeProfileApiDeps, operation: ()
   }
 }
 
+function admissionFields(): { admissionStatus: "ready" | "blocked"; admissionBlockReason?: string } {
+  const gate = nativeMainStartupGateSnapshot();
+  return gate.status === "blocked"
+    ? { admissionStatus: gate.status, admissionBlockReason: gate.reason }
+    : { admissionStatus: gate.status };
+}
+
 async function withRecoveryGateTransition<T>(
   manager: NativeProfileManager,
   deps: NativeProfileApiDeps,
@@ -147,13 +154,20 @@ export async function handleNativeProfileAPI(
       return jsonResponse(await manager.list(), 200, req, config);
     }
     if (url.pathname === "/api/native-main-profiles/doctor" && req.method === "GET") {
-      const doc = await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" });
-      const gate = nativeMainStartupGateSnapshot();
-      return jsonResponse({
-        ...doc,
-        admissionStatus: gate.status,
-        ...(gate.status === "blocked" ? { admissionBlockReason: gate.reason } : {}),
-      }, 200, req, config);
+      try {
+        const doc = await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" });
+        return jsonResponse({ ...doc, ...admissionFields() }, 200, req, config);
+      } catch (error) {
+        if (!(error instanceof NativeProfileError)) throw error;
+        return jsonResponse({
+          error: error.message,
+          code: error.code,
+          retryable: error.retryable,
+          ...(error.cleanupRequired === true ? { cleanupRequired: true } : {}),
+          ...(typeof error.plaintextMayRemain === "boolean" ? { plaintextMayRemain: error.plaintextMayRemain } : {}),
+          ...admissionFields(),
+        }, error.status, req, config);
+      }
     }
     if (url.pathname === "/api/native-main-profiles/register" && req.method === "POST") {
       const input = await body(req);

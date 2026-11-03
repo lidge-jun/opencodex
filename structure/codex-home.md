@@ -119,8 +119,8 @@ restore a different home. A recorded spelling that still resolves to the same ph
 a junction or symlink alias — counts as the same home for the ownership check, the recorded SQLite
 home, and the unattended ownership preflight. Access or transient I/O errors are unknown rather
 than foreign in preflight; distinct spellings with missing/non-directory paths remain mismatches.
-Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`.
-An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly. Generated launchd, systemd, Task Scheduler and WinSW definitions pin the resolved `CODEX_HOME` and `OPENCODEX_HOME`, including their defaults, so a service restart does not inherit a different home from its login environment. Repair an older registration after upgrading to refresh those values.
+Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`. `ocx doctor` reads native-main admission from the running proxy's authenticated `/api/native-main-profiles/doctor` response, not from the separately launched doctor's process-local startup gate; an unavailable live read is reported as unavailable.
+An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly. Generated launchd, systemd, Task Scheduler and WinSW definitions pin the resolved `CODEX_HOME` and `OPENCODEX_HOME`, including their defaults. Launchd and systemd repeat both shell-quoted values after login-profile initialization; the Task Scheduler wrapper writes the absolute values without runtime profile-variable indirection. WinSW uses the same canonical default-home resolver as install state, including when `~/.codex` is a junction. Repair an older registration after upgrading to refresh those values.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 

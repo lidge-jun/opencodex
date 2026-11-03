@@ -16,9 +16,9 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
+import { resolveCodexHomeDir } from "../codex/home";
 import { recordOwnedConfigPath } from "./config-ownership";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime, type DurableBunRuntime } from "./bun-runtime";
 import type { BunRuntimeSource } from "./bun-runtime";
@@ -61,7 +61,7 @@ function xmlEscape(value: string): string {
 
 function currentCodexHomeAbsolute(env: NodeJS.ProcessEnv = process.env): string {
   const raw = env.CODEX_HOME?.trim();
-  return raw ? windowsServicePathAbsolute(raw) : win32.join(homedir(), ".codex");
+  return raw ? windowsServicePathAbsolute(raw) : resolveCodexHomeDir({ env });
 }
 
 function windowsServicePathAbsolute(raw: string): string {
