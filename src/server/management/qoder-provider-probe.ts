@@ -1,6 +1,6 @@
 import { discoverQoderModels, QODER_INTERACTIVE_DEADLINE_MS } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
-import { captureModelCacheGeneration, clearModelCache, isModelCacheGenerationCurrent } from "../../codex/model-cache";
+import { captureModelCacheGeneration, isModelCacheGenerationCurrent } from "../../codex/model-cache";
 import { clearGatherRoutedModelsInflight } from "../../codex/catalog/routed-gather";
 import type { OcxProviderConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
@@ -22,10 +22,11 @@ function retryable(disposition: unknown): boolean {
 }
 
 /**
- * Publish a late roster. Each attempt first drops in-flight aggregate gathers, as a provider reload
- * does: one that started before the eviction may already have read the old roster for this
- * provider and would hand it to the convergence that joins it. A busy or stale convergence is
- * retried; an invalidated cache generation ends the attempts.
+ * Publish a late roster. The finished run is not stored yet, so the convergence gather prefers it
+ * over the cached roster, which stays as the fallback if publication never happens. Each attempt
+ * first drops in-flight aggregate gathers, as a provider reload does: one that started before the
+ * run finished may already hold the old roster and would hand it to the convergence that joins it.
+ * A busy or stale convergence is retried; an invalidated cache generation ends the attempts.
  */
 async function resyncAfterLateSuccess(
   name: string,
@@ -38,7 +39,6 @@ async function resyncAfterLateSuccess(
     if (delay > 0) await sleep(delay);
     if (!isModelCacheGenerationCurrent(name, generation)) return;
     (deps.clearGatherInflight ?? clearGatherRoutedModelsInflight)();
-    clearModelCache(name, "eviction");
     let disposition: unknown;
     try { disposition = await converge(); } catch { continue; }
     if (!retryable(disposition)) return;
@@ -52,9 +52,8 @@ async function resyncAfterLateSuccess(
  * `qoder --list-models` can take longer than this interactive test should wait, so the test joins
  * the shared background discovery (the same run the catalog gather uses, with its longer bound)
  * and waits only its own short deadline. Past it, the provider is reported as still discovering
- * rather than failed. A later success evicts the provider's cached roster (keeping its generation,
- * so the finished run stays joinable) and runs `converge`, the management catalog convergence,
- * whose gather reads that run and publishes the models without a restart (see
+ * rather than failed. A later success runs `converge`, the management catalog convergence, whose
+ * gather reads that run ahead of the cached roster and publishes the models without a restart (see
  * {@link resyncAfterLateSuccess}). Nothing happens when the cache was invalidated meanwhile: the run
  * belongs to the previous generation.
  */

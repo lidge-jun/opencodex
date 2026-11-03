@@ -316,3 +316,31 @@ describe("late re-sync publication (#8115)", () => {
     expect(attempts).toBe(0);
   });
 });
+
+describe("late result publication keeps the retained roster (#8115)", () => {
+  test("a re-sync that never publishes leaves the previous roster as the fallback", async () => {
+    setFetchQoderModelsForTests(async () => ({ ok: true, models: ["Old-Model"] }));
+    expect((await fetchProviderModels(NAME, provider, 60_000)).map(model => model.id)).toEqual(["Old-Model"]);
+    clearQoderDiscoveryFlightsForTests();
+    setFetchQoderModelsForTests(async () => { await Bun.sleep(40); return { ok: true, models: ["Account-Model"] }; });
+    let attempts = 0;
+    await probeQoderProvider(NAME, provider, "pat", async () => { attempts += 1; return { status: "failed", retryable: false }; }, { deadlineMs: 5 });
+    const until = Date.now() + 5_000;
+    while (attempts === 0 && Date.now() < until) await Bun.sleep(5);
+    expect(attempts).toBe(1);
+    // The unpublished run expires; a later discovery fails and degrades to the retained roster.
+    clearQoderDiscoveryFlightsForTests();
+    setFetchQoderModelsForTests(async () => ({ ok: false, error: "timeout" }));
+    expect((await fetchProviderModels(NAME, provider, 0)).map(model => model.id)).toEqual(["Old-Model"]);
+  });
+
+  test("once a gather stores the run, later gathers use the cache again", async () => {
+    let runs = 0;
+    setFetchQoderModelsForTests(async () => { runs += 1; return { ok: true, models: ["Account-Model"] }; });
+    await fetchProviderModels(NAME, provider, 60_000);
+    const revision = (await import("../../src/codex/model-cache")).observeModelCacheRevision(NAME);
+    await fetchProviderModels(NAME, provider, 60_000);
+    expect((await import("../../src/codex/model-cache")).observeModelCacheRevision(NAME)).toBe(revision);
+    expect(runs).toBe(1);
+  });
+});

@@ -70,7 +70,13 @@ export const QODER_INTERACTIVE_DEADLINE_MS = 8_000;
  */
 export const QODER_DISCOVERY_REUSE_MS = 60_000;
 
-type QoderDiscoveryFlight = { promise: Promise<QoderModelsResult>; succeededAt?: number };
+type QoderDiscoveryFlight = {
+  promise: Promise<QoderModelsResult>;
+  succeededAt?: number;
+  result?: QoderModelsResult;
+  /** Set once a catalog gather stored this result; until then it outranks a fresh cached roster. */
+  committed?: true;
+};
 const qoderDiscoveryFlights = new Map<string, QoderDiscoveryFlight>();
 
 /**
@@ -105,6 +111,22 @@ export function qoderDiscoveryJoinable(profile: QoderProfile, apiKey: string, sc
 }
 
 /**
+ * A successful run no gather has stored yet: one an interactive caller started and stopped waiting
+ * for. The gather uses it ahead of a fresh cached roster, which stays in place (and keeps serving
+ * as the stale fallback) until this result is accepted.
+ */
+export function uncommittedQoderDiscovery(profile: QoderProfile, apiKey: string, scope: string, now = Date.now()): QoderModelsResult | undefined {
+  const flight = joinableFlight(qoderDiscoveryKey(profile, apiKey, scope), now);
+  return flight?.succeededAt !== undefined && !flight.committed ? flight.result : undefined;
+}
+
+/** Record that a gather stored this scope's successful run. */
+export function markQoderDiscoveryCommitted(profile: QoderProfile, apiKey: string, scope: string): void {
+  const flight = qoderDiscoveryFlights.get(qoderDiscoveryKey(profile, apiKey, scope));
+  if (flight?.succeededAt !== undefined) flight.committed = true;
+}
+
+/**
  * One `--list-models` run per PAT, shared by the background catalog gather and interactive callers.
  * A failed run is forgotten when it settles; a successful one stays joinable for the reuse window.
  */
@@ -116,6 +138,7 @@ export function discoverQoderModels(profile: QoderProfile, apiKey: string, scope
     promise: Promise.resolve().then(() => fetchQoderModels(profile, apiKey)).then(result => {
       if (result.ok) {
         flight.succeededAt = Date.now();
+        flight.result = result;
         // A key whose generation was revoked is never looked up again, so the success expires on
         // its own; the identity check keeps a newer flight under the same key.
         const expiry = setTimeout(() => {
