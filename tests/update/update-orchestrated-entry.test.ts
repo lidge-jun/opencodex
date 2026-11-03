@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { assertNotRealHomeUnderTest } from "../../src/lib/test-home-guard";
-import { encodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
+import { encodeOrchestratedExpect, issueOrchestratedResultCapability } from "../../src/update/orchestrated-session.mjs";
 import { createUpdatePlanToken } from "../../src/update/orchestrated-token.mjs";
 import { inspectUpdateMarker, inspectUpdateSyncMutex, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex.mjs";
 import { isUpdateInFlight } from "../../src/update/sync-update-mutex";
@@ -75,7 +75,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     const executable = Bun.which("node"); if (!executable) throw new Error("Node required");
     const node = spawnSync(executable, ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
     if (!node || !node.startsWith("/")) throw new Error("Node executable is not an absolute path");
-    writeFileSync(join(path, "npm"), `#!${node}\nconst fs=require('node:fs'), p=require('node:path'), a=process.argv.slice(2);\nfs.appendFileSync(process.env.OCX_FIXTURE_LOG,JSON.stringify({args:a,outcome:JSON.parse(fs.readFileSync(process.env.OCX_FIXTURE_RESULT))})+'\\n');\nif(a[0]==='config') console.log(process.env.OCX_FIXTURE_CACHE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':(process.env.OCX_FIXTURE_MOVED==='1' && a.some(x=>x.endsWith('@2.1.0'))?'2.2.0':'2.1.0'));\nelse if(a[0]==='install'){const s=a[a.indexOf('--prefix')+1],d=p.join(s,'lib/node_modules/@bitkyc08/opencodex');fs.cpSync(process.env.OCX_FIXTURE_PKG,d,{recursive:true});const m=JSON.parse(fs.readFileSync(p.join(d,'package.json')));m.version='2.1.0';fs.writeFileSync(p.join(d,'package.json'),JSON.stringify(m));if(process.env.OCX_FIXTURE_ROLLBACK==='1'){const l=p.join(d,'bin/ocx.mjs'),t=p.join(s,'temporary-launcher');fs.copyFileSync(l,t);fs.unlinkSync(l);fs.symlinkSync(p.relative(p.dirname(l),t),l);}}\nelse process.exit(90);\n`);
+    writeFileSync(join(path, "npm"), `#!${node}\nconst fs=require('node:fs'), p=require('node:path'), a=process.argv.slice(2);\nfs.appendFileSync(process.env.OCX_FIXTURE_LOG,JSON.stringify({args:a,capability:process.env.OCX_UPDATE_RESULT_CAPABILITY??null,outcome:JSON.parse(fs.readFileSync(process.env.OCX_FIXTURE_RESULT))})+'\\n');\nif(a[0]==='config') console.log(process.env.OCX_FIXTURE_CACHE);\nelse if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':(process.env.OCX_FIXTURE_MOVED==='1' && a.some(x=>x.endsWith('@2.1.0'))?'2.2.0':'2.1.0'));\nelse if(a[0]==='install'){const s=a[a.indexOf('--prefix')+1],d=p.join(s,'lib/node_modules/@bitkyc08/opencodex');fs.cpSync(process.env.OCX_FIXTURE_PKG,d,{recursive:true});const m=JSON.parse(fs.readFileSync(p.join(d,'package.json')));m.version='2.1.0';fs.writeFileSync(p.join(d,'package.json'),JSON.stringify(m));if(process.env.OCX_FIXTURE_ROLLBACK==='1'){const l=p.join(d,'bin/ocx.mjs'),t=p.join(s,'temporary-launcher');fs.copyFileSync(l,t);fs.unlinkSync(l);fs.symlinkSync(p.relative(p.dirname(l),t),l);}}\nelse process.exit(90);\n`);
     chmodSync(join(path, "npm"), 0o755);
     const npmScript = join(path, "npm"), npmSource = readFileSync(npmScript, "utf8");
     const npmTimed = npmSource.replace("const s=a[a.indexOf('--prefix')+1]", "if(process.env.OCX_FIXTURE_TIMEOUT==='1'){const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(process.env.OCX_FIXTURE_DESCENDANT,String(c.pid));setInterval(()=>{},1000);return;}const s=a[a.indexOf('--prefix')+1]");
@@ -100,12 +100,15 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
       const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken });
       const args = [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result];
       if (deadline) args.push("--not-after", String(deadline));
-      return spawnSync(node, args, { cwd: root, env: { ...env, OCX_FIXTURE_ROLLBACK: rollback ? "1" : "0" }, encoding: "utf8", timeout: 30000 });
+      rmSync(result, { force: true });
+      const { capability } = issueOrchestratedResultCapability(result);
+      return spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: capability, OCX_FIXTURE_ROLLBACK: rollback ? "1" : "0" }, encoding: "utf8", timeout: 30000 });
     };
     const encoded = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: token });
     const descendant = join(root, "installer-descendant");
+    const { capability } = issueOrchestratedResultCapability(result);
     const timeout = spawnSync(node, [launcher, "update", "--version", "2.1.0", "--orchestrated-expect", encoded, "--orchestrated-result", result], {
-      cwd: root, env: { ...env, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
+      cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: capability, OCX_FIXTURE_TIMEOUT: "1", OCX_FIXTURE_DESCENDANT: descendant }, encoding: "utf8", timeout: 30000,
     });
     expect({ status: timeout.status, stderr: timeout.stderr }).toMatchObject({ status: 1 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "failed", terminationConfirmed: false });
@@ -144,6 +147,8 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
     const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    // The child takes the result capability out of its environment before any probe or installer runs.
+    expect(calls.length).toBeGreaterThan(0); expect(calls.filter(call => call.capability !== null)).toEqual([]);
     expect(calls.find(call => call.args[0] === "view").outcome.phase).toBe("preflight");
     expect(calls.some(call => call.args[0] === "view" && call.args.includes("dist.integrity") && call.args.includes("@bitkyc08/opencodex@2.1.0"))).toBe(true);
     expect(calls.find(call => call.args[0] === "install").outcome.phase).toBe("mutating");
@@ -177,6 +182,7 @@ if (process.env.OCX_FIXTURE_OVERRUN === '1' && process.argv.includes('--yes')) {
     expect(JSON.parse(parentApplied.stdout)).toMatchObject({ applied: true, toVersion: "2.1.0" });
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8")).toContain("@bitkyc08/opencodex@preview");
+    expect(readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.capability !== null)).toEqual([]);
     expireFixtureFence(home);
     const resetVersion = () => {
       const m = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); m.version = "2.0.0";
@@ -237,12 +243,15 @@ test.skipIf(process.platform === "win32")("pnpm child reports unchanged active t
     const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", OPENCODEX_BUN_PATH: process.execPath,
       PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_RESULT: result };
-    const failed = spawnSync(node, args, { cwd: root, env: { ...env, OCX_FIXTURE_FAIL: "1" }, encoding: "utf8", timeout: 30000 });
+    const firstCapability = issueOrchestratedResultCapability(result).capability;
+    const failed = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: firstCapability, OCX_FIXTURE_FAIL: "1" }, encoding: "utf8", timeout: 30000 });
     expect({ status: failed.status, stdout: failed.stdout, stderr: failed.stderr }).toMatchObject({ status: 1 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "failed", rollbackPerformed: false });
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.0.0");
     expireFixtureFence(home);
-    const updated = spawnSync(node, args, { cwd: root, env, encoding: "utf8", timeout: 30000 });
+    rmSync(result, { force: true });
+    const nextCapability = issueOrchestratedResultCapability(result).capability;
+    const updated = spawnSync(node, args, { cwd: root, env: { ...env, OCX_UPDATE_RESULT_CAPABILITY: nextCapability }, encoding: "utf8", timeout: 30000 });
     expect({ status: updated.status, stdout: updated.stdout, stderr: updated.stderr }).toMatchObject({ status: 0 });
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "installed", activeRoot: pkg });
     expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).fenceUntil).toBeUndefined();
@@ -311,7 +320,7 @@ test.skipIf(process.platform === "win32")("identity probe is passive through bot
 }, 40000);
 
 test.skipIf(process.platform === "win32")("authorized npm launcher child writes a preflight outcome before package checks", () => {
-  const root = mkdtempSync(join(tmpdir(), "ocx-node-child-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-node-child-")));
   const home = join(root, "home"), pkg = join(root, "node_modules/@bitkyc08/opencodex");
   const result = join(root, "result.json");
   try {
@@ -321,10 +330,11 @@ test.skipIf(process.platform === "win32")("authorized npm launcher child writes 
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@bitkyc08/opencodex", version: "2.0.0", type: "module" }));
     const node = Bun.spawnSync(["node", "-p", "process.execPath"], { stdout: "pipe" }).stdout.toString().trim();
     const expected = encodeOrchestratedExpect({ home, cliRoot: pkg, servingRoot: null, runtimePid: null, planToken: "a".repeat(43) });
+    const { capability } = issueOrchestratedResultCapability(result);
     const child = spawnSync(node, [join(pkg, "bin/ocx.mjs"), "update", "--version", "2.1.0", "--orchestrated-expect", expected, "--orchestrated-result", result], {
       cwd: root, encoding: "utf8", timeout: 30000,
       env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
-        OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", PATH: root },
+        OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: capability, PATH: root },
     });
     expect(child.status).not.toBe(64);
     expect(JSON.parse(readFileSync(result, "utf8"))).toMatchObject({ phase: "preflight" });
@@ -332,16 +342,18 @@ test.skipIf(process.platform === "win32")("authorized npm launcher child writes 
 }, 35000);
 
 test("authorized child reaches Bun update preflight while internal flags without authorization are rejected", async () => {
-  const root = mkdtempSync(join(tmpdir(), "ocx-child-entry-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-child-entry-")));
   const home = join(root, "home"), codex = join(root, "codex"), result = join(root, "result.json");
   mkdirSync(home); mkdirSync(codex); assertNotRealHomeUnderTest(home);
   const expectValue = encodeOrchestratedExpect({ home, cliRoot: repoPath(), servingRoot: null, runtimePid: null, planToken: "a".repeat(43) });
   const args = ["update", "--version", "99.0.0", "--orchestrated-expect", expectValue, "--orchestrated-result", result];
-  const run = async (authorized: boolean) => {
-    const proc = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), ...args], { cwd: root, stdout: "pipe", stderr: "pipe",
+  const run = async (authorized: boolean, launcher: "bun" | "node" = "bun") => {
+    const capability = authorized ? issueOrchestratedResultCapability(result).capability : undefined;
+    const entry = launcher === "bun" ? [process.execPath, repoPath("src/cli/index.ts")] : [Bun.which("node")!, repoPath("bin/ocx.mjs")];
+    const proc = Bun.spawn([...entry, ...args], { cwd: root, stdout: "pipe", stderr: "pipe",
       env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
         OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(),
-        OCX_UPDATE_ORCHESTRATED_CHILD: authorized ? "1" : "0" } });
+        OCX_UPDATE_ORCHESTRATED_CHILD: authorized ? "1" : "0", OCX_UPDATE_RESULT_CAPABILITY: capability } });
     return { stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text(), code: await proc.exited };
   };
   try {
@@ -350,12 +362,16 @@ test("authorized child reaches Bun update preflight while internal flags without
     const child = await run(true);
     expect(child.code).toBe(1);
     expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
+    // Through the Node launcher, the source checkout hands the same child to the Bun CLI with its capability.
+    rmSync(result);
+    await run(true, "node");
+    expect(JSON.parse(readFileSync(result, "utf8"))).toEqual({ phase: "preflight" });
     expect(JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8")).phase).toBe("failed");
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30000);
 
 test.skipIf(process.platform === "win32")("Bun-global apply runs the real child with the plan's exact target", async () => {
-  const root = mkdtempSync(join(tmpdir(), "ocx-bun-global-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-bun-global-")));
   const home = join(root, "home"), ocxHome = join(home, ".opencodex"), path = join(root, "path");
   const pkg = join(home, ".bun/install/global/node_modules/@bitkyc08/opencodex"), log = join(root, "commands");
   mkdirSync(pkg, { recursive: true }); mkdirSync(ocxHome, { recursive: true }); mkdirSync(path);
@@ -365,9 +381,9 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
   const manifest = JSON.parse(readFileSync(repoPath("package.json"), "utf8")); manifest.version = "2.0.0";
   writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
   symlinkSync(repoPath("node_modules"), join(pkg, "node_modules"));
-  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\ncase "$*" in *dist.integrity*) printf 'sha512-YWJj\\n';; *) if [ -e "$OCX_FIXTURE_PKG/tag-queried" ]; then printf '2.2.0\\n'; else : > "$OCX_FIXTURE_PKG/tag-queried"; printf '2.1.0\\n'; fi;; esac\n`);
+  writeFileSync(join(path, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nprintf 'CAP=%s\\n' "\${OCX_UPDATE_RESULT_CAPABILITY:-none}" >> "$OCX_FIXTURE_LOG"\ncase "$*" in *dist.integrity*) printf 'sha512-YWJj\\n';; *) if [ -e "$OCX_FIXTURE_PKG/tag-queried" ]; then printf '2.2.0\\n'; else : > "$OCX_FIXTURE_PKG/tag-queried"; printf '2.1.0\\n'; fi;; esac\n`);
   chmodSync(join(path, "npm"), 0o755);
-  writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs"),root=process.env.OCX_FIXTURE_PKG;fs.writeFileSync(root+"/installer-ready","");const end=Date.now()+10000;const t=setInterval(()=>{if(!fs.existsSync(root+"/installer-release") && Date.now()<end)return;clearInterval(t);const p=root+"/package.json",m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));},10);'\n`);
+  writeFileSync(join(path, "bun"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$OCX_FIXTURE_LOG"\nprintf 'CAP=%s\\n' "\${OCX_UPDATE_RESULT_CAPABILITY:-none}" >> "$OCX_FIXTURE_LOG"\nexec '${process.execPath}' -e 'const fs=require("node:fs"),root=process.env.OCX_FIXTURE_PKG;fs.writeFileSync(root+"/installer-ready","");const end=Date.now()+10000;const t=setInterval(()=>{if(!fs.existsSync(root+"/installer-release") && Date.now()<end)return;clearInterval(t);const p=root+"/package.json",m=JSON.parse(fs.readFileSync(p,"utf8"));m.version="2.1.0";fs.writeFileSync(p,JSON.stringify(m));},10);'\n`);
   chmodSync(join(path, "bun"), 0o755);
   const proc = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--yes", "--json", "--tag", "preview"], {
     cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
@@ -393,6 +409,9 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir() }, true);
     expect(readFileSync(log, "utf8")).toContain("add -g @bitkyc08/opencodex@2.1.0");
     expect(readFileSync(log, "utf8").match(/@preview version/g)).toHaveLength(1);
+    const noCapability = () => { const seen = readFileSync(log, "utf8").split("\n").filter(line => line.startsWith("CAP="));
+      expect(seen.length).toBeGreaterThan(0); expect(seen.filter(line => line !== "CAP=none")).toEqual([]); };
+    noCapability();
     expect(JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version).toBe("2.1.0");
     expireFixtureFence(ocxHome);
     const reset = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); reset.version = "2.0.0";
@@ -414,20 +433,22 @@ test.skipIf(process.platform === "win32")("Bun-global apply runs the real child 
     expect(JSON.parse(readFileSync(join(ocxHome, "update-orchestrated.json"), "utf8")).phase).toBe("installed");
     expireFixtureFence(ocxHome);
     writeFileSync(join(pkg, "package.json"), JSON.stringify(reset));
-    const childResult = join(root, "bun-worker-result.json"), cliRoot = realpathSync.native(pkg), childHome = ocxHome;
+    const childResult = join(root, "result.json"), cliRoot = realpathSync.native(pkg), childHome = ocxHome;
     const planToken = createUpdatePlanToken({ currentVersion: "2.0.0", targetVersion: "2.1.0", installer: "bun", cliRoot,
       servingRoot: null, runtimeOwner: "none", runtime: null });
     const childExpect = encodeOrchestratedExpect({ home: childHome, cliRoot, servingRoot: null, runtimePid: null, planToken });
+    const { capability } = issueOrchestratedResultCapability(childResult);
     const worker = Bun.spawn([process.execPath, join(pkg, "src/cli/index.ts"), "update", "--version", "2.1.0",
       "--orchestrated-expect", childExpect, "--orchestrated-result", childResult], {
       cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome,
         CODEX_HOME: join(home, ".codex"), CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${path}:/usr/bin:/bin`,
-        OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(),
+        OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: capability, OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(),
         OCX_FIXTURE_LOG: log, OCX_FIXTURE_PKG: pkg },
     });
     const [, workerError, workerCode] = await Promise.all([new Response(worker.stdout).text(), new Response(worker.stderr).text(), worker.exited]);
     expect({ code: workerCode, stderr: workerError }).toMatchObject({ code: 1 });
     expect(JSON.parse(readFileSync(childResult, "utf8"))).toMatchObject({ phase: "installed", activeRoot: cliRoot, recoveryFailed: true, error: "runtime-unhealthy" });
+    noCapability();
   } finally {
     if (proc.exitCode === null) {
       writeFileSync(join(pkg, "installer-release"), "release");

@@ -1,19 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { repoPath } from "../helpers/repo-root";
 import { inspectUpdateMarker, isUpdateInFlight, tryAcquireUpdateSyncMutex } from "../../src/update/sync-update-mutex";
-import { createOrchestratedChildSession, encodeOrchestratedExpect, decodeOrchestratedExpect } from "../../src/update/orchestrated-session.mjs";
+import { createOrchestratedChildSession, createOrchestratedResultChannel, encodeOrchestratedExpect, decodeOrchestratedExpect, issueOrchestratedResultCapability } from "../../src/update/orchestrated-session.mjs";
+import { classifyOrchestratedOutcome } from "../../src/update/orchestrated-outcome.mjs";
 import { runOwnedPnpm } from "../../src/update/index";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+// The result destination must be a canonical owner-only path holding a freshly issued capability file.
 function fixture() {
-  const home = mkdtempSync(join(tmpdir(), "ocx-session-")); roots.push(home);
-  return { home, resultPath: join(home, "result.json"), expect: { home, cliRoot: join(home, "cli"), servingRoot: null, runtimePid: null, planToken: "a".repeat(43) } };
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-"))); roots.push(home);
+  const resultPath = join(home, "result.json"), { capability: resultCapability } = issueOrchestratedResultCapability(resultPath);
+  return { home, resultPath, resultCapability, expect: { home, cliRoot: join(home, "cli"), servingRoot: null, runtimePid: null, planToken: "a".repeat(43) } };
 }
 function read(path: string) { return JSON.parse(readFileSync(path, "utf8")); }
 
@@ -165,9 +168,90 @@ test("a confirmed untracked installer releases its fence only after finalization
 
 test("preflight must be writable before proceeding", () => {
   const f = fixture();
-  const session = createOrchestratedChildSession({ ...f, resultPath: join(f.home, "missing", "result"), verifyIdentity: () => true });
-  expect(() => session.start()).toThrow();
+  rmSync(f.resultPath);
+  expect(() => createOrchestratedChildSession({ ...f, verifyIdentity: () => true })).toThrow("invalid orchestrated result destination");
   expect(isUpdateInFlight(f.home)).toBe(false);
+  expect(existsSync(f.resultPath)).toBe(false);
+});
+
+test("a result destination is accepted only when it is exactly an issued capability file", () => {
+  const f = fixture(), other = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-other-"))); roots.push(other);
+  const create = (resultPath: string, resultCapability = f.resultCapability) =>
+    () => createOrchestratedChildSession({ ...f, resultPath, resultCapability, verifyIdentity: () => true });
+  const refused = (path: string, resultCapability?: string) => {
+    const before = readFileSync(path);
+    expect(create(path, resultCapability)).toThrow("invalid orchestrated result destination");
+    expect(readFileSync(path).equals(before)).toBe(true);
+  };
+  const victim = join(other, "result.json"); writeFileSync(victim, "user data\n", { mode: 0o600 });
+  refused(victim);
+  const named = join(f.home, "notes.txt"); writeFileSync(named, readFileSync(f.resultPath), { mode: 0o600 });
+  refused(named);
+  const padded = join(mkdtempSync(join(other, "padded-")), "result.json");
+  writeFileSync(padded, readFileSync(f.resultPath, "utf8") + " ", { mode: 0o600 });
+  refused(padded);
+  const large = join(mkdtempSync(join(other, "large-")), "result.json");
+  writeFileSync(large, readFileSync(f.resultPath, "utf8").padEnd(4 * 1024 * 1024, " "), { mode: 0o600 });
+  refused(large);
+  refused(f.resultPath, "b".repeat(43));
+  for (const resultCapability of [undefined, "", "short", "!".repeat(43)]) {
+    expect(() => createOrchestratedChildSession({ ...f, resultCapability: resultCapability as string, verifyIdentity: () => true })).toThrow("invalid orchestrated result destination");
+  }
+  expect(create(join(f.home, "missing", "result.json"))).toThrow("invalid orchestrated result destination");
+  const linked = join(mkdtempSync(join(other, "linked-")), "result.json"); linkSync(f.resultPath, linked);
+  refused(linked); refused(f.resultPath);
+  rmSync(linked);
+  if (process.platform !== "win32") {
+    const fileLink = join(mkdtempSync(join(other, "file-link-")), "result.json"); symlinkSync(f.resultPath, fileLink);
+    refused(fileLink);
+    const directoryLink = join(other, "directory-link"); symlinkSync(f.home, directoryLink);
+    refused(join(directoryLink, "result.json"));
+    chmodSync(f.resultPath, 0o644); refused(f.resultPath); chmodSync(f.resultPath, 0o600);
+    chmodSync(f.home, 0o755); refused(f.resultPath); chmodSync(f.home, 0o700);
+  }
+  // The rule binds content, not location: a caller-authored capability file elsewhere is the only other writable target.
+  const crafted = join(mkdtempSync(join(other, "crafted-")), "result.json"), issued = issueOrchestratedResultCapability(crafted);
+  const session = createOrchestratedChildSession({ ...f, resultPath: crafted, resultCapability: issued.capability, verifyIdentity: () => true });
+  expect(session.start()).toEqual({ ok: true });
+  expect(read(crafted)).toEqual({ phase: "preflight" });
+  expect(readFileSync(victim, "utf8")).toBe("user data\n");
+  session.finishPreflight();
+});
+
+test.skipIf(process.platform === "win32")("writes follow the validated file, not a path swapped in afterwards", () => {
+  const f = fixture(), moved = join(f.home, "moved.json");
+  const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
+  renameSync(f.resultPath, moved); writeFileSync(f.resultPath, "decoy", { mode: 0o600 });
+  expect(session.start()).toEqual({ ok: true });
+  expect(readFileSync(f.resultPath, "utf8")).toBe("decoy");
+  expect(read(moved)).toEqual({ phase: "preflight" });
+  session.finishPreflight();
+});
+
+test("the parent reads only its recorded result and removes only what it created", () => {
+  const channel = createOrchestratedResultChannel(); roots.push(channel.directory);
+  const outcome = (text: string) => { writeFileSync(channel.resultPath, text); return channel.read(); };
+  expect(channel.read()).toBeNull();
+  const record = JSON.stringify({ phase: "installed", activeRoot: channel.directory });
+  for (const interrupted of ["", record.slice(0, -1), record.slice(0, 12)]) {
+    expect(outcome(interrupted)).toBeNull();
+    expect(classifyOrchestratedOutcome({ fromVersion: "1.0.0", toVersion: "1.0.1", installer: "npm", childExited: true, childExitCode: 0,
+      outcome: channel.read(), previousVerified: true, targetVerified: true, runtimeHealthy: true, restarted: false }).exitCode).toBe(12);
+  }
+  expect(outcome(record)).toEqual({ phase: "installed", activeRoot: channel.directory });
+  expect(outcome(JSON.stringify({ phase: "installed", activeRoot: channel.directory, pad: "x".repeat(70_000) }))).toBeNull();
+  const moved = join(channel.directory, "moved.json");
+  renameSync(channel.resultPath, moved); writeFileSync(channel.resultPath, record, { mode: 0o600 });
+  expect(channel.read()).toBeNull();
+  channel.dispose();
+  expect(readFileSync(channel.resultPath, "utf8")).toBe(record);
+  expect(readdirSync(channel.directory).sort()).toEqual(["moved.json", "result.json"]);
+  rmSync(channel.resultPath); rmSync(moved);
+  const clean = createOrchestratedResultChannel();
+  clean.dispose();
+  // Windows never removes by path; POSIX removes only under a non-replaceable ancestor chain.
+  expect(existsSync(clean.directory)).toBe(process.platform === "win32");
+  if (process.platform === "win32") rmSync(clean.directory, { recursive: true, force: true });
 });
 
 test("sync holder refuses without writing an orchestrated marker", async () => {
@@ -287,6 +371,79 @@ test.skipIf(process.platform === "win32")("Bun worker retains its mutex through 
     expect(isUpdateInFlight(f.home)).toBe(false);
   } finally { writeFileSync(release, "release"); if (worker.exitCode === null) { worker.kill("SIGKILL"); await worker.exited; } }
 }, 20000);
+
+test.each(["bun", "node"] as const)("a %s child publishes through the channel a parent created under a non-default temp root", runtime => {
+  const node = Bun.which("node");
+  if (runtime === "node" && !node) return;
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-temp-"))); roots.push(base);
+  const real = join(base, "real"); mkdirSync(real, { mode: 0o700 });
+  const tempRoot = process.platform === "win32" ? real : join(base, "linked");
+  if (tempRoot !== real) symlinkSync(real, tempRoot);
+  const home = join(base, "home"); mkdirSync(home, { mode: 0o700 });
+  const session = pathToFileURL(repoPath("src/update/orchestrated-session.mjs")).href;
+  const args = pathToFileURL(repoPath("src/update/orchestrated-arguments.mjs")).href;
+  const child = `const { createOrchestratedChildSession } = await import(${JSON.stringify(session)});
+    const { parseOrchestratedChildArgs } = await import(${JSON.stringify(args)});
+    const parsed = parseOrchestratedChildArgs(process.argv.slice(process.argv.indexOf("--version")), process.env); if (!parsed.ok) process.exit(64);
+    const s = createOrchestratedChildSession({ home: ${JSON.stringify(home)}, resultPath: parsed.resultPath, resultCapability: parsed.resultCapability, verifyIdentity: () => true });
+    if (!s.start().ok || !(await s.enterMutation()).ok) process.exit(2);
+    s.finish({ phase: "installed", activeRoot: ${JSON.stringify(home)} });`;
+  const childArgv = [...(runtime === "node" ? ["--input-type=module"] : []), "-e", child, "--",
+    "--version", "2.1.0", "--orchestrated-expect", "fixture", "--orchestrated-result"];
+  const parent = `const { createOrchestratedResultChannel } = await import(${JSON.stringify(session)});
+    const { spawnSync } = await import("node:child_process");
+    const channel = createOrchestratedResultChannel();
+    const run = spawnSync(${JSON.stringify(runtime === "node" ? node : process.execPath)}, [...${JSON.stringify(childArgv)}, channel.resultPath],
+      { env: { ...process.env, OCX_UPDATE_ORCHESTRATED_CHILD: "1", OCX_UPDATE_RESULT_CAPABILITY: channel.capability }, encoding: "utf8" });
+    const outcome = channel.read(); channel.dispose();
+    console.log(JSON.stringify({ status: run.status, stderr: run.stderr, outcome, directory: channel.directory }));`;
+  const result = spawnSync(process.execPath, ["-e", parent], { env: { ...process.env, TMPDIR: tempRoot, TEMP: tempRoot, TMP: tempRoot }, encoding: "utf8", timeout: 30000 });
+  expect(result.stderr).toBe("");
+  const report = JSON.parse(result.stdout);
+  expect(report).toMatchObject({ status: 0, stderr: "", outcome: { phase: "installed", activeRoot: home } });
+  expect(report.directory.startsWith(realpathSync.native(real))).toBe(true);
+  expect(existsSync(report.directory)).toBe(process.platform === "win32");
+}, 30000);
+
+test("dispose leaves the channel in place when an ancestor could be replaced or the platform is Windows", () => {
+  const previous = process.env.TMPDIR;
+  const shared = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-shared-"))); roots.push(shared);
+  try {
+    if (process.platform !== "win32") {
+      chmodSync(shared, 0o777);
+      process.env.TMPDIR = shared;
+      const exposed = createOrchestratedResultChannel();
+      process.env.TMPDIR = previous;
+      expect(exposed.directory.startsWith(shared)).toBe(true);
+      exposed.dispose();
+      expect(existsSync(exposed.resultPath)).toBe(true);
+      expect(existsSync(exposed.directory)).toBe(true);
+    }
+    const channel = createOrchestratedResultChannel(); roots.push(channel.directory);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try { channel.dispose(); } finally { Object.defineProperty(process, "platform", platform); }
+    expect(existsSync(channel.resultPath)).toBe(true);
+  } finally { if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous; }
+});
+
+test.each(["bun", "node"] as const)("a %s child refuses a destination reached through a directory link", runtime => {
+  const node = Bun.which("node");
+  if (runtime === "node" && !node) return;
+  const f = fixture(), base = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-session-link-"))); roots.push(base);
+  const link = join(base, "linked");
+  symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  const before = readFileSync(f.resultPath);
+  const session = pathToFileURL(repoPath("src/update/orchestrated-session.mjs")).href;
+  const script = `const { createOrchestratedChildSession } = await import(${JSON.stringify(session)});
+    try { createOrchestratedChildSession({ home: ${JSON.stringify(f.home)}, resultPath: ${JSON.stringify(join(link, "result.json"))},
+      resultCapability: ${JSON.stringify(f.resultCapability)}, verifyIdentity: () => true }); console.log("accepted"); }
+    catch (error) { console.log(error.message); }`;
+  const argv = runtime === "node" ? [node!, "--input-type=module", "-e", script] : [process.execPath, "-e", script];
+  const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 30000 });
+  expect({ stdout: result.stdout.trim(), stderr: result.stderr }).toEqual({ stdout: "invalid orchestrated result destination", stderr: "" });
+  expect(readFileSync(f.resultPath).equals(before)).toBe(true);
+}, 30000);
 
 // The compiled CLI bundles this library and gives every module the same entry URL, so the
 // library itself must never act as an entry point (a top-level main once failed every packaged start).
