@@ -150,6 +150,7 @@
   "file-identity-callers.test.ts": "lib",
   "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
+    "subscription-reserve.test.ts": "claude-integration",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
   "messages-revoked-token.test.ts": "claude-integration",
   "anthropic-revoked-token-continuation.test.ts": "adapters/anthropic",

@@ -35,6 +35,7 @@ import { AnthropicRequestError, callerCacheRetention, DesktopModelMappingUnavail
 import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
+import { classifyTraffic, decideReserve, observeWeeklyHeaders } from "../claude/subscription-reserve";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
@@ -384,6 +385,7 @@ async function anthropicNativePassthrough(
   const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
+  observeWeeklyHeaders(upstream.headers);
   const rateLimitHeaders = {
     ...anthropicRateLimitHeaders(upstream.headers),
     ...(pathname === "/v1/messages" ? upstreamMessagesRequestIdHeaders(upstream.headers) : {}),
@@ -682,6 +684,18 @@ async function handleClaudeMessagesWithBudget(
         effortOverride = effortRow.effort;
       }
       if (fastRow) anthropicBody.model = fastRow.baseId;
+    }
+    // Weekly-reserve downgrade (src/claude/subscription-reserve.ts): once the subscription's weekly
+    // window passes the configured threshold, background traffic for a genuine Claude model is routed
+    // to the downgrade target. `requestedModel` keeps the original, so the request log shows
+    // requested -> served. Interactive traffic and every non-Claude model are untouched.
+    if (isRec(anthropicBody) && typeof anthropicBody.model === "string" && /^(claude|anthropic)/i.test(anthropicBody.model)
+      && resolveInboundModel(anthropicBody.model, cc) === anthropicBody.model) {
+      const reserve = decideReserve(classifyTraffic(req.headers, anthropicBody));
+      if (reserve.action === "downgrade" && reserve.target) {
+        console.warn(`[route] requested=${anthropicBody.model} served=${reserve.target} fallback=yes reason="${reserve.reason}"`);
+        anthropicBody.model = reserve.target;
+      }
     }
     // Debug capture (opt-in allowlist scalars) BEFORE the passthrough branch so
     // native, routed, and disabled-alias paths are all observable (devlog 130 B1).
