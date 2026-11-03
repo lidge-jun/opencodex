@@ -1392,8 +1392,8 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // chunk])` per chunk — O(n²) over a long stream because every chunk copies
   // every buffered byte again. Now we keep a queue of arriving chunks with a
   // running offset; we only `Buffer.concat` when a frame straddles a chunk
-  // boundary, and we slice/drop fully-consumed chunks immediately. For
-  // typical 50-200KB responses this is ~5x faster and produces zero waste.
+  // boundary. A drain clears the queue or removes its consumed prefix once,
+  // instead of shifting the array separately for every consumed chunk.
   const chunkQueue: Buffer[] = [];
   let queuedBytes = 0;
   // Bun + Node ReadableStream readers diverge on the type-level shape
@@ -1430,16 +1430,25 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   /** Drop the first `n` bytes from the chunk queue. */
   function drop(n: number): void {
     queuedBytes -= n;
+    if (queuedBytes === 0) {
+      chunkQueue.length = 0;
+      return;
+    }
     let remaining = n;
-    while (remaining > 0 && chunkQueue.length > 0) {
-      const head = chunkQueue[0];
+    let consumed = 0;
+    while (remaining > 0 && consumed < chunkQueue.length) {
+      const head = chunkQueue[consumed];
       if (head.length <= remaining) {
-        chunkQueue.shift();
+        consumed++;
         remaining -= head.length;
       } else {
-        chunkQueue[0] = head.slice(remaining);
+        chunkQueue[consumed] = head.slice(remaining);
         remaining = 0;
       }
+    }
+    if (consumed > 0) {
+      chunkQueue.copyWithin(0, consumed);
+      chunkQueue.length -= consumed;
     }
   }
 

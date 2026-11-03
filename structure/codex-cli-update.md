@@ -423,7 +423,7 @@ and a newly enabled flag without admission refuses retryably before spawning.
 The injection releases admission after config commit or rollback, including config-lock acquisition
 failure, before its history worker starts. The feature transition retains the shared artifact preimage.
 Codex feature-setting callers acquire admission before their synchronous
-transition; management keeps the lease across config-root hardening, then rechecks its mode plan and
+transition; management also holds it across single-feature command preparation, config-lock waits and child execution, and across config-root hardening, then rechecks its mode plan and
 commits in the existing no-await callback. Refusal precedes combined setting writes and returns a
 retryable `codex_cli_selection_busy` response. Diagnostics classify a held async parent by its exact
 buffer and owner, so it cannot appear as a retained Worker. Portable gate/caller regressions and
