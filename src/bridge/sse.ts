@@ -24,7 +24,7 @@ import {
   mayBecomePatchEnvelope,
   repairFreeformToolInput,
 } from "../responses/apply-patch-envelope";
-import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
+import { ProgressiveFreeformInputReader } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary, releaseCompactionCiphertextLease } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
@@ -480,7 +480,7 @@ export function bridgeToResponsesSSE(
       // Full assistant text of a compaction turn (across message boundaries) — becomes the
       // synthetic compaction item's payload on done.
       let compaction = emptyChunks();
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string; codeModeHelperName?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; argsBytes: number; namespace?: string; freeform?: boolean; toolSearch?: boolean; inputEmitted?: string; freeformReader?: ProgressiveFreeformInputReader; codeModeHelperName?: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
       // Open native web-search cell (between begin and end). Holds the output index allocated on
       // begin so the matching done reuses it; closed as `failed` if the stream terminates early.
       let currentWebSearch: { itemId: string; eventId: string; outputIndex: number } | null = null;
@@ -1157,7 +1157,9 @@ export function bridgeToResponsesSSE(
                   // is the same disagreement in the other direction.
                   const ownsFreeformGrammar = currentToolCall.namespace === undefined
                     || currentToolCall.namespace === "functions";
-                  const full = progressiveFreeformInput(
+                  // One reader per call resumes where the previous delta stopped.
+                  currentToolCall.freeformReader ??= new ProgressiveFreeformInputReader();
+                  const full = currentToolCall.freeformReader.update(
                     currentToolCall.args,
                     ownsFreeformGrammar ? currentToolCall.name : "",
                   );

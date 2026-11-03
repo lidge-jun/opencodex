@@ -152,7 +152,7 @@ literal opening. `JSON.parse` decides the completed input, and it cares about ne
 order nor how a name is spelled, so a canonical key arriving after other properties or written
 with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
 follows is: an own string `input` streams progressively (completion prefers it to any other
-member) unless its executable body could still be a nested wrapper. A non-string `input`, a text
+member) unless its executable body could still be a nested wrapper (a nested non-string `input` holds only while a later string duplicate can follow). A non-string `input`, a text
 that is not an object, and an object `JSON.parse` can no longer accept all publish their own
 bytes, because that is what completion returns for them; every other object HOLDS until it closes,
 because a key that has not arrived yet can still change the answer. Fallback fields decide at that
