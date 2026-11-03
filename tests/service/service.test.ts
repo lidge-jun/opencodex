@@ -73,7 +73,6 @@ async function readText(path: string): Promise<string> {
 function windowsBatchValue(value: string): string {
   return value
     .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
     .replace(/"/g, "")
     .replace(/[\r\n]/g, "");
 }
@@ -1216,7 +1215,7 @@ describe("Windows service task", () => {
       cli: "C:\\OpenCodex&Dir\\cli.ts",
     });
 
-    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
+    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^\\bun.exe"');
     expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
     expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start --port');
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
@@ -1495,7 +1494,7 @@ describe("launchd service plist", () => {
       service.indexOf("export function restartLaunchdJob"),
     );
     expect(installLaunchd).not.toContain("stableLauncherEntry");
-    expect(installLaunchd).toContain("buildPlist(resolvedProxyEnv())");
+    expect(installLaunchd).toContain("buildPlist(resolvedProxyEnv(), { homes })");
     expect(installLaunchd).toContain('writeServiceInstallState("scheduler")');
   });
 

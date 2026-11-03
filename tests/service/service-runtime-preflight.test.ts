@@ -18,7 +18,7 @@ import { repoPath } from "../helpers/repo-root";
 
 const runtime: DurableBunRuntime = { path: process.execPath, source: "override", overrideEnv: "OPENCODEX_BUN_PATH" };
 /** The service script writes a profile-located Bun as a %LOCALAPPDATA%/%USERPROFILE% token with batch escaping. */
-const bunLine = () => `set "OCX_BUN=${windowsEnvIndirectBatchValue(runtime.path, v => v.replace(/%/g, "%%").replace(/\^/g, "^^").replace(/"/g, ""))}"`;
+const bunLine = () => `set "OCX_BUN=${windowsEnvIndirectBatchValue(runtime.path, v => v.replace(/%/g, "%%").replace(/"/g, ""))}"`;
 const roots: string[] = [];
 const envKeys = ["OPENCODEX_HOME", "CODEX_HOME", BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV] as const;
 const originalEnv = envKeys.map(key => process.env[key]);

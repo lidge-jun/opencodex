@@ -26,12 +26,29 @@ export function systemdListenPort(deps: { readUnit?: () => string } = {}): numbe
   }
 }
 
+/**
+ * Quote one word for a systemd unit setting. systemd unquotes double-quoted words with C-style
+ * escapes (systemd.syntax), so backslash, double quote and line breaks are escaped, and it
+ * resolves `%` specifiers in every setting used here, so a literal `%` becomes `%%`.
+ */
 function systemdQuote(value: string): string {
   return `"${value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, "\\\"")
     .replace(/%/g, "%%")
-    .replace(/\n/g, "\\n")}"`;
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")}"`;
+}
+
+/**
+ * Quote one ExecStart= word. On top of {@link systemdQuote}, ExecStart= expands `$NAME` and
+ * `${NAME}` from the unit environment before the program runs (systemd.service, "Command
+ * lines"), so a literal `$` must be written `$$`. Environment= does not expand variables,
+ * which is why this escape stays out of the shared quoting.
+ */
+function systemdExecQuote(value: string): string {
+  return systemdQuote(value).replace(/\$/g, "$$$$");
 }
 
 function systemdEnvironmentAssignment(name: string, value: string | undefined): string | null {
@@ -97,7 +114,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${systemdQuote("/bin/sh")} -lc ${systemdQuote(command)}
+ExecStart=${systemdExecQuote("/bin/sh")} -lc ${systemdExecQuote(command)}
 Restart=on-failure
 RestartSec=5
 ${envLines}

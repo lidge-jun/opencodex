@@ -11,10 +11,17 @@ import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_P
 import { resolveServiceListenPort, resolvedProxyEnv } from "./definition";
 import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute, currentWindowsServiceCodexHome, currentOpenCodexHome } from "./state";
 
+/**
+ * Escape a value for the quoted `set "NAME=value"` form every wrapper assignment uses.
+ * Inside the quotes cmd treats `^`, `&`, `|`, `<`, `>` and parentheses as literal, so a
+ * caret must stay single: doubling it would point the variable at a different path. Percent
+ * expansion still runs in a batch file, so `%` becomes `%%`. `!` is literal because the
+ * wrapper runs under DisableDelayedExpansion. A quote or line break cannot be represented
+ * and is dropped.
+ */
 function windowsBatchValue(value: string): string {
   return value
     .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
     .replace(/"/g, "")
     .replace(/[\r\n]/g, "");
 }
