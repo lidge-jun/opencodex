@@ -130,7 +130,7 @@ import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
-import { admissionModelDeniedResponse, type AdmissionModelScope } from "./admission-model-scope";
+import { admissionModelDeniedResponse, projectAdmissionModelDeniedLog, type AdmissionModelScope } from "./admission-model-scope";
 import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
 import { retainUpstreamMessagesRequestId } from "./messages-response-headers";
 
@@ -395,6 +395,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
 
   const toolScopeDenial = nativeMessagesToolScopeDenial(options.modelScope, route.providerName, requestedModel, body);
   if (toolScopeDenial) {
+    projectAdmissionModelDeniedLog(toolScopeDenial, logCtx);
     finishLog(403, toolScopeDenial.message);
     return admissionModelDeniedResponse(toolScopeDenial);
   }
@@ -1005,7 +1006,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const undeclaredTool = clientDeclaredEmptyToolCatalog ? nativeMessagesClientToolName(message, declaredInlineTools) : undefined;
   if (undeclaredTool !== undefined) {
     logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
-    return fail(502, undeclaredToolCallMessage(undeclaredTool), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
+    return fail(502, undeclaredToolCallMessage(), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
   if (logIds) recordFirstOutput(logCtx, logIds.start);

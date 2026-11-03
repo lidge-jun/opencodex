@@ -18,10 +18,16 @@ export function powershellArgv(script: string): string[] {
 export const WINDOWS_CONTAINMENT_EXIT = 126;
 
 const SCRIPT_PACKED_PREFIX = "$ocxPacked='";
-function packedPowerShellArgv(script: string): string[] {
+/**
+ * The whole script travels deflated and is inflated on the Child before anything in it exists,
+ * including Fail. A session that cannot inflate it (Constrained Language Mode blocks the stream
+ * types) must still exit 126, so only the inflate is guarded: Invoke-Expression stays outside the
+ * try, and the inflated script's own errors and exit status are never relabelled as containment.
+ */
+export function packedPowerShellArgv(script: string): string[] {
   const bytes = deflateRawSync(Buffer.from(script, "utf8"), { level: 9 });
   const packed = Array.from(bytes, byte => String.fromCharCode(byte + 256)).join("");
-  return powershellArgv(`${SCRIPT_PACKED_PREFIX}${packed}'\n` + String.raw`$b=[byte[]]@($ocxPacked.ToCharArray()|%{[int]$_-256});$r=[IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new($b),[IO.Compression.CompressionMode]::Decompress));Invoke-Expression ($r.ReadToEnd())`);
+  return powershellArgv(`${SCRIPT_PACKED_PREFIX}${packed}'\n` + String.raw`$ErrorActionPreference='Stop';try{$b=[byte[]]@($ocxPacked.ToCharArray()|%{[int]$_-256});$r=[IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new($b),[IO.Compression.CompressionMode]::Decompress));$s=$r.ReadToEnd()}catch{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit ${WINDOWS_CONTAINMENT_EXIT}};Invoke-Expression $s`);
 }
 function unpackPowerShell(script: string): string {
   const match = /\$ocxPacked='([^']+)'/.exec(script);
@@ -86,8 +92,8 @@ export const OCX_JOB_SOURCE = [
 ].join("\n");
 
 /**
- * The helper travels deflated so the whole command fits cmd.exe's line; PowerShell inflates it and
- * hands the text to Add-Type. It is never evaluated as PowerShell.
+ * The helper reaches Add-Type as a quoted literal inside the packed script; it is never evaluated
+ * as PowerShell.
  */
 const NATIVE_PROCESS = String.raw`$ErrorActionPreference='Stop'
 function Fail{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit 126}

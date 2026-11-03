@@ -247,5 +247,7 @@ describe("raw exec patch envelope recognition", () => {
       .toBe("*** Begin Patch\nbody\n*** End Patch");
     expect(stableCanonicalPatchPrefix("*** Begin Patch\nbody\n*** End Patch ***\ninterior"))
       .toBe("*** Begin Patch\nbody\n*** End Patch ***\ninterior");
+    const longLfOnlyLine = `*** Begin Patch\n${"x".repeat(200_000)}`;
+    expect(stableCanonicalPatchPrefix(longLfOnlyLine)).toBe(longLfOnlyLine);
   });
 });
