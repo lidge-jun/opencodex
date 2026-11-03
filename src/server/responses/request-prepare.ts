@@ -181,6 +181,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { codexToolCatalogReloadResponse } from "./codex-tool-catalog";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -247,6 +248,10 @@ export async function prepareResponsesRequest(
       return clientCancelledResponse();
     }
     return decodeRequestErrorResponse(err, "responses");
+  }
+  if (inboundWire === "responses" && !concreteSelection) {
+    const catalogReload = codexToolCatalogReloadResponse(body, req.headers);
+    if (catalogReload) return catalogReload;
   }
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel

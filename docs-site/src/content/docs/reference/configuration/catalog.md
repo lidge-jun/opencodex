@@ -3,6 +3,23 @@ title: Catalog options
 description: Optional native model omission in the generated Codex catalog.
 ---
 
+## Reloading model metadata
+
+Codex loads a local model catalog at startup. After OpenCodex changes that catalog,
+run `ocx sync --restart-codex` to refresh existing clients. Publishing a new catalog
+file does not update a client that is already running.
+
+If a Codex client sends 64 or more eager MCP tool definitions, OpenCodex refuses the
+request before contacting a model provider with HTTP 400 and error code
+`codex_catalog_reload_required`. This prevents missing or stale model metadata from
+causing repeated large prompts and compactions. Run the restart command and retry.
+The check also covers definitions embedded in Code Mode; it leaves deferred tools,
+ordinary conversation history, and other API clients unchanged.
+
+Routed models advertise deferred discovery. In Code Mode, discover available tools
+through `ALL_TOOLS` and call them through `tools`; a separate `tool_search` function
+is not required. Models using the direct tool interface can expose `tool_search`.
+
 ## Omit disabled native models
 
 `omitDisabledNativeModels` is an optional boolean in `config.json`, defaulting to `false`.

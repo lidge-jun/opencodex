@@ -108,6 +108,7 @@
   "messages-native-key-selection.test.ts": "claude-integration",
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
+  "codex-eager-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
   "current-turn-tool-catalog-direct.test.ts": "responses",
   "current-turn-tool-catalog-namespace.test.ts": "responses",

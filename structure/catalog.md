@@ -474,7 +474,7 @@ turn-1 payload regression (96,699 → 258,929 chars). For Cursor this can also m
 `exec` exceed the 120,000-byte serialized `McpTools` ceiling; the budget then drops `exec` and
 its companion `wait` (#1830). Hosted search remains independent: non-Cursor routes keep
 `web_search_tool_type: "text_and_image"`, while Cursor omits it because runTurn bypasses the
-search sidecar.
+search sidecar. Under code mode,
 
 > Decision record: [ADR-0022](decisions/ADR-0022-routed-tool-discovery-and-hosted-search.md)
 
