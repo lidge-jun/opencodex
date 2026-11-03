@@ -8,7 +8,7 @@ import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
- * Codex requests output.encrypted_content, which xAI, Meta and Azure reject with HTTP 400.
+ * Codex requests output.encrypted_content, which xAI, Meta, Azure and Kimi Code reject with HTTP 400.
  * The caller gates this on the destination. Preserve reasoning.encrypted_content
  * for stateless replay and leave unknown or malformed values for upstream validation.
  */
