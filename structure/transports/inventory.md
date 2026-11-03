@@ -379,7 +379,13 @@ waiting to fill a slice or an entire declared HTTP chunk. The next pull validate
 chunk's trailing CRLF before reading another chunk; premature EOF and malformed framing still
 error the body. Fixed-length completion releases the socket as soon as the declared bytes are
 queued, without requiring an extra consumer pull. Terminal reader cleanup discards unread bytes;
-only the successful SOCKS handshake preserves bytes for the next socket owner. Payload reads
+only the successful SOCKS handshake preserves bytes for the next socket owner. Disposal marks
+the reader terminal before rejecting waiters, so an already-queued framing continuation cannot
+register a new waiter or abort listener after socket listeners are detached. Owned handshake
+and response timeout callbacks are removed at their phase/terminal boundaries; disabling the
+clock or destroying the socket does not release those callbacks. Unrelated timeout observers
+are preserved. `tests/lib/socks5-reader-lifecycle.test.ts` and
+`tests/lib/socks5-timeout-cleanup.test.ts` bind these cleanup contracts. Payload reads
 use existing byte views instead of accumulating an exact-length copy. Coding limits,
 certificate verification, proxy selection and upload ownership are unchanged.
 `tests/lib/socks5-tls-lifecycle.test.ts` also covers partial payloads, compressed SSE, delayed
