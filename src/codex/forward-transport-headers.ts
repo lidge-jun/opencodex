@@ -20,6 +20,9 @@ export const FORWARD_HEADERS = [
 const MAX_ROUTING_MODEL_BYTES = 256;
 const MAX_ROUTING_TIER_BYTES = 64;
 const MAX_TURN_METADATA_BYTES = 32 * 1024;
+// Each escaped code unit (U+007F+) becomes 6 ASCII bytes: at most 3x the UTF-8 size of
+// non-ASCII text (DEL alone grows 6x), so 96 KiB holds any DEL-free canonical value.
+const MAX_ESCAPED_TURN_METADATA_BYTES = 3 * MAX_TURN_METADATA_BYTES;
 
 /** Compatibility export: caller values never contribute to the selected account identity. */
 export function deriveCodexAccountInstallationId(chatgptAccountId: string, _callerInstallationId: string): string {
@@ -30,25 +33,39 @@ export function deriveCodexAccountInstallationId(chatgptAccountId: string, _call
  * Rewrites the `installation_id` inside Codex turn metadata while preserving all other fields.
  *
  * Structure contract: the returned JSON is printable ASCII — every code unit outside
- * U+0020–U+007E is escaped as `\\uXXXX` (JSON.stringify already escapes U+0000–U+001F;
- * U+007F and above are escaped here). Both consumers of rewritten turn metadata (the
+ * U+0020–U+007E is escaped (JSON.stringify already escapes U+0000–U+001F, with short forms
+ * such as `\\n`; U+007F and above become `\\uXXXX` here). Both consumers of rewritten turn metadata (the
  * `x-codex-turn-metadata` HTTP header and the embedded `client_metadata` value)
  * receive this ASCII-safe form, so header setters never see literal Unicode.
+ *
+ * The 32 KiB bound applies to the canonical (unescaped UTF-8) rewritten JSON, and the escaped
+ * result is capped at 96 KiB. Feeding an accepted result back in is therefore a no-op: it
+ * parses to the same canonical JSON, so repeated isolation passes cannot refuse it.
  */
 export function rewriteTurnMetadataInstallationId(rawMetadata: string, chatgptAccountId: string): string {
   if (!chatgptAccountId.trim()) throw new CodexInstallationIdUnavailableError();
   // A size bound must refuse the Pool send, never bypass identity projection.
-  if (Buffer.byteLength(rawMetadata, "utf8") > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
+  const rawBytes = Buffer.byteLength(rawMetadata, "utf8");
+  if (rawBytes > MAX_ESCAPED_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
+  // Values returned unchanged keep the raw bound; only rewritten JSON is measured canonically.
+  const passThrough = () => {
+    if (rawBytes > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
+    return rawMetadata;
+  };
   let parsed: unknown;
-  try { parsed = JSON.parse(rawMetadata); } catch { return rawMetadata; }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return rawMetadata;
+  try { parsed = JSON.parse(rawMetadata); } catch { return passThrough(); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return passThrough();
   const record = parsed as Record<string, unknown>;
-  if (typeof record.installation_id !== "string" || !record.installation_id.trim()) return rawMetadata;
+  if (typeof record.installation_id !== "string" || !record.installation_id.trim()) return passThrough();
   const nextId = deriveCodexAccountInstallationId(chatgptAccountId, record.installation_id);
+  const canonical = JSON.stringify({ ...record, installation_id: nextId });
+  if (Buffer.byteLength(canonical, "utf8") > MAX_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
   if (nextId === record.installation_id) return rawMetadata;
   // Turn metadata is also sent as an HTTP header; DEL and non-ASCII are invalid field-value bytes.
-  return JSON.stringify({ ...record, installation_id: nextId })
+  const escaped = canonical
     .replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  if (escaped.length > MAX_ESCAPED_TURN_METADATA_BYTES) throw new CodexInstallationIdUnavailableError();
+  return escaped;
 }
 
 export function isolateCodexPoolAccountHeaders(headers: Headers, chatgptAccountId: string): void {

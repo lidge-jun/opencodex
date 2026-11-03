@@ -25,9 +25,16 @@ while empty installation and turn-metadata headers retain their existence gates.
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
 After the `installation_id` rewrite, the turn-metadata JSON escapes every code unit outside
-printable ASCII (U+0000–U+001F and U+007F and above) as `\uXXXX`, so the header stays a valid
-HTTP field value and JSON-decodes to the same metadata; the client-metadata copy uses the same form.
-Pool turn metadata is bounded to 32 KiB of UTF-8. Larger values refuse the send with the same
+printable ASCII: `JSON.stringify` escapes U+0000–U+001F (with short forms such as `\n` and
+`\t` where JSON defines them, `\uXXXX` otherwise), and U+007F and above become `\uXXXX`. The
+header stays a valid HTTP field value and JSON-decodes to the same metadata; the client-metadata
+copy uses the same form. Pool turn metadata is bounded to 32 KiB of canonical UTF-8, measured on
+the unescaped rewritten JSON, and the escaped output is capped at 96 KiB (escaping grows
+non-ASCII text at most threefold; DEL-heavy values past the cap are refused). Raw input above
+96 KiB is refused before parsing, and values passed through unchanged keep a 32 KiB raw bound.
+Because the bound is on canonical JSON, an accepted escaped value re-enters unchanged, so the
+Responses path can isolate it during auth materialization and again in the policy recheck.
+Larger values refuse the send with the same
 sanitized identity error instead of passing unprojected bytes through; main and main-pool
 retain their original values. Routed compact handoffs preserve present empty installation and
 turn-metadata headers, so the final selected account applies the same rule as a direct send.

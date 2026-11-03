@@ -5,7 +5,9 @@ import {
   deriveCodexAccountInstallationId,
   isolateCodexPoolAccountHeaders,
   isolateCodexPoolClientMetadata,
+  rewriteTurnMetadataInstallationId,
 } from "../../src/codex/forward-transport-headers";
+import { CodexInstallationIdUnavailableError } from "../../src/codex/installation-id";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -250,6 +252,20 @@ describe("Codex metadata integrity", () => {
     expect(JSON.parse(rewritten).workspaces).toEqual(["/tmp/a\u007fb/\ubcd1\u0001"]);
     expect(JSON.parse(rewritten).installation_id)
       .toBe(deriveCodexAccountInstallationId(accountA.chatgptAccountId, "caller-installation"));
+  });
+  test("escaped turn metadata is accepted unchanged on re-entry and capped at 96 KiB", () => {
+    const account = accountA.chatgptAccountId;
+    const raw = JSON.stringify({ installation_id: "caller-installation", pad: "\u00e9".repeat(6000) });
+    const once = rewriteTurnMetadataInstallationId(raw, account);
+    expect(once.length).toBeGreaterThan(32 * 1024);
+    expect(rewriteTurnMetadataInstallationId(once, account)).toBe(once);
+    const headers = headersForCodexAuthContext(new Headers({ "x-codex-turn-metadata": raw }), poolAuthContext);
+    expect(headersForCodexAuthContext(headers, poolAuthContext).get("x-codex-turn-metadata")).toBe(once);
+    // DEL expands 6x: 20,000 of them fit the 32 KiB canonical bound but exceed the escaped cap.
+    const del = JSON.stringify({ installation_id: "caller-installation", pad: "\u007f".repeat(20_000) });
+    expect(() => rewriteTurnMetadataInstallationId(del, account)).toThrow(CodexInstallationIdUnavailableError);
+    // Non-JSON values pass through unchanged, so they keep the raw 32 KiB bound.
+    expect(() => rewriteTurnMetadataInstallationId("x".repeat(32 * 1024 + 1), account)).toThrow(CodexInstallationIdUnavailableError);
   });
   test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
     for (const provider of [
