@@ -15,7 +15,7 @@ test("only Artificial Analysis is requested and missing keys produce unattribute
   const requests: string[] = [];
   globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
     requests.push(String(input));
-    return Response.json({ data: [{ name: "Fixture model", evaluations: { artificial_analysis_intelligence_index: 42 } }] });
+    return Response.json({ pagination: { page: 1, page_size: 200, total_pages: 1, has_more: false }, data: [{ name: "Fixture model", evaluations: { artificial_analysis_intelligence_index: 42 } }] });
   }, { preconnect: originalFetch.preconnect }) as typeof fetch;
   const empty = await loadCapabilityTable(config(undefined));
   expect(empty).toMatchObject({ source: null, domains: {}, fallbackReason: "benchmark data was unavailable: no Artificial Analysis key is configured" });

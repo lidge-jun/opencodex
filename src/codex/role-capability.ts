@@ -132,8 +132,10 @@ export async function fetchArtificialAnalysisTable(apiKey: string, fetchImpl: ty
     budget -= bytes.byteLength;
     const body = JSON.parse(new TextDecoder().decode(bytes)) as { data?: unknown; pagination?: { has_more?: unknown } } | null;
     if (!Array.isArray(body?.data)) throw new Error("Artificial Analysis returned no model list");
+    const hasMore = body.pagination?.has_more;
+    if (typeof hasMore !== "boolean") throw new Error("Artificial Analysis returned no pagination.has_more");
     rows.push(...body.data);
-    if (body.pagination?.has_more !== true) return capabilityTableFromArtificialAnalysis({ data: rows });
+    if (!hasMore) return capabilityTableFromArtificialAnalysis({ data: rows });
   }
   throw new Error(`Artificial Analysis listed more than ${MAX_TABLE_PAGES} pages`);
 }

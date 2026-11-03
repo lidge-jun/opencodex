@@ -91,7 +91,7 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     const urls: string[] = [];
     globalThis.fetch = Object.assign(async (input: string | URL | globalThis.Request) => {
       urls.push(String(input));
-      return Response.json({ data: [
+      return Response.json({ pagination: { page: 1, page_size: 200, total_pages: 1, has_more: false }, data: [
         { name: "small", evaluations: { artificial_analysis_intelligence_index: 66 } },
         { name: "big", evaluations: { artificial_analysis_intelligence_index: 58 } },
       ] });
