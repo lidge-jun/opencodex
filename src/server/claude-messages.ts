@@ -1284,7 +1284,7 @@ async function handleClaudeMessagesWithBudget(
         config,
         envelope,
         selector: nativeSelector,
-        requestedModel,
+        requestedModel: clientFacingModelText(clientModelLabel),
         translatorBudget,
         callerAnthropicBeta: req.headers.get("anthropic-beta"),
         clientIdentity: captureAnthropicClientIdentity(req.headers),

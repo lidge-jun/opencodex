@@ -173,6 +173,17 @@ export function createComboProtocolLanes(input: {
     return undefined;
   };
 
+  // Judging a candidate only reads the request, so a Messages candidate is checked against the
+  // source body by reference (the model swapped in a shallow view) and never charges a copy; the
+  // charged fresh body is made once, for the child that actually sends.
+  const nativeEligible = (target: ComboTarget, route: RouteResult | undefined): boolean => {
+    if (source.inbound === "messages") {
+      if (!route || route.provider.adapter !== "anthropic") return false;
+      return isNativeMessagesRouteEligible(route, { ...envelope.peekBody(), model: selector(target) }, config, source.selector);
+    }
+    return nativeBody(target, route) !== undefined;
+  };
+
   const verdicts = new Map<string, CandidateVerdict>();
   let skipRecorded = false;
   const judge = (target: ComboTarget): CandidateVerdict => {
@@ -189,7 +200,7 @@ export function createComboProtocolLanes(input: {
     }
     if (targetRoute) {
       const settled = settle(target, targetRoute);
-      const native = nativeBody(target, settled) !== undefined;
+      const native = nativeEligible(target, settled);
       const upstream = native ? source.inbound : upstreamWireForAdapter((settled ?? targetRoute).provider.adapter);
       const checked = checkRepresentable({
         inbound: source.inbound,
