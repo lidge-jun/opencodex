@@ -34,8 +34,12 @@ test("reads every page of the free model list and stops when has_more is false",
   expect(table.domains.general?.get("model-b")).toBe(60);
 });
 
-test("a page without pagination.has_more fails the read instead of ending the list", async () => {
-  const { requests, fetchImpl } = transport(() => Response.json({ tier: "free", data: [row("model-a", 70)] }));
+test.each([
+  ["missing", {}],
+  ["a string", { pagination: { page: 1, has_more: "true" } }],
+  ["null", { pagination: { page: 1, has_more: null } }],
+])("a page whose pagination.has_more is %s fails the read instead of ending the list", async (_label, pagination) => {
+  const { requests, fetchImpl } = transport(() => Response.json({ tier: "free", ...pagination, data: [row("model-a", 70)] }));
   await expect(fetchArtificialAnalysisTable("aa-no-pagination-fixture", fetchImpl)).rejects.toThrow("pagination.has_more");
   expect(requests).toEqual([pageUrl(1)]);
 });
