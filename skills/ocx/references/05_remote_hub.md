@@ -321,6 +321,12 @@ To sync only while that reading still holds, pass what you read back to sync:
 relinked in between, the sync changes nothing and exits 5 with a JSON `phase` line on stderr
 ([04_failure_semantics.md](04_failure_semantics.md#a-pinned-sync-that-refuses-exit-5)).
 
+On the Home, `ocx sync` fans out only after it commits a current catalog. Use `--local-only`
+to suppress propagation and `--json` to inspect Home and Child results. Fan-out never asks a Child
+to restart a Codex app or app-server; use GOAT or `ocx sync --restart-codex` on that Child. Its
+pinned sync can still restart its own OpenCodex client runtime after applying changed Home settings.
+A Child sync already running can continue after the Home times out its local SSH process.
+
 ## Key rotation is a two-step commit
 
 Starting a rotation issues the new key while **the old key stays valid**. The dashboard

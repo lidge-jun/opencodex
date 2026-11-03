@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 /**
  * Durable runtime ownership in the shared service install state.
  *
@@ -7,10 +8,12 @@
  * therefore lasted until the next repair — from a tray helper, from `ocx update`, from a
  * doctor suggestion — and nothing said it had gone.
  */
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
+import { withServiceStateLocks } from "../../src/service/state-lock";
 import {
   desktopOwnsService,
   inspectServiceStateEvidence,
@@ -585,6 +588,24 @@ describe("the anchor lock", () => {
     })).toThrow(/another process owns/);
     // Nothing was written: the swap never reached a commit.
     expect(existsSync(serviceStatePath())).toBe(false);
+  });
+
+  test("lock identity preserves adjacent NTFS-sized values", () => {
+    const statePath = serviceStatePath();
+    const lockPath = `${statePath}.lock`;
+    const identity = 9_007_199_254_740_992n;
+    let changed = false;
+    const realLstat = fs.lstatSync;
+    const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
+      const ino = identity + (changed ? 1n : 0n);
+      return samePath(path, lockPath) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+        { ino: options?.bigint ? ino : Number(ino) }) : stat;
+    }) as typeof fs.lstatSync);
+    try {
+      withServiceStateLocks([statePath], () => {}, { hooks: { beforeRelease: () => { changed = true; } } });
+      expect(existsSync(lockPath)).toBe(true);
+    } finally { lstat.mockRestore(); }
   });
 
   test("a late release cannot remove a successor lock", () => {

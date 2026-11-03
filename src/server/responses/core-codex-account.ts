@@ -1,3 +1,5 @@
+import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { captureAccountAutoPauseAttempt, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig, OcxParsedRequest } from "../../types";
 import type { CodexAuthContext, CodexAuthPolicyConfig } from "../../codex/auth-context";
@@ -25,6 +27,7 @@ import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { isNonReplayableResponse, isTransientUpstreamStatus, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import {
   codexWsPreOutputRefusalHold,
   codexWsPreOutputRefusalOutcomeRecorded,
@@ -488,6 +491,8 @@ export interface CodexPoolAccountRetryArgs {
     abortSignal?: AbortSignal;
     onCodexAuthContextResolved?: (ctx: CodexAuthContext) => void;
     deferCodexResetDerivedCooldown?: boolean;
+    /** Private Claude bridge pool identity; alternate selection completes it like the first pick. */
+    claudeBridgePoolSession?: string;
     // Narrowed subset of HandleResponsesOptions: the retry rebuilds the adapter, so it
     // needs the inbound scope or the retry could land on a different wire than the
     // first attempt.
@@ -765,7 +770,9 @@ export async function retryCodexPoolOnAlternateAccount(
   }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
-        callerAuthHeaders,
+        // Alternate selection keeps the initial Claude bridge pool identity; the retry's upstream
+        // headers are still built from uncompleted callerAuthHeaders below.
+        applyClaudeBridgePoolSession(callerAuthHeaders, { codexAccountMode: "pool" }, options),
         config,
         "pool",
         {
@@ -886,7 +893,7 @@ export async function retryCodexPoolOnAlternateAccount(
     retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
     retryProvider = applyCodexAuthContextToProvider(stripCodexRuntimeProviderFields(route.provider), retryAuthCtx, "pool");
   } catch (error) {
-    if (!(error instanceof CodexPoolAccountCreditsOffError)) throw error;
+    if (!(error instanceof CodexPoolAccountCreditsOffError) && !(error instanceof CodexInstallationIdUnavailableError)) throw error;
     // Body/entitlement reads above can outlive credit consent. No alternate will send:
     // release its reservation and probes, then let the owner map the policy refusal.
     accountMovePermit?.release();
@@ -911,9 +918,7 @@ export async function retryCodexPoolOnAlternateAccount(
   {
     const binding = conversationStateBindingFromAuth(
       retryAuthCtx,
-      firstAuthCtx.kind === "pool" || firstAuthCtx.kind === "main-pool"
-        ? firstAuthCtx.affinityKey
-        : undefined,
+      firstAuthCtx.affinityKey ?? firstAuthCtx.conversationStateKey,
     );
     if (binding) {
       applyAccountChangeConversationStateScrub({
@@ -924,16 +929,26 @@ export async function retryCodexPoolOnAlternateAccount(
           && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
-        priorAccountId: firstAuthCtx.accountId,
+        priorAccountId: conversationStateAccountId(firstAuthCtx),
         logCtx,
       });
     }
   }
-  const request = await retryAdapter.buildRequest(parsed, {
-    headers: retryHeaders,
-    providerName: route.providerName,
-    translatorBudget: options.translatorBudget,
-  });
+  let request;
+  try {
+    request = await retryAdapter.buildRequest(parsed, {
+      headers: retryHeaders,
+      providerName: route.providerName,
+      translatorBudget: options.translatorBudget,
+    });
+  } catch (error) {
+    if (!(error instanceof CodexInstallationIdUnavailableError)) throw error;
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(firstAuthCtx);
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
+    await firstResponse.body?.cancel().catch(() => undefined);
+    return { kind: "transport", error, authCtx: retryAuthCtx };
+  }
   recordAdapterReasoning(logCtx, request);
   recordAdapterTier(logCtx, request);
 
@@ -1153,7 +1168,14 @@ export function codexForwardTerminalOutcomeRecorder(
   modelId?: string,
   logCtx?: RequestLogContext,
 ): ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined {
-  if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
+  if (!usesCodexForwardPoolAuth(authCtx, provider)) {
+    if (!isKeyedRequestOwnedMain(authCtx) || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+    return (status, httpStatusOverride) => {
+      const quota = [httpStatusOverride, logCtx?.terminalHttpStatus].find(value => value === 429 || value === 402);
+      const outcome = status === "completed" || (status === "incomplete" && quota === undefined) ? 200 : (quota ?? httpStatusOverride ?? logCtx?.terminalHttpStatus ?? 502);
+      releaseRequestOwnedMainOnOutcome(authCtx, outcome, modelId);
+    };
+  }
   const windowMeta = codexFailureWindowOutcomeMeta(authCtx);
   return (status, httpStatusOverride) => {
     const quotaStatus = [httpStatusOverride, logCtx?.terminalHttpStatus]

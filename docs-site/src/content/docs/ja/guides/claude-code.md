@@ -568,7 +568,7 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 **エラー分類:** 400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`、
-それ以外の 5xx は `api_error` です。`Retry-After` はそのまま維持します。
+それ以外の 5xx は `api_error` です。`Retry-After` は整数の秒数で送信し（HTTP 日付は残り秒数に変換）、上限は 8 日です。
 
 ## プロンプトキャッシュとトークン使用量
 

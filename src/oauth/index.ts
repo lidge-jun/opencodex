@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { MuseLoginError, museLoginErrorMessage } from "./meta-muse-errors";
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { mapFill } from "../providers/resolved-model-policy-merge";
@@ -97,6 +98,7 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
@@ -449,10 +451,9 @@ export function getOAuthCredentialApiBaseUrl(provider: string): string | undefin
 export function listOAuthProviders(): string[] {
   return Object.keys(OAUTH_PROVIDERS).filter(isPublicOAuthProvider);
 }
-
 export class UnsupportedOAuthProviderError extends Error {
   constructor(provider: string) {
-    super(`Unsupported OAuth provider in config: ${provider}`);
+    super(`Unsupported OAuth provider in config: ${errorDestinationText(providerErrorDestinationLabel(provider))}`);
     this.name = "UnsupportedOAuthProviderError";
   }
 }
@@ -461,7 +462,7 @@ export class OAuthLoginRequiredError extends Error {
   readonly provider: string;
 
   constructor(provider: string) {
-    super(`Not logged in to ${provider}. Run: ocx login ${provider}`);
+    super(`Not logged in to ${errorDestinationText(providerErrorDestinationLabel(provider))}. Run: ocx login ${errorDestinationText(providerErrorDestinationLabel(provider))}`);
     this.name = "OAuthLoginRequiredError";
     this.provider = provider;
   }
@@ -1828,6 +1829,8 @@ export interface OAuthAccountSummary {
    * Missing or invalid labels remain null; quota percentages never establish a subscription.
    */
   plan: string | null;
+  /** Anthropic display-only subscription name; absent when no tier was observed. */
+  planLabel?: string;
 }
 
 /**
@@ -1855,6 +1858,8 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     expiresAt: a.credential.expires,
     // Explicitly null rather than omitted when upstream tier metadata is unknown.
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,
+    ...((provider === "anthropic" || provider === "anthropic2") && anthropicSubscriptionLabel(a.credential.plan)
+      ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

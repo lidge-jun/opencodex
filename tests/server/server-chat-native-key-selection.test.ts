@@ -204,7 +204,7 @@ for (const statusCode of [401, 429]) test(`chat wire override ${statusCode} does
   }) as typeof fetch;
   const result = await start(config, new AbortController());
   expect(result.response.status).toBe(statusCode);
-  expect(result.text).toContain("fixture overridden credential refusal");
+  expect(result.text).toContain(statusCode === 401 ? "The provider rejected the configured credentials." : "The provider rate limit was reached; retry later.");
   expect(seen.map(entry => entry.key)).toEqual(["Bearer fixture-key-override"]);
   for (let index = 0; index < KEYS.length; index++) expect(getKeyCooldownUntil(NAME, `k${index + 1}`)).toBeNull();
   unchanged(config); noLeaks(config);

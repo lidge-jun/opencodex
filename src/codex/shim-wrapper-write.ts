@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
+import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import {
   buildUnixCodexShim,
@@ -54,7 +55,7 @@ export function windowsShimContent(wrapperPath: string, realCodexPath: string, r
   return buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()));
 }
 
-export function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): { dev: number; ino: number } | undefined {
+export function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): FileIdentity | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   if (process.platform === "win32") {
     writeFileSync(wrapperPath, windowsShimContent(wrapperPath, realCodexPath, runtime), "utf8");
@@ -74,7 +75,7 @@ export function writeShim(wrapperPath: string, realCodexPath: string, runtime?: 
     try {
       // "wx" fails if the staging path somehow exists, so we never inherit a file.
       writeFileSync(staged, buildUnixCodexShim(realCodexPath, bun, cli, bunRuntimeSource), { encoding: "utf8", flag: "wx", mode: 0o600 });
-      const stagedStat = lstatSync(staged);
+      const stagedStat = lstatSync(staged, { bigint: true });
       chmodSync(staged, 0o755);
       renameSync(staged, wrapperPath);
       renamed = true;
@@ -96,14 +97,14 @@ export function writeShim(wrapperPath: string, realCodexPath: string, runtime?: 
  */
 export function ownedWrapperFingerprint(
   wrapperPath: string,
-  written: { dev: number; ino: number } | undefined,
+  written: FileIdentity | undefined,
 ): ShimPathFingerprint | undefined {
   const probe = stableShimPathProbe(wrapperPath);
   if (!probe) return undefined;
   // Platforms that still write in place (Windows) have no staged identity; fall
   // back to the marker check they have always used.
   if (!written) return probe.prefix.includes(SHIM_MARKER) ? probe.fingerprint : undefined;
-  if (probe.fingerprint.dev !== written.dev || probe.fingerprint.ino !== written.ino) return undefined;
+  if (!sameFileIdentity(probe.fingerprint.identity, written)) return undefined;
   return probe.fingerprint;
 }
 
@@ -118,11 +119,11 @@ export function ownedWrapperFingerprint(
  */
 export function wrapperInodeIsOurs(
   wrapper: StableShimPathProbe,
-  written: { dev: number; ino: number } | undefined,
+  written: FileIdentity | undefined,
   recorded: ShimPathFingerprint | undefined,
 ): boolean {
   // A different inode is conclusive: someone renamed their own file over ours.
-  if (written && (wrapper.fingerprint.dev !== written.dev || wrapper.fingerprint.ino !== written.ino)) {
+  if (written && !sameFileIdentity(wrapper.fingerprint.identity, written)) {
     return false;
   }
   // Same inode is not sufficient on its own — an in-place truncation (shell `>`,

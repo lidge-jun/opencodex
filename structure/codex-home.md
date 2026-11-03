@@ -142,7 +142,7 @@ to SQLite ownership; the tolerant root-string helper used by injection and catal
 
 > Decision record: [ADR-0007](decisions/ADR-0007-codex-home.md)
 
-Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
+Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance. Native profile switches transact only auth state; they do not write or journal `installation_id`. [Pool wire identity](providers/codex-installation-identity.md) lives in the OpenCodex home.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged
 `.opencodex-native-profile.lock.sqlite` beside that directory serializes every process sharing the

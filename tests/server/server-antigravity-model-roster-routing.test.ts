@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,7 +176,7 @@ test("every usable account omitting the model refuses locally without an upstrea
   const result = await turn(config(true));
   expect(result.status).toBe(403);
   expect(result.body.error).toMatchObject({
-    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(model),
+    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)),
   });
   expect(sends).toEqual([]);
 });
@@ -185,7 +186,7 @@ test("without failover an omitting selected account is refused, not moved", asyn
   for (const enabled of [undefined, false]) {
     const result = await turn(config(enabled));
     expect(result.status).toBe(403);
-    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(model));
+    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)));
   }
   expect(sends).toEqual([]);
   expect(getAccountSet(provider)!.activeAccountId).toBe(ids[0]);
