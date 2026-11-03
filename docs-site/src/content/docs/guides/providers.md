@@ -654,6 +654,8 @@ If Kiro ends with plain text instead of its private final-answer tool, one bound
 still runs, and only the resulting final answer is displayed. Progress accompanying a real
 tool call remains visible. A normal private final answer needs no completion retry.
 
+When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
+
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
 token counts may still be estimated, and the credit value does not replace USD cost estimates.
@@ -1836,6 +1838,16 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
+
+**Kimi Coding Plan quota.** Account login and API-key providers on the canonical
+`https://api.kimi.com/coding/v1` endpoint read `/usages`. Plans that report
+`usages.limit_month_total` (or `monthTotal`) show a monthly utilization bar, with
+`limit_month_code` (or `monthCode`) as the fallback when total usage is unavailable.
+The `used_ratio` / `usedRatio` fraction must be in `[0, 1]` before conversion to a consumed
+percentage; invalid ratios are ignored. Empty or unusable `usages` containers do not hide
+usable monthly data in another supported envelope. Any reported reset time is retained.
+Existing 5-hour, weekly, and total subscription-credit
+windows remain separate, and an absent monthly window is not shown as 0%.
 
 **Abliteration credits.** A provider of any name whose `baseUrl` is
 `https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads

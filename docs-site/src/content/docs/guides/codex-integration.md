@@ -412,6 +412,16 @@ reference/fallback config. On loopback it contains the root keys you can merge m
 injection was removed; on non-loopback it contains the dedicated provider form. External-provider
 mode leaves this profile untouched.
 
+Rebuilding that file keeps the plain root keys OpenCodex does not manage, so a setting you add such as
+`stream_idle_timeout_ms` or `stream_max_retries` survives the next injection. Each kept assignment is
+copied exactly as written, including values that span several lines and 64-bit integers, and is placed
+above the first table. Keys inside tables and dotted root keys such as `a.b = 1` are not kept.
+OpenCodex wins every collision: the root keys it owns (`model_provider`, `model_catalog_json`,
+`openai_base_url`) are rewritten for the routing mode in use, and a root key named like a table the
+profile writes, such as an inline `features = { ... }` when the profile writes `[features]`, is
+dropped. If the file changes while an injection waits for the write lock, the injection stops with a
+retryable error and leaves your edit in place.
+
 :::caution
 Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` **must** sit before the
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate
@@ -759,6 +769,12 @@ converts it to the nested `tools.apply_patch` call before the tool-completion ev
 Codex. Native custom calls and converted function calls use the same completion rule;
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
+
+When a routed model double-wraps an executable freeform body, opencodex removes one extra
+JSON object containing only an input string. This repair applies to local exec and apply_patch
+bodies, leaves other tool grammars and ambiguous objects unchanged, and does not decode recursively.
+A body holds its streamed preview only while it can still turn out to be such a wrapper;
+JavaScript that merely starts with an object or block keeps streaming as it arrives.
 
 A routed model can also mistakenly send a shell-argument object such as
 `{"cmd":"git status --short"}` to code-mode `exec`. For a verified code-mode catalog,

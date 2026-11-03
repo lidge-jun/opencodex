@@ -34,6 +34,8 @@ L’API de gestion expose `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/eff
 
 La page Codex Auth permet également de modifier l’indicateur natif `default_mode_request_user_input` de Codex (`GET`/`PUT /api/codex-auth/features/default-mode-request-user-input`). Son activation ajoute `[features] default_mode_request_user_input = true` au fichier `$CODEX_HOME/config.toml` de Codex au moyen de la commande officielle `codex features enable|disable`. Cette modification préserve le format du fichier et est retirée lorsque l’option est désactivée. Codex peut ainsi suspendre une session en mode Default et vous poser des questions avec l’outil `request_user_input`. Cet indicateur est encore en développement en amont et ne s’applique qu’aux nouvelles sessions ; l’activation échoue explicitement si la version installée de Codex ne le reconnaît pas encore.
 
+Pendant qu’une mise à jour de Codex CLI détient l’installation, cette commande renvoie HTTP 503 avec `codex_cli_selection_busy` et `retryable: true` avant toute exécution. Réessayez après la mise à jour ; les erreurs d’écriture de la configuration restent des réponses 502.
+
 ## Liste des modèles et consignes
 
 La liste v2 effective comprend, parmi les modèles configurés, les cinq premiers qui sont visibles dans le sélecteur, classés par priorité, compatibles avec v2 et présents dans le catalogue injecté. Un modèle est admissible en v2 si son choix imposé en amont vaut explicitement `"v2"`, vaut `null` ou est absent. Un véritable choix `"v1"` l’exclut. Les entrées exclues restent dans la configuration afin de pouvoir redevenir admissibles ultérieurement.

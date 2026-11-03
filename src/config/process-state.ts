@@ -39,6 +39,8 @@ export type RuntimePortState = {
   command?: string[];
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
+  /** A Link runtime is draining; new and in-flight sync commits must stand down. */
+  clientStopping?: true;
   /**
    * The live proxy's port when this runtime is a sibling instance started beside it
    * (`src/codex/sibling-start.ts`). `ocx stop` reads it to leave shared client routing alone.
@@ -61,6 +63,7 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && Number(state.port) <= 65535
     && hostnameOk
     && attestationOk
+    && (state.clientStopping === undefined || state.clientStopping === true)
     && siblingOk;
 }
 
