@@ -1,19 +1,41 @@
-import { normalizeDeclaredToolName, type AdapterEvent } from "../types";
+import { namespacedToolName, normalizeDeclaredToolName, type AdapterEvent } from "../types";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "./errors";
 import { releaseTranslatedEvent, type TranslatorBudget } from "./translator-budget";
 import { releaseCompactionCiphertextLease } from "../responses/compaction";
 
-/** Snapshot of current-turn declarations when an explicit empty catalog activates enforcement. */
+/** Current-turn names for normalization, with wire-specific membership enforcement. */
 export interface ClientToolCatalogRestriction {
   declaredToolNames: ReadonlySet<string>;
   bareCustomToolNames: ReadonlySet<string>;
+  canonicalToolNames?: ReadonlySet<string>;
+  enforceDeclaredToolNames?: boolean;
+}
+
+/** Current declarations may narrow the selection-filtered bridge names, never widen them. */
+export function currentTurnToolBridgeMaps<T extends Pick<ClientToolCatalogRestriction, "declaredToolNames" | "bareCustomToolNames"> & {
+  toolNsMap: ReadonlyMap<string, { namespace: string; name: string }>;
+}>(
+  maps: T,
+  catalog: ClientToolCatalogRestriction | undefined,
+): T {
+  if (!catalog) return maps;
+  const currentIdentity = (name: string): boolean => {
+    const mapped = maps.toolNsMap.get(name);
+    // An ambiguous historical bare alias may lack a mapping. Keep only current identities.
+    return catalog.canonicalToolNames?.has(mapped ? namespacedToolName(mapped.namespace, mapped.name) : name) ?? true;
+  };
+  return {
+    ...maps,
+    declaredToolNames: new Set([...catalog.declaredToolNames].filter(name => maps.declaredToolNames.has(name) && currentIdentity(name))),
+    bareCustomToolNames: new Set([...catalog.bareCustomToolNames].filter(name => maps.bareCustomToolNames.has(name) && currentIdentity(name))),
+  };
 }
 
 export function emptyToolCatalogRefusal(
   event: AdapterEvent,
   catalog: ClientToolCatalogRestriction | undefined,
 ): Extract<AdapterEvent, { type: "error" }> | undefined {
-  if (!catalog) return;
+  if (!catalog || catalog.enforceDeclaredToolNames === false) return;
   if (event.type === "tool_call_start") {
     const name = normalizeDeclaredToolName(event.name, catalog.declaredToolNames, undefined, catalog.bareCustomToolNames);
     if (catalog.declaredToolNames.has(name)) return;

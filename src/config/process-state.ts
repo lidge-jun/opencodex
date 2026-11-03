@@ -35,6 +35,8 @@ export type RuntimePortState = {
   pid: number;
   port: number;
   hostname?: string;
+  /** Absolute relaunch prefix written by runtimes that identify their serving install. */
+  command?: string[];
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
   /**

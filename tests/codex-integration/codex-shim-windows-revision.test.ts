@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 /**
  * An installed Windows CMD or PowerShell wrapper from before the bypass-token fix loads the
  * service token before honoring OCX_SHIM_BYPASS. Those wrappers carry the shim marker but no
@@ -8,10 +9,13 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { autoRestoreCodexShim, installCodexShim, uninstallCodexShim } from "../../src/codex/shim";
 import { createWorkerCommitWindow, createCodexCliUpdateFence, codexCliUpdateSelectionGate } from "../../src/codex/cli-update-selection-gate";
-import { stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { sameFingerprint, stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { ownedWrapperFingerprint, wrapperInodeIsOurs } from "../../src/codex/shim-wrapper-write";
+import { readBoundedRegularFile } from "../../src/codex/shim-state-file";
+import { tryAcquireShimRestoreLock } from "../../src/codex/shim-restore-lock";
 import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
 import { buildWindowsCodexShim, buildWindowsPowerShellCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
@@ -48,6 +52,103 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(dir);
+});
+
+test("shim probe rejects adjacent NTFS-sized file identities", () => {
+  const path = join(dir, "launcher");
+  fs.writeFileSync(path, "launcher fixture");
+  const id = 9_007_199_254_740_992n;
+  const real = fs.lstatSync;
+  let calls = 0;
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const result = options?.bigint ? real(target, { bigint: true }) : real(target);
+    if (!samePath(target, path)) return result;
+    const ino = id + BigInt(calls++ > 0);
+    return Object.assign(Object.create(Object.getPrototypeOf(result)), result,
+      { ino: options?.bigint ? ino : Number(ino) });
+  }) as typeof fs.lstatSync);
+  try { expect(stableShimPathProbe(path)).toBeNull(); }
+  finally { stat.mockRestore(); }
+});
+
+for (const [name, owns] of [
+  ["wrapperInodeIsOurs", (path, probe, written) => wrapperInodeIsOurs(probe, written, undefined)],
+  ["ownedWrapperFingerprint", (path, _probe, written) => ownedWrapperFingerprint(path, written) !== undefined],
+] as const satisfies ReadonlyArray<readonly [string, (path: string, probe: NonNullable<ReturnType<typeof stableShimPathProbe>>, written: { dev: bigint; ino: bigint }) => boolean]>) test(`${name} rejects adjacent identities with equal numeric fields`, () => {
+  const path = join(dir, "launcher");
+  fs.writeFileSync(path, "launcher fixture");
+  const id = 2n ** 53n;
+  const real = fs.lstatSync;
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? real(target, { bigint: true }) : real(target);
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value,
+      { dev: options?.bigint ? 1n : 1, ino: options?.bigint ? id : Number(id) }) : value;
+  }) as typeof fs.lstatSync);
+  try {
+    const probe = stableShimPathProbe(path)!;
+    const written = { dev: 1n, ino: id + 1n };
+    expect(probe.fingerprint.ino).toBe(Number(written.ino));
+    expect(owns(path, probe, written)).toBe(false);
+    // A legacy numeric observation must not regain ownership after rounding.
+    const legacy = { dev: 1, ino: Number(written.ino) } as unknown as typeof written;
+    expect(owns(path, probe, legacy)).toBe(false);
+  } finally { stat.mockRestore(); }
+});
+
+test("fingerprint comparisons fail closed when identity is missing", () => {
+  const path = join(dir, "launcher");
+  fs.writeFileSync(path, "launcher fixture");
+  const fingerprint = stableShimPathProbe(path)!.fingerprint;
+  const missing = { ...fingerprint, identity: undefined } as unknown as typeof fingerprint;
+  expect(sameFingerprint(fingerprint, missing)).toBe(false);
+  expect(sameFingerprint(missing, fingerprint)).toBe(false);
+});
+
+test("shim state read rejects adjacent NTFS-sized file identities", () => {
+  const path = join(dir, "state.json");
+  fs.writeFileSync(path, "{}");
+  const id = 9_007_199_254_740_992n;
+  const realLstat = fs.lstatSync, realFstat = fs.fstatSync;
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const stat = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
+    return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? id : Number(id) }) : stat;
+  }) as typeof fs.lstatSync);
+  const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stat = options?.bigint ? realFstat(fd, { bigint: true }) : realFstat(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? id + 1n : Number(id + 1n) });
+  }) as typeof fs.fstatSync);
+  try { expect(readBoundedRegularFile(path, 1024)).toMatchObject({ warning: expect.stringContaining("changed while being read") }); }
+  finally { fstat.mockRestore(); lstat.mockRestore(); }
+});
+
+test("shim restore lock preserves an owner with an adjacent NTFS-sized identity", () => {
+  const lockPath = join(dir, "codex-shim.autorestore.lock");
+  const id = 9_007_199_254_740_992n;
+  const realOpen = fs.openSync, realFstat = fs.fstatSync, realLstat = fs.lstatSync;
+  let ownerFd: number | undefined;
+  const open = spyOn(fs, "openSync").mockImplementation(((path, flags, mode) => {
+    const fd = realOpen(path, flags, mode);
+    if (String(path).startsWith(lockPath) && flags === "wx") ownerFd = fd;
+    return fd;
+  }) as typeof fs.openSync);
+  const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stat = options?.bigint ? realFstat(fd, { bigint: true }) : realFstat(fd);
+    return fd === ownerFd ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? id : Number(id) }) : stat;
+  }) as typeof fs.fstatSync);
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+    const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
+    return String(path).startsWith(lockPath + sep) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      { ino: options?.bigint ? id + 1n : Number(id + 1n) }) : stat;
+  }) as typeof fs.lstatSync);
+  try {
+    const lock = tryAcquireShimRestoreLock();
+    expect(lock).not.toBeNull();
+    lock!.release();
+    expect(fs.existsSync(lockPath)).toBe(true);
+  } finally { lstat.mockRestore(); fstat.mockRestore(); open.mockRestore(); }
 });
 
 /** The pre-fix template: no Windows revision line, and the token load ahead of the bypass check. */

@@ -2,19 +2,21 @@
  * Measured capability per task domain, so role auto-assign can tier candidates by what they score
  * instead of what they cost. Artificial Analysis is read live when configured:
  *
- * - Artificial Analysis (https://artificialanalysis.ai/api-reference), when the user configures
+ * - Artificial Analysis (https://artificialanalysis.ai/data-api/docs), when the user configures
  *   their own API key. Its terms allow that user's internal use with attribution and forbid
  *   redistributing the raw data, so its scores never leave this process.
  *
- * Each domain maps to one published index. The source names a model by display name
- * with one row per reasoning setting ("Claude Opus 5.5 (High)"); capabilityModelKey drops the
- * setting and folds the rest to a slug, which matches a catalog id once its provider prefix is
- * gone ("cpa/claude-opus-5-5"). The best setting's score stands for the model, since a role can
- * be given that setting. A candidate with no row is unmeasured, never guessed.
+ * Every domain reads the Intelligence Index: Artificial Analysis no longer publishes a Coding or
+ * an Agentic Index (both are always null) and its free model list carries no math index. The
+ * source names a model by display name with one row per reasoning setting ("Claude Opus 5.5
+ * (High)"); capabilityModelKey drops the setting and folds the rest to a slug, which matches a
+ * catalog id once its provider prefix is gone ("cpa/claude-opus-5-5"). The best setting's score
+ * stands for the model, since a role can be given that setting. A candidate with no row is
+ * unmeasured, never guessed.
  */
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
 import type { OcxConfig } from "../types";
-import type { SizingDomain } from "./role-sizing";
+import { SIZING_DOMAINS, type SizingDomain } from "./role-sizing";
 
 export interface CapabilitySource {
   readonly name: string;
@@ -31,21 +33,23 @@ export const ARTIFICIAL_ANALYSIS_SOURCE: CapabilitySource = {
   redistributable: false,
 };
 
-const ARTIFICIAL_ANALYSIS_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
+/**
+ * The free-tier language model list, which any key may read. It replaced
+ * /api/v2/data/llms/models, retired at 2026-11-04 23:59 UTC with 410 Gone afterwards
+ * (https://artificialanalysis.ai/data-api/migrate-v2-data).
+ */
+export const ARTIFICIAL_ANALYSIS_URL = "https://artificialanalysis.ai/api/v2/language/models/free";
 
-/** Per domain, the indexes to read in order; the first one the response carries is used. */
 const INTELLIGENCE_INDEX = "artificial_analysis_intelligence_index";
-const ARTIFICIAL_ANALYSIS_INDEXES: Record<SizingDomain, readonly string[]> = {
-  coding: ["artificial_analysis_coding_index", INTELLIGENCE_INDEX],
-  agentic: ["artificial_analysis_agentic_index", INTELLIGENCE_INDEX],
-  reasoning: ["artificial_analysis_math_index", INTELLIGENCE_INDEX],
-  writing: [INTELLIGENCE_INDEX],
-  knowledge: [INTELLIGENCE_INDEX],
-  general: [INTELLIGENCE_INDEX],
-};
+
+/**
+ * Pages read per refresh. The list is paginated (200 rows a page in the published example, two
+ * pages); ten pages bound one daily refresh to a tenth of the free tier's 100 requests a day.
+ */
+export const MAX_TABLE_PAGES = 10;
 
 const FETCH_TIMEOUT_MS = 30_000;
-/** Each published table is under 1 MB today; 16 MB leaves room to grow and still bounds memory. */
+/** The bytes all pages of one refresh may total; the list is under 1 MB today, 16 MB still bounds memory. */
 export const MAX_TABLE_BYTES = 16 * 1024 * 1024;
 
 export interface CapabilityTable {
@@ -74,22 +78,15 @@ function keepBest(scores: Map<string, number>, key: string, value: number) {
 export function capabilityTableFromArtificialAnalysis(body: unknown): CapabilityTable {
   const rows = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(rows)) throw new Error("Artificial Analysis returned no model list");
-  const domains: Partial<Record<SizingDomain, Map<string, number>>> = {};
-  for (const [domain, indexes] of Object.entries(ARTIFICIAL_ANALYSIS_INDEXES) as [SizingDomain, readonly string[]][]) {
-    for (const index of indexes) {
-      const scores = new Map<string, number>();
-      for (const row of rows as Record<string, unknown>[]) {
-        const value = (row?.evaluations as Record<string, unknown> | undefined)?.[index];
-        if (typeof value !== "number" || !Number.isFinite(value)) continue;
-        if (typeof row.name === "string") keepBest(scores, capabilityModelKey(row.name), value);
-        if (typeof row.slug === "string") keepBest(scores, capabilityModelKey(row.slug), value);
-      }
-      if (scores.size > 0) {
-        domains[domain] = scores;
-        break;
-      }
-    }
+  const scores = new Map<string, number>();
+  for (const row of rows as Record<string, unknown>[]) {
+    const value = (row?.evaluations as Record<string, unknown> | undefined)?.[INTELLIGENCE_INDEX];
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    if (typeof row.name === "string") keepBest(scores, capabilityModelKey(row.name), value);
+    if (typeof row.slug === "string") keepBest(scores, capabilityModelKey(row.slug), value);
   }
+  const domains: Partial<Record<SizingDomain, ReadonlyMap<string, number>>> = {};
+  if (scores.size > 0) for (const domain of SIZING_DOMAINS) domains[domain] = scores;
   return { source: ARTIFICIAL_ANALYSIS_SOURCE, publishedAt: null, domains };
 }
 
@@ -118,15 +115,29 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
   return out.buffer;
 }
 
+/** A list past either bound fails whole, so price ranking takes over rather than tiering on part of it. */
 export async function fetchArtificialAnalysisTable(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<CapabilityTable> {
-  const response = await fetchImpl(ARTIFICIAL_ANALYSIS_URL, {
-    redirect: "error",
-    headers: { "x-api-key": apiKey },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const bytes = await readBoundedBytes(response, MAX_TABLE_BYTES);
-  return capabilityTableFromArtificialAnalysis(JSON.parse(new TextDecoder().decode(bytes)));
+  const rows: unknown[] = [];
+  let budget = MAX_TABLE_BYTES;
+  for (let page = 1; page <= MAX_TABLE_PAGES; page++) {
+    const url = new URL(ARTIFICIAL_ANALYSIS_URL);
+    url.searchParams.set("page", String(page));
+    const response = await fetchImpl(url.href, {
+      redirect: "error",
+      headers: { "x-api-key": apiKey },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bytes = await readBoundedBytes(response, budget);
+    budget -= bytes.byteLength;
+    const body = JSON.parse(new TextDecoder().decode(bytes)) as { data?: unknown; pagination?: { has_more?: unknown } } | null;
+    if (!Array.isArray(body?.data)) throw new Error("Artificial Analysis returned no model list");
+    const hasMore = body.pagination?.has_more;
+    if (typeof hasMore !== "boolean") throw new Error("Artificial Analysis returned no pagination.has_more");
+    rows.push(...body.data);
+    if (!hasMore) return capabilityTableFromArtificialAnalysis({ data: rows });
+  }
+  throw new Error(`Artificial Analysis listed more than ${MAX_TABLE_PAGES} pages`);
 }
 
 /** One fetch per period key; a failed fetch is forgotten so the next request retries. */

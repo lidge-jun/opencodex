@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
@@ -115,7 +116,7 @@ describe("CC-Switch keyless provider import", () => {
     const realLstat = fs.lstatSync, realFstat = fs.fstatSync;
     const lstat = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
       const stat = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
-      return target === path ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+      return samePath(target, path) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
         { ino: options?.bigint ? identity : Number(identity) }) : stat;
     }) as typeof fs.lstatSync);
     const fstat = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {

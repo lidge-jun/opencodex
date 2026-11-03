@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { closeSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -297,7 +298,7 @@ test("initial config file identity preserves adjacent NTFS-sized values", () => 
   }) as typeof fs.fstatSync);
   const lstat = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
     const stat = options?.bigint ? realLstat(path, { bigint: true }) : realLstat(path);
-    return path === tempPath ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+    return samePath(path, tempPath) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
       { ino: options?.bigint ? identity + 1n : Number(identity + 1n) }) : stat;
   }) as typeof fs.lstatSync);
   try {

@@ -31,12 +31,10 @@
  * posture as the affinity key itself. Two callers presenting identical thread ids can never read
  * each other's lineage, and no raw identifier or durable hash is stored.
  *
- * LIFETIME, stated plainly because the word "affinity" invites the opposite assumption: none of
- * this survives the process. The binding map is in memory, and the HMAC key above is fresh random
- * bytes taken at module load, so a restart does not merely forget the table -- it makes yesterday's
- * keys unreproducible. This is a warm-start hint for the life of one proxy process, never durable
- * account ownership, and nothing here should be read as a promise to a conversation that outlives
- * a restart.
+ * LIFETIME: lineage records and their keys remain process-local. The HMAC key is fresh random
+ * bytes taken at module load, so yesterday's keys cannot be reproduced after a restart. An
+ * affinity store may persist separate digests of cohort anchors under its own secret; it must
+ * never persist these process-local keys.
  *
  * The one upgrade that is neither a fresh start nor an untouched process is a code swap under a
  * live conversation, where the binding map is still populated with entries made under the
@@ -50,6 +48,12 @@ import { retainedUtf8Bytes } from "../lib/admission";
 
 const CODEX_LINEAGE_COMPONENT_MAX_BYTES = 512;
 const CODEX_LINEAGE_KEY = randomBytes(32);
+let conversationAnchorObserver: ((key: string, familyId: string, threadId: string) => void) | undefined;
+
+/** Register the consumer of derived cohort anchors, or remove it. */
+export function setCodexConversationAnchorObserver(fn?: (key: string, familyId: string, threadId: string) => void): void {
+  conversationAnchorObserver = fn;
+}
 
 /**
  * Mirrors `CODEX_THREAD_AFFINITY_IDLE_TTL_MS` in ./routing. Deliberately duplicated rather than
@@ -149,12 +153,14 @@ function boundedLineageComponent(value: string | null): string | undefined {
  * byte-identical to the key the thread actually binds under.
  */
 export function codexConversationKeyFor(familyId: string, threadId: string): string {
-  return `app:${createHmac("sha256", CODEX_LINEAGE_KEY)
+  const key = `app:${createHmac("sha256", CODEX_LINEAGE_KEY)
     .update("opencodex-app-pool-affinity-v1\0")
     .update(familyId)
     .update("\0")
     .update(threadId)
     .digest("base64url")}`;
+  conversationAnchorObserver?.(key, familyId, threadId);
+  return key;
 }
 
 /**

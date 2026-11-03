@@ -1,3 +1,4 @@
+import { samePath } from "../helpers/same-path";
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
@@ -88,12 +89,12 @@ describe("loadCommandCodeProjectContext", () => {
       writeFileSync(agentsPath, "project memory", "utf8");
       lstatMock.mockImplementation((async (path: Parameters<typeof realLstat>[0], options?: { bigint?: boolean }) => {
         const stat = options?.bigint ? await realLstat(path, { bigint: true }) : await realLstat(path);
-        return String(path) === agentsPath ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+        return samePath(path, agentsPath) ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
           { ino: options?.bigint ? identity + 1n : Number(identity + 1n) }) : stat;
       }) as typeof realLstat);
       openMock.mockImplementation(async path => {
         const handle = await realOpen(path);
-        if (String(path) !== agentsPath) return handle;
+        if (!samePath(path, agentsPath)) return handle;
         return { ...handle, read: handle.read.bind(handle), close: handle.close.bind(handle),
           stat: async (options?: { bigint?: boolean }) => {
             const stat = options?.bigint ? await handle.stat({ bigint: true }) : await handle.stat();
@@ -148,7 +149,7 @@ describe("loadCommandCodeProjectContext", () => {
         let releaseStalled: () => Promise<void> = async () => {};
         if (stalled === "lstat") {
           lstatMock.mockImplementation(path => {
-            if (String(path) !== agentsPath) return realLstat(path);
+            if (!samePath(path, agentsPath)) return realLstat(path);
             stalledCalls++;
             return new Promise<Stats>(resolve => {
               releaseStalled = async () => { resolve(await realLstat(path)); };
@@ -156,7 +157,7 @@ describe("loadCommandCodeProjectContext", () => {
           });
         } else {
           realpathMock.mockImplementation(path => {
-            if (String(path) !== agentsPath) return realRealpath(path);
+            if (!samePath(path, agentsPath)) return realRealpath(path);
             stalledCalls++;
             return new Promise<string>(resolve => {
               releaseStalled = async () => { resolve(await realRealpath(path)); };
@@ -249,7 +250,7 @@ describe("loadCommandCodeProjectContext", () => {
     try {
       execFileSync("mkfifo", [fifo]);
       openMock.mockImplementation(async (path, flags) => {
-        if (String(path) === fifo) {
+        if (samePath(path, fifo)) {
           openedFifo = true;
           throw new Error("FIFO must be rejected before open");
         }
@@ -303,7 +304,7 @@ describe("loadCommandCodeProjectContext", () => {
     try {
       writeFileSync(agentsPath, "recovered memory", "utf8");
       lstatMock.mockImplementation(path => {
-        if (String(path) !== agentsPath) return realLstat(path);
+        if (!samePath(path, agentsPath)) return realLstat(path);
         return new Promise<Stats>(resolve => {
           release = async () => { resolve(await realLstat(path)); };
         });
@@ -413,7 +414,7 @@ describe("loadCommandCodeProjectContext", () => {
     };
 
     opendirMock.mockImplementation(async path => {
-      if (String(path) === skillRoot) {
+      if (samePath(path, skillRoot)) {
         return hangingDir as Awaited<ReturnType<typeof realOpendir>>;
       }
       return realOpendir(path);
@@ -464,7 +465,7 @@ describe("loadCommandCodeProjectContext", () => {
       let entriesIterated = 0;
       opendirMock.mockImplementation(async path => {
         const dir = await realOpendir(path);
-        if (String(path) !== skillRoot) return dir;
+        if (!samePath(path, skillRoot)) return dir;
         const realIter = dir[Symbol.asyncIterator]();
         return {
           close: () => dir.close(),
@@ -560,7 +561,7 @@ describe("loadCommandCodeProjectContext", () => {
       writeFileSync(agentsPath, "x".repeat(4 * 1024 * 1024), "utf8");
       openMock.mockImplementation(async path => {
         const handle = await realOpen(path);
-        if (String(path) !== agentsPath) return handle;
+        if (!samePath(path, agentsPath)) return handle;
         const originalRead = handle.read.bind(handle);
         return {
           ...handle,
@@ -636,7 +637,7 @@ describe("loadCommandCodeProjectContext", () => {
       },
     };
     openMock.mockImplementation(async path => {
-      if (String(path) === agentsPath) {
+      if (samePath(path, agentsPath)) {
         return hangingFile as Awaited<ReturnType<typeof realOpen>>;
       }
       return realOpen(path);
@@ -700,7 +701,7 @@ describe("loadCommandCodeProjectContext", () => {
       writeFileSync(outsidePath, "outside secret", "utf8");
       symlinkSync(insidePath, agentsPath);
       openMock.mockImplementation(async path => {
-        if (String(path) === agentsPath) {
+        if (samePath(path, agentsPath)) {
           unlinkSync(agentsPath);
           symlinkSync(outsidePath, agentsPath);
         }
@@ -761,7 +762,7 @@ describe("loadCommandCodeProjectContext", () => {
         if (path !== skillFile) return;
         realpathMock.mockImplementation(async (p, opts) => {
           const resolved = await realRealpath(p, opts);
-          if (typeof resolved === "string" && resolved === skillFile) {
+          if (typeof resolved === "string" && samePath(resolved, skillFile)) {
             changedCanonicalPaths += 1;
             return resolved.replace(/SKILL\.md$/, "skill.md");
           }

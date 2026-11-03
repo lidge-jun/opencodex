@@ -4,6 +4,7 @@ import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chat
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, statSync } from "node:fs";
+import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
@@ -86,7 +87,7 @@ type MainAuthJsonCredential = {
    * the content hash notices those, and only once the new bytes are visible (#2999).
    * `null` when the target could not be stat'ed, which fails closed.
    */
-  identity: { dev: number; ino: number } | null;
+  identity: FileIdentity | null;
   root: Record<string, unknown>;
   tokens: Record<string, unknown>;
   accessToken?: string;
@@ -201,10 +202,10 @@ function sha256(value: string): string {
  * fail closed, because the whole point here is refusing to overwrite a file we can no
  * longer vouch for.
  */
-function statIdentity(path: string): { dev: number; ino: number } | null {
+function statIdentity(path: string): FileIdentity | null {
   try {
-    const stat = statSync(path);
-    return { dev: Number(stat.dev), ino: Number(stat.ino) };
+    const stat = statSync(path, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino };
   } catch {
     return null;
   }
@@ -316,8 +317,7 @@ function assertMainAuthJsonIdentityUnchanged(expected: MainAuthJsonCredential): 
   const identity = statIdentity(expected.path);
   if (!identity
     || !expected.identity
-    || identity.dev !== expected.identity.dev
-    || identity.ino !== expected.identity.ino) {
+    || !sameFileIdentity(identity, expected.identity)) {
     throw new MainAuthJsonChangedDuringRefreshError();
   }
 }

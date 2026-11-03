@@ -35,6 +35,7 @@ import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, ha
 import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { statTimeMs } from "../lib/file-identity";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
 import { publishAccountSelection, publishOAuthAccountPauseChange, publishOAuthAccountRoutingPolicyChange } from "../lib/account-selection-events";
 import {
@@ -433,7 +434,7 @@ interface LockSnapshot { bytes: string; dev: bigint; ino: bigint; mtimeMs: numbe
 export interface OAuthFileLockOptions { path: string; waitTimeoutMs?: number; staleAfterMs?: number; pollMinMs?: number; pollMaxMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; random?: () => number; beforeStaleUnlink?: () => void; beforeReleaseUnlink?: () => void; beforeFailedCreateUnlink?: () => void; writeMetadata?: (fd: number, bytes: string) => void }
 export interface OAuthFileLockGuard { readonly ownerId: string; release(): void }
 function errorCode(error: unknown): string | undefined { return error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined; }
-function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path, { bigint: true }); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:Number(s.mtimeNs)/1e6, mtimeNs:s.mtimeNs, size:s.size }; }
+function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path, { bigint: true }); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:statTimeMs(s.mtimeNs), mtimeNs:s.mtimeNs, size:s.size }; }
 function sameSnapshot(a: LockSnapshot,b: LockSnapshot): boolean { return a.bytes===b.bytes&&a.dev===b.dev&&a.ino===b.ino&&a.mtimeNs===b.mtimeNs&&a.size===b.size; }
 function sameFd(a: LockSnapshot,b: import("node:fs").BigIntStats): boolean { return a.dev===b.dev&&a.ino===b.ino&&a.mtimeNs===b.mtimeNs&&a.size===b.size; }
 export function createOAuthFileLock(options: OAuthFileLockOptions): { acquire(): Promise<OAuthFileLockGuard> } {

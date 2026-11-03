@@ -94,6 +94,7 @@ type StartedServer = {
   /** Captured during start(): the child's streams can only be read once. */
   stdout: Promise<string>;
   stderr: Promise<string>;
+  stdoutSnapshot: () => string;
 };
 
 type CapturedChildStream = {
@@ -334,8 +335,8 @@ class Fixture {
     return { exitCode, stdout, stderr };
   }
 
-  async start(): Promise<StartedServer> {
-    const child = this.spawnCli(["start"]);
+  async start(options: { readonly preloadPaths?: readonly string[]; readonly env?: Record<string, string> } = {}): Promise<StartedServer> {
+    const child = this.spawnCli(["start"], this.homeA, this.userprofileA, options);
     const pidPath = join(this.ocx, "ocx.pid");
     const runtimePath = join(this.ocx, "runtime-port.json");
     // Run 35093667426 waited the full 45 s Windows watchdog with the child alive, but
@@ -387,7 +388,7 @@ class Fixture {
       }
     }, "child /healthz").catch(() => diagnose("timed out waiting for child /healthz"));
     expect(health).toMatchObject({ pid: child.pid, port: runtime.port });
-    return { process: child, runtime, stdout: stdout.completed, stderr: stderr.completed };
+    return { process: child, runtime, stdout: stdout.completed, stderr: stderr.completed, stdoutSnapshot: stdout.snapshot };
   }
 
   async stop(server: StartedServer): Promise<void> {
@@ -819,6 +820,88 @@ describe("WP13 composed toggle acceptance", () => {
     expect(existsSync(join(fx.homeB, "native-write-locks"))).toBe(false);
     writeFileSync(release, "release");
     expect(await holder.exited).toBe(0);
+  }, CASE_TIMEOUT_MS);
+
+  /** RED: remove the corresponding handleStart admission term; discovery recreates the fence. */
+  test.each(["persisted-off", "shutdown"] as const)("Grok E2E: held startup discovery respects %s", async boundary => {
+    const fx = fixture();
+    let turnEntered = false;
+    const enteredFile = join(fx.root, "grok-catalog-entered");
+    const releaseFile = join(fx.root, "grok-catalog-release");
+    const releaseCatalog = () => writeFileSync(releaseFile, "release\n");
+    let releaseTurn!: () => void;
+    const turnGate = new Promise<void>(resolve => { releaseTurn = resolve; });
+    const provider = Bun.serve({
+      port: 0,
+      idleTimeout: 255, // The gates below, not an idle socket timeout, bound these deliberate holds.
+      fetch: async request => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith("/models")) {
+          return Response.json({ data: [{ id: "held-model" }] });
+        }
+        if (path.endsWith("/chat/completions")) {
+          turnEntered = true;
+          await turnGate;
+          return Response.json({ id: "held-turn", choices: [{ index: 0,
+            message: { role: "assistant", content: "done" }, finish_reason: "stop" }] });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const providers = { fixture: { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+      apiKey: "fixture-key", allowPrivateNetwork: true, liveModels: true, models: ["held-model"] } };
+    const grokHome = join(fx.homeA, ".grok");
+    mkdirSync(grokHome);
+    const original = "# user grok config\n";
+    writeFileSync(join(grokHome, "config.toml"), original);
+    fx.writeConfig({ providers, clientIntegrations: { codex: false }, shutdownTimeoutMs: HELD_REQUEST_BUDGET_MS });
+    const signalFile = join(fx.root, "signal-startup-stop");
+    let server: StartedServer | undefined;
+    let heldTurn: Promise<number> | undefined;
+    const turnAbort = new AbortController();
+    try {
+      server = await fx.start({
+        preloadPaths: [resolve(repoRoot, "tests/fixtures/grok-startup-discovery-preload.ts")],
+        env: { OCX_TEST_GROK_ENTERED_FILE: enteredFile, OCX_TEST_GROK_RELEASE_FILE: releaseFile,
+          OCX_TEST_GROK_HOLD_MS: String(HELD_REQUEST_BUDGET_MS),
+          ...(boundary === "shutdown" ? { OCX_TEST_STARTUP_SIGNAL_FILE: signalFile } : {}) },
+      });
+      await waitFor(() => existsSync(enteredFile) || null, "Grok startup catalog hold");
+      expect(server.stdoutSnapshot()).not.toContain("Client startup work complete.");
+      if (boundary === "shutdown") {
+        // Keep real admission occupied so shutdown cannot exit before discovery resumes.
+        heldTurn = fetch(`http://127.0.0.1:${server.runtime.port}/v1/chat/completions`, {
+          method: "POST", headers: { "content-type": "application/json", "x-opencodex-api-key": fx.dataToken },
+          body: JSON.stringify({ model: "fixture/held-model", messages: [{ role: "user", content: "fixture" }] }),
+          signal: AbortSignal.any([turnAbort.signal, AbortSignal.timeout(HELD_REQUEST_BUDGET_MS)]),
+        }).then(async response => { await response.text(); return response.status; });
+        void heldTurn.catch(() => {}); // Teardown joins it even when an earlier assertion fails.
+        await waitFor(() => turnEntered || null, "admitted provider turn");
+        writeFileSync(signalFile, "SIGINT\n");
+        await waitFor(() => server!.stdoutSnapshot().includes("Shutting down opencodex proxy") || null, "startup shutdown handler");
+      } else {
+        fx.writeConfig({ providers, clientIntegrations: { codex: false, grok: false } });
+      }
+      releaseCatalog();
+      await waitFor(() => server!.stdoutSnapshot().includes("Client startup work complete.") || null, "resumed Grok startup");
+      // Read before shutdown cleanup: a transient write followed by strip must fail too.
+      expect(server.process.exitCode).toBeNull();
+      expect(readFileSync(join(grokHome, "config.toml"), "utf8")).toBe(original);
+      expect(existsSync(join(grokHome, "config.toml.bak-opencodex"))).toBe(false);
+      expect(server.stdoutSnapshot()).not.toContain("Grok Build config updated");
+      releaseTurn();
+      if (heldTurn) {
+        expect(await heldTurn).toBe(200);
+        expect(await server.process.exited).toBe(0);
+      }
+    } finally {
+      releaseCatalog();
+      releaseTurn();
+      turnAbort.abort();
+      await heldTurn?.catch(() => {});
+      try { if (server) await fx.stop(server); }
+      finally { provider.stop(true); }
+    }
   }, CASE_TIMEOUT_MS);
 
   /** RED: delete the durable Grok intent or bypass `shouldSyncGrokOnStart`; startup recreates the fence. */

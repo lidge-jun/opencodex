@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { markResponseNonReplayable, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, SendBudgetExhaustedError, providerErrorDestinationLabel } from "../../src/lib/upstream-retry";
 import { resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
@@ -429,7 +429,7 @@ describe("Anthropic thinking-signature recovery through Responses dispatch", () 
   test("a local send-budget refusal retains 429 identity after refetch aborts its upstream signal", async () => {
     const bodies = fakeUpstream(index => {
       if (index === 1) return streamRejection();
-      if (index === 2) throw new SendBudgetExhaustedError("synthetic-upstream");
+      if (index === 2) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-upstream"));
       return success(true);
     });
     const result = await send(true);
@@ -656,7 +656,7 @@ test("a later media iteration preserves a structured send-budget refusal after t
       return Response.json({ error: { message: "Synthetic image refusal" } }, { status: 400 });
     }
     if (url !== "https://anthropic.example.test/v1/messages") throw new Error("Unexpected test network target");
-    if (++inferenceCalls > 1) throw new SendBudgetExhaustedError("synthetic-later-media-send");
+    if (++inferenceCalls > 1) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-later-media-send"));
     return sse(frame("message_start", { message: { usage: { input_tokens: 2 } } }),
       frame("content_block_start", { index: 0, content_block: { type: "tool_use", id: "image_fixture", name: "image_gen", input: {} } }),
       frame("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: '{"prompt":"fixture"}' } }),

@@ -21,6 +21,7 @@ import {
   UNGATED_LOOPBACK_ROUTES,
 } from "../../src/server/inbound-body-admission";
 import { configureInboundBodyBudget, createInboundBodyBudget, inboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { OLLAMA_JSON_BODY_ROUTES } from "../../src/server/ollama-native-paths";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 import { saturateInboundBodyBudget } from "../helpers/inbound-body-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -38,7 +39,7 @@ function fixtureAdmission(...args: Parameters<typeof withRaisedInboundBodyAdmiss
 const RAISED_BODY_LIMIT = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
 // Read the gate's own set rather than a second copy: a route added to admission
 // without protocol coverage, or covered here but never admitted, must not pass.
-const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES];
+const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES, ...OLLAMA_JSON_BODY_ROUTES];
 /** Synchronize upload and producer milestones without timer-based ordering. */
 function bodyDeferred() {
   let resolve!: () => void;
@@ -815,6 +816,12 @@ describe("raised inbound body admission at the real HTTP boundary", () => {
         });
         assert.equal(response.status, 503, path);
         assert.equal(response.headers.get("retry-after"), "1", path);
+        if (OLLAMA_JSON_BODY_ROUTES.has(path)) {
+          // Native clients get their own error shape; the refusal still owns one logged row.
+          assert.deepEqual(await response.json(), { error: "server temporarily unavailable; retry later" }, path);
+          assert.match(response.headers.get("x-opencodex-request-id") ?? "", /^ocx-/, path);
+          continue;
+        }
         const payload = await response.json() as { type?: string; error: { type: string; code: string } };
         assert.equal(payload.error.code, "server_busy", path);
         assert.equal(payload.error.type, path.startsWith("/v1/messages") ? "overloaded_error" : "server_error", path);

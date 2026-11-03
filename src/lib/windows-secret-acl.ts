@@ -660,10 +660,10 @@ export function windowsSecretAclReapPendingForPath(targetPath: string): boolean 
 }
 
 /** Non-blocking removal guard for callers that must refuse rather than wait for a stuck child. */
-export function windowsSecretAclReapPendingAtOrBelow(rootPath: string): boolean {
+export function windowsSecretAclReapPendingAtOrBelow(rootPath: string, includeAncestors = false): boolean {
   const root = captureRemovalIdentity(rootPath);
   return [...activeAsyncAclWork.values(), ...pendingAsyncIcaclsReaps.values()]
-    .some(entries => [...entries].some(entry => retainedWorkIsAtOrBelow(entry, root)));
+    .some(entries => [...entries].some(entry => retainedWorkIsAtOrBelow(entry, root, includeAncestors)));
 }
 
 /**
