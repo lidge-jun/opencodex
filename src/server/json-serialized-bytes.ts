@@ -7,7 +7,8 @@ type Frame =
 /**
  * UTF-8 byte length of JSON.stringify(value) for a JSON.parse result, computed without
  * recursion: a valid body nested deeper than the call stack must be measured, not crash.
- * Each container keeps one cursor frame, so extra memory grows with depth, not width.
+ * Each open container keeps one cursor frame, so arrays add no per-element queue; an object
+ * frame retains its key list, which stays bounded by the input size.
  */
 export function serializedJsonByteLength(value: unknown): number {
   let bytes = 0;
