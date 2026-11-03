@@ -132,6 +132,26 @@ export function isThroughputLimitText(message: string): boolean {
   return THROUGHPUT_LIMIT_TEXT_RE.test(message);
 }
 
+/** Codes that say nothing about the cause, so the message decides (#8127). */
+const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "api_error", "internal_error"]);
+const NON_OVERFLOW_ERROR_TYPES: ReadonlySet<string> = new Set(["rate_limit_error", "authentication_error", "permission_error"]);
+
+/**
+ * Whether a translated refusal is an oversized-input refusal. A coded context_length_exceeded
+ * always is. Some Responses upstreams send the refusal uncoded or as a generic server_error
+ * ("Your input exceeds the context window of this model"); as a 502 Claude Code retries it
+ * instead of compacting (#8127). Those count only when the wording is an overflow, is not a
+ * throughput limit, and the type is not a rate-limit or credential refusal. Any other specific
+ * code keeps its own classification.
+ */
+export function isContextOverflowError(error: { type?: unknown; code?: unknown }, message: string): boolean {
+  const code = error.code;
+  if (code === "context_length_exceeded") return true;
+  if (code != null && !(typeof code === "string" && GENERIC_FAILURE_CODES.has(code))) return false;
+  if (typeof error.type === "string" && NON_OVERFLOW_ERROR_TYPES.has(error.type)) return false;
+  return isContextOverflowText(message) && !isThroughputLimitText(message);
+}
+
 export function anthropicErrorBody(status: number, message: string, type?: string, code?: string): Rec {
   const overflow = code === "context_length_exceeded" && !isThroughputLimitText(message);
   const text = overflow ? claudePromptTooLongMessage(message) : message;
@@ -333,7 +353,7 @@ export function anthropicIncompleteOutcome(
  */
 export function anthropicFailedStatus(error: Rec, message: string): number {
   const code = typeof error.code === "string" ? error.code : undefined;
-  if (code === "context_length_exceeded") return 400;
+  if (isContextOverflowError(error, message)) return 400;
   return code === "translation_buffer_limit"
     ? 413
     : typeof error.status === "number"
@@ -852,7 +872,7 @@ export function responsesSseToAnthropicSse(
               status,
               message,
               !deterministic,
-              deterministic || code === "context_length_exceeded" ? code : undefined,
+              deterministic ? code : isContextOverflowError(error, message) ? "context_length_exceeded" : undefined,
             );
             break;
           }
