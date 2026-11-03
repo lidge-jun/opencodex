@@ -150,6 +150,19 @@ döngüde otomatik enjeksiyon kaldırılmışsa manuel olarak birleştirebilece�
 kök anahtarları içerir; geri döngü olmayanda ise özel sağlayıcı formunu içerir.
 Harici sağlayıcı modu bu profile dokunmaz.
 
+Bu dosya yeniden oluşturulurken OpenCodex'in yönetmediği düz kök anahtarlar
+korunur; böylece `stream_idle_timeout_ms` veya `stream_max_retries` gibi
+eklediğiniz bir ayar sonraki enjeksiyondan sonra da kalır. Korunan her atama,
+birden çok satıra yayılan değerler ve 64 bit tamsayılar dahil yazıldığı gibi
+kopyalanır ve ilk tablonun önüne yerleştirilir. Tablo içindeki anahtarlar ve
+`a.b = 1` gibi noktalı kök anahtarlar korunmaz. Çakışmada her zaman OpenCodex
+kazanır: sahip olduğu kök anahtarlar (`model_provider`, `model_catalog_json`,
+`openai_base_url`) kullanılan yönlendirme moduna göre yeniden yazılır ve
+profilin yazdığı bir tabloyla aynı adı taşıyan kök anahtar (profil `[features]`
+yazarken satır içi `features = { ... }` gibi) atılır. Enjeksiyon yazma kilidini
+beklerken dosya değişirse enjeksiyon yeniden denenebilir bir hatayla durur ve
+düzenlemeniz yerinde kalır.
+
 :::caution
 `openai_base_url`, `model_provider` ve `model_catalog_json` gibi kök anahtarlar
 ilk `[tablo]` başlığından önce **bulunmalıdır**. Enjektör bu yerleşimi garanti
