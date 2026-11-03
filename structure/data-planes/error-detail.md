@@ -25,7 +25,7 @@ through the disk reader. A row keeps:
   (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
-  `src/combos/failover.ts`), so a validation error that quotes "prompt is too long" stays rejected, a 429 that
+  `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, so a validation error that quotes "prompt is too long" stays rejected, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the

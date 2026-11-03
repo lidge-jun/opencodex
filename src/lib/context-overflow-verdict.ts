@@ -20,7 +20,12 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "maximum context length",
   "maximum context window",
   "too many tokens",
-  "at or past the model's context window",
+];
+
+/** Provider wording that says the conversation has reached/passed its model's context capacity. */
+const CONTEXT_WINDOW_POSITION_VERDICTS: readonly RegExp[] = [
+  /\b(?:history|conversation|input|prompt|request|turn|messages?)\b.{0,120}\b(?:at(?:\s+or\s+past)?|past|over|beyond|exceed(?:s|ed|ing)?|reached)\b.{0,60}\b(?:(?:the|this|selected|its)\s+)?(?:model(?:'s)?\s+)?context\s+(?:window|length|limit)\b/i,
+  /\b(?:context\s+(?:window|length|limit)|model(?:'s)?\s+context(?:\s+(?:window|length|limit))?)\b.{0,60}\b(?:full|exceed(?:s|ed|ing)?|exhausted|at\s+capacity)\b/i,
 ];
 
 /**
@@ -67,6 +72,7 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
+    || CONTEXT_WINDOW_POSITION_VERDICTS.some(verdict => verdict.test(text))
     || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 

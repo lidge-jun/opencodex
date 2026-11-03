@@ -39,6 +39,9 @@ export function registerComboContextOverflowCases<Server>({
     // A relay that serializes a Python SDK exception quotes the provider verdict inside a dict repr.
     "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
+    "The conversation has exceeded this model's context limit.",
+    "This input is beyond the context window for the selected model.",
+    "The request has reached the model context length limit.",
     // Devin's opaque context-window refusal: emitted as a structured event with code context_length_exceeded.
     "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
   ]) {
@@ -98,6 +101,7 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
       message: "Invalid 'tools[0].function.name': 'customer's prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { param: "tools[0].function.name", message: "customer's prompt is too long" } }),
+    JSON.stringify({ error: { type: "invalid_request_error", param: "tools[0].function.name", message: "The conversation has exceeded this model's context limit." } }),
     "Invalid 'tools[0].function.name': 'customer\\'s prompt is too long'.",
     SDK_VALIDATION,
     JSON.stringify({ error: { type: "invalid_request_error", message: SDK_VALIDATION } }),
@@ -149,6 +153,17 @@ export function registerComboContextOverflowCases<Server>({
     expect(isDefiniteContextOverflow(400, "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}")).toBe(true);
     expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { param: "messages", code: "context_length_exceeded",
       message: "This model's maximum context length is 8192 tokens." } }))).toBe(true);
+    for (const message of [
+      "The conversation has exceeded this model's context limit.",
+      "This input is beyond the context window for the selected model.",
+      "The request has reached the model context length limit.",
+      "The model's context window is full.",
+      "This model's context limit has been exceeded.",
+      "Devin rejected this turn and its history is at or past the model's context window. Compact the conversation or start a new session.",
+    ]) {
+      expect(isDefiniteContextOverflow(400, message)).toBe(true);
+      expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { message } }))).toBe(true);
+    }
     for (const echo of [
       JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),

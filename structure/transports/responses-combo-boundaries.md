@@ -12,7 +12,7 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 
 `isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
-Bedrock `input is too long for requested model` and `Please reduce the length of the messages or completion`
+Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, and `Please reduce the length of the messages or completion`
 count only at the start of the leaf message, so a validation error or SDK wrapper that echoes them is not
 evidence. Parameter validation (`invalid_value`/`invalid_type`, a `param` outside the conversation and token
 budget fields, `Invalid '<x>'`, Pydantic `input_value=`) never counts. This shared detector grants a
