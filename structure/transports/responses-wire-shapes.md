@@ -316,9 +316,9 @@ input deltas are tracked separately from client-executed `tool_use` blocks.
 
 Ingress `clientDeclaredEmptyToolCatalog` (`src/server/chat-completions.ts`, `src/server/claude-messages.ts`)
 survives omission during translation. Preparation snapshots declarations after direct decoding, before hosted-tool rewrites.
-Direct Chat with `tools: []` and legacy functions reads their names from the bridge projection;
-empty and omitted catalogs need no extra projection. Explicit `tools: []` or empty `additional_tools`
-activates the restriction; replayed declarations neither activate it nor grant names. Delivery
+Direct decoders expose current function names, including legacy Chat functions, without translating
+the conversation again or duplicating retained reasoning-budget charges. Explicit `tools: []` or empty
+`additional_tools` activates the restriction; replayed declarations neither activate it nor grant names. Delivery
 normalization uses those names; direct custom `exec` helpers use the bridge compiler. Refusals keep `undeclared_tool_call` in buffered envelopes and endpoint
 projections; Messages sees `api_error`, never `overloaded_error`. Caller-forward routes retain their
 exemption; `default.` normalization remains separate.

@@ -14,6 +14,7 @@ import {
   normalizeDeclaredToolName,
 } from "../types";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { TOOL_SEARCH_FUNCTION_NAME } from "../responses/tool-search-compat";
 
 /** Item types the client executes through a request-declared wire name. */
 export const CLIENT_EXECUTED_CALL_TYPES: ReadonlySet<string> = new Set([
@@ -89,6 +90,7 @@ function addWireToolName(
   tool: unknown,
   namespace?: string,
   ambiguousDottedAliases?: ReadonlySet<string>,
+  canonicalOnly = false,
 ): void {
   if (!isPlainObject(tool)) return;
   const name = wireToolInnerName(tool);
@@ -101,6 +103,7 @@ function addWireToolName(
     return;
   }
   names.add(namespacedToolName(namespace, name));
+  if (canonicalOnly) return;
   // Some routed providers echo the flattened wire name with a dot (`ns.name`, observed with
   // muse-spark via opencode-go) instead of `ns__name`. It is the same tool identity, so register
   // the dotted spelling too, mirroring `toolChoiceAliases` (#3402) -- but only while that
@@ -148,16 +151,17 @@ function addWireToolSpecs(
   names: Set<string>,
   specs: unknown,
   ambiguousDottedAliases?: ReadonlySet<string>,
+  canonicalOnly = false,
 ): void {
   if (!Array.isArray(specs)) return;
   for (const spec of specs) {
     if (!isPlainObject(spec)) continue;
     if (spec.type === "namespace" && Array.isArray(spec.tools)) {
       const namespace = typeof spec.name === "string" ? spec.name : undefined;
-      for (const inner of spec.tools) addWireToolName(names, inner, namespace, ambiguousDottedAliases);
+      for (const inner of spec.tools) addWireToolName(names, inner, namespace, ambiguousDottedAliases, canonicalOnly);
       continue;
     }
-    addWireToolName(names, spec, undefined, ambiguousDottedAliases);
+    addWireToolName(names, spec, undefined, ambiguousDottedAliases, canonicalOnly);
   }
 }
 
@@ -169,7 +173,7 @@ function addWireToolSpecs(
  * inside `input`, routed custom-tool rewrites) that the internal list flattens or renames, and
  * only the wire names can be compared against what the provider echoes back.
  */
-export function collectDeclaredWireToolNames(body: unknown): Set<string> {
+export function collectDeclaredWireToolNames(body: unknown, options?: { canonicalOnly?: boolean }): Set<string> {
   const names = new Set<string>();
   if (!isPlainObject(body)) return names;
   const specGroups: unknown[] = [body.tools];
@@ -182,7 +186,29 @@ export function collectDeclaredWireToolNames(body: unknown): Set<string> {
     }
   }
   const ambiguousDottedAliases = collectAmbiguousDottedAliases(specGroups);
-  for (const specs of specGroups) addWireToolSpecs(names, specs, ambiguousDottedAliases);
+  for (const specs of specGroups) addWireToolSpecs(names, specs, ambiguousDottedAliases, options?.canonicalOnly);
+  return names;
+}
+
+/**
+ * Function names that translated adapters give to nameless hosted declarations in this catalog.
+ * The parser exposes a declared `{type:"tool_search"}` to Chat-style providers as the function
+ * `tool_search`, so only a declaration present in this (current-turn) body authorizes that name.
+ */
+export function collectTranslatedHostedToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!isPlainObject(body)) return names;
+  const specGroups: unknown[] = [body.tools];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (isPlainObject(item) && item.type === "additional_tools") specGroups.push(item.tools);
+    }
+  }
+  for (const specs of specGroups) {
+    if (Array.isArray(specs) && specs.some(spec => isPlainObject(spec) && spec.type === "tool_search")) {
+      names.add(TOOL_SEARCH_FUNCTION_NAME);
+    }
+  }
   return names;
 }
 

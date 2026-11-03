@@ -728,7 +728,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(hits).toEqual(["a:m1:SECRET_PROMPT_X"]);
   });
 
-  test("monthly quota then Orca free-prompt cap continues to a healthy third provider", async () => {
+  test.each([400, 422])("monthly quota then Orca HTTP %s free-prompt cap continues to a healthy third provider", async status => {
     const hits: string[] = [];
     const go = serve(async request => {
       const body = await request.json() as { model?: string };
@@ -745,7 +745,7 @@ describe("server combo failover 030 activation matrix", () => {
         type: "invalid_request_error",
         code: "free_rate_limited",
         metadata: { reason: "err_free_prompt_cap" },
-      } }, { status: 400 });
+      } }, { status });
     });
     const backup = serve(async request => {
       const body = await request.json() as { model?: string };
@@ -766,6 +766,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(await response.json())).toContain("healthy fallback");
     expect(hits).toEqual(["go:m1", "orca:m2", "backup:m3"]);
+    expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
   });
 
   test("ordinary openai-chat 503 hops to backup for non-stream and stream", async () => {
