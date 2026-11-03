@@ -288,10 +288,17 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
   return { owner, manifest };
 }
 
+/** Room the `uninstallStartedAt` tombstone needs on top of a registration's manifest. */
+const TOMBSTONE_RESERVE_BYTES = 64;
+
+function serializeManifest(manifest: ConfigUninstallManifest): string {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
 function writeManifest(configDir: string, manifest: ConfigUninstallManifest): void {
   const path = join(configDir, CONFIG_UNINSTALL_MANIFEST);
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(temp, serializeManifest(manifest), { encoding: "utf8", mode: 0o600 });
   try {
     // Same Windows sharing-violation tolerance the config writer has: a
     // scanner holding the manifest must not turn uninstall bookkeeping into a
@@ -435,11 +442,13 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     if (!current) return null;
     if (current.manifest.uninstallStartedAt !== undefined) throw new ConfigUninstallInProgressError(configDir);
     if (current.manifest.paths.includes(rel)) return { ownership: current, recorded: true, identity: manifestIdentity(configDir) };
-    // A manifest over the cap would fail validation and strand every recorded path.
-    if (current.manifest.paths.length >= MANIFEST_MAX_PATHS) {
+    const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
+    // A manifest over either cap would fail validation and strand every recorded path. The byte
+    // check leaves room for the tombstone uninstall adds later.
+    if (manifest.paths.length > MANIFEST_MAX_PATHS
+      || Buffer.byteLength(serializeManifest(manifest)) + TOMBSTONE_RESERVE_BYTES > METADATA_MAX_BYTES) {
       return { ownership: current, recorded: false, identity: manifestIdentity(configDir) };
     }
-    const manifest = { ...current.manifest, paths: [...current.manifest.paths, rel].sort() };
     writeManifest(configDir, manifest);
     return { ownership: { owner: current.owner, manifest }, recorded: true, identity: manifestIdentity(configDir) };
   });
@@ -459,12 +468,27 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   return locked.value.recorded;
 }
 
-/** The only names a finished uninstall can leave behind when a lock file could not be unlinked. */
-function onlyOwnershipLockFilesRemain(configDir: string): boolean {
+/**
+ * What uninstall's last step can leave when it stops after deleting the manifest: the owner marker
+ * and lock files, and nothing else. Uninstall deletes the manifest first, so its absence means the
+ * snapshot was already removed. Windows also keeps a lock file another process holds open.
+ */
+function onlyOwnershipLeftoversRemain(configDir: string): boolean {
+  if (existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))) return false;
   const names = readdirSync(configDir);
-  const lockNames = new Set([CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
-  return names.length > 0 && names.every(name => lockNames.has(name)
-    && lstatSync(join(configDir, name)).isFile() && !lstatSync(join(configDir, name)).isSymbolicLink());
+  const allowed = new Set([CONFIG_OWNER_FILE, CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
+  if (names.length === 0 || !names.every(name => allowed.has(name))) return false;
+  for (const name of names) {
+    const entry = lstatSync(join(configDir, name));
+    if (!entry.isFile() || entry.isSymbolicLink()) return false;
+  }
+  if (!names.includes(CONFIG_OWNER_FILE)) return true;
+  try {
+    const owner = readBoundedJson(join(configDir, CONFIG_OWNER_FILE));
+    return isOwner(owner) && samePath(owner.root, canonicalRoot(configDir));
+  } catch {
+    return false;
+  }
 }
 
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
@@ -480,18 +504,20 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
   if (!loadOwnership(configDir)) {
-    // A rerun after the metadata was deleted but a lock file could not be unlinked (Windows keeps
-    // a file another process has open): nothing but lock files remains, so finish the removal.
-    if (!existsSync(join(configDir, CONFIG_OWNER_FILE)) && !existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))
-      && onlyOwnershipLockFilesRemain(configDir)) {
+    // A rerun after uninstall stopped between deleting the manifest and removing the root: only
+    // this module's own marker and lock files remain, so finish the removal.
+    if (onlyOwnershipLeftoversRemain(configDir)) {
       try {
+        try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
         removeOwnershipLockFile(configDir);
         rmdirSync(configDir);
         return { status: "removed", residualPaths: [] };
       } catch (error) {
         return {
           status: "partial",
-          reason: `could not remove the ownership lock: ${error instanceof Error ? error.message : String(error)}`,
+          reason: `could not remove ownership metadata: ${error instanceof Error ? error.message : String(error)}`,
           residualPaths: readdirSync(configDir).map(name => join(configDir, name)),
         };
       }

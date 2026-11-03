@@ -163,15 +163,58 @@ describe("serialized ownership manifest (#8093)", () => {
 });
 
 describe("callers that create files after registering them (#8093)", () => {
-  test("service log rotation creates no generation while uninstall refuses its registration", withHome(async dir => {
+  test("service log rotation stops creating generations once uninstall has started", withHome(async dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    const tombstoned = { ...manifest(dir), uninstallStartedAt: Date.now() };
-    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify(tombstoned, null, 2) + "\n");
     const { startServiceLogging, SERVICE_LOG_MAX_BYTES } = await import("../../src/service/logging");
     const path = join(dir, "service.log");
-    writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
-    startServiceLogging(path, { OCX_SERVICE: "1" }, 60_000)();
+    const grow = () => writeFileSync(path, "x".repeat(SERVICE_LOG_MAX_BYTES + 1));
+    grow();
+    const stop = startServiceLogging(path, { OCX_SERVICE: "1" }, 10);
+    try {
+      expect(existsSync(path + ".1")).toBe(true);
+      expect(manifest(dir).paths).toEqual(expect.arrayContaining(["service.log.1", "service.log.2"]));
+      // Uninstall starts while the timer is running; the next rotations must create nothing.
+      const tombstoned = { ...manifest(dir), uninstallStartedAt: Date.now() };
+      writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify(tombstoned, null, 2) + "\n");
+      removeTreeWithRetry(path + ".1");
+      grow();
+      await Bun.sleep(100);
+    } finally { stop(); }
     expect(existsSync(path + ".1")).toBe(false);
-    expect(manifest(dir).paths).not.toContain("service.log.1");
+    expect(existsSync(path + ".2")).toBe(false);
+  }));
+});
+
+describe("manifest limits and uninstall leftovers (#8093)", () => {
+  test("registration stops at the byte limit instead of writing a manifest uninstall would reject", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const warn = console.warn;
+    console.warn = () => {};
+    let refused = 0;
+    try {
+      for (let i = 0; i < 400 && refused === 0; i += 1) {
+        if (!recordOwnedConfigPath(dir, join(dir, String(i).padStart(4, "0") + "-" + "n".repeat(220)))) refused += 1;
+      }
+    } finally { console.warn = warn; }
+    expect(refused).toBe(1);
+    expect(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST)).length).toBeLessThanOrEqual(64 * 1024 - 64);
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+  }));
+
+  test("a rerun finishes an uninstall that stopped after deleting the manifest", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(true);
+    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+  }));
+
+  test("leftover metadata next to any other file is still refused untouched", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
+    writeFileSync(join(dir, "user-notes.txt"), "keep");
+    expect(removeOwnedConfigState(dir).status).toBe("refused");
+    expect(existsSync(join(dir, "user-notes.txt"))).toBe(true);
+    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(true);
   }));
 });

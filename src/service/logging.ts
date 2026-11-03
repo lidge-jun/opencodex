@@ -125,16 +125,13 @@ export function startServiceLogging(
     };
     restore.push(() => { console[method] = original; });
   }
-  // Rotation creates the .1/.2 files, so it waits until they are registered for uninstall; a
-  // refusal (uninstall in progress, busy ownership lock) skips rotation and retries next tick.
-  let rotationOwned = false;
+  // Rotation creates the .1/.2 files, so every rotation registers them first. Once recorded this
+  // is one stat, and it still sees an uninstall tombstone written after logging started; a refusal
+  // (uninstall in progress, busy ownership lock) skips this rotation and retries next tick.
   const rotate = () => {
-    if (!rotationOwned) {
-      try {
-        for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
-        rotationOwned = true;
-      } catch { return; /* ownership bookkeeping must not break logging */ }
-    }
+    try {
+      for (const suffix of [".1", ".2"]) recordOwnedConfigPath(dirname(path), `${path}${suffix}`);
+    } catch { return; /* ownership bookkeeping must not break logging */ }
     rotateServiceLog(path);
   };
   rotate();
