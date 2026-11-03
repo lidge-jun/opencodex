@@ -24,6 +24,9 @@ while empty installation and turn-metadata headers retain their existence gates.
 `src/codex/forward-transport-headers.ts` also isolates a present installation field inside native
 turn metadata and strips caller attestations from substituted credentials. Its selected-header merge
 prevents removed identity fields from reappearing through provider defaults.
+After the `installation_id` rewrite, the turn-metadata JSON escapes every code unit outside
+printable ASCII (U+0000–U+001F and U+007F and above) as `\uXXXX`, so the header stays a valid
+HTTP field value and JSON-decodes to the same metadata; the client-metadata copy uses the same form.
 Pool turn metadata is bounded to 32 KiB of UTF-8. Larger values refuse the send with the same
 sanitized identity error instead of passing unprojected bytes through; main and main-pool
 retain their original values. Routed compact handoffs preserve present empty installation and
