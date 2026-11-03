@@ -140,6 +140,14 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
+allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
+only a fragment containing a newline triggers splitting of the accumulated record. Complete
+records and the remaining residual retain their independent size checks and existing reservation
+order, including CRLF and EOF handling. The fatal streaming decoder emits complete code points,
+so fragment counts remain exact across split UTF-8 reads. `tests/providers/ollama/ollama-native-scaling.test.ts`
+checks linear measurement and splitting work, framing equivalence, invalid UTF-8 and cancellation.
+
 `src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
 and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
 gates subsequent socket input even when the decoder would accept more coded bytes.

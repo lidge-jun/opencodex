@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { formatMuseResetCountdown, museLimitReport, withMuseLimitObservation } from "../src/muse-limit-observation";
 
 const now = Date.parse("2026-10-25T19:08:28Z");
+// Rows carry the server-derived numeric reset; the dashboard never reads provider message text.
 const row = { provider: "meta-muse", accountLogLabel: "o527765", status: 429, errorCode: "rate_limit_exceeded", timestamp: now,
-  upstreamError: "Subscription quota exhausted. Your usage window resets at 2026-10-26T00:00:00Z." };
+  rateLimitResetAt: Date.parse("2026-10-26T00:00:00Z") };
 
 test("the visible countdown decreases and stops at zero", () => {
   expect(formatMuseResetCountdown(now + 3661000, now)).toBe("01:01:01");
@@ -21,10 +22,17 @@ test("an explicit subscription refusal preserves the observed reset without inve
 test("expired, malformed, unrelated and cross-account evidence never becomes a quota", () => {
   for (const invalid of [
     { ...row, status: 200 }, { ...row, provider: "xai" }, { ...row, accountLogLabel: "o000000" },
-    { ...row, upstreamError: "Too many requests. Try again later." }, { ...row, timestamp: now + 1000 },
-    { ...row, upstreamError: "Subscription quota exhausted. Your usage window resets at 2099-10-26T00:00:00Z." },
+    { ...row, rateLimitResetAt: undefined }, { ...row, timestamp: now + 1000 },
+    { ...row, rateLimitResetAt: Date.parse("2099-10-26T00:00:00Z") }, { ...row, rateLimitResetAt: Number.NaN },
+    { ...row, rateLimitResetAt: "2026-10-26T00:00:00Z" }, { ...row, rateLimitResetAt: now - 1 },
   ]) expect(museLimitReport(invalid, "o527765", now)).toBeNull();
   expect(museLimitReport(row, "o527765", Date.parse("2026-10-26T00:00:00Z"))).toBeNull();
+});
+
+test("a legacy quota sentence without the numeric reset is not parsed in the dashboard", () => {
+  const { rateLimitResetAt: _reset, ...legacy } = row;
+  const sentence = { ...legacy, upstreamError: "Subscription quota exhausted. Your usage window resets at 2026-10-26T00:00:00Z." };
+  expect(museLimitReport(sentence, "o527765", now)).toBeNull();
 });
 
 test("an existing measured quota is authoritative and needs no fallback reads", async () => {
@@ -39,7 +47,7 @@ test("fallback reads bind the latest request to the active account and never inv
     const url = String(input); paths.push(url);
     if (url === "/api/providers") return Response.json([{ name: "meta-muse", authMode: "oauth", baseUrl: "https://api.meta.ai/v1" }]);
     if (url.startsWith("/api/oauth/accounts?")) return Response.json({ activeAccountId: "fixture-muse-account", accounts: [{ id: "fixture-muse-account" }] });
-    if (url === "/api/logs?provider=meta-muse&account=o527765") return Response.json({ logs: [{ ...row, timestamp: Date.now(), upstreamError: `Subscription quota exhausted. Your usage window resets at ${new Date(Date.now() + 3600000).toISOString().replace(/\.\d{3}Z$/, "Z")}.` }] });
+    if (url === "/api/logs?provider=meta-muse&account=o527765") return Response.json({ logs: [{ ...row, timestamp: Date.now(), rateLimitResetAt: Date.now() + 3600000 }] });
     throw Error("unexpected request");
   }) as typeof fetch;
   const result = await withMuseLimitObservation({}, "", new AbortController().signal, fetcher);
@@ -97,8 +105,7 @@ async function observeFinalizedRows(logs: unknown[]) {
 
 function overlappingRows() {
   const started = Date.now() - 2000;
-  const refusal = { ...row, timestamp: started,
-    upstreamError: `Subscription quota exhausted. Your usage window resets at ${new Date(started + 3600000).toISOString().replace(/\.\d{3}Z$/, "Z")}.` };
+  const refusal = { ...row, timestamp: started, rateLimitResetAt: started + 3600000 };
   return { refusal, success: { ...refusal, status: 200, timestamp: started + 1000 } };
 }
 

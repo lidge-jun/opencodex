@@ -12,6 +12,22 @@ const files = ["bin/ocx.mjs", "src/update/index.ts", "src/update/job.ts", "src/u
   "src/update/job-supervised-restart.ts", "src/update/job-pinned-start.ts", "src/update/job-windows-restart.ts"];
 const compact = (node: ts.Node) => node.getText().replace(/\s+/g, " ");
 
+function isMutationEntryRefusal(node: ts.CallExpression): boolean {
+  const statement = node.parent;
+  if (!ts.isExpressionStatement(statement) || !ts.isBlock(statement.parent)) return false;
+  const block = statement.parent, branch = block.parent;
+  if (!ts.isIfStatement(branch) || branch.thenStatement !== block || branch.elseStatement
+    || compact(branch.expression) !== "!entered.ok" || block.statements.length !== 2
+    || block.statements[1] !== statement || compact(block.statements[0]) !== "releaseUpdateLease();"
+    || compact(node) !== "process.exit(10)" || !ts.isBlock(branch.parent)) return false;
+  const siblings = branch.parent.statements, index = siblings.indexOf(branch);
+  if (index < 1) return false;
+  const previous = siblings[index - 1];
+  return ts.isVariableStatement(previous) && !!(previous.declarationList.flags & ts.NodeFlags.Const)
+    && previous.declarationList.declarations.length === 1
+    && compact(previous.declarationList.declarations[0]) === "entered = await session.enterMutation()";
+}
+
 export function updateModuleFiles(root = repoPath("src/update"), prefix = "src/update"): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
     ? updateModuleFiles(join(root, entry.name), prefix + "/" + entry.name)
@@ -55,7 +71,8 @@ export function rawMutationViolations(source: ts.SourceFile, file: string): stri
     if ([ts.SyntaxKind.TypeQuery, ts.SyntaxKind.TypeReference, ts.SyntaxKind.TypeLiteral, ts.SyntaxKind.InterfaceDeclaration, ts.SyntaxKind.TypeAliasDeclaration].includes(node.kind)) return;
     if (ts.isCallExpression(node) && file === "bin/ocx.mjs" && contextOf(node) === "runPackageManagerSelfUpdate"
       && compact(node.expression) === "process.exit" && node.pos > source.text.indexOf("const homePolicy")
-      && compact(node.arguments[0]) !== "1") failures.push("unguarded successful update exit: " + compact(node));
+      && (!node.arguments[0] || compact(node.arguments[0]) !== "1") && !isMutationEntryRefusal(node))
+      failures.push("unguarded successful update exit: " + compact(node));
     // Dependency admission applies even to trusted primitive implementations and
     // exact legacy exemptions; an exemption cannot open a new import edge.
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {

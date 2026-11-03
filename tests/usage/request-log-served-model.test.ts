@@ -17,17 +17,19 @@ import {
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
 
-test("upstream served model persists only when it is a plausible bounded identifier", () => {
+test("upstream served model persists only when it is a model id the route or catalog already knows", () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-served-model-"));
   const previousHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   clearRequestLogsForTests();
   resetUsageReadCacheForTests();
   try {
-    const valid = "vendor/model.v2:@+-_";
+    // A catalog model for the selected provider; anything else, however well formed, is not recorded.
+    const valid = "gpt-5.5";
     // Credential-shaped but inside the identifier alphabet; built at runtime so no token-like literal is committed.
     const credentialShaped = ["eyJ" + "a".repeat(12), "b".repeat(12), "c".repeat(8)].join(".");
-    const invalid = ["m".repeat(201), "model\ninjected", "model with space", "model\twith-tab", credentialShaped];
+    const invalid = ["m".repeat(129), "model+plus", "model\ninjected", "model with space", "model\twith-tab", credentialShaped,
+      "vendor/model.v2:@-_", "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e"];
     for (const [index, model] of [valid, ...invalid].entries()) {
       const context: RequestLogContext = {
         model: "route-model",
@@ -92,8 +94,12 @@ test("the client selector echoed in response.model is not recorded as the served
 
   // A model the upstream really answered with is still an observation.
   const rerouted = anthropicContext();
-  applyResponseLogMetadata(rerouted, { response: { model: "claude-opus-5-1" } });
-  expect(rerouted.servedModel).toBe("claude-opus-5-1");
+  applyResponseLogMetadata(rerouted, { response: { model: "claude-sonnet-5-5" } });
+  expect(rerouted.servedModel).toBe("claude-sonnet-5-5");
+  // A model the provider catalog does not know is not recorded, whatever its shape.
+  const unknown = anthropicContext();
+  applyResponseLogMetadata(unknown, { response: { model: "claude-opus-5-1" } });
+  expect(unknown.servedModel).toBeUndefined();
 
   // A combo parent inherits a child's echo of the combo selector.
   const combo: RequestLogContext = {
@@ -128,6 +134,9 @@ test("rows persisted with a selector echo lose it on read", () => {
   }));
   expect(combo).not.toHaveProperty("servedModel");
 
-  const genuine = normalizeUsageEntryForTest(row({ wireModel: "claude-opus-5-5", servedModel: "claude-opus-5-1" }));
-  expect(genuine.servedModel).toBe("claude-opus-5-1");
+  const genuine = normalizeUsageEntryForTest(row({ wireModel: "claude-opus-5-5", servedModel: "claude-sonnet-5-5" }));
+  expect(genuine.servedModel).toBe("claude-sonnet-5-5");
+  const unknown = normalizeUsageEntryForTest(row({ wireModel: "claude-opus-5-5", servedModel: "claude-opus-5-1", resolvedModel: "claude-opus-5-1" }));
+  expect(unknown).not.toHaveProperty("servedModel");
+  expect(unknown).not.toHaveProperty("resolvedModel");
 });

@@ -1,10 +1,8 @@
 # Protocol Paths
-
 How a request on one public inference API reaches an upstream wire, in shared vocabulary. The
 transport behavior of each ingress stays owned by [Inbound Compatibility Surfaces](inbound-compat.md)
 and [Responses transport](../transports/responses.md); this doc owns the names, the declared
 feature dispositions and the baseline those docs are measured against.
-
 ## Vocabulary and leaf modules
 
 `src/protocols/contract.ts` defines the three public protocols (`responses`, `chat`,
@@ -103,7 +101,7 @@ one. `/api/logs` spreads the entry and accepts `protocolMode`
 an unknown value matches nothing. The dashboard renders it with
 `gui/src/components/protocols/` (a row badge and a detail-dialog section) and filters by mode
 client-side in `gui/src/pages/logs-filter.ts`. `tests/responses/protocol-trace.test.ts` and
-`tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter.
+`tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter. A translating native ingress can suppress the trace: see [Ollama-Compatible Inbound](ollama-inbound.md#protocol-trace).
 
 ## Planner and preview
 
@@ -229,7 +227,7 @@ converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/ou
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
 `anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector. Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
+the existing collector. Only producer-marked watchdog/EOF terminals retain local Chat wording; upstream copies of their reason or message follow [client error normalization](error-detail.md#client-error-bodies-chat). Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
@@ -598,3 +596,5 @@ implicitly. The three are declared as `api` capabilities in `src/cli/capabilitie
 routes carry no exemption in `src/server/management/route-registry.ts`; the capability mutation
 check reads the registry's `mutates`, so the read-only plan POST is not a write. `tests/cli/cli-api-protocols.test.ts` pins the requests, the usage errors and that every
 protocol route is verbed.
+
+Chat direct encoders and collectors share [the owned client-body contract](error-detail.md#client-error-bodies-chat). A response-scoped verdict sink crosses the lifetime wrapper explicitly, preserving collector decisions from the original failure.

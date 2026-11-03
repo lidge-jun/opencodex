@@ -1,3 +1,4 @@
+import { clientFacingModelText } from "../../lib/error-destination";
 import type { AdapterEvent, OcxConfig } from "../../types";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { routeConcreteModel, type RouteResult } from "../../router";
@@ -160,7 +161,8 @@ export async function runWithCompactionRecovery(
     let target: RouteResult;
     try { target = routeConcreteModel(config, recovery.model); } catch { return keep(response); }
     if (!routed(target, kind) || identity(sourceRoute) === identity(target)) return keep(response);
-    const originalModel = firstOptions.compactionRoutingOverride?.sourceModel ?? String(snapshot.model);
+    const originalModel = firstOptions.clientModelLabel ? clientFacingModelText(firstOptions.clientModelLabel)
+      : firstOptions.compactionRoutingOverride?.sourceModel ?? String(snapshot.model);
     // Use the established protocol commit boundary. For runTurn streams the direct event
     // observer additionally preserves side-effect heartbeats that the bridge does not publish.
     if (response.ok && hasResponseMediaType(response.headers, "text/event-stream")) {
@@ -268,7 +270,7 @@ export async function runWithCompactionRecovery(
         options.accountLoad.lease = null;
       }
       fallback = await dispatch(child, config, logCtx, {
-        ...options, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
+        ...options, clientModelLabel: firstOptions.clientModelLabel, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
         compactionRoutingOverride: { sourceModel: originalModel },
         onRequestBodyRead: undefined, onRequestBodyParsed: undefined,
         onCompactionRecoveryRoute: undefined, onCompactionRecoveryAdapterEvent: undefined,

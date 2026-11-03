@@ -18,6 +18,8 @@ export interface PreparedCodexWsRequest {
   /** Original HTTP body/framing/options with only the canonical routing hint re-derived. */
   httpInit: RequestInit;
   canonical: boolean;
+  /** The request's model id, when the body names one: a model the relayed metadata may report. */
+  model?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,7 +85,7 @@ export function prepareCodexWsRequest(url: string, init: RequestInit): PreparedC
         ? headers["openai-beta"]
         : `${headers["openai-beta"]}, ${WS_BETA}`
       : WS_BETA;
-    return { frameText, headers, httpInit, canonical };
+    return { frameText, headers, httpInit, canonical, ...(typeof body.model === "string" ? { model: body.model } : {}) };
   } catch {
     return null;
   }

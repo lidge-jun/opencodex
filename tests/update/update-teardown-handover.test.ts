@@ -62,7 +62,7 @@ describe("handover exit code and update decision", () => {
     expect(STOP_TEARDOWN_HANDED_OVER_EXIT_CODE).toBe(81);
     expect([STOP_HISTORY_INCOMPLETE_EXIT_CODE, STOP_HISTORY_DEFERRED_EXIT_CODE]).not.toContain(81);
     const cli = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
-    const dispatch = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
+    const dispatch = ["dispatch.ts", "sync-command.ts"].map(file => readFileSync(repoPath("src", "cli", file), "utf8")).join("\n");
     const literal = [...cli.matchAll(/process\.exit(?:Code)?\s*(?:=|\()\s*(\d+)/g), ...dispatch.matchAll(/return (\d+);/g)]
       .map(match => Number(match[1]));
     expect(literal).not.toContain(81);

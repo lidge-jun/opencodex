@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import type { OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboTarget, OcxConfig } from "../types";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
 import { resolveComboId } from "./types";
@@ -109,8 +110,7 @@ export function concreteComboRequestBody(
     if (!warnedUnsupportedDefaults.has(key)) {
       warnedUnsupportedDefaults.add(key);
       console.debug("[opencodex] combo default effort omitted", {
-        provider: target.provider,
-        model: target.model,
+        provider: errorDestinationText(providerErrorDestinationLabel(target.provider)),
         requestedEffort: defaultEffort,
         capability: targetReasoningEfforts === undefined ? "unknown" : "unsupported",
       });
