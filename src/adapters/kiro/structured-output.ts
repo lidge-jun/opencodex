@@ -1,6 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../types";
 import { KIRO_STRUCTURED_OUTPUT_TOOL_NAME } from "../kiro-constants";
 import { sanitizeKiroSchema } from "../kiro-tools";
+import { readKiroJson } from "./structured-output-json";
 import { assertKiroStrictSchemaSupported, kiroStrictSchemaProblem, rewriteKiroWrappedRefs } from "./structured-output-schema";
 
 /**
@@ -192,7 +193,6 @@ function admittedRootTypes(schema: JsonRecord): string[] {
 
 /** The first reason `value` breaks the light contract, or undefined when it passes. */
 function structuredValueProblem(spec: KiroStructuredOutputSpec, value: unknown): string | undefined {
-  if (spec.strict && spec.schema) return kiroStrictSchemaProblem(spec.schema, value);
   const types = spec.schema ? admittedRootTypes(spec.schema) : ["object"];
   if (types.length > 0 && !types.some(type => matchesJsonType(value, type))) {
     return `expected a JSON ${types.join(" or ")} at the root`;
@@ -205,14 +205,32 @@ function structuredValueProblem(spec: KiroStructuredOutputSpec, value: unknown):
   return undefined;
 }
 
+/**
+ * Strict validation of JSON `text` that already parsed: the JSON text to relay, or the problem.
+ *
+ * The strict validator reads the text again keeping every number's lexeme, so bounds, `const` and
+ * `enum` judge the exact bytes the client will receive. The wrapped form relays the original bytes
+ * of `value`, which keeps integers beyond 2^53 intact there too.
+ */
+function strictStructuredJson(schema: JsonRecord, text: string, wrapped: boolean): { json: string } | { problem: string } {
+  const document = readKiroJson(text);
+  if (!document) return { problem: "$: the value nests deeper than strict validation allows" };
+  const root = document.value;
+  const value = wrapped && root.kind === "object" ? root.entries.get("value") : root;
+  if (!value) return { problem: "missing `value`" };
+  const problem = kiroStrictSchemaProblem(schema, value, document.nodes);
+  if (problem) return { problem };
+  return { json: wrapped ? text.slice(value.start, value.end) : text };
+}
+
 const FAILURE_PREFIX = "Kiro structured output did not match the requested format";
 
 /**
  * Validate the structured-output tool's input and return the JSON text to relay.
  *
  * The direct form relays the model's own bytes rather than a re-serialization, so integers beyond
- * 2^53 and key order survive exactly as written. The wrapped form has to extract `value` and so
- * re-serializes it.
+ * 2^53 and key order survive exactly as written. The wrapped form extracts `value`: a strict format
+ * relays its original bytes, and a non-strict one re-serializes it.
  */
 export function parseKiroStructuredToolInput(
   spec: KiroStructuredOutputSpec,
@@ -230,6 +248,10 @@ export function parseKiroStructuredToolInput(
     return { error: `${FAILURE_PREFIX}: missing \`value\`` };
   }
   const value = spec.wrapped ? input.value : input;
+  if (spec.strict && spec.schema) {
+    const strict = strictStructuredJson(spec.schema, text, spec.wrapped);
+    return "json" in strict ? strict : { error: `${FAILURE_PREFIX}: ${strict.problem}` };
+  }
   const problem = structuredValueProblem(spec, value);
   if (problem) return { error: `${FAILURE_PREFIX}: ${problem}` };
   return { json: spec.wrapped ? JSON.stringify(value) : text };
@@ -255,6 +277,10 @@ export function parseKiroStructuredText(spec: KiroStructuredOutputSpec, text: st
     value = JSON.parse(candidate);
   } catch {
     return undefined;
+  }
+  if (spec.strict && spec.schema) {
+    // A text answer is the value itself, even when the tool input would have wrapped it.
+    return "json" in strictStructuredJson(spec.schema, candidate, false) ? candidate : undefined;
   }
   return structuredValueProblem(spec, value) === undefined ? candidate : undefined;
 }

@@ -164,14 +164,35 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   turn carries no tool-catalog nudge. The prose contract restates the caller's unsanitized schema
   when it fits the injected-instruction budget, and is otherwise sent without it.
 - The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
-  call. The direct form relays the model's bytes; the wrapped form relays `JSON.stringify(value)`.
+  call. The direct form relays the model's bytes; the wrapped form relays the original bytes of
+  `value` under `strict: true` and `JSON.stringify(value)` otherwise.
   Without `strict: true`, validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
   root's `required` keys are present. With `strict: true`, `src/adapters/kiro/structured-output-schema.ts`
-  validates the whole value against the original schema: `type` (including type arrays), `properties`,
-  `required`, `additionalProperties`, `enum`, `const`, `items`, `anyOf`, local `$ref` with
-  `$defs`/`definitions`, and string length, pattern, numeric and array-length bounds. A strict
-  schema with any other assertion keyword (`format`, `oneOf`, `allOf`, `not`, tuple `items`, a
-  remote `$ref`, ...) is refused before anything is sent, as structured output was before emulation.
+  prepares the original schema into a validation graph once, at the boundary, and validates the whole
+  value exactly and in bounded work. Anything outside this subset is refused before anything is sent,
+  with the same refusal structured output had before emulation:
+  - `type` (a known type or a non-empty array of them), `properties`, `required`,
+    `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
+  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition;
+    `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
+    references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`
+    edges that consumes none of the value are refused. Recursion through properties or items is allowed.
+  - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
+  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and every number inside `const`
+    or `enum` must be a safe integer or a non-integer with at most 15 significant digits, so the
+    parsed double still says what the caller wrote. The model's numbers are compared by their
+    original text with exact decimal arithmetic (`src/adapters/kiro/structured-output-json.ts`).
+  - `multipleOf` only as a positive safe integer, checked with exact integer arithmetic.
+  - `pattern` only when it compiles as a Unicode regular expression, uses no backreference, and does
+    not repeat (`*`, `+`, `{n,m}`) a group containing a quantifier or an alternation, the shape of
+    catastrophic backtracking such as `(a+)+`. `?` on such a group is allowed.
+  - Annotations (`title`, `description`, `default`, `examples`, ...) are ignored.
+
+  One validation visits at most 10,000 schema nodes plus 16 per JSON value in the answer, and one
+  depth limit of 128 schema levels spans references, `anyOf` branches, properties and items; the
+  reader stops at 512 levels of nesting. A value that needs more is non-conforming (it takes the
+  bounded retry like any invalid answer), so a recursive `anyOf` cannot branch exponentially and a
+  deep value cannot exhaust the stack.
 - A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
   JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, or a tool
   input that fails validation (including truncated JSON), takes the one bounded `text_fallback` retry with a structured-output
@@ -183,7 +204,7 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
 - A call to whichever private tool the turn did not advertise is a protocol error, never a client
   tool call.
 
-Coverage: `tests/providers/kiro/kiro-structured-output.test.ts` and
+Coverage: `tests/providers/kiro/kiro-structured-output.test.ts`, `tests/providers/kiro/kiro-structured-output-strict.test.ts` and
 `tests/server/server-kiro-structured-output-e2e.test.ts`.
 
 > Decision record: [ADR-8071](../decisions/ADR-8071-kiro-structured-output-emulation.md)

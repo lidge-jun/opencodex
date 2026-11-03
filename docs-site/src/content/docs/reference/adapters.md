@@ -515,10 +515,23 @@ MiMo model Command Code serves.
   accepted as is. Any other reply gets one bounded retry when the model stopped cleanly (a reply cut by the output-token limit, a content filter or a full context window ends with that stop's own error instead), and if the retry also fails the request ends
   with an `invalid_kiro_structured_output` error. A caller expecting JSON never receives prose.
   Without `strict: true` the check covers JSON syntax, the root type and the root's required
-  properties. With `strict: true` the whole value is checked against the schema (types, properties,
-  required, additionalProperties, enum, const, items, anyOf, local `$ref`, and length, pattern and
-  range bounds); a strict schema that uses any other assertion keyword, such as `format` or
-  `oneOf`, is refused before the request is sent.
+  properties. With `strict: true` the whole value is checked exactly against the schema, and a
+  strict schema outside this subset is refused before the request is sent:
+  - `type`, `properties`, `required`, `additionalProperties`, single-schema `items`, `enum`,
+    `const` and `anyOf`.
+  - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root. References such
+    as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
+    reach a property or item are refused.
+  - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
+  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and numbers in `const` or
+    `enum` as safe integers or decimals with at most 15 significant digits. The model's numbers are
+    compared exactly as written, so `9007199254740993` never matches `9007199254740992`.
+  - `multipleOf` only as a positive integer.
+  - `pattern` only when it is a valid Unicode regular expression without backreferences and without
+    a repeated group that contains a quantifier or `|` (such as `(a+)+`).
+
+  Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
+  levels deep). An answer that needs more counts as not matching the format.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
   Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a
