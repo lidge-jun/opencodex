@@ -134,11 +134,28 @@ mock.module("node:child_process", () => ({ ...processTools,
     Date.now = () => realNow() + clockOffset;
     return directChild;
   },
-  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean } = {}) => {
+  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean; input?: string } = {}) => {
     if (spawnedNpmOperation(args, options) === "view") return { status: 0, stdout: "99.0.0\n", stderr: "" };
+    const posixSupervisor = args[0] === repoPath("src/update/posix-install-supervisor-entry.mjs") && args[1] === "supervise";
+    // Windows routes the same transaction through runWindowsInstallerSync: an inline module reading
+    // { invocation, timeoutMs } from stdin (src/update/npm-install.mjs).
+    const windowsBridge = _bin === process.execPath && args.length === 3 && args[0] === "--input-type=module" && args[1] === "-e"
+      && args[2]!.includes("import {runNpmInstall} from ") && args[2]!.includes("JSON.parse(readFileSync(0,'utf8'))");
+    const supervisor = posixSupervisor || windowsBridge;
+    if (supervisor) {
+      const request = JSON.parse(options.input ?? "null");
+      const installerArgs: unknown = posixSupervisor ? request?.args : request?.invocation?.args;
+      const marker = JSON.parse(readFileSync(join(home, "update-orchestrated.json"), "utf8"));
+      if ((posixSupervisor ? request?.markerPath !== join(home, "update-orchestrated.json")
+        : typeof request?.invocation?.file !== "string" || !Number.isSafeInteger(request?.timeoutMs) || request.timeoutMs <= 0)
+        || marker.phase !== "mutating" || marker.pid !== process.pid || !Array.isArray(installerArgs)
+        || !installerArgs.some((arg: unknown) => typeof arg === "string" && arg.includes("@bitkyc08/opencodex"))) {
+        throw new Error("invalid installer supervisor request");
+      }
+    }
     const env = options.env ?? process.env;
     const phase = args.includes("stop") ? "stop" : args.includes("service") ? "recovery"
-      : args.some(arg => arg.includes("@bitkyc08/opencodex")) ? "replacement" : "ancillary";
+      : supervisor || args.some(arg => arg.includes("@bitkyc08/opencodex")) ? "replacement" : "ancillary";
     trace.push({ phase, contenderBlocked: probe(unprivileged()) === 17,
       delegated: !!env[tokenKey], canJoin: probe(env) === 0 });
     if (phase === "stop") {
@@ -149,9 +166,13 @@ mock.module("node:child_process", () => ({ ...processTools,
     }
     if (phase === "replacement") {
       packageReplaced = true;
-      if (scenario === "replacement-throw") throw new Error("injected replacement failure");
+      // The real supervisor converts an installer exception into a confirmed nonzero exit.
+      if (scenario === "replacement-throw" && !supervisor) throw new Error("injected replacement failure");
       if (scenario === "foreign-owner") writeFileSync(authority, JSON.stringify({ revision: 2, owner: "desktop", installId: "owner-b", consentGeneration: 2 }));
-      if (direct || scenario === "home-unknown-fail" || scenario === "package-fail" || scenario === "foreign-owner" || scenario === "recovery-throw") return { status: 1 };
+      const status = direct || ["home-unknown-fail", "package-fail", "foreign-owner", "recovery-throw", "replacement-throw"].includes(scenario) ? 1 : 0;
+      const confirmed = posixSupervisor ? { status, signal: null, groupExited: true, groupKilled: false } : { status, processTreeExited: true };
+      if (supervisor) return { status: 0, stdout: scenario === "supervisor-unconfirmed" ? "" : JSON.stringify(confirmed), stderr: "" };
+      if (status) return { status };
     }
     if (phase === "recovery") {
       if (scenario === "recovery-throw") throw new Error("injected recovery failure");

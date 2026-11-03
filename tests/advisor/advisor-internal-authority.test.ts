@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   ADVISOR_INTERNAL_CAPABILITY_HEADER,
@@ -39,7 +40,7 @@ describe("internal-call capability — server-owned authority", () => {
       setAdvisorPlanFactory(config, async input => {
         observed = true;
         expect(input.admissionScope).toBe(captured);
-        expect(() => assertRouteAllowedByScope(input.admissionScope, "advisor/private", {
+        expect(() => assertRouteAllowedByScope(input.admissionScope, clientFacingModelLabel("advisor/private"), {
           providerName: "advisor", modelId: "private",
         })).toThrow("not allowed");
         // Stop at the real factory seam; downstream dispatch is not exercised.
@@ -95,7 +96,7 @@ describe("internal-call capability — server-owned authority", () => {
         // a fallback to either live config or a later caller-owned option.
         expect(input.admissionScope).toBe(captured);
         if (snapshot === "undefined") expect(input.admissionScope).toBeUndefined();
-        else expect(() => assertRouteAllowedByScope(input.admissionScope, "advisor/private", {
+        else expect(() => assertRouteAllowedByScope(input.admissionScope, clientFacingModelLabel("advisor/private"), {
           providerName: "advisor", modelId: "private",
         })).toThrow("not allowed");
         throw reachedFactory;

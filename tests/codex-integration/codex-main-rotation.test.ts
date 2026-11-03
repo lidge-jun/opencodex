@@ -170,7 +170,7 @@ describe("main account rotation (Option A)", () => {
         identityKey: expect.stringMatching(/^[a-f0-9]{64}$/),
         identityGeneration: expect.any(Number),
       },
-      affinityDecision: { move: "new_bind", reason: "healthy" },
+      affinityDecision: { move: "unbound", reason: "no_conversation" },
     });
     expect(isCodexAuthContextUsable(ctx, config)).toBe(true);
     const headers = headersForCodexAuthContext(new Headers(), ctx);
@@ -203,7 +203,7 @@ describe("main account rotation (Option A)", () => {
         identityKey: expect.stringMatching(/^[a-f0-9]{64}$/),
         identityGeneration: expect.any(Number),
       },
-      affinityDecision: { move: "new_bind", reason: "healthy" },
+      affinityDecision: { move: "unbound", reason: "no_conversation" },
     });
     expect(isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
