@@ -75,11 +75,14 @@ only. It copies no request content and adds no bytes to the upstream wire; see t
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
-`JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
+the byte length of `JSON.stringify(parsed)`: numeric normalization can make it larger than the input
+text. `src/server/json-serialized-bytes.ts` computes that length with an iterative walk, so a valid
+body nested deeper than the call stack is measured instead of throwing during accounting. These
 observations retain the existing ownership and release lifecycle and do not consume the translator's
 hard byte cap. Per-body limits, parsing, compression, and reader error envelopes are unchanged.
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
-normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
+and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
 
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,

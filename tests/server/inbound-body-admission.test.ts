@@ -612,6 +612,29 @@ describe("raised inbound body admission lifetime", () => {
     });
   }
 
+  for (const normalized of [false, true]) {
+    test(`measures a deeply nested valid JSON body with translator budget ${normalized}`, async () => {
+      // Deeper than the call stack allows a recursive serializer to walk, and well under the limit.
+      const depth = 500_000;
+      const text = "[".repeat(depth) + "]".repeat(depth);
+      const req = admissionRequest("/v1/responses", text);
+      const translator = normalized ? createTranslatorBudget() : undefined;
+      let response: Response | undefined;
+      try {
+        response = await admittedBodyWork(async () => {
+          assert.equal(Array.isArray(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT)), true);
+          return new Response("held");
+        }, req);
+        assert.equal(response.status, 200);
+        assert.deepEqual(testBudget.snapshot(), { reservedBytes: text.length, activeLeases: 1, queuedRequests: 0 });
+        await response.text();
+      } finally {
+        await response?.body?.cancel().catch(() => undefined);
+        translator?.dispose();
+      }
+    });
+  }
+
   for (const end of ["eof", "error", "cancel"] as const) {
     test(`retains decoded compressed bytes until response ${end} settles exactly once`, async () => {
       const text = JSON.stringify({ input: "x".repeat(10_000) });
