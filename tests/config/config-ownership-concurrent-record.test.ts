@@ -299,9 +299,25 @@ describe("interrupted metadata writes (#8093)", () => {
   test("a manifest write that stopped before its rename does not block uninstall", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     const temp = join(dir, CONFIG_UNINSTALL_MANIFEST + ".4242." + crypto.randomUUID() + ".tmp");
-    writeFileSync(temp, "{}");
+    // What writeManifest leaves when it stops before the rename: this home's next manifest.
+    writeFileSync(temp, JSON.stringify({ ...manifest(dir), paths: [...manifest(dir).paths, "next"].sort() }, null, 2) + "\n");
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
     expect(existsSync(dir)).toBe(false);
+  }));
+
+  test("a file that only looks like a manifest temp file is kept and reported", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const name = (suffix: string) => join(dir, CONFIG_UNINSTALL_MANIFEST + "." + suffix + "." + crypto.randomUUID() + ".tmp");
+    const userData = name("4242");
+    const truncated = name("4243");
+    const otherHome = name("4244");
+    writeFileSync(userData, "user data");
+    writeFileSync(truncated, JSON.stringify(manifest(dir)).slice(0, 40));
+    writeFileSync(otherHome, JSON.stringify({ ...manifest(dir), ownerId: crypto.randomUUID() }));
+    const result = removeOwnedConfigState(dir);
+    expect(result.status).toBe("partial");
+    expect([...result.residualPaths].sort()).toEqual([userData, truncated, otherHome].sort());
+    expect(readFileSync(userData, "utf8")).toBe("user data");
   }));
 
   test("a home whose creation wrote the manifest but not yet the owner marker is refused untouched", withHome(dir => {

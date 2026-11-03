@@ -63,7 +63,9 @@ file afterwards; see the last item below.)
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
   process's registrations skip the tombstone check: its remover snapshots the manifest under the lock
   afterwards, so whatever they add is removed in the same run. Under the lock it also
-  removes manifest temporary files a stopped write left behind. Under the tombstone (with or without
+  removes manifest temporary files a stopped write left behind, but only one whose content is a
+  manifest with this home's owner id and root; any other file with such a name is kept and
+  reported. Under the tombstone (with or without
   the owner marker) the same scope records a path that does not exist yet, such as the config
   mutation database an older snapshot lacks, and never adopts an existing entry the snapshot does
   not list. An initially owned name may use a fixed recovery reserve past the usual caps, so an

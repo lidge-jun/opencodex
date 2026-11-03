@@ -347,13 +347,20 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
 /** Temporary names `writeManifest` uses; one left behind means a write stopped before its rename. */
 const MANIFEST_TEMP_PATTERN = new RegExp(`^${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`);
 
-/** Under the lock no manifest write is in progress, so any such temporary file is abandoned. */
-function removeAbandonedMetadataTemps(configDir: string): void {
+/**
+ * Under the lock no manifest write is in progress, so such a temporary file is abandoned. It is
+ * removed only when its content shows `writeManifest` wrote it for this home: a manifest carrying
+ * this home's random owner id and root. Any other file with a matching name, a truncated write
+ * included, is kept, and uninstall reports it as a residual path.
+ */
+function removeAbandonedMetadataTemps(configDir: string, owner: ConfigOwner): void {
   for (const name of readdirSync(configDir)) {
     if (!MANIFEST_TEMP_PATTERN.test(name)) continue;
     const path = join(configDir, name);
-    const entry = lstatSync(path);
-    if (entry.isFile() && !entry.isSymbolicLink()) unlinkSync(path);
+    let content: unknown;
+    try { content = readBoundedJson(path, TOMBSTONED_MANIFEST_MAX_BYTES); } catch { continue; }
+    if (!isManifest(content) || content.ownerId !== owner.ownerId || !samePath(content.root, owner.root)) continue;
+    unlinkSync(path);
   }
 }
 
@@ -792,7 +799,7 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       if (ownership.manifest.uninstallStartedAt === undefined) {
         writeManifest(configDir, { ...ownership.manifest, uninstallStartedAt: Date.now() });
       }
-      removeAbandonedMetadataTemps(configDir);
+      removeAbandonedMetadataTemps(configDir, ownership.owner);
       const rootPath = canonicalRoot(configDir);
       for (const rel of ownership.manifest.paths) {
         const path = join(configDir, ...rel.split("/"));
