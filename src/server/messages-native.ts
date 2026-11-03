@@ -42,7 +42,7 @@ import {
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
 import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
-import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
+import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowError, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
@@ -989,8 +989,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           ]).get(logCtx.failureDetail?.code ?? "");
           if (localMessage !== undefined) return fail(502, localMessage, "api_error");
         }
-        if (isNativeOverflowError(error, text)) return failEvidence(400, text, "invalid_request_error", undefined, true, error);
-        return failEvidence(502, text, "api_error", undefined, false, error);
+        const overflow = isContextOverflowError(error, text) && !isThroughputLimitText(text);
+        if (isNativeOverflowError(error, text)) return failEvidence(400, text, "invalid_request_error", undefined, overflow, error);
+        return failEvidence(502, text, "api_error", undefined, overflow, error);
       }
       finishLog(200);
       const collected = collectorVerdictSink.collected;
@@ -1087,12 +1088,14 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   let upstreamType: string | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
+  let originalUpstreamMessage: string | undefined;
   try {
     const parsed = JSON.parse(bodyText) as Rec;
     const details = isRec(parsed.error) ? parsed.error : parsed;
     if (typeof details.type === "string") upstreamType = details.type;
     if (typeof details.code === "string") upstreamCode = details.code;
     if (typeof details.message === "string" && details.message.trim()) {
+      originalUpstreamMessage = details.message;
       upstreamMessage = redactSecretString(details.message.trim());
     }
   } catch { /* keep generic classification */ }
@@ -1142,10 +1145,14 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
   // Claude Code recognizes it and compacts (010).
   // Only a 400/413 refusal: the shared classifier also files a 429 "too many tokens per minute"
   // under context_length_exceeded, and that one must stay a rate limit.
-  const overflow = !replayRefusal && (response.status === 400 || response.status === 413)
+  const legacyOverflow = !replayRefusal && (response.status === 400 || response.status === 413)
     && !isThroughputLimitText(safeMessage)
     && (classified.code === "context_length_exceeded" || upstreamCode === "context_length_exceeded"
       || isContextOverflowText(safeMessage));
+  const originalEvidence = { status: response.status, type: upstreamType, code: upstreamCode };
+  const originalMessage = originalUpstreamMessage ?? bodyText;
+  const overflow = !replayRefusal && isContextOverflowError(originalEvidence, originalMessage)
+    && !isThroughputLimitText(originalMessage);
   const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
     status, type: transient ? "overloaded_error" : upstreamType,
     code: replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
@@ -1154,7 +1161,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     ...(clientZenMessage === undefined ? {} : { localError: markProxyError({ message: clientZenMessage }) }),
   })), { status, headers });
   attachComboFailureEvidence(out, JSON.stringify(anthropicErrorBody(status,
-    overflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
+    legacyOverflow ? claudePromptTooLongMessage(safeMessage) : safeMessage,
     transient ? "overloaded_error" : upstreamType,
     replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
   )));

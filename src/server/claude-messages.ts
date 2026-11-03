@@ -65,7 +65,6 @@ import {
   anthropicErrorResponse,
   collectAnthropicMessage,
   isContextOverflowError,
-  isContextOverflowText,
   isThroughputLimitText,
   responsesJsonToAnthropicMessage,
   responsesSseToAnthropicSse,
@@ -453,9 +452,8 @@ async function anthropicNativePassthrough(
   const isError = !upstream.ok || (isRec(parsed) && (parsed.type === "error" || Object.hasOwn(parsed, "error")));
   const originalMessage = typeof error.message === "string" ? error.message : "";
   const throughput = isThroughputLimitText(originalMessage);
-  const sizedError = error.type === "invalid_request_error" || error.type === "request_too_large";
-  const overflow = ![401, 403, 429].includes(upstream.status) && !throughput
-    && (isContextOverflowError(error, originalMessage) || (sizedError && isContextOverflowText(originalMessage)));
+  const originalEvidence = { status: upstream.status, type: error.type, code: error.code };
+  const overflow = isContextOverflowError(originalEvidence, originalMessage) && !throughput;
   const clientBody = isError ? JSON.stringify(ownedAnthropicErrorPayload({ status: upstream.status,
     overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
     type: typeof error.type === "string" ? error.type : undefined,
@@ -1363,11 +1361,12 @@ async function handleClaudeMessagesWithBudget(
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
     const decidedCode = replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined;
     const legacyBody = JSON.stringify(anthropicErrorBody(outStatus, message, undefined, decidedCode));
+    const originalEvidence = { status: response.status, type: originalType, code: originalCode };
     const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
       status: outStatus,
       evidence: { status: response.status, type: originalType, code: originalCode, message },
       code: decidedCode,
-      overflow: contextError && !isThroughputLimitText(message),
+      overflow: isContextOverflowError(originalEvidence, message) && !isThroughputLimitText(message),
       ...(contextError && isThroughputLimitText(message) ? { condition: "rate_limited" as const } : {}),
       ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
       ...(isProxyError(response) ? { localError: markProxyError({ message }) } : {}),

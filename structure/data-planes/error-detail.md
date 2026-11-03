@@ -340,8 +340,12 @@ supply client error text. Local pre-handler, admission and thread-refusal envelo
 
 Status, retry, overflow, rotation, quota and logging decisions run on original evidence. Overflow uses
 `CLAUDE_CONTEXT_OVERFLOW_MESSAGE` after the lane's overflow-versus-throughput decision on the original
-message. A context code with throughput wording does not select the compaction sentence. Buffered
-passthrough and count_tokens preserve the upstream status and closed type/code. The type chosen
+message using `isContextOverflowError` and an explicit throughput exclusion. Quoted, negated,
+conditional and validation mentions do not select the compaction sentence. The original status and
+type gates apply to uncoded verdicts; an explicit context code counts unless throughput wording
+excludes compaction. The direct encoder retains original adapter fields by terminal identity,
+independently of shared classification. Buffered passthrough and count_tokens preserve the upstream
+status and closed type/code. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
 records into the collector without serializing them; publication follows successful frame admission.
@@ -351,9 +355,12 @@ independent of replacement-message length. Request logging and combo evidence re
 
 The native streaming relay, tool-guard frames, shared-tap tails and native overflow SSE rewrite retain
 their existing byte behavior. `tests/claude-integration/messages-native-stream-parity.test.ts` executes
-exact baseline modules from git-show bytes in a temporary overlay and compares configured/builtin
-stream bytes, settlement callbacks, usage and cancellation with the current modules. The baseline
-loader also checks an intentionally changed header function to prove it is executing original code.
+the current modules against `tests/fixtures/messages-native-stream-parity.json`, including
+configured/builtin stream bytes, settlement callbacks, usage and cancellation. Normal runs need no
+git history or network. The helper's explicit --generate-base mode requires baseline 72e80d280,
+loads its exact modules through a temporary overlay, and checks original header-writer behavior
+before recording the golden. Fixture inputs use fixed synthetic IDs; observations omit timestamps
+and compare client bytes without rewriting them.
 The converter and direct encoder own their separate terminal writers.
 `tests/claude-integration/messages-error-normalization.test.ts` and
 `tests/claude-integration/messages-lane-errors.test.ts` exercise buffered and converted boundaries.

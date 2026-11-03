@@ -2,7 +2,7 @@ import { beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { helperPath, repoRoot } from "../helpers/repo-root";
+import { fixturePath, helperPath, repoRoot } from "../helpers/repo-root";
 
 type Outcome = { bytes: string; calls?: { status: number; closeReason: string }[]; settlements?: { status: number; mode?: string }[]; sends?: number; status?: number; cancelled: string[] };
 const outcomes: Record<string, Record<string, Outcome>> = {};
@@ -10,14 +10,16 @@ const cases = ["overflow", "throughput", "guard", "eof", "stop-error", "complete
 beforeAll(async () => {
   const scratch = mkdtempSync(join(tmpdir(), "ocx-messages-parity-"));
   try {
-    for (const mode of ["base", "head"]) {
+    const golden = JSON.parse(readFileSync(fixturePath("messages-native-stream-parity.json"), "utf8"));
+    expect(golden.baseCommit).toBe("72e80d280d614bdf4f1aada9b233f6732404afec");
+    outcomes.base = golden.results;
+    for (const mode of ["head"]) {
       const home = join(scratch, mode); mkdirSync(join(home, "ocx"), { recursive: true }); mkdirSync(join(home, "codex"));
       const output = join(home, "results.json");
       const child = Bun.spawn([process.execPath, helperPath("messages-stream-differential.ts"), mode, home, output], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: join(home, "ocx"), CODEX_HOME: join(home, "codex") }, stdout: "pipe", stderr: "pipe" });
       const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       if (exit !== 0) throw new Error(`${mode} fixture exited ${exit}\n${stdout}\n${stderr}`);
       const fixture = JSON.parse(readFileSync(output, "utf8"));
-      expect(fixture.overlayProbe).toEqual(mode === "base" ? { "request-id": "req_fixture" } : {});
       outcomes[mode] = fixture.results;
     }
   } finally { rmSync(scratch, { recursive: true, force: true }); }

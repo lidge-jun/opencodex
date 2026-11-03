@@ -205,7 +205,7 @@ describe("native Messages lane", () => {
   });
 
   test("HTTP 413 and an upstream context_length_exceeded code are both recognized", async () => {
-    const large = await send(nativeConfig(refusal("model token limit reached", 413)), false);
+    const large = await send(nativeConfig(refusal("Your request exceeded model token limit: 262144", 413)), false);
     expect(large.response.status).toBe(413);
     expect(claudeCodeSeesPromptTooLong(JSON.parse(large.text).error.message)).toBe(true);
     await upstream?.stop(true);

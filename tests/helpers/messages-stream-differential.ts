@@ -9,7 +9,8 @@ function git(...args: string[]): string {
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
   return result.stdout.toString();
 }
-if (mode === "base") {
+if (mode !== "head" && mode !== "--generate-base") throw new Error("Expected head or --generate-base");
+if (mode === "--generate-base") {
   // Overlay exact git-show bytes at the original module identities so relative imports resolve identically.
   const existing = new Set(git("ls-tree", "-r", "--name-only", "72e80d280", "--", "src").trim().split("\n"));
   const changed = git("diff", "--name-only", "72e80d280", "--", "src").trim().split("\n").filter(path => existing.has(path));
@@ -80,4 +81,7 @@ try {
     }
   }
 } finally { release(); }
-await Bun.write(output, JSON.stringify({ overlayProbe, results }, null, 2));
+if (mode === "--generate-base" && overlayProbe["request-id"] !== "req_fixture") {
+  throw new Error("Baseline module overlay did not execute the original header writer");
+}
+await Bun.write(output, JSON.stringify({ ...(mode === "--generate-base" ? { baseCommit: "72e80d280d614bdf4f1aada9b233f6732404afec" } : {}), results }, null, 2) + "\n");

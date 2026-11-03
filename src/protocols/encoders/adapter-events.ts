@@ -90,6 +90,12 @@ export interface EncodedTerminal {
 }
 
 const encoderTransportFailures = new WeakSet<object>();
+const originalErrorEvidence = new WeakMap<object, { status?: number; type?: string; code?: string; message: string }>();
+/** Original adapter fields for a client writer; terminal classification stays independent. */
+export function encoderOriginalErrorEvidence(terminal: EncodedTerminal) {
+  return originalErrorEvidence.get(terminal);
+}
+
 export function isEncoderTransportFailure(terminal: EncodedTerminal): boolean {
   return encoderTransportFailures.has(terminal);
 }
@@ -802,6 +808,7 @@ export function encodeAdapterEventStream(
               reportUsage: event.usage !== undefined,
               durable: true,
             };
+            originalErrorEvidence.set(terminal, { status: event.status, type: event.errorType, code: event.code, message: event.message });
             break;
           }
           default:

@@ -1031,7 +1031,7 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
 
 test.each([
   "prompt is too long: 213000 tokens > 200000 maximum",
-  "This model's maximum context length is 200000 tokens",
+  "This model's maximum context length is 200000 tokens. Your messages resulted in 213000 tokens.",
 ])("an upstream error response is normalized and its original condition reaches the request log and usage.jsonl (%s)", async message => {
   const sentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
   const errorBody = { type: "error", error: { type: "invalid_request_error", message: `${message} ${sentinel}` }, request_id: "req_fixture" };
