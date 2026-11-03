@@ -1687,7 +1687,8 @@ async function handleUninstall() {
   try {
     const { uninstallCodexShimAsync } = await import("../codex/shim");
     const r = await uninstallCodexShimAsync();
-    console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
+    if (r.refused) { failures.push("Codex autostart shim removed"); console.error(`⚠️  Codex autostart shim removed failed: ${r.message}`); }
+    else console.log(r.removed ? "✅ Codex autostart shim removed" : "- Codex autostart shim removed: not installed");
   } catch (err) {
     failures.push("Codex autostart shim removed");
     console.error(`⚠️  Codex autostart shim removed failed: ${err instanceof Error ? err.message : String(err)}`);
