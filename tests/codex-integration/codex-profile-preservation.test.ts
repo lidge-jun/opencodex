@@ -5,8 +5,9 @@
  * generated profile writes, the plan reads the real profile path, and an edit that
  * lands before the write lock is not overwritten.
  */
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
 import type { OcxConfig } from "../../src/types";
@@ -160,6 +161,28 @@ describe("the injection plan", () => {
     const parsed = Bun.TOML.parse(plan.profileContent) as Record<string, unknown>;
     expect(parsed.stream_idle_timeout_ms).toBe(60000);
     expect(parsed.features).toEqual({ fast_mode: true });
+  });
+
+  const planWithoutJournal = () => deriveCodexInjectionPlan('model = "fixture-model"\n', {
+    config: {} as OcxConfig, routingTarget: loopback, catalogPathOption: null, journalReadOnly: true,
+  });
+
+  test("treats a profile removed after the existence check as absent", () => {
+    // The profile reported present and then gone is a removal between the check and the read.
+    const realExists = fs.existsSync;
+    const exists = spyOn(fs, "existsSync").mockImplementation(path => path === CODEX_PROFILE_PATH || realExists(path));
+    try {
+      const plan = planWithoutJournal();
+      if (plan.kind !== "ok") throw new Error(plan.message);
+      expect(plan.profileSource).toBeNull();
+    } finally { exists.mockRestore(); }
+  });
+
+  test("an unreadable profile other than a missing one still fails the plan", () => {
+    mkdirSync(CODEX_PROFILE_PATH);
+    try {
+      expect(planWithoutJournal).toThrow(/EISDIR|directory/i);
+    } finally { rmSync(CODEX_PROFILE_PATH, { recursive: true, force: true }); }
   });
 
   test("refuses retryably when the profile changes before the write lock is held", () => {

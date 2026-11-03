@@ -330,7 +330,15 @@ export function deriveCodexInjectionPlan(
     managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
   }
 
-  const profileSource = existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf-8") : null;
+  // Read directly: a profile removed between an existence check and the read is simply absent.
+  // If it reappears before the write lock, the lock-time comparison refuses retryably.
+  let profileSource: string | null;
+  try {
+    profileSource = readFileSync(CODEX_PROFILE_PATH, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    profileSource = null;
+  }
   const profileContent = preserveUnmanagedProfileKeys(
     profileSource,
     buildProfileFileForTarget(
