@@ -601,6 +601,7 @@ const commandRunners: Record<string, CommandRunner> = {
       case "remove": {
         const r = await uninstallCodexShimAsync();
         console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        if (r.refused) return 1;
         break;
       }
       default:

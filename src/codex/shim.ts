@@ -8,7 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, extname, join, posix, win32 } from "node:path";
+import { delimiter, join, posix, win32 } from "node:path";
 import { durableBunRuntime, type DurableBunRuntime } from "../lib/bun-runtime";
 import type { FileIdentity } from "../lib/file-identity";
 import { assertSelectedRuntimeWritable, RuntimePreflightError, type RuntimePreflightDeps } from "../lib/bun-runtime-preflight";
@@ -58,6 +58,14 @@ import {
   type CodexPathScanDeps,
 } from "./shim-path-resolution";
 import { ownedWrapperFingerprint, windowsShimContent, wrapperInodeIsOurs, writeShim } from "./shim-wrapper-write";
+import {
+  checkLegacyShimRecord,
+  hostShimPathApi,
+  legacyShimBackupPath,
+  legacyShimDirectoryUnchanged,
+  legacyShimFilesProblem,
+  legacyShimManualRestoreMessage,
+} from "./shim-legacy-record";
 
 export { buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim } from "./shim-templates";
 export { isVersionManagerOwnedCodexPath } from "./shim-fingerprint";
@@ -207,8 +215,7 @@ function findWindowsCodexTargets(): ShimFileState[] | null {
 }
 
 function backupPathFor(path: string): string {
-  const ext = extname(path);
-  return ext ? `${path.slice(0, -ext.length)}.opencodex-real${ext}` : `${path}.opencodex-real`;
+  return legacyShimBackupPath(path);
 }
 
 /**
@@ -770,8 +777,12 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[], runtime?: Dur
   };
 }
 
-function installCodexShimInternal(options: InstallCodexShimInternalOptions): { installed: boolean; message: string } {
+function installCodexShimInternal(options: InstallCodexShimInternalOptions): { installed: boolean; message: string; refused?: boolean } {
   const existing = readState();
+  if (existing) {
+    const legacy = checkLegacyShimRecord(existing);
+    if (!legacy.ok) return { installed: false, refused: true, message: legacyShimManualRestoreMessage(legacy.reason, statePath()) };
+  }
   const filesBefore = existing ? stateFiles(existing) : [];
   if (filesBefore.length > 0 && filesBefore.every(file => {
     if (file.preserveOnly) return existsSync(file.backupPath) && !existsSync(file.originalPath);
@@ -864,6 +875,9 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       return originalPath ? [{ wrapperPath: originalPath, originalPath, backupPath: backupPathFor(originalPath) }] : null;
     })();
   if (!targets) return { installed: false, message: lastShimDiscoveryError ?? "Could not find a codex executable on PATH." };
+  // The writer obeys the rules every later restore checks, so it never records a layout it would refuse.
+  const fresh = checkLegacyShimRecord(primaryState(targets));
+  if (!fresh.ok) return { installed: false, refused: true, message: `Refusing to install the Codex autostart shim: ${fresh.reason}.` };
 
   for (const target of targets) {
     if (existsSync(target.backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
@@ -1032,6 +1046,8 @@ function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
     return { status: stateRead.present ? "ineligible" : "not-installed" };
   }
   if (state.platform !== process.platform) return { status: "ineligible" };
+  const legacy = checkLegacyShimRecord(state);
+  if (!legacy.ok) return { status: "ineligible", message: legacyShimManualRestoreMessage(legacy.reason, statePath()) };
 
   const files = stateFiles(state);
   const replacementProbes = new Map<string, StableShimPathProbe>();
@@ -1104,6 +1120,9 @@ function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
           || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
       }
       if (state.platform === "win32") {
+        // Recheck after the lock and the stability sleep, immediately before the wrappers are rewritten.
+        const recheck = checkLegacyShimRecord(state);
+        if (!recheck.ok) return { status: "ineligible", message: legacyShimManualRestoreMessage(recheck.reason, statePath()) };
         const realFor = (path: string) => { const file = files.find(entry => entry.wrapperPath === path)!; return file.realPath ?? file.backupPath; };
         return refreshAdmittedWindowsShims(obsoleteShimProbes, currentShimProbes, path => windowsShimContent(path, realFor(path), runtime))
           ? { status: "restored", message: `Upgraded Codex autostart shim at ${[...obsoleteShimProbes.keys()].join(", ")}.` } : { status: "deferred" };
@@ -1136,7 +1155,7 @@ function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
   }
 }
 
-export function uninstallCodexShim(): { removed: boolean; message: string } {
+export function uninstallCodexShim(): { removed: boolean; message: string; refused?: boolean } {
   if (process.platform !== "win32") return uninstallUnixCodexShim();
   const gate = beginCodexCliSelectionParentWrite();
   if (!gate.entered) return { removed: false, message: "codex_cli_selection_busy" };
@@ -1144,16 +1163,43 @@ export function uninstallCodexShim(): { removed: boolean; message: string } {
   finally { gate.exit(); }
 }
 
-function uninstallWindowsCodexShim(): { removed: boolean; message: string } {
-  const state = readState();
-  if (!state) return { removed: false, message: "Codex autostart shim is not installed." };
-  const files = stateFiles(state);
-  for (const file of files) {
-    if (file.preserveOnly) continue;
-    if (existsSync(file.wrapperPath) && isShim(file.wrapperPath)) unlinkSync(file.wrapperPath);
+let legacyUninstallStepHookForTests: ((step: "unlink" | "rename", index: number) => void) | null = null;
+/** @internal Runs before each uninstall mutation, after validation; lets tests change the filesystem there. */
+export function setLegacyShimUninstallStepHookForTests(hook: typeof legacyUninstallStepHookForTests): void {
+  legacyUninstallStepHookForTests = hook;
+}
+
+function uninstallWindowsCodexShim(): { removed: boolean; message: string; refused?: boolean } {
+  const read = readStateResult();
+  const refused = (reason: string, partial = false) => ({ removed: false, refused: true, message: legacyShimManualRestoreMessage(reason, statePath(), partial) });
+  if (!read.state) return read.present ? refused(read.warning ? "the shim record is unsafe to read" : "the shim record is unreadable") : { removed: false, message: "Codex autostart shim is not installed." };
+  if (read.state.mode !== undefined || read.state.platform !== "win32") {
+    // Another platform's record (a config directory shared with WSL) names no Windows launcher.
+    if (existsSync(statePath())) unlinkSync(statePath());
+    return { removed: true, message: "Codex autostart shim record from another platform removed; no launcher file was changed." };
   }
-  for (const file of files) {
-    if (existsSync(file.backupPath) && !existsSync(file.originalPath)) renameSync(file.backupPath, file.originalPath);
+  const checked = checkLegacyShimRecord(read.state);
+  if (!checked.ok) return refused(checked.reason);
+  const { files, recordedDirectory, resolvedDirectory } = checked;
+  if (resolvedDirectory !== null) {
+    const api = hostShimPathApi();
+    const at = (path: string) => api.join(resolvedDirectory, api.basename(path));
+    // Act only inside the directory that was validated, and only while it still resolves there.
+    const stillValid = () => legacyShimDirectoryUnchanged(recordedDirectory, resolvedDirectory)
+      && legacyShimFilesProblem(files, resolvedDirectory) === null;
+    let step = 0;
+    for (const [index, file] of files.entries()) {
+      legacyUninstallStepHookForTests?.("unlink", index);
+      if (!stillValid()) return refused("the launcher directory changed during removal", step > 0);
+      const wrapper = at(file.wrapperPath);
+      if (existsSync(wrapper) && isShim(wrapper)) { unlinkSync(wrapper); step++; }
+    }
+    for (const [index, file] of files.entries()) {
+      legacyUninstallStepHookForTests?.("rename", index);
+      if (!stillValid()) return refused("the launcher directory changed during removal", step > 0);
+      const backup = at(file.backupPath), original = at(file.originalPath);
+      if (existsSync(backup) && !existsSync(original)) { renameSync(backup, original); step++; }
+    }
   }
   if (existsSync(statePath())) unlinkSync(statePath());
   return { removed: true, message: `Codex autostart shim removed. Restored ${files.map(f => f.originalPath).join(", ")}.` };
