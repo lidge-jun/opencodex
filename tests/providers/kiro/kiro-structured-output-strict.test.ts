@@ -51,7 +51,7 @@ describe("Kiro strict structured output validation", () => {
     type: "object",
     properties: {
       kind: { enum: ["a", "b"] },
-      version: { const: 2 },
+      version: { const: "v2" },
       note: { type: ["string", "null"] },
       tags: { type: "array", items: { type: "string" } },
       item: { $ref: "#/$defs/item" },
@@ -62,12 +62,12 @@ describe("Kiro strict structured output validation", () => {
     $defs: { item: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
   };
   const richSpec = kiroStructuredOutputSpec(request(rich))!;
-  const good = { kind: "a", version: 2, note: null, tags: ["t"], item: { id: "i" }, choice: { x: true } };
+  const good = { kind: "a", version: "v2", note: null, tags: ["t"], item: { id: "i" }, choice: { x: true } };
   test.each([
     [good, undefined],
     [{ ...good, choice: 3 }, undefined],
     [{ ...good, kind: "c" }, "$.kind: expected one of the enum values"],
-    [{ ...good, version: 3 }, "$.version: expected the const value"],
+    [{ ...good, version: "v3" }, "$.version: expected the const value"],
     [{ ...good, note: 1 }, "$.note: expected a JSON string or null"],
     [{ ...good, tags: ["t", 1] }, "$.tags[1]: expected a JSON string"],
     [{ ...good, item: { id: "i", more: 1 } }, '$.item: unexpected property "more"'],
