@@ -9,7 +9,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 import { resolveServiceListenPort, resolvedProxyEnv } from "./definition";
-import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
+import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute, currentWindowsServiceCodexHome, currentOpenCodexHome } from "./state";
 
 function windowsBatchValue(value: string): string {
   return value
@@ -80,9 +80,9 @@ export function buildWindowsServiceScript(
     windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
-    windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
+    windowsBatchSet("CODEX_HOME", currentWindowsServiceCodexHome(), "path"),
     windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
-    windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    windowsBatchSet("OPENCODEX_HOME", currentOpenCodexHome(), "path"),
     ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),

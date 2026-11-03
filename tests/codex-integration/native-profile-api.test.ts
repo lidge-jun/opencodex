@@ -12,6 +12,7 @@ import {
 } from "../../src/server/lifecycle";
 import {
   blockNativeMainRecovery,
+  blockNativeMainStartupForUnownedServiceHome,
   completeNativeMainRecovery,
   initializeNativeMainStartupGate,
   nativeMainStartupGateSnapshot,
@@ -26,6 +27,23 @@ afterEach(() => {
 });
 
 describe("native main profile management API", () => {
+  test("profile doctor reports when native-main admission is fenced", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    const manager = { doctor: async () => ({ recoveryPending: false }) } as unknown as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/doctor");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({
+        recoveryPending: false,
+        admissionStatus: "blocked",
+        admissionBlockReason: "foreign-ownership",
+      });
+    } finally {
+      await fence.release();
+    }
+  });
+
   test("long Direct/non-main work does not block switch while new main selection is fenced", async () => {
     const longPoolTurn = tryAdmitTurn();
     expect(longPoolTurn).not.toBeNull();

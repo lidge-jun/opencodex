@@ -770,10 +770,12 @@ Launchd restarts the proxy after a crash or failed restart handoff, but leaves i
 the service deliberately exits cleanly because the desktop app owns the runtime. Run
 `ocx service repair` once to apply this behavior to a service installed by an older version.
 
-Definitions installed before this change still carry the old versioned paths and cannot migrate
-themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
-`ocx service repair` once after upgrading. Linux service starts then follow the launcher; macOS
-repair writes the new package paths into the launchd definition.
+Definitions installed before this change do not have the resolved `CODEX_HOME` and `OPENCODEX_HOME`
+baked into the service environment. After upgrading, run `ocx service repair` once so service
+restarts keep using the homes resolved at install time. Repair also refreshes old versioned paths;
+if the old executable was already deleted, reinstall opencodex before repairing. Linux service
+starts then follow the launcher; macOS repair writes the new package and home paths into the launchd
+definition.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
 than the running proxy, run `ocx service restart` so the new build serves. On macOS, `repair` is not
 enough there: the definition did not change, and a repair that changes nothing reloads nothing.

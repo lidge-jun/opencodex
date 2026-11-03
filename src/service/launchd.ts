@@ -12,7 +12,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
 import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./definition";
-import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
 
@@ -40,9 +40,9 @@ export function buildPlist(
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   const log = logPath();
   const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "darwin");
-  const codexHome = process.env.CODEX_HOME?.trim();
+  const codexHome = currentCodexHome();
   const codexSqliteHome = currentCodexSqliteHomeAbsolute();
-  const opencodexHome = process.env.OPENCODEX_HOME?.trim();
+  const opencodexHome = currentOpenCodexHome();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
     // OCX_SERVICE alone cannot identify the managed job: `ocx claude` and `ocx opencode`

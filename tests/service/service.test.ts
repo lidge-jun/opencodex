@@ -1208,23 +1208,29 @@ describe("Windows service task", () => {
 
   test("escapes environment values that would break out of set quotes", () => {
     const oldPath = process.env.PATH;
+    const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.PATH = 'C:\\safe" & echo PWNED & rem "';
+      process.env.CODEX_HOME = 'C:\\codex" & del C:\\important & rem "';
       process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
       process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
       const script = buildWindowsServiceScript();
       expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
-      expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
+      expect(script).toContain('set "CODEX_HOME=C:\\codex & del C:\\important & rem "');
+      expect(script).toContain('C:\\ocx & del C:\\important & rem ');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
       expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
       expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
-      expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
+      expect(script).not.toContain('set "CODEX_HOME=C:\\codex" & del');
+      expect(script).not.toContain('C:\\ocx" & del');
       expect(script).not.toContain("token & echo LEAK");
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -1432,6 +1438,26 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
+    }
+  });
+
+  test("bakes resolved CODEX_HOME and OPENCODEX_HOME into service definitions even when unset in process.env", () => {
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    try {
+      delete process.env.CODEX_HOME;
+      process.env.OPENCODEX_HOME = TEST_DIR;
+      const plist = buildPlist();
+      expect(plist).toContain("<key>CODEX_HOME</key><string>");
+      expect(plist).toContain("<key>OPENCODEX_HOME</key><string>");
+      const unit = buildUnit();
+      expect(unit).toContain('Environment="CODEX_HOME=');
+      expect(unit).toContain('Environment="OPENCODEX_HOME=');
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
     }
   });
 

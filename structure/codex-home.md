@@ -120,7 +120,7 @@ a junction or symlink alias — counts as the same home for the ownership check,
 home, and the unattended ownership preflight. Access or transient I/O errors are unknown rather
 than foreign in preflight; distinct spellings with missing/non-directory paths remain mismatches.
 Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`.
-An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
+An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly. Generated launchd, systemd, Task Scheduler and WinSW definitions pin the resolved `CODEX_HOME` and `OPENCODEX_HOME`, including their defaults, so a service restart does not inherit a different home from its login environment. Repair an older registration after upgrading to refresh those values.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 

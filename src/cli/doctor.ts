@@ -1440,6 +1440,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     const { formatNativeMainRefreshDoctorLines, resolveNativeMainRefreshMode } = await import("../codex/native-main-refresh-mode");
     const resolution = await resolveNativeMainRefreshMode(loadConfig());
     for (const line of formatNativeMainRefreshDoctorLines(resolution)) console.log(line);
+    const { nativeMainStartupGateSnapshot } = await import("../codex/native-profile-startup");
+    const gate = nativeMainStartupGateSnapshot();
+    if (gate.status === "blocked") {
+      console.log(`  !!  native-main admission is fenced (reason: ${gate.reason})`);
+      console.log("       Native model requests will return 503 until this clears (e.g. restart proxy or fix CODEX_HOME mismatch).");
+    }
   }
 
   // Mirrors `ocx status` through the same comparison rather than a second implementation:

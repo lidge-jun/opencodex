@@ -147,7 +147,13 @@ export async function handleNativeProfileAPI(
       return jsonResponse(await manager.list(), 200, req, config);
     }
     if (url.pathname === "/api/native-main-profiles/doctor" && req.method === "GET") {
-      return jsonResponse(await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" }), 200, req, config);
+      const doc = await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" });
+      const gate = nativeMainStartupGateSnapshot();
+      return jsonResponse({
+        ...doc,
+        admissionStatus: gate.status,
+        ...(gate.status === "blocked" ? { admissionBlockReason: gate.reason } : {}),
+      }, 200, req, config);
     }
     if (url.pathname === "/api/native-main-profiles/register" && req.method === "POST") {
       const input = await body(req);
