@@ -184,8 +184,7 @@ covers the source mapping, the cap, the 404 and the parameter bounds.
 ingress parsed. It keeps that body by reference for the request only, scans its features on the
 first `features()` call and caches them, and hands out `freshBody()` copies, each a
 `structuredClone` charged under `request_copies`, so a consumer that rewrites its body cannot
-leak the rewrite into another consumer's input; `releaseBody(copy)` hands that charge back, so combo judging keeps only
-the dispatched native child's copy charged.
+leak the rewrite into another consumer's input; `releaseBody(copy)` hands that charge back, so combo judging keeps only the dispatched native child's copy charged.
 
 `src/protocols/codecs/{chat,messages,responses}.ts` are named entry points over the existing
 translators — `chatToResponsesBody` is `chatCompletionsToResponsesBody`,
