@@ -80,6 +80,10 @@ Réparez l'historique d'une tâche compactée par un fournisseur routé avant de
 
 Arrête le service et le proxy, supprime le service et le shim Codex, rétablit le fonctionnement natif de Codex, puis supprime la configuration locale d’opencodex uniquement si toutes les étapes de restauration ont réussi. `remove` est un alias de `uninstall`. Le nettoyage de la configuration exige les métadonnées de propriété créées par une installation récente ; les répertoires anciens ou partagés sont conservés.
 
+Lorsque `ocx uninstall` s’exécute en tant que root ou depuis une invite Windows élevée (administrateur), il vérifie d’abord qu’aucun autre compte ne peut modifier le répertoire de configuration, les répertoires qui le contiennent ni ceux dont il supprime des entrées. Si un autre compte le peut, la désinstallation s’arrête avant toute modification et en indique la raison. Lancez `ocx uninstall` avec le compte propriétaire du répertoire de configuration, sans `sudo` ni droits d’administrateur, ou réservez le répertoire de configuration et ses répertoires parents à ce compte, puis relancez la commande. Sous Windows ARM64, où opencodex ne peut pas savoir si l’invite est élevée, la même vérification s’applique ; si elle ne peut pas aboutir, arrêtez opencodex et supprimez vous-même le répertoire de configuration.
+
+Une entrée enregistrée dont un répertoire parent dans le répertoire de configuration est un lien (lien symbolique ou jonction) est laissée en place et listée parmi les chemins restants, et l’exécution se termine par une désinstallation partielle. Remplacez ce lien par le répertoire réel ou supprimez-le, puis relancez `ocx uninstall` pour terminer.
+
 ## État et santé
 
 ### `ocx status [--json]`
