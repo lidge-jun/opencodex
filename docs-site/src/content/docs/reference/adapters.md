@@ -518,17 +518,20 @@ MiMo model Command Code serves.
   properties. With `strict: true` the whole value is checked exactly against the schema, and a
   strict schema outside this subset is refused before the request is sent:
   - `type`, `properties`, `required`, `additionalProperties`, single-schema `items`, `enum`,
-    `const` and `anyOf`.
+    `const` and `anyOf`. A `const` or `enum` value that contains a number is refused: the proxy
+    receives the request already parsed, so a number such as `1.0000000000000001` arrives as `1`
+    and an exact match could accept a value the caller excluded.
   - `$ref` only to `#/$defs/<name>` or `#/definitions/<name>` at the schema root. References such
     as `#`, `#/properties/...` or `#/default`, nested `$defs`, and reference cycles that never
     reach a property or item are refused.
   - `minLength`, `maxLength`, `minItems` and `maxItems` as non-negative integers.
-  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and numbers in `const` or
-    `enum` as safe integers or decimals with at most 15 significant digits. The model's numbers are
-    compared exactly as written, so `9007199254740993` never matches `9007199254740992`.
-  - `multipleOf` only as a positive integer.
-  - `pattern` only when it is a valid Unicode regular expression without backreferences and without
-    a repeated group that contains a quantifier or `|` (such as `(a+)+`).
+  - `minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` as safe integers or decimals
+    with at most 15 significant digits. The model's numbers are compared exactly as written. This is
+    a heuristic for the bound itself: a bound written with more digits than a double holds can still
+    arrive rounded, so a value within about one unit in the last place of the bound may be judged on
+    the wrong side.
+  - `multipleOf`, `pattern` and `patternProperties` are refused in strict mode. Without
+    `strict: true` they are accepted and left to the light checks above.
 
   Validation work is capped per answer (10,000 schema checks plus 16 per JSON value, 128 schema
   levels deep). An answer that needs more counts as not matching the format.

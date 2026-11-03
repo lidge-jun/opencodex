@@ -183,25 +183,51 @@ describe("Kiro strict references", () => {
   });
 });
 
-describe("Kiro strict numbers compare the original text", () => {
-  test("a const or enum number JSON.parse may have rounded is refused", () => {
-    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { n: { const: 9007199254740992 } } })))
-      .toThrow(`${REFUSED} "const" cannot be enforced`);
-    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { n: { enum: [1, 1e300] } } })))
-      .toThrow(`${REFUSED} "enum" cannot be enforced`);
-    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { n: { maximum: 0.12345678901234568 } } })))
-      .toThrow(`${REFUSED} "maximum" cannot be enforced`);
+describe("Kiro strict numbers", () => {
+  // The request reaches the adapter already parsed, so a schema number written with more digits than
+  // a double holds arrives rounded: 1.0000000000000001 is 1 by then. Exact-equality keywords on
+  // numbers are therefore refused in strict mode.
+  test.each([
+    ["const", { const: 5 }],
+    ["const", { const: JSON.parse("1.0000000000000001") }],
+    ["const", { const: { limit: 1 } }],
+    ["enum", { enum: [1, 2] }],
+    ["enum", { enum: ["a", [3]] }],
+  ])("a numeric %s literal is refused before sending", (keyword, property) => {
+    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { n: property } })))
+      .toThrow(`${REFUSED} "${keyword}" cannot be enforced`);
   });
 
-  test("bounds and const judge the exact lexeme the client receives", () => {
+  test("const and enum without numbers are still enforced", () => {
     const spec = kiroStructuredOutputSpec(request({
       type: "object",
-      properties: { c: { const: 5 }, m: { type: "number", maximum: 10 }, i: { type: "integer" } },
+      properties: { kind: { const: "pdf" }, mode: { enum: ["a", null, true, { x: "y" }] } },
       additionalProperties: false,
     }))!;
-    expect(parseKiroStructuredToolInput(spec, '{"c":5.0000000000000001}')).toEqual({ error: `${FAIL}: $.c: expected the const value` });
-    expect(parseKiroStructuredToolInput(spec, '{"c":5.0}')).toEqual({ json: '{"c":5.0}' });
+    expect(parseKiroStructuredToolInput(spec, '{"kind":"pdf","mode":{"x":"y"}}')).toEqual({ json: '{"kind":"pdf","mode":{"x":"y"}}' });
+    expect(parseKiroStructuredToolInput(spec, '{"kind":"png"}')).toEqual({ error: `${FAIL}: $.kind: expected the const value` });
+    expect(parseKiroStructuredToolInput(spec, '{"mode":"b"}')).toEqual({ error: `${FAIL}: $.mode: expected one of the enum values` });
+  });
+
+  test("bounds accept safe integers and decimals up to 15 significant digits, and refuse past that edge", () => {
+    for (const maximum of [100, -5, 0.123456789012345, 9007199254740991]) {
+      expect(() => kiroStructuredOutputSpec(request({ type: "number", maximum }))).not.toThrow();
+    }
+    for (const maximum of [0.1234567890123456, 9007199254740992, 1e300]) {
+      expect(() => kiroStructuredOutputSpec(request({ type: "number", maximum })))
+        .toThrow(`${REFUSED} "maximum" cannot be enforced`);
+    }
+  });
+
+  test("bounds judge the exact lexeme the client receives", () => {
+    const spec = kiroStructuredOutputSpec(request({
+      type: "object",
+      properties: { m: { type: "number", maximum: 10 }, i: { type: "integer", minimum: 0 } },
+      additionalProperties: false,
+    }))!;
+    expect(parseKiroStructuredToolInput(spec, '{"m":10.0}')).toEqual({ json: '{"m":10.0}' });
     expect(parseKiroStructuredToolInput(spec, '{"m":10.0000000000000001}')).toEqual({ error: `${FAIL}: $.m: above maximum` });
+    expect(parseKiroStructuredToolInput(spec, '{"i":-0.0000000000000001}')).toEqual({ error: `${FAIL}: $.i: expected a JSON integer` });
     expect(parseKiroStructuredToolInput(spec, '{"i":1.0000000000000001}')).toEqual({ error: `${FAIL}: $.i: expected a JSON integer` });
     expect(parseKiroStructuredText(spec, '{"m":1e400}')).toBeUndefined();
   });
@@ -213,28 +239,25 @@ describe("Kiro strict numbers compare the original text", () => {
   });
 });
 
-describe("Kiro strict multipleOf and pattern", () => {
-  test("multipleOf must be a positive integer and is checked exactly", () => {
-    expect(() => kiroStructuredOutputSpec(request({ type: "object", properties: { n: { multipleOf: 0.1 } } })))
-      .toThrow(`${REFUSED} "multipleOf" cannot be enforced`);
-    const spec = kiroStructuredOutputSpec(request({ type: "number", multipleOf: 3 }))!;
-    for (const ok of ["9", "9.0", "-12", "0", "3e400"]) {
-      expect(parseKiroStructuredToolInput(spec, `{"value":${ok}}`)).toEqual({ json: ok });
-    }
-    for (const bad of ["10", "1e400", "9.5"]) {
-      expect(parseKiroStructuredToolInput(spec, `{"value":${bad}}`)).toEqual({ error: `${FAIL}: $: not a multiple of multipleOf` });
-    }
+describe("Kiro strict multipleOf and regular expressions are refused", () => {
+  test.each([
+    ["multipleOf", { type: "number", multipleOf: 3 }],
+    ["multipleOf", { type: "number", multipleOf: 0.1 }],
+    ["pattern", { type: "string", pattern: "^[a-z]+$" }],
+    ["pattern", { type: "string", pattern: "(a+)+$" }],
+    ["patternProperties", { type: "object", patternProperties: { "^x": { type: "string" } } }],
+  ])("strict %s is refused before sending", (keyword, schema) => {
+    expect(() => kiroStructuredOutputSpec(request(schema))).toThrow(`${REFUSED} "${keyword}" cannot be enforced`);
   });
 
-  test.each(["[", "(a+)+$", "(a|b)*", "(x)\\1", "(\\d{2,}-){2}"])("pattern %j is refused before sending", pattern => {
-    expect(() => kiroStructuredOutputSpec(request({ type: "string", pattern })))
-      .toThrow(`${REFUSED} "pattern" cannot be enforced`);
-  });
-
-  test("a simple pattern compiles at the boundary and is enforced", () => {
-    const spec = kiroStructuredOutputSpec(request({ type: "string", pattern: "^(\\d{3}-)?[a-z]+$" }))!;
-    expect(parseKiroStructuredToolInput(spec, '{"value":"123-abc"}')).toEqual({ json: '"123-abc"' });
-    expect(parseKiroStructuredToolInput(spec, '{"value":"ABC"}')).toEqual({ error: `${FAIL}: $: does not match pattern` });
+  test("non-strict formats still accept them, with the light root checks", () => {
+    for (const schema of [
+      { type: "number", multipleOf: 3 },
+      { type: "string", pattern: "(a+)+$" },
+      { type: "object", properties: { n: { const: 5 } } },
+    ]) {
+      expect(() => kiroStructuredOutputSpec(request(schema, false))).not.toThrow();
+    }
   });
 });
 

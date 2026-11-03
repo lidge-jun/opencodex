@@ -12,19 +12,22 @@
  *
  * - `type` (a known type or a non-empty array of them), `properties`, `required`,
  *   `additionalProperties` (boolean or schema), `items` (one schema), `enum`, `const`, `anyOf`.
+ *   A `const` or `enum` literal that contains a number is refused: the request reaches this module
+ *   already parsed, so a literal such as `1.0000000000000001` arrives as `1`, and an exact equality
+ *   check would accept a value the caller excluded.
  * - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>`, naming a definition in the root's
  *   `$defs`/`definitions`. `$defs`/`definitions` are accepted only at the root. Root-relative
  *   references (`#`, `#/properties/...`), references into annotations and remote references are
  *   refused, and so is a cycle of references and `anyOf` branches that consumes none of the value.
  * - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
- * - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and the numbers inside `const`
- *   and `enum` as finite numbers that are either safe integers or non-integers with at most 15
- *   significant digits, so the double the request parsed into still says what the caller wrote.
- *   Values are compared against the model's original number text exactly.
- * - `multipleOf` only as a positive safe integer, checked with exact integer arithmetic.
- * - `pattern` only when it compiles as a Unicode regular expression, has no backreference, and
- *   repeats (`*`, `+`, `{n,m}`) no group that itself contains a quantifier or an alternation, which
- *   is the shape of catastrophic backtracking such as `(a+)+`. `?` on such a group is allowed.
+ * - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` as finite numbers that are either
+ *   safe integers or non-integers with at most 15 significant digits. This is a heuristic: a bound
+ *   written with more digits than a double holds can still arrive rounded, so a value within about
+ *   one unit in the last place of the bound may be judged on the wrong side. The model's numbers
+ *   are compared against their original text exactly.
+ * - `multipleOf`, `pattern` and `patternProperties` are refused. `multipleOf` is exact equality on a
+ *   possibly rounded number, and a regular expression evaluated against model output can take
+ *   super-linear time on the request path.
  *
  * Annotations (`title`, `description`, `default`, ...) carry no assertion and are ignored.
  *
@@ -38,7 +41,6 @@
 import {
   compareKiroDecimal,
   isKiroDecimalInteger,
-  isKiroDecimalMultipleOf,
   kiroDecimal,
   type KiroDecimal,
   type KiroJsonValue,
@@ -75,12 +77,10 @@ interface StrictNode {
   maxLength?: number;
   minItems?: number;
   maxItems?: number;
-  pattern?: RegExp;
   minimum?: KiroDecimal;
   maximum?: KiroDecimal;
   exclusiveMinimum?: KiroDecimal;
   exclusiveMaximum?: KiroDecimal;
-  multipleOf?: bigint;
   items?: StrictNode;
   required?: string[];
   properties?: Map<string, StrictNode>;
@@ -106,58 +106,14 @@ function isFaithfulNumber(value: unknown): value is number {
   return kiroDecimal(String(value)).digits.length <= 15;
 }
 
-/** Every number inside a `const`/`enum` literal is faithful. Iterative, so a deep literal is safe. */
-function isFaithfulLiteral(literal: unknown): boolean {
+/** Whether a const/enum literal contains a number anywhere. Iterative, so a deep literal is safe. */
+function containsNumber(literal: unknown): boolean {
   const stack = [literal];
   while (stack.length > 0) {
     const item = stack.pop();
-    if (typeof item === "number" && !isFaithfulNumber(item)) return false;
+    if (typeof item === "number") return true;
     if (Array.isArray(item)) for (const child of item) stack.push(child);
     else if (isRecord(item)) for (const child of Object.values(item)) stack.push(child);
-  }
-  return true;
-}
-
-/** Whether a pattern repeats a group that contains a quantifier or alternation, or uses a backreference. */
-export function isKiroRiskyPattern(pattern: string): boolean {
-  const groups: boolean[] = [false];
-  let closedGroup: boolean | undefined;
-  for (let i = 0; i < pattern.length;) {
-    const ch = pattern[i]!;
-    if (ch === "\\") {
-      if (/[1-9k]/.test(pattern[i + 1] ?? "")) return true;
-      i += 2;
-      closedGroup = undefined;
-    } else if (ch === "[") {
-      for (i++; i < pattern.length && pattern[i] !== "]"; i += pattern[i] === "\\" ? 2 : 1);
-      i++;
-      closedGroup = undefined;
-    } else if (ch === "(") {
-      groups.push(false);
-      i++;
-      if (pattern[i] === "?") {
-        const named = /^\?<(?![=!])[^>]*>/.exec(pattern.slice(i));
-        i += named ? named[0].length : pattern[i + 1] === "<" ? 3 : 2;
-      }
-      closedGroup = undefined;
-    } else if (ch === ")") {
-      closedGroup = groups.pop() ?? false;
-      if (closedGroup) groups[groups.length - 1] = true;
-      i++;
-    } else if (ch === "|") {
-      groups[groups.length - 1] = true;
-      i++;
-      closedGroup = undefined;
-    } else {
-      const quantifier = /^(?:[*+?]|\{\d+(?:,\d*)?\})\??/.exec(pattern.slice(i));
-      if (quantifier) {
-        const repeats = !/^(?:\?|\{1\}|\{0,1\})\??$/.test(quantifier[0]);
-        if (repeats && closedGroup) return true;
-        groups[groups.length - 1] = true;
-        i += quantifier[0].length;
-      } else i++;
-      closedGroup = undefined;
-    }
   }
   return false;
 }
@@ -233,11 +189,11 @@ function prepare(schema: JsonRecord): PreparedSchema {
           node.items = build(arg, depth + 1, key);
           break;
         case "enum":
-          if (!Array.isArray(arg) || !isFaithfulLiteral(arg)) throw new Unsupported(key);
+          if (!Array.isArray(arg) || containsNumber(arg)) throw new Unsupported(key);
           node.enumValues = arg;
           break;
         case "const":
-          if (!isFaithfulLiteral(arg)) throw new Unsupported(key);
+          if (containsNumber(arg)) throw new Unsupported(key);
           node.constValue = { value: arg };
           break;
         case "anyOf":
@@ -247,19 +203,6 @@ function prepare(schema: JsonRecord): PreparedSchema {
         case "$ref":
           node.ref = resolve(arg);
           break;
-        case "multipleOf":
-          if (!(Number.isSafeInteger(arg) && (arg as number) > 0)) throw new Unsupported(key);
-          node.multipleOf = BigInt(arg as number);
-          break;
-        case "pattern": {
-          if (typeof arg !== "string" || isKiroRiskyPattern(arg)) throw new Unsupported(key);
-          try {
-            node.pattern = new RegExp(arg, "u");
-          } catch {
-            throw new Unsupported(key);
-          }
-          break;
-        }
         default:
           if ((COUNTS as readonly string[]).includes(key)) {
             if (!(Number.isSafeInteger(arg) && (arg as number) >= 0)) throw new Unsupported(key);
@@ -411,7 +354,6 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
       const length = [...value.value].length;
       if (node.minLength !== undefined && length < node.minLength) return `${path}: shorter than minLength`;
       if (node.maxLength !== undefined && length > node.maxLength) return `${path}: longer than maxLength`;
-      if (node.pattern && !node.pattern.test(value.value)) return `${path}: does not match pattern`;
     }
     if (value.kind === "number") {
       const number = kiroDecimal(value.lexeme);
@@ -419,7 +361,6 @@ export function validateKiroStrictValue(schema: JsonRecord, value: KiroJsonValue
       if (node.maximum && compareKiroDecimal(number, node.maximum) > 0) return `${path}: above maximum`;
       if (node.exclusiveMinimum && compareKiroDecimal(number, node.exclusiveMinimum) <= 0) return `${path}: not above exclusiveMinimum`;
       if (node.exclusiveMaximum && compareKiroDecimal(number, node.exclusiveMaximum) >= 0) return `${path}: not below exclusiveMaximum`;
-      if (node.multipleOf !== undefined && !isKiroDecimalMultipleOf(number, node.multipleOf)) return `${path}: not a multiple of multipleOf`;
     }
     if (value.kind === "array") {
       if (node.minItems !== undefined && value.items.length < node.minItems) return `${path}: fewer than minItems`;

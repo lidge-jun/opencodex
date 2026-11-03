@@ -173,19 +173,21 @@ comes from `output_config.format`) is a contract the CodeWhisperer wire has no r
   with the same refusal structured output had before emulation:
   - `type` (a known type or a non-empty array of them), `properties`, `required`,
     `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
+    A `const` or `enum` literal that contains a number is refused: the request arrives parsed, so
+    `1.0000000000000001` is already `1`, and exact equality could accept a value the caller excluded.
   - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition;
     `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
     references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`
     edges that consumes none of the value are refused. Recursion through properties or items is allowed.
   - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
-  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and every number inside `const`
-    or `enum` must be a safe integer or a non-integer with at most 15 significant digits, so the
-    parsed double still says what the caller wrote. The model's numbers are compared by their
+  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` must be a safe integer or a
+    non-integer with at most 15 significant digits. This is a heuristic: a bound written with more
+    digits than a double holds can still arrive rounded, so a value within about one unit in the last
+    place of the bound may be judged on the wrong side. The model's numbers are compared by their
     original text with exact decimal arithmetic (`src/adapters/kiro/structured-output-json.ts`).
-  - `multipleOf` only as a positive safe integer, checked with exact integer arithmetic.
-  - `pattern` only when it compiles as a Unicode regular expression, uses no backreference, and does
-    not repeat (`*`, `+`, `{n,m}`) a group containing a quantifier or an alternation, the shape of
-    catastrophic backtracking such as `(a+)+`. `?` on such a group is allowed.
+  - `multipleOf`, `pattern` and `patternProperties` are refused: `multipleOf` is exact equality on
+    a possibly rounded number, and a regular expression run against model output can take
+    super-linear time on the request path.
   - Annotations (`title`, `description`, `default`, `examples`, ...) are ignored.
 
   One validation visits at most 10,000 schema nodes plus 16 per JSON value in the answer, and one
