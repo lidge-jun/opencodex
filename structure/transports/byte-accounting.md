@@ -143,6 +143,14 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
+its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
+removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
+the previous charge owned until `finally` releases it, without releasing other owners' bytes.
+The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
+covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
+one-byte overflow, another retained owner, consumer return and upstream cancellation.
+
 Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
 allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
 only a fragment containing a newline triggers splitting of the accumulated record. Complete
