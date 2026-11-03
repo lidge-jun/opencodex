@@ -624,6 +624,7 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `GET, POST, DELETE /api/providers/keys` | List masked provider keys, add/activate one, or remove one | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
+| `PUT /api/providers/keys/pause` | Pause or resume one provider API key. Body `{ name, id, paused }`; pausing the active key selects the next usable key in ring order. Success includes the resulting `activeAccountId` (or `null`) and `activeAccountChanged`. | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
 
 `POST /api/oauth/login/cancel` can also dismiss the selected settled failed login attempt. It leaves stored credentials and successful login results intact; status then reports the remaining flow or idle. Cancelling an in-progress attempt still records its cancelled outcome.

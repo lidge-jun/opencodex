@@ -31,8 +31,9 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
   }
-  if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
-    || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
+  const hasPausedActiveReference = row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
+    && !row.apiKeyPool?.some(entry => !entry.disabled && entry.key === row.apiKey);
+  if (hasPausedActiveReference || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
   const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()) return null;

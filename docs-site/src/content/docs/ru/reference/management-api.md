@@ -280,6 +280,7 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `GET, POST, DELETE /api/providers/keys` | Показать список masked provider-key'ов, добавить/активировать один или удалить один | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Выбрать активный ключ провайдера | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Задать или очистить alias provider-key'а | 400 invalid input; 404 provider/key missing |
+| `PUT /api/providers/keys/pause` | Приостановить или возобновить один provider API key. Body `{ name, id, paused }`. При паузе активного ключа выбирается следующий доступный ключ по порядку кольца. Успешный ответ содержит итоговый `activeAccountId` (или `null`) и `activeAccountChanged`. | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | Показать список, создать, отредактировать или удалить admission key data plane | 400 invalid body/id; 404 key missing |
 
 Ответы со списками credential'ов намеренно маскируются. OAuth access-token'ы и полные API-key'и

@@ -20,6 +20,7 @@ import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, too
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -1220,6 +1221,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(envelope) };
       }
+
+      if (isProviderApiKeyPaused(provider)) throw new ProviderApiKeyPausedError();
 
       if (provider.googleMode === "vertex") {
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);

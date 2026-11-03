@@ -31,7 +31,7 @@ counters. Their transport and lifetime follow the [Responses image replay contra
 the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored with the
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain
 `disabled`, `pauseDetails` and `pauseRevision` per entry. Runtime counters are process-local.
-Manual resume clears details and changes the revision, fencing already-sent refusals.
+Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
 
 ## Opt-in permanent refusal recovery
 
@@ -54,7 +54,11 @@ transient/quota/model/request failures. No provider body or account identifier e
 The opt-in counter defaults to two refusals; each process owns its counters. Durable pause
 uses `setAccountPaused`, `setCodexAccountPaused`, or
 `src/providers/api-key-pause.ts`; resume changes an incarnation fence and clears the reason.
+Key pool pause and resume mutate under `commitProviderApiKeySelection`, verifying the selection
+revision and policy fences. An enabled row sharing the active reference preserves that reference when another row is paused or removed; active row identity prefers the first enabled matching row. When the last enabled row for the active reference is paused, the active selection advances in ring
+order to the next enabled entry; resuming an entry into an all-paused pool restores the active key.
 API-key selectors and reactive/proactive failover exclude disabled pool entries, including request-local round-robin allocation. A distributed refusal pauses its exact sending entry even when a different key is active, under the existing selection-revision fence. Recovery allocates a healthy sibling and reacquires its pacing lease before dispatch.
+When every key in a pool is paused, no paused key is dispatched. A request with no other eligible route fails closed with 403 `permission_error` before keyed wire transport; API-key selection never falls back to ambient environment credentials or Application Default Credentials. Manual pause or resume clears key cooldowns and rotation cursors, and purges model and quota caches on active key transition. Quota probing skips disabled keys while preserving fresh last-good cached quota.
 Regression coverage: `tests/oauth/oauth-account-auto-pause.test.ts` and
 `tests/responses/responses-account-auto-pause.test.ts` and `tests/providers/api-key-auto-pause-distribution.test.ts`.
 
@@ -92,8 +96,9 @@ OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason 
 ms timestamp) beside the existing pause flag. The CLI preserves those fields and includes
 the reason in account listings. `src/server/management/oauth-account-routes.ts` also serves
 `PUT /api/providers/keys/pause` with provider `name`, key `id` and boolean `paused`, through
-the existing management authorization boundary. Key listings expose `disabled` and pause
-details. OAuth upserts for dual-auth providers keep validated key pause fields through
+the existing management authorization boundary. Its success response reports the committed
+`activeAccountId` (or `null`) and whether the active key changed. Key listings expose `disabled`
+and pause details. OAuth upserts for dual-auth providers keep validated key pause fields through
 `src/oauth/api-key-pool-preserve.ts` and never promote a paused key to the active key. Dashboard key Resume clears the pause through that endpoint before activating
 the key; OAuth/Codex keep their existing resume actions.
 `src/server/management/route-registry.ts` declares key pause as an ordinary management mutation,

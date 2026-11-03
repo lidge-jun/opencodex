@@ -287,6 +287,7 @@ Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT va
 | `GET, POST, DELETE /api/providers/keys` | Répertorier les clés de fournisseur masquées, en ajouter ou en activer une, ou en supprimer une | 400 saisie invalide ; 404 fournisseur ou clé manquante |
 | `PUT /api/providers/keys/active` | Sélectionnez la clé active d'un fournisseur | 400 saisie invalide ; 404 provider/key manquant |
 | `PUT /api/providers/keys/alias` | Définir ou supprimer un alias de clé de fournisseur | 400 saisie invalide ; 404 provider/key manquant |
+| `PUT /api/providers/keys/pause` | Suspendre ou reprendre une clé API de fournisseur. Body `{ name, id, paused }` ; la suspension de la clé active sélectionne la clé utilisable suivante selon l'ordre circulaire. En cas de succès, renvoie le résultat `activeAccountId` (ou `null`) et `activeAccountChanged`. | 400 saisie invalide ; 404 provider/key manquant |
 | `GET, POST, PATCH, DELETE /api/keys` | Répertorier, créer, modifier ou supprimer les clés d'admission du plan de données | 400 corps ou identifiant invalide ; 404 clé manquante |
 
 Les réponses qui répertorient les identifiants sont délibérément masquées. Les jetons d'accès OAuth et les clés API complètes des
