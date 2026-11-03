@@ -13,18 +13,17 @@ const raw = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
 const proxyControls = await Bun.file(new URL("../src/components/ui-v2/proxy-controls.tsx", import.meta.url)).text();
+const proxyLever = await Bun.file(new URL("../src/components/ui-v2/proxy-lever.tsx", import.meta.url)).text();
 
 test("the sidebar foot pairs stop with restart-Codex", () => {
   // Design system v2: the sidebar foot renders one ProxyControls card instead of loose orbs.
   const card = src.slice(src.indexOf("<ProxyControls"), src.indexOf("/>", src.indexOf("<ProxyControls")));
   expect(card).toContain("handleStop");
   expect(card).toContain("handleCodexRestart");
-  expect(proxyControls).toContain("IconPower");
   expect(proxyControls).toContain("IconRefresh");
-  // The destructive control keeps its danger marking: the stop button is the tray's `danger` one,
-  // and only that variant turns red on hover.
-  expect(proxyControls).toMatch(/<TrayButton onClick=\{onStop\}[^>]*\bdanger\b/);
-  expect(proxyControls).toContain('"hover:bg-danger-soft hover:text-danger');
+  // Stop is a pull-down lever, and it keeps its danger marking: its plate turns red on hover.
+  expect(proxyControls).toMatch(/<ProxyLever [^>]*onThrow=\{onStop\}/);
+  expect(proxyLever).toContain('"hover:bg-danger-soft hover:text-danger"');
 });
 
 test("the mobile top bar carries the same pair", () => {
@@ -49,10 +48,11 @@ test("every action orb carries an accessible name", () => {
   for (const orb of orbs) expect(orb.slice(0, 400)).toContain("aria-label");
   // The sidebar card's icon buttons are tray buttons; each call passes a name, and the tray
   // button turns it into the aria-label.
-  const buttons = proxyControls.split("<TrayButton ").slice(1);
+  const buttons = proxyControls.split(/<(?:TrayButton|ProxyLever) /).slice(1);
   expect(buttons.length).toBeGreaterThanOrEqual(3);
   for (const button of buttons) expect(button.slice(0, 400)).toMatch(/\blabel=\{/);
   expect(proxyControls).toContain("aria-label={label}");
+  expect(proxyLever).toContain("aria-label={label}");
 });
 
 test("the restart action comes from the shared hook, not an inline duplicate", () => {

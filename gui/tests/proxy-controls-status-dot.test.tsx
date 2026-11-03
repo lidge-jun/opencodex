@@ -31,3 +31,16 @@ test("stopping: the dot goes neutral even while online", () => {
   expect(dotClass({ online: true, stopping: true })).toContain("bg-fg-subtle");
   expect(dotClass({ online: true, stopping: true })).not.toContain("bg-success");
 });
+
+test("stop is a lever named by the stop label, and it locks down while stopping", () => {
+  const render = (stopping: boolean) => renderToStaticMarkup(
+    <ProxyControls label="Proxy" statusLabel="Online" stopLabel="Stop" stoppingLabel="Stopping"
+      restartLabel="Restart" restartingLabel="Restarting" stopping={stopping} restarting={false}
+      onStop={() => {}} onRestart={() => {}} />,
+  );
+  expect(render(false)).toMatch(/<button type="button" aria-label="Stop"[^>]*>/);
+  expect(render(false)).toContain("rotate(-40deg)");
+  const stoppingHtml = render(true);
+  expect(stoppingHtml).toMatch(/<button type="button" aria-label="Stopping"[^>]*disabled=""/);
+  expect(stoppingHtml).toContain("rotate(40deg)");
+});

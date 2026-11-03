@@ -548,7 +548,7 @@ export default function App() {
             restartingLabel={t("dash.codexRestarting")}
             stopping={stopping}
             restarting={codexRestarting}
-            onStop={() => { void handleStop(); }}
+            onStop={handleStop}
             onRestart={() => { void handleCodexRestart(); }}
             session={(targets.connected || deviceForgetAvailable) && sharedSessionReady ? {
               label: endSessionLabel,

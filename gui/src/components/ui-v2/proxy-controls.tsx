@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconPower, IconRefresh, IconX } from "../../icons";
+import { IconRefresh, IconX } from "../../icons";
+import { ProxyLever } from "./proxy-lever";
 import { cn } from "@/lib/utils";
 
 interface ProxyControlsProps {
@@ -17,7 +18,8 @@ interface ProxyControlsProps {
   restartingLabel: string;
   stopping: boolean;
   restarting: boolean;
-  onStop: () => void;
+  /** May return the stop's promise so the lever can rise again if the confirmation is declined. */
+  onStop: () => void | Promise<unknown>;
   onRestart: () => void;
   /** Optional third action (end the dashboard session on a connected client). */
   session?: { label: string; busyLabel: string; busy: boolean; onClick: () => void } | undefined;
@@ -26,8 +28,8 @@ interface ProxyControlsProps {
 
 /*
  * Design system v2 proxy status, as one sidebar row: a static status dot, the title and how
- * long it has been up, then restart and stop as bare icons (a soft plate on hover; stop's turns
- * red). No panel, beam or pulse: the row reads like the navigation above it. Restart spins while
+ * long it has been up, then restart as a bare icon (a soft plate on hover) and stop as a pull-down
+ * lever (proxy-lever.tsx) whose plate turns red. No panel, beam or pulse: the row reads like the navigation above it. Restart spins while
  * in flight and shows a check for a moment when it settles. The status word stays available to
  * assistive tech and as the row's tooltip.
  */
@@ -80,20 +82,16 @@ export function ProxyControls({
           </span>
         )}
       </TrayButton>
-      <TrayButton onClick={onStop} disabled={stopping} danger
-        label={stopping ? stoppingLabel : stopLabel} title={stopping ? stoppingLabel : stopLabel}>
-        <IconPower />
-      </TrayButton>
+      <ProxyLever label={stopping ? stoppingLabel : stopLabel} down={stopping} onThrow={onStop} />
     </div>
   );
 }
 
-function TrayButton({ onClick, disabled, label, title, danger, children }: {
+function TrayButton({ onClick, disabled, label, title, children }: {
   onClick: () => void;
   disabled: boolean;
   label: string;
   title: string;
-  danger?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -108,7 +106,7 @@ function TrayButton({ onClick, disabled, label, title, danger, children }: {
         "transition-[background-color,color] duration-150 ease-soft",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-highlight",
         "disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5",
-        danger ? "hover:bg-danger-soft hover:text-danger" : "hover:bg-accent-soft hover:text-fg",
+        "hover:bg-accent-soft hover:text-fg",
       )}
     >
       {children}
