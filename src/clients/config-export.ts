@@ -995,10 +995,13 @@ type KimiEffort = typeof KIMI_EFFORT_ORDER[number];
 function kimiEfforts(model: ExportModel): { support_efforts?: KimiEffort[]; default_effort?: KimiEffort } {
   // An explicit "no reasoning" declaration outranks any ladder that reached the exporter.
   if (model.supportsReasoning === false || model.supportsReasoningEffort === false) return {};
-  const offered = new Set((model.reasoningEfforts ?? []).map(effort => effort.trim().toLowerCase()));
+  const offered = new Set((model.reasoningEfforts ?? [])
+    .filter((effort): effort is string => typeof effort === "string")
+    .map(effort => effort.trim().toLowerCase()));
   const support = KIMI_EFFORT_ORDER.filter(effort => offered.has(effort));
   if (support.length === 0) return {};
-  const declared = model.defaultReasoningEffort?.trim().toLowerCase();
+  const declared = typeof model.defaultReasoningEffort === "string"
+    ? model.defaultReasoningEffort.trim().toLowerCase() : undefined;
   const fallback = support.find(effort => effort === declared);
   return { support_efforts: support, ...(fallback ? { default_effort: fallback } : {}) };
 }

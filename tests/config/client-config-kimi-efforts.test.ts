@@ -15,6 +15,7 @@ const MODELS: ExportModel[] = [
   { ...base, namespaced: "kimi/only-ultra", id: "only-ultra", reasoningEfforts: ["ultra"] },
   { ...base, namespaced: "kimi/no-effort", id: "no-effort", reasoningEfforts: ["low", "high"], supportsReasoningEffort: false },
   { ...base, namespaced: "kimi/no-reasoning", id: "no-reasoning", reasoningEfforts: ["low", "high"], supportsReasoning: false },
+  { ...base, namespaced: "kimi/malformed", id: "malformed", reasoningEfforts: [7, "high", null] as unknown as string[], defaultReasoningEffort: 3 as unknown as string },
 ];
 const config = { port: 10100, hostname: "127.0.0.1", defaultProvider: "kimi", providers: {} } as unknown as OcxConfig;
 const ctx: ExportContext = { baseUrl: "http://127.0.0.1:10100/v1", models: MODELS, config };
@@ -41,6 +42,11 @@ describe("kimi export declares effort metadata (#8095)", () => {
     expect(entry).not.toHaveProperty("support_efforts");
     expect(entry).not.toHaveProperty("default_effort");
     expect(entry).not.toHaveProperty("capabilities");
+  });
+
+  test("non-string ladder entries and defaults are ignored instead of failing the export", () => {
+    expect(block("kimi/malformed")).toMatchObject({ support_efforts: ["high"], capabilities: ["thinking"] });
+    expect(block("kimi/malformed")).not.toHaveProperty("default_effort");
   });
 
   test("the effort fields round-trip through TOML", () => {
