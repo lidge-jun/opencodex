@@ -212,21 +212,29 @@ describe("manifest limits and uninstall leftovers (#8093)", () => {
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
   }));
 
-  test("a rerun finishes an uninstall that stopped after deleting the manifest", withHome(dir => {
+  test("a rerun resuming from the tombstoned manifest keeps an unlisted file and reports it", withHome(async dir => {
+    const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(true);
-    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
-    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
-    expect(existsSync(dir)).toBe(false);
+    writeFileSync(join(dir, "seed"), "x");
+    setUninstallStepHookForTests(step => { if (step === "owner-deleted") throw new Error("stopped"); });
+    try { expect(removeOwnedConfigState(dir).status).toBe("partial"); } finally { setUninstallStepHookForTests(undefined); }
+    writeFileSync(join(dir, "user-notes.txt"), "keep");
+    const result = removeOwnedConfigState(dir);
+    expect(result.status).toBe("partial");
+    expect(result.residualPaths).toEqual([join(dir, "user-notes.txt")]);
+    expect(readFileSync(join(dir, "user-notes.txt"), "utf8")).toBe("keep");
   }));
 
-  test("leftover metadata next to any other file is still refused untouched", withHome(dir => {
-    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
-    writeFileSync(join(dir, "user-notes.txt"), "keep");
-    expect(removeOwnedConfigState(dir).status).toBe("refused");
-    expect(existsSync(join(dir, "user-notes.txt"))).toBe(true);
-    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(true);
+  test("leftover lock files are kept while another process holds the lock", withHome(dir => {
+    mkdirSync(dir);
+    writeFileSync(join(dir, CONFIG_OWNERSHIP_LOCK), "");
+    const release = holdLock(dir);
+    try {
+      expect(removeOwnedConfigState(dir).status).toBe("refused");
+      expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(true);
+    } finally { release(); }
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
   }));
 });
 
@@ -363,17 +371,22 @@ describe("concurrent first registrations on an absent home (#8093)", () => {
   }), 60_000);
 });
 
-describe("rerun after the manifest was already deleted (#8093)", () => {
+describe("rerun after the owner marker was already deleted (#8093)", () => {
   test("the rerun's own cleanup can recreate an initially owned file, and the rerun still finishes", withHome(async dir => {
     const { removeOwnedConfigAfterDesktopCleanup } = await import("../../src/cli/uninstall-client-state");
     const { withClientLifecycle } = await import("../../src/client/lifecycle-lock");
     const { withConfigMutationLockSync } = await import("../../src/config/mutation-lock");
+    const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    // An earlier uninstall stopped after deleting the manifest: its owner marker records that the
-    // snapshot was removed, and the marker and lock remain.
-    const owner = JSON.parse(readFileSync(join(dir, ".opencodex-owner.json"), "utf8"));
-    writeFileSync(join(dir, ".opencodex-owner.json"), JSON.stringify({ ...owner, uninstallSnapshotRemovedAt: Date.now() }, null, 2) + "\n");
-    removeTreeWithRetry(join(dir, CONFIG_UNINSTALL_MANIFEST));
+    // An earlier uninstall stopped after deleting the owner marker: only its tombstoned manifest
+    // (and the lock) remain, and other processes keep refusing to register.
+    setUninstallStepHookForTests(step => { if (step === "owner-deleted") throw new Error("stopped"); });
+    try { expect(removeOwnedConfigState(dir).status).toBe("partial"); } finally { setUninstallStepHookForTests(undefined); }
+    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(false);
+    expect(manifest(dir).uninstallStartedAt).toEqual(expect.any(Number));
+    expect(await spawnChild(dir, "config.json").exited).toBe(3);
+    expect(await spawnChild(dir, "late").exited).toBe(3);
+    expect(() => recordOwnedConfigPath(dir, join(dir, "late"))).toThrow(ConfigUninstallInProgressError);
     const lockPath = join(dirname(dir), "runtime", "lifecycle.sqlite");
     const result = await removeOwnedConfigAfterDesktopCleanup(
       { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false },
@@ -386,7 +399,12 @@ describe("rerun after the manifest was already deleted (#8093)", () => {
         cleanupIntegrations: async () => ({ attempted: 0, changed: 0 }),
         remove: () => removeOwnedConfigState(dir),
         aclReapPending: () => false,
-        removePickerArtifacts: async () => { withConfigMutationLockSync(() => undefined, dir); return { ok: true }; },
+        // Picker cleanup takes the config mutation lock, which recreates its listed database.
+        removePickerArtifacts: async () => {
+          withConfigMutationLockSync(() => undefined, dir);
+          expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
+          return { ok: true };
+        },
       } as never,
     );
     expect(result).toEqual({ status: "removed", residualPaths: [] });
@@ -416,22 +434,35 @@ describe("paths recorded after the uninstall snapshot (#8093)", () => {
         // A listed path is read without the lock and refused by the tombstone; a new path needs the lock.
         seen.listed = Bun.spawnSync([process.execPath, "-e", childScript(dir, "config.json")]).exitCode;
       }
-      if (step === "manifest-deleted") {
-        // Only the owner marker, flagged by this run, remains: that is an uninstall finishing.
+      if (step === "owner-deleted") {
+        // Only the tombstoned manifest remains: that is an uninstall finishing, not an unowned home.
+        seen.secondBetweenUnlinks = Bun.spawnSync([process.execPath, "-e", uninstallScript]).stdout.toString().trim();
         seen.betweenUnlinks = Bun.spawnSync([process.execPath, "-e", childScript(dir, "fresh-between")]).exitCode;
       }
     });
     let result;
     try { result = removeOwnedConfigState(dir); } finally { setUninstallStepHookForTests(undefined); }
-    expect(seen).toEqual({ secondUninstall: "refused", listed: 3, betweenUnlinks: 3 });
+    expect(seen).toEqual({ secondUninstall: "refused", listed: 3, secondBetweenUnlinks: "refused", betweenUnlinks: 3 });
     expect(result).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(join(dir, "fresh-between"))).toBe(false);
   }), 60_000);
 
-  test("an abandoned owner-marker temp file does not block uninstall", withHome(dir => {
-    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    writeFileSync(join(dir, ".opencodex-owner.json.4242." + crypto.randomUUID() + ".tmp"), "{}");
-    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
-  }));
+  test("a finishing uninstall leaves a lock file another installation created in place", { skip: process.platform === "win32" },
+    withHome(async dir => {
+      const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
+      expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+      const lock = join(dir, CONFIG_OWNERSHIP_LOCK);
+      setUninstallStepHookForTests(step => {
+        if (step !== "owner-deleted") return;
+        // A new generation's lock replaces the path this run holds.
+        removeTreeWithRetry(lock);
+        writeFileSync(lock, "new");
+      });
+      let result;
+      try { result = removeOwnedConfigState(dir); } finally { setUninstallStepHookForTests(undefined); }
+      expect(readFileSync(lock, "utf8")).toBe("new");
+      expect(result).toEqual({ status: "partial", reason: "unowned files remain in the config directory", residualPaths: [lock] });
+    }));
 
   test("a home cached as unowned picks up an owner marker written later", withHome(dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
@@ -487,18 +518,23 @@ describe("a missing manifest without uninstall evidence (#8093)", () => {
     expect(existsSync(join(dir, "auth.json"))).toBe(true);
   }));
 
-  test("an uninstall stopped after deleting the manifest leaves that evidence, and a rerun finishes", withHome(async dir => {
+  test("an uninstall stopped after deleting the owner marker resumes from its exact snapshot", withHome(async dir => {
     const { setUninstallStepHookForTests } = await import("../../src/lib/config-ownership");
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    setUninstallStepHookForTests(step => { if (step === "manifest-deleted") throw new Error("stopped"); });
+    // A manifest from an older version may omit an initially owned name; that file is not ours.
+    writeFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), JSON.stringify({ ...manifest(dir), paths: manifest(dir).paths.filter(path => path !== "config.json") }, null, 2) + "\n");
+    writeFileSync(join(dir, "config.json"), "{\"keep\":true}");
+    setUninstallStepHookForTests(step => { if (step === "owner-deleted") throw new Error("stopped"); });
     try { expect(removeOwnedConfigState(dir).status).toBe("partial"); } finally { setUninstallStepHookForTests(undefined); }
-    expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(false);
-    const owner = JSON.parse(readFileSync(join(dir, ".opencodex-owner.json"), "utf8")) as { uninstallSnapshotRemovedAt?: number };
-    expect(owner.uninstallSnapshotRemovedAt).toEqual(expect.any(Number));
-    // The rerun's own cleanup recreates an initially owned file before the remover runs.
+    expect(existsSync(join(dir, ".opencodex-owner.json"))).toBe(false);
+    expect(manifest(dir).uninstallStartedAt).toEqual(expect.any(Number));
+    // A listed file recreated before the rerun is removed by it; the unlisted one stays.
     writeFileSync(join(dir, "config-mutation.sqlite"), "");
-    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
-    expect(existsSync(dir)).toBe(false);
+    const result = removeOwnedConfigState(dir);
+    expect(result.status).toBe("partial");
+    expect(result.residualPaths).toEqual([join(dir, "config.json")]);
+    expect(readFileSync(join(dir, "config.json"), "utf8")).toBe("{\"keep\":true}");
+    expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(false);
   }));
 });
 

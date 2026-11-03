@@ -141,11 +141,11 @@ const warnedFullManifest = new Set<string>();
  */
 let teardownDepth = 0;
 
-type UninstallStep = "snapshot-removed" | "manifest-deleted";
+type UninstallStep = "snapshot-removed" | "owner-deleted";
 let uninstallStepHookForTests: ((step: UninstallStep) => void) | undefined;
 /**
- * Test seam: runs after uninstall removed its snapshot (before the final lock hold), and inside that
- * hold after the manifest is deleted. A hook that throws stops the run there, as a crash would.
+ * Test seam, called inside uninstall's single lock hold: after it removed its snapshot, and after it
+ * deleted the owner marker. A hook that throws stops the run there, as a crash would.
  */
 export function setUninstallStepHookForTests(hook: ((step: UninstallStep) => void) | undefined): void {
   uninstallStepHookForTests = hook;
@@ -314,9 +314,10 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
     root: canonicalRoot(configDir),
   };
   const manifest: ConfigUninstallManifest = { ...owner, paths: [...INITIAL_OWNED_PATHS] };
-  // Manifest first, owner marker second: the reverse of uninstall's deletion order. A root holding
-  // only the owner marker is therefore a stopped uninstall, never an initialization in progress,
-  // and leftover recovery cannot remove a home that is still being created.
+  // Manifest first, owner marker second; uninstall deletes them in the reverse order (owner marker,
+  // then manifest). Both leave a manifest without an owner marker in between, told apart by the
+  // tombstone: creation's manifest never carries one, so a home still being created is never
+  // mistaken for a stopped uninstall.
   writeFileSync(join(configDir, CONFIG_UNINSTALL_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, {
     encoding: "utf8",
     flag: "wx",
@@ -335,15 +336,13 @@ function createOwnership(configDir: string): { owner: ConfigOwner; manifest: Con
   return { owner, manifest };
 }
 
-/** Temporary names the manifest and owner-marker writers use; one left behind means a write stopped before its rename. */
-const METADATA_TEMP_PATTERN = new RegExp(
-  `^(?:${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}|${CONFIG_OWNER_FILE.replace(/\./g, "\\.")})\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`,
-);
+/** Temporary names `writeManifest` uses; one left behind means a write stopped before its rename. */
+const MANIFEST_TEMP_PATTERN = new RegExp(`^${CONFIG_UNINSTALL_MANIFEST.replace(/\./g, "\\.")}\\.\\d+\\.[0-9a-f-]{36}\\.tmp$`);
 
-/** Under the lock no metadata write is in progress, so any such temporary file is abandoned. */
+/** Under the lock no manifest write is in progress, so any such temporary file is abandoned. */
 function removeAbandonedMetadataTemps(configDir: string): void {
   for (const name of readdirSync(configDir)) {
-    if (!METADATA_TEMP_PATTERN.test(name)) continue;
+    if (!MANIFEST_TEMP_PATTERN.test(name)) continue;
     const path = join(configDir, name);
     const entry = lstatSync(path);
     if (entry.isFile() && !entry.isSymbolicLink()) unlinkSync(path);
@@ -389,9 +388,11 @@ function fileIdentity(path: string): string {
 function withOwnershipLock<T>(configDir: string, run: () => T): { value: T } | undefined {
   const path = join(configDir, CONFIG_OWNERSHIP_LOCK);
   const ownerPath = join(configDir, CONFIG_OWNER_FILE);
+  const manifestPath = join(configDir, CONFIG_UNINSTALL_MANIFEST);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    // Never lock (and so never create the lock file in) a root without an owner marker.
-    if (!existsSync(ownerPath)) return undefined;
+    // Never lock (and so never create the lock file in) a root without ownership metadata. A
+    // tombstoned manifest alone is an uninstall that stopped after deleting the owner marker.
+    if (!existsSync(ownerPath) && !existsSync(manifestPath)) return undefined;
     try {
       writeFileSync(path, "", { flag: "wx", mode: 0o600 });
     } catch (error) {
@@ -426,9 +427,10 @@ function withOwnershipLock<T>(configDir: string, run: () => T): { value: T } | u
     } finally {
       try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
       try { database.close(); } catch { /* the OS lock is released with the handle */ }
-      // A holder that finds the metadata gone (a finished uninstall) does not leave the lock behind.
-      if (!existsSync(ownerPath)) {
-        try { removeOwnershipLockFile(configDir); } catch { /* uninstall reports what remains */ }
+      // A holder that finds the metadata gone (a finished uninstall) retires the lock it held, and
+      // only that file: a new installation may already have created its own lock at the same path.
+      if (!existsSync(ownerPath) && !existsSync(manifestPath)) {
+        try { if (!lockFileChanged(path, before)) removeOwnershipLockFile(configDir); } catch { /* uninstall reports what remains */ }
       }
     }
   }
@@ -473,19 +475,6 @@ function removeOwnershipLockFile(configDir: string): void {
   }
 }
 
-/** Replace the owner marker atomically, as the manifest is replaced. */
-function writeOwnerMarker(configDir: string, owner: ConfigOwner & { uninstallSnapshotRemovedAt?: number }): void {
-  const path = join(configDir, CONFIG_OWNER_FILE);
-  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(owner, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  try {
-    renameAtomicFile(temp, path, undefined, "config-ownership");
-  } catch (error) {
-    try { unlinkSync(temp); } catch { /* best effort */ }
-    throw error;
-  }
-}
-
 function removeOwnedEntry(root: string, path: string): void {
   const entry = lstatSync(path);
   if (entry.isSymbolicLink()) {
@@ -527,16 +516,28 @@ export function initializeConfigOwnership(configDir: string): boolean {
   return ownership !== null;
 }
 
-/** Whether the owner marker records that an uninstall already removed its snapshot. */
-function ownerMarkerRecordsUninstall(configDir: string): boolean {
-  const path = join(configDir, CONFIG_OWNER_FILE);
-  if (!existsSync(path)) return false;
+/**
+ * The metadata of an uninstall that stopped after deleting the owner marker: a valid, tombstoned
+ * manifest for this root and no owner marker. Uninstall deletes the owner marker first and the
+ * manifest last, so this state carries the owner id, the root and the exact snapshot. Creation
+ * writes an untombstoned manifest first, so it never looks like this.
+ */
+function tombstonedManifestWithoutOwner(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
+  if (existsSync(join(configDir, CONFIG_OWNER_FILE))) return null;
+  const path = join(configDir, CONFIG_UNINSTALL_MANIFEST);
+  if (!existsSync(path)) return null;
   try {
-    const owner = readBoundedJson(path);
-    return isOwner(owner) && Number.isSafeInteger((owner as Record<string, unknown>).uninstallSnapshotRemovedAt);
+    const manifest = readBoundedJsonSized(path, METADATA_MAX_BYTES + TOMBSTONE_RESERVE_BYTES).value;
+    if (!isManifest(manifest) || manifest.uninstallStartedAt === undefined || !samePath(manifest.root, canonicalRoot(configDir))) return null;
+    return { owner: { version: 1, ownerId: manifest.ownerId, root: manifest.root }, manifest };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Ownership for uninstall: the usual pair, or the tombstoned manifest a stopped uninstall left. */
+function loadOwnershipForUninstall(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
+  return loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
 }
 
 /** How long a first registration waits for another process that is creating the same home. */
@@ -559,7 +560,8 @@ function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifes
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)) && !existsSync(join(configDir, CONFIG_OWNER_FILE));
+    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)) && !existsSync(join(configDir, CONFIG_OWNER_FILE))
+      && !tombstonedManifestWithoutOwner(configDir);
     if (!creating || Date.now() >= deadline) return loadOwnership(configDir);
     Bun.sleepSync(5);
   }
@@ -575,9 +577,9 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   const rel = manifestRelativePath(configDir, candidatePath);
   if (!rel) return false;
   if (!initializeConfigOwnership(configDir)) {
-    // Between uninstall's two final unlinks only the owner marker remains, flagged with
-    // `uninstallSnapshotRemovedAt`. That is an uninstall finishing, not an unowned home.
-    if (teardownDepth === 0 && ownerMarkerRecordsUninstall(configDir)) throw new ConfigUninstallInProgressError();
+    // Between uninstall's two final unlinks only the tombstoned manifest remains. That is an
+    // uninstall finishing (or stopped there), not an unowned home.
+    if (teardownDepth === 0 && tombstonedManifestWithoutOwner(configDir)) throw new ConfigUninstallInProgressError();
     return false;
   }
   const cacheKey = ownershipCacheKey(configDir);
@@ -637,37 +639,38 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
 }
 
 /**
- * What uninstall's last step can leave when it stops after deleting the manifest: the owner marker
- * and lock files, plus initially owned names a rerun's own cleanup recreated, which are accepted
- * only when the owner marker records that the snapshot was removed. Windows also keeps a lock file
- * another process holds open.
+ * What a finished uninstall can leave when a lock file could not be unlinked (Windows keeps a file
+ * another process holds open): nothing but this module's lock files.
  */
-function onlyOwnershipLeftoversRemain(configDir: string): boolean {
-  if (existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST))) return false;
+function onlyOwnershipLockFilesRemain(configDir: string): boolean {
   const names = readdirSync(configDir);
-  const metadata = new Set([CONFIG_OWNER_FILE, CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
-  let snapshotRemoved = false;
-  if (names.includes(CONFIG_OWNER_FILE)) {
-    let owner: unknown;
-    try {
-      owner = readBoundedJson(join(configDir, CONFIG_OWNER_FILE));
-    } catch {
-      return false;
-    }
-    if (!isOwner(owner) || !samePath(owner.root, canonicalRoot(configDir))) return false;
-    snapshotRemoved = Number.isSafeInteger((owner as Record<string, unknown>).uninstallSnapshotRemovedAt);
-  }
-  // Initially owned names are claimed only when the owner marker records that uninstall already
-  // removed its snapshot: a rerun's own cleanup (the config mutation lock) can recreate one. A home
-  // whose manifest is missing for any other reason keeps them and is refused.
-  const initial = new Set<string>(snapshotRemoved ? INITIAL_OWNED_PATHS : []);
-  if (names.length === 0 || !names.every(name => metadata.has(name) || initial.has(name))) return false;
-  for (const name of names) {
-    if (!metadata.has(name)) continue;
+  const lockNames = new Set([CONFIG_OWNERSHIP_LOCK, ...OWNERSHIP_LOCK_SIDECARS.map(suffix => `${CONFIG_OWNERSHIP_LOCK}${suffix}`)]);
+  return names.length > 0 && names.every(name => {
+    if (!lockNames.has(name)) return false;
     const entry = lstatSync(join(configDir, name));
-    if (!entry.isFile() || entry.isSymbolicLink()) return false;
+    return entry.isFile() && !entry.isSymbolicLink();
+  });
+}
+
+/** Remove leftover lock files only if no other process holds the lock (an uninstall still finishing). */
+function removeIdleLockFiles(configDir: string): "removed" | "busy" {
+  const path = join(configDir, CONFIG_OWNERSHIP_LOCK);
+  if (existsSync(path)) {
+    const before = fileIdentity(path);
+    const database = new Database(path, { create: false, readwrite: true });
+    try {
+      acquireImmediate(database);
+    } catch (error) {
+      try { database.close(); } catch { /* acquisition already failed */ }
+      if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "SQLITE_BUSY") return "busy";
+      throw error;
+    }
+    try { database.exec("ROLLBACK"); } catch { /* close releases it */ }
+    database.close();
+    if (lockFileChanged(path, before)) return "busy";
   }
-  return true;
+  removeOwnershipLockFile(configDir);
+  return "removed";
 }
 
 export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
@@ -682,25 +685,20 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       residualPaths: [configDir],
     };
   }
-  if (!loadOwnership(configDir)) {
-    // A rerun after uninstall stopped between deleting the manifest and removing the root: only
-    // this module's own marker and lock files remain, so finish the removal.
-    if (onlyOwnershipLeftoversRemain(configDir)) {
+  if (!loadOwnershipForUninstall(configDir)) {
+    // A finished uninstall whose lock file could not be unlinked (Windows keeps a file another
+    // process holds open) leaves only lock files. They are removed once no process holds the lock.
+    if (onlyOwnershipLockFilesRemain(configDir)) {
       try {
-        const rootPath = canonicalRoot(configDir);
-        for (const name of readdirSync(configDir)) {
-          if ((INITIAL_OWNED_PATHS as readonly string[]).includes(name)) removeOwnedEntry(rootPath, join(configDir, name));
+        if (removeIdleLockFiles(configDir) === "busy") {
+          return { status: "refused", reason: "another opencodex process holds the ownership lock; retry shortly", residualPaths: [configDir] };
         }
-        try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        removeOwnershipLockFile(configDir);
         rmdirSync(configDir);
         return { status: "removed", residualPaths: [] };
       } catch (error) {
         return {
           status: "partial",
-          reason: `could not remove ownership metadata: ${error instanceof Error ? error.message : String(error)}`,
+          reason: `could not remove the ownership lock: ${error instanceof Error ? error.message : String(error)}`,
           residualPaths: readdirSync(configDir).map(name => join(configDir, name)),
         };
       }
@@ -712,15 +710,16 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
 
-  // One lock hold covers the whole run: validate, tombstone, snapshot, remove the snapshot, record
-  // the evidence on the owner marker, delete the metadata. While it is held no other process can
-  // record a path (a listed path read without the lock sees the tombstone and refuses, a new path
-  // needs the lock), and a second uninstall is refused as busy, so nothing can be recreated behind
-  // this run. An interrupted run leaves the tombstone, and a rerun finishes from the same manifest.
+  // One lock hold covers the whole run: validate, tombstone, snapshot, remove the snapshot, delete
+  // the owner marker and then the manifest. While it is held no other process can record a path (a
+  // listed path read without the lock sees the tombstone and refuses, a new path needs the lock),
+  // and a second uninstall is refused as busy, so nothing can be recorded or recreated behind this
+  // run. A run interrupted at any point leaves the tombstoned manifest, which carries the owner id,
+  // the root and the exact snapshot, so a rerun finishes from it.
   let outcome: ConfigRemovalResult;
   try {
     const locked = withOwnershipLock(configDir, (): ConfigRemovalResult => {
-      const ownership = loadOwnership(configDir);
+      const ownership = loadOwnershipForUninstall(configDir);
       if (!ownership) {
         return { status: "refused", reason: "config ownership metadata is missing or invalid", residualPaths: [configDir] };
       }
@@ -749,12 +748,13 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
       }
       uninstallStepHookForTests?.("snapshot-removed");
       try {
-        // Durable evidence for a rerun, and for registrations that arrive between the two unlinks:
-        // the owner marker records that this run removed its snapshot before the manifest goes.
-        writeOwnerMarker(configDir, { ...ownership.owner, uninstallSnapshotRemovedAt: Date.now() });
+        // Owner marker first, manifest last: until the end the tombstoned manifest stays as the record
+        // a rerun resumes from, and creation (manifest first) never leaves that state.
+        try { unlinkSync(join(configDir, CONFIG_OWNER_FILE)); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        uninstallStepHookForTests?.("owner-deleted");
         unlinkSync(join(configDir, CONFIG_UNINSTALL_MANIFEST));
-        uninstallStepHookForTests?.("manifest-deleted");
-        unlinkSync(join(configDir, CONFIG_OWNER_FILE));
       } catch (error) {
         return {
           status: "partial",
@@ -774,15 +774,7 @@ export function removeOwnedConfigState(configDir: string): ConfigRemovalResult {
     };
   }
   if (outcome.status !== "removed") return outcome;
-  try {
-    removeOwnershipLockFile(configDir);
-  } catch (error) {
-    return {
-      status: "partial",
-      reason: `could not remove ownership metadata: ${error instanceof Error ? error.message : String(error)}`,
-      residualPaths: readdirSync(configDir).map(name => join(configDir, name)),
-    };
-  }
+  // The lock holder retired its own lock file on release; one that remains (Windows) is reported.
   const residualPaths = readdirSync(configDir).map(name => join(configDir, name));
   if (residualPaths.length > 0) {
     return {

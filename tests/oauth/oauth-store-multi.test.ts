@@ -214,7 +214,7 @@ describe("multi-account auth store", () => {
   });
 
   // A false result (an unowned home) keeps the recovery copy; a thrown refusal removes it, because an
-  // unlisted credential copy would survive uninstall.
+  // unlisted credential copy would survive uninstall, and defers the migration so a retry backs up again.
   test.each(["false", "throw"] as const)("recovery handles registration %s and warns without exposing credentials", async (failure) => {
     const path = join(TEST_DIR, "auth.json");
     const backup = `${path}.pre-multiauth`;
@@ -228,14 +228,20 @@ describe("multi-account auth store", () => {
     });
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      const saved = saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      if (failure === "false") {
+        await saved;
+        expect(readFileSync(backup, "utf8")).toBe(original);
+        expect(getCredential("xai")?.access).toBe("new-access");
+        expect(warning.mock.calls).toEqual([["[oauth] Recovery backup created, but uninstall ownership registration failed."]]);
+      } else {
+        // The migration is deferred: no unlisted copy, and the legacy store is left for a retry.
+        await expect(saved).rejects.toThrow("OAuth store migration deferred");
+        expect(existsSync(backup)).toBe(false);
+        expect(readFileSync(path, "utf8")).toBe(original);
+        expect(warning.mock.calls).toEqual([]);
+      }
       expect(registration).toHaveBeenCalledWith(TEST_DIR, backup);
-      if (failure === "false") expect(readFileSync(backup, "utf8")).toBe(original);
-      else expect(existsSync(backup)).toBe(false);
-      expect(getCredential("xai")?.access).toBe("new-access");
-      expect(warning.mock.calls).toEqual([[failure === "false"
-        ? "[oauth] Recovery backup created, but uninstall ownership registration failed."
-        : "[oauth] Recovery backup removed: uninstall ownership registration failed."]]);
     } finally {
       warning.mockRestore();
       registration.mockRestore();

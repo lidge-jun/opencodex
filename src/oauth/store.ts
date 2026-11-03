@@ -470,18 +470,19 @@ function backupLegacyOnce(): void {
   try {
     publishCredentialSync(() => copyFileSync(path, backup, fsConstants.COPYFILE_EXCL));
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
-    try {
-      // Register only the copy we just created. An unowned home still needs downgrade recovery.
-      if (!recordOwnedConfigPath(getConfigDir(), backup)) {
-        console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
-      }
-    } catch {
-      // A thrown registration (uninstall in progress, busy ownership lock) would leave an unlisted
-      // credential copy. This call created it exclusively, so remove it; a later load retries.
-      try { unlinkSync(backup); } catch { /* best-effort */ }
-      console.warn("[oauth] Recovery backup removed: uninstall ownership registration failed.");
-    }
-  } catch { /* best-effort */ }
+  } catch { return; /* best-effort */ }
+  let registered: boolean;
+  try {
+    // Register only the copy we just created. An unowned home still needs downgrade recovery.
+    registered = recordOwnedConfigPath(getConfigDir(), backup);
+  } catch {
+    // A thrown registration (uninstall in progress, busy ownership lock) would leave an unlisted
+    // credential copy. This call created it exclusively, so remove it, and defer the migration:
+    // the legacy store stays as it is and the next mutation makes the backup again.
+    try { unlinkSync(backup); } catch { /* best-effort */ }
+    throw new Error("OAuth store migration deferred: its recovery backup could not be registered for uninstall; retry shortly.");
+  }
+  if (!registered) console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
 }
 
 /**

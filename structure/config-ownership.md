@@ -28,18 +28,20 @@ because it records its own database through `recordOwnedConfigPath`.
   uninstall accepts. Writers keep working, and uninstall reports such files as residual paths. A
   tombstoned manifest may use that reserve when it is read, so a home whose older manifest already
   sits at the limit still resumes an interrupted uninstall; without a tombstone the limit is unchanged.
-- The lock file is created only while the owner marker exists, so a refused uninstall of a home
-  without metadata leaves that home untouched. A holder that finds the metadata gone removes the
-  lock file, and a waiter whose lock file was unlinked under it retries against the current path.
+- The lock file is created only while ownership metadata exists, so a refused uninstall of a home
+  without metadata leaves that home untouched. A holder that finds both metadata files gone removes
+  the lock file only if the path still names the file it locked; a new installation may already
+  have created its own lock there. A waiter whose lock file was unlinked under it retries against
+  the current path.
 
 ## Uninstall tombstone
 
 Uninstall holds the lock for its whole run: it validates every manifest path, writes an
 `uninstallStartedAt` tombstone, removes abandoned metadata temp files, removes the snapshot,
-rewrites the owner marker with `uninstallSnapshotRemovedAt`, and deletes the manifest and then the
-owner marker. It removes the lock file after releasing it. While the run holds the lock, a second
-uninstall is refused as busy, a new path cannot be registered, and a listed path read without the
-lock sees the tombstone, so nothing can be recorded or recreated behind the snapshot.
+and deletes the owner marker and then the manifest. It removes the lock file after releasing it.
+While the run holds the lock, a second uninstall is refused as busy, a new path cannot be
+registered, and a listed path read without the lock sees the tombstone, so nothing can be recorded
+or recreated behind the snapshot.
 
 - A registration that acquires the lock after the tombstone throws
   `ConfigUninstallInProgressError` and writes nothing. A racing registration is therefore either in
@@ -47,7 +49,7 @@ lock sees the tombstone, so nothing can be recorded or recreated behind the snap
   still holds other files records nothing, and its file is reported as a residual path if it exists
   when uninstall lists what remains (a file created after that point is not seen by that run). One
   that arrives when the root is missing or empty creates new metadata and records its path there.
-  Between the two final unlinks only the flagged owner marker remains; a registration that finds it
+  Between the two final unlinks only the tombstoned manifest remains; a registration that finds it
   is refused as an uninstall in progress, not treated as an unowned home. A home cached as unowned is
   re-read on later registrations, so an owner marker another process writes late is picked up.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
@@ -55,19 +57,21 @@ lock sees the tombstone, so nothing can be recorded or recreated behind the snap
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this
   process's registrations skip the tombstone check: its remover snapshots the manifest under the lock
   afterwards, so whatever they add is removed in the same run. Under the lock it also
-  removes manifest and owner-marker temporary files a stopped write left behind.
-- Creation writes the manifest before the owner marker and uninstall deletes them in the reverse
-  order, so a root holding only the owner marker is always a stopped uninstall, never a home being
-  created. If uninstall stops after deleting the manifest (a crash, or a lock
-  file Windows keeps because another process holds it open), a rerun that finds only a valid owner
-  marker and lock files removes them and the root. Only an owner marker carrying
-  `uninstallSnapshotRemovedAt` lets a rerun also remove
-  top-level names every manifest starts with, which the rerun's own cleanup (the config mutation
-  lock) can recreate first. A home whose manifest is missing for any other reason keeps them and is
-  refused. Any other file next to them is still refused.
+  removes manifest temporary files a stopped write left behind.
+- Creation writes the manifest before the owner marker, and uninstall deletes the owner marker
+  before the manifest. Both pass through a manifest without an owner marker; only uninstall's carries
+  the tombstone, so a home being created is never taken for a stopped uninstall. A run that stops
+  after deleting the owner marker leaves the tombstoned manifest, which still holds the owner id,
+  the root and the exact snapshot: the rerun resumes from it and removes only the paths it lists. A
+  name every new manifest starts with but this one omits is never removed. A home with an owner
+  marker and no manifest is refused untouched. A root holding only lock files (Windows keeps a file
+  another process holds open) is cleared once the lock can be taken; while it is held the rerun is
+  refused.
 - Callers that create a file only after registering it skip that file on a refusal: the restart
   handoff log is not opened, and service log rotation registers its generations before every
-  rotation, so a tombstone written while the service runs stops it.
+  rotation, so a tombstone written while the service runs stops it. The OAuth store's one-time
+  legacy backup is removed and its migration deferred when registration throws, so the legacy store
+  stays for a later attempt to back up again.
 - The guarantee covers manifest entries. A process that recorded a path before the snapshot can still
   create that file after uninstall removed it, which is why uninstall stops the service first.
 
