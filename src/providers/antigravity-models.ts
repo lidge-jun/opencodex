@@ -787,11 +787,13 @@ export function resolveAntigravityEffortWireModel(
     : discoveredAntigravityWireModelId(modelId, baseUrl);
   if (discoveredWireModelId && (discoveredWireModelId !== modelId || isAntigravitySuffixModelId(modelId))) {
     const defaultLevel = ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId];
+    // A lone discovered Argon tier keeps its suffix id; the level it names is what exposes thought text.
+    const argonSuffix = /^gemini-4-argon-(low|medium|high)$/.exec(discoveredWireModelId);
     return {
       wireModelId: discoveredWireModelId,
       ...(defaultLevel
         ? { thinkingLevel: effort ? resolveAntigravityThinkingLevel(effort) ?? defaultLevel : defaultLevel }
-        : {}),
+        : argonSuffix ? { thinkingLevel: argonSuffix[1]! } : {}),
     };
   }
 

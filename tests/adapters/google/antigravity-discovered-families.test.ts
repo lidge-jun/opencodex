@@ -98,3 +98,10 @@ test("an evidenced overlapping base takes routing precedence over a parent tier 
   expect(resolveAntigravityEffortWireModel("foo-low", "high", baseUrl)).toEqual({ wireModelId: "foo-low-high" });
   expect(resolveAntigravityEffortWireModel("foo", "low", baseUrl)).toEqual({ wireModelId: "foo-low" });
 });
+
+test("a lone discovered Argon tier keeps its level so thought text still streams", () => {
+  const rows = parseAntigravityAvailableModels(payload("gemini-4-argon", ["high"]))!;
+  registerAntigravityDiscoveredWireModels(baseUrl, rows);
+  expect(resolveAntigravityEffortWireModel("gemini-4-argon-high", undefined, baseUrl))
+    .toEqual({ wireModelId: "gemini-4-argon-high", thinkingLevel: "high" });
+});

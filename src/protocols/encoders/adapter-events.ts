@@ -34,7 +34,13 @@ import { coerceIntegerToolArguments } from "../../lib/tool-argument-integers";
 import { classifyError, isCyberPolicyCode, type OcxErrorPayload } from "../../lib/errors";
 import { redactSecretString } from "../../lib/redact";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import { createCitationMarkerFilter, escapeMemoryCitationMentions, type CitationMarkerFilter } from "../../responses/citation-markers";
+import {
+  createCitationMarkerFilter,
+  createMemoryCitationEscaper,
+  escapeMemoryCitationMentions,
+  type CitationMarkerFilter,
+  type MemoryCitationEscaper,
+} from "../../responses/citation-markers";
 import { isTruncatedStopReason, truncationReasonFor } from "../../responses/truncated-stop-reason";
 import { safeWebSearchSources } from "../../web-search/sources";
 import { resolveStallTimeoutSec } from "../../stall-timeout";
@@ -332,7 +338,7 @@ export function encodeAdapterEventStream(
   };
 
   // Item state, ported from bridgeToResponsesSSE.
-  let currentMsg: { phase?: OcxMessagePhase; citationFilter: CitationMarkerFilter } | null = null;
+  let currentMsg: { phase?: OcxMessagePhase; citationFilter: CitationMarkerFilter; memoryCitationEscaper: MemoryCitationEscaper } | null = null;
   let currentReasoning: { itemId: string } | null = null;
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
@@ -358,7 +364,11 @@ export function encodeAdapterEventStream(
     if (!currentMsg) return;
     // A citation span can straddle a delta boundary; the filter releases its held tail here.
     const trailing = currentMsg.citationFilter.flush();
-    if (trailing) writer.text(escapeMemoryCitationMentions(trailing));
+    // A tag or candidate block still held by the escaper is resolved once, whole, so a real
+    // block's closing tag is neither split nor re-escaped.
+    const tail = (trailing ? currentMsg.memoryCitationEscaper.push(trailing) : "")
+      + escapeMemoryCitationMentions(currentMsg.memoryCitationEscaper.pending());
+    if (tail) writer.text(tail);
     writer.messageDone();
     currentMsg = null;
   };
@@ -600,13 +610,18 @@ export function encodeAdapterEventStream(
             // Only an explicit phase change starts a new message.
             if (currentMsg && event.phase !== undefined && currentMsg.phase !== event.phase) closeCurrentMessage();
             if (!currentMsg) {
-              currentMsg = { citationFilter: createCitationMarkerFilter(), ...(event.phase ? { phase: event.phase } : {}) };
+              currentMsg = {
+                citationFilter: createCitationMarkerFilter(),
+                memoryCitationEscaper: createMemoryCitationEscaper(),
+                ...(event.phase ? { phase: event.phase } : {}),
+              };
             }
             const visible = currentMsg.citationFilter.push(event.text);
             // A literal memory-citation tag in prose makes the Codex client hide everything
             // between the first opening tag and the last closing one, which reads as a truncated
             // answer. Escape it here, while it streams.
-            if (visible) writer.text(escapeMemoryCitationMentions(visible));
+            const escaped = visible ? currentMsg.memoryCitationEscaper.push(visible) : "";
+            if (escaped) writer.text(escaped);
             break;
           }
           case "thinking_delta": {

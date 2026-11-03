@@ -86,6 +86,9 @@ const MEMORY_CITATION_BODY = /<citation_entries>[\s\S]*<\/citation_entries>[\s\S
 /** First element of a real block's body, used to decide from a short lookahead. */
 const MEMORY_CITATION_BODY_OPEN = "<citation_entries>";
 
+/** Longest candidate block the streaming escaper holds while waiting for its closing tag. */
+const MAX_MEMORY_CITATION_HOLD = 65_536;
+
 /**
  * Whether the text right after an opening tag still could begin a real block.
  *
@@ -191,8 +194,14 @@ export interface MemoryCitationEscaper {
  * Everything else is a mention and gets `&lt;`.
  */
 export function createMemoryCitationEscaper(): MemoryCitationEscaper {
-  /** Unresolved tail: either a partial tag, or a tag whose follower has not arrived yet. */
+  /**
+   * Unresolved tail. It starts at a `<` and is either a partial tag, or an opening tag whose block
+   * has not closed yet. A candidate block is held WHOLE until its closing tag arrives, because only
+   * the complete body (entries, then rollout ids) proves it is a real block rather than a mention.
+   */
   let held = "";
+  const escapeOpen = "&lt;" + MEMORY_CITATION_OPEN.slice(1);
+  const escapeClose = "&lt;" + MEMORY_CITATION_CLOSE.slice(1);
   return {
     push(delta: string): string {
       if (!held && !delta.includes("<")) return delta;
@@ -208,39 +217,43 @@ export function createMemoryCitationEscaper(): MemoryCitationEscaper {
         }
         out += input.slice(i, next);
         const tail = input.slice(next);
-        const isOpen = MEMORY_CITATION_OPEN.startsWith(tail) || tail.startsWith(MEMORY_CITATION_OPEN);
-        const isClose = MEMORY_CITATION_CLOSE.startsWith(tail) || tail.startsWith(MEMORY_CITATION_CLOSE);
-        if (!isOpen && !isClose) {
-          out += "<";
-          i = next + 1;
-          continue;
-        }
-        // A complete close tag is never part of a block we would keep here: real blocks are
-        // emitted whole from their opening tag, so this one belongs to prose.
         if (tail.startsWith(MEMORY_CITATION_CLOSE)) {
-          out += "&lt;/oai-mem-citation>";
+          // A close tag outside a claimed block is prose.
+          out += escapeClose;
           i = next + MEMORY_CITATION_CLOSE.length;
           continue;
         }
         if (!tail.startsWith(MEMORY_CITATION_OPEN)) {
-          // The open tag itself is still arriving.
-          held = tail;
-          return out;
+          if (MEMORY_CITATION_OPEN.startsWith(tail) || MEMORY_CITATION_CLOSE.startsWith(tail)) {
+            // A tag is still arriving.
+            held = tail;
+            return out;
+          }
+          out += "<";
+          i = next + 1;
+          continue;
         }
         const afterOpen = tail.slice(MEMORY_CITATION_OPEN.length);
-        const trimmed = afterOpen.replace(/^\s+/, "");
-        if (trimmed.length === 0) {
-          // Whitespace-only follow-up could still be the start of a real block.
-          held = tail;
-          return out;
-        }
-        if (MEMORY_CITATION_BODY_OPEN.startsWith(trimmed) || trimmed.startsWith(MEMORY_CITATION_BODY_OPEN)) {
-          // A real block: emit its opening tag and stream the body through untouched.
-          out += MEMORY_CITATION_OPEN;
+        if (!bodyCouldBeReal(afterOpen)) {
+          out += escapeOpen;
           i = next + MEMORY_CITATION_OPEN.length;
           continue;
         }
-        out += "&lt;oai-mem-citation>";
+        const end = opensRealBlock(tail, 0);
+        if (end !== undefined) {
+          // A complete real block is released verbatim, both tags included, so the delta stream
+          // equals what `escapeMemoryCitationMentions` keeps in the final text.
+          out += tail.slice(0, end);
+          i = next + end;
+          continue;
+        }
+        if (!tail.includes(MEMORY_CITATION_CLOSE, MEMORY_CITATION_OPEN.length) && tail.length <= MAX_MEMORY_CITATION_HOLD) {
+          // The block may still close; hold it whole.
+          held = tail;
+          return out;
+        }
+        // Closed without a valid body, or too large to keep holding: a mention.
+        out += escapeOpen;
         i = next + MEMORY_CITATION_OPEN.length;
       }
       return out;
