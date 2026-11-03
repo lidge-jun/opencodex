@@ -18,6 +18,82 @@ function mayBecomeFencedBody(text: string, toolName: string): boolean {
 }
 
 const LOW_SURROGATE_ESCAPE = /^\\u[dD][c-fC-F][0-9a-fA-F]{2}$/;
+const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
+const JSON_SIMPLE_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t"]);
+
+/**
+ * Read the JSON string whose opening quote precedes `start`: its decoded value and the index
+ * after the closing quote, `partial` when the text ends first, or `null` when no continuation
+ * can parse. Only key text needs the decoded value, so escapes other than `\\u` keep a marker.
+ */
+function readJsonString(text: string, start: number): { value: string; next: number; partial: boolean } | null {
+  let value = "";
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') return { value, next: i + 1, partial: false };
+    if (c.charCodeAt(0) <= 0x1f) return null;
+    if (c !== "\\") { value += c; continue; }
+    const n = text[i + 1];
+    if (n === undefined) break;
+    if (n === "u") {
+      const hex = text.slice(i + 2, i + 6);
+      if (!/^[0-9a-fA-F]*$/.test(hex)) return null;
+      if (hex.length < 4) break;
+      value += String.fromCharCode(parseInt(hex, 16));
+      i += 5;
+      continue;
+    }
+    if (!JSON_SIMPLE_ESCAPES.has(n)) return null;
+    value += "\\" + n;
+    i += 1;
+  }
+  return { value, next: text.length, partial: true };
+}
+
+/**
+ * Whether a decoded executable body can still grow into the one extra `{"input":string}`
+ * wrapper that completion removes. Ordinary object-leading JavaScript such as `{ let x` or
+ * `({` fails within a few characters and streams from there; only a prefix that is still a
+ * possible wrapper holds. A false answer never turns true again as the body grows, so the
+ * held prefix is flushed once and streaming continues. Duplicate `input` keys are followed
+ * because `JSON.parse` keeps the last; a non-string value holds to completion, since a later
+ * duplicate could still replace it.
+ */
+function mayBecomeNestedWrapper(text: string): boolean {
+  let i = 0;
+  const skipWhitespace = () => { while (i < text.length && JSON_WHITESPACE.has(text[i]!)) i++; };
+  skipWhitespace();
+  if (i === text.length) return true;
+  if (text[i] !== "{") return false;
+  i++;
+  for (;;) {
+    skipWhitespace();
+    if (i === text.length) return true;
+    if (text[i] !== '"') return false;
+    const key = readJsonString(text, i + 1);
+    if (key === null) return false;
+    if (key.partial) return "input".startsWith(key.value);
+    if (key.value !== "input") return false;
+    i = key.next;
+    skipWhitespace();
+    if (i === text.length) return true;
+    if (text[i] !== ":") return false;
+    i++;
+    skipWhitespace();
+    if (i === text.length || text[i] !== '"') return true;
+    const value = readJsonString(text, i + 1);
+    if (value === null) return false;
+    if (value.partial) return true;
+    i = value.next;
+    skipWhitespace();
+    if (i === text.length) return true;
+    if (text[i] === ",") { i++; continue; }
+    if (text[i] !== "}") return false;
+    i++;
+    skipWhitespace();
+    return i === text.length;
+  }
+}
 
 /**
  * The decoded prefix of a JSON string body, stopping at the first byte it cannot resolve.
@@ -78,7 +154,8 @@ function decodeJsonStringPrefix(body: string): string | null {
  * `input` is decidable from its prefix: `unwrapFreeformToolInput` returns it whenever the
  * key is present, whatever else the object carries, so its value can be unescaped
  * progressively and never retracted, except for executable bodies that may contain one
- * extra canonical wrapper. Those object-leading bodies hold until authoritative completion.
+ * extra canonical wrapper. Such a body holds only while its prefix can still become that
+ * wrapper (`mayBecomeNestedWrapper`); the first byte that rules it out flushes the held text.
  *
  * One case escapes that claim and is accepted rather than fixed: a duplicate `input` key.
  * `JSON.parse` keeps the last one, so `{"input":"a","input":"b"}` streams a and completes with
@@ -112,9 +189,8 @@ export function progressiveFreeformInput(args: string, toolName: string): string
   if (scan.kind === "input") {
     const decoded = decodeJsonStringPrefix(args.slice(scan.valueStart));
     if (decoded === null) return null;
-    // Completion may remove one extra {input:string} body wrapper. A later member can still
-    // disqualify it, so hold the whole object-shaped preview rather than decode recursively.
-    if ((toolName === "exec" || toolName === "apply_patch") && decoded.trimStart().startsWith("{")) return null;
+    // Completion may remove one extra {input:string} body wrapper, so hold while it can.
+    if ((toolName === "exec" || toolName === "apply_patch") && mayBecomeNestedWrapper(decoded)) return null;
     return mayBecomeFencedBody(decoded, toolName) ? null : decoded;
   }
   if (scan.kind === "raw") return mayBecomeFencedBody(args, toolName) ? null : args;

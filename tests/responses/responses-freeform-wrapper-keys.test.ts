@@ -62,11 +62,60 @@ describe("freeform wrapper keys the literal matcher could not see", () => {
     }
     const foreign = JSON.stringify({ input: JSON.stringify({ input: source }) });
     expect(published(foreign, "")).toBe(JSON.stringify({ input: source }));
-    // A valid JS block can begin like an object too: only its preview is sacrificed.
+    // A valid JS block can begin like an object too; it streams once it cannot be a wrapper.
     const block = "{ let x = 1; return x; }";
     const wrappedBlock = JSON.stringify({ input: block });
     expect(unwrapFreeformToolInput(wrappedBlock, tool)).toBe(block);
-    expect(published(wrappedBlock, tool)).toBe("");
+    expect(published(wrappedBlock, tool)).toBe(block);
+  });
+
+  // The extra-wrapper hold covers only prefixes that can still become {"input":<string>}.
+  test.each(["exec", "apply_patch"])("object-leading %s bodies keep streaming progressively", tool => {
+    for (const body of [
+      "{ let x = 1; text(x); }",
+      '({ a: 1, b: "two" }).b.length;\ntext("done");',
+      '{"inputs": 1}; text("not a wrapper");',
+      '{}; text("empty object first");',
+    ]) {
+      const args = JSON.stringify({ input: body });
+      const { deltas, retractions } = stream(args, tool);
+      expect(retractions).toEqual([]);
+      expect(deltas.length, body).toBeGreaterThan(body.length / 2);
+      expect(deltas.join("")).toBe(body);
+      expect(unwrapFreeformToolInput(args, tool)).toBe(body);
+    }
+  });
+
+  test.each(["exec", "apply_patch"])("a real double-wrapped %s body is unwrapped once and never previewed", tool => {
+    const source = tool === "exec" ? "text(" + JSON.stringify("x".repeat(400)) + ");" : "*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch";
+    for (const nested of [
+      JSON.stringify({ input: source }),
+      ' \t{ "in\\u0070ut" :\n' + JSON.stringify(source) + " } \n",
+      '{"input":"first","input":' + JSON.stringify(source) + "}",
+    ]) {
+      const args = JSON.stringify({ input: nested });
+      expect(stream(args, tool)).toEqual({ deltas: [], retractions: [] });
+      expect(unwrapFreeformToolInput(args, tool)).toBe(source);
+    }
+  });
+
+  test.each(["exec", "apply_patch"])("late divergence from the wrapper shape flushes then streams (%s)", tool => {
+    const long = "y".repeat(600);
+    for (const [nested, divergeAt] of [
+      ['{"input":"' + long + '","extra":true}', 14 + long.length],
+      ['{"input":"' + long + '"} + text(2);', 14 + long.length],
+      ['{"input":"' + long + "\\q" + long + '"}', 12 + long.length],
+      ['{"inputs":"' + long + '"}', 8],
+    ] as const) {
+      const args = JSON.stringify({ input: nested });
+      const { deltas, retractions } = stream(args, tool);
+      expect(retractions).toEqual([]);
+      // Everything held until the divergence arrives in one flush, then streaming resumes.
+      expect(deltas[0], nested.slice(0, 20)).toBe(nested.slice(0, divergeAt));
+      expect(deltas.length).toBeGreaterThan(1);
+      expect(deltas.join("")).toBe(nested);
+      expect(unwrapFreeformToolInput(args, tool)).toBe(nested);
+    }
   });
 
   // `progressive` records whether the value can be previewed before the object closes. It is
