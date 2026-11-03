@@ -53,7 +53,8 @@ async function resyncAfterLateSuccess(
  * the shared background discovery (the same run the catalog gather uses, with its longer bound)
  * and waits only its own short deadline. Past it, the provider is reported as still discovering
  * rather than failed. A later success runs `converge`, the management catalog convergence, whose
- * gather reads that run ahead of the cached roster and publishes the models without a restart (see
+ * gather reads that run ahead of the cached roster and publishes the models without a proxy
+ * restart; running Codex sessions keep their copy until restarted (see
  * {@link resyncAfterLateSuccess}). Nothing happens when the cache was invalidated meanwhile: the run
  * belongs to the previous generation.
  */
