@@ -136,8 +136,19 @@ const defaultCheckDeps: UpdateCheckDeps = {
   detectInstall,
   detectInstallOwnership,
   latestVersion,
+  managedReleaseDirectory,
   miseUpdateCommand,
 };
+
+/**
+ * A release directory such as `/opt/opencodex/releases/v2.96.0-<12 hex>` is deployed and switched by
+ * an external updater (for example a systemd timer), so a source-checkout `git pull` hint is wrong
+ * there. `OCX_MANAGED_RELEASE=1` marks the same layout when the directory name differs.
+ */
+export function managedReleaseDirectory(root: string = join(dirname(fileURLToPath(import.meta.url)), "..", "..")): boolean {
+  if (process.env.OCX_MANAGED_RELEASE === "1") return true;
+  return /[\\/]releases[\\/]v\d+\.\d+\.\d+(?:-[\w.]+)?-[0-9a-f]{12}[\\/]?$/i.test(root);
+}
 
 function nodeBin(): string {
   return process.platform === "win32" ? "node.exe" : "node";
@@ -466,16 +477,19 @@ export function checkForUpdate(
   const ownership = deps.detectInstallOwnership?.();
   const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" || installer === "standalone" ? null : deps.latestVersion(channel);
+  const managedRelease = installer === "source" && deps.managedReleaseDirectory?.() === true;
+  const latest = (installer === "source" && !managedRelease) || installer === "standalone" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : installer === "source"
+  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : managedRelease ? "" : installer === "source"
     ? manualSourceCommand()
     : installer === "mise"
       ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
       : updateExecutionCommand(installer, channel).display;
 
-  if (installer === "source" || installer === "standalone") {
+  if (managedRelease) {
+    reason = "managed_release";
+  } else if (installer === "source" || installer === "standalone") {
     reason = installer === "source" ? "source_checkout" : "standalone_install";
   } else if (installer === "mise") {
     reason = command ? "externally_managed" : "external_ownership_invalid";
