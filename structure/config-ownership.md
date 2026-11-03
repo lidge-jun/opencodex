@@ -35,9 +35,11 @@ then deletes the manifest and owner marker under the lock and removes the lock f
 
 - A registration that acquires the lock after the tombstone throws
   `ConfigUninstallInProgressError` and writes nothing. A racing registration is therefore either in
-  the snapshot and removed, or refused; one that arrives after the metadata is gone records nothing
-  and its file is reported as a residual path if it exists when uninstall lists what remains (a file
-  created after that point is not seen by that run).
+  the snapshot and removed, or refused. One that arrives after the metadata is gone while the root
+  still holds other files records nothing, and its file is reported as a residual path if it exists
+  when uninstall lists what remains (a file created after that point is not seen by that run). One
+  that arrives after the root itself is removed creates a new root with new metadata and records its
+  path there.
 - An interrupted uninstall (a crash, or a path it could not remove) leaves the tombstone. Registrations
   keep refusing, and the next `ocx uninstall` finishes from the same manifest. The rerun's own cleanup
   steps (Desktop picker, disconnect, integrations) run inside `beginConfigOwnershipTeardown`, where this

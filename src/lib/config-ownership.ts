@@ -468,10 +468,36 @@ export function initializeConfigOwnership(configDir: string): boolean {
   }
   let ownership = ownershipCache.get(cacheKey);
   if (ownership === undefined) {
-    ownership = loadOwnership(configDir) ?? createOwnership(configDir);
+    ownership = loadOrCreateOwnership(configDir);
     ownershipCache.set(cacheKey, ownership);
   }
   return ownership !== null;
+}
+
+/** How long a first registration waits for another process that is creating the same home. */
+const CONCURRENT_CREATION_WAIT_MS = 500;
+
+/**
+ * Load the ownership metadata, or create it in an empty root. Two processes can start on the same
+ * absent home: the loser of the exclusive manifest write, or one that sees the manifest before the
+ * owner marker (creation writes them in that order), waits briefly and loads the winner's metadata
+ * instead of caching the home as unowned for the rest of its life.
+ */
+function loadOrCreateOwnership(configDir: string): { owner: ConfigOwner; manifest: ConfigUninstallManifest } | null {
+  const deadline = Date.now() + CONCURRENT_CREATION_WAIT_MS;
+  for (;;) {
+    const loaded = loadOwnership(configDir);
+    if (loaded) return loaded;
+    try {
+      const created = createOwnership(configDir);
+      if (created) return created;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const creating = existsSync(join(configDir, CONFIG_UNINSTALL_MANIFEST)) && !existsSync(join(configDir, CONFIG_OWNER_FILE));
+    if (!creating || Date.now() >= deadline) return loadOwnership(configDir);
+    Bun.sleepSync(5);
+  }
 }
 
 export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {

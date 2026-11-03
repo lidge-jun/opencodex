@@ -331,3 +331,25 @@ describe("teardown scope ends cleanly (#8093)", () => {
     expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
   }));
 });
+
+describe("concurrent first registrations on an absent home (#8093)", () => {
+  test("processes that start together on an absent home all record their paths", withHome(async dir => {
+    const names = Array.from({ length: 6 }, (_, i) => "cold-" + i);
+    const signals = dirname(dir);
+    const go = join(signals, "go-cold");
+    const script = (rel: string) => [
+      "import { existsSync, writeFileSync } from \"node:fs\";",
+      "import { recordOwnedConfigPath } from " + JSON.stringify(modulePath) + ";",
+      "writeFileSync(" + JSON.stringify(join(signals, rel + ".ready")) + ", \"\");",
+      "const until = Date.now() + " + BARRIER_MS + "; while (!existsSync(" + JSON.stringify(go) + ") && Date.now() < until) Bun.sleepSync(2);",
+      "process.exit(recordOwnedConfigPath(" + JSON.stringify(dir) + ", " + JSON.stringify(join(dir, rel)) + ") ? 0 : 2);",
+    ].join("\n");
+    const children = names.map(name => Bun.spawn([process.execPath, "-e", script(name)], { stderr: "inherit" }));
+    const deadline = Date.now() + BARRIER_MS;
+    while (Date.now() < deadline && !names.every(name => existsSync(join(signals, name + ".ready")))) await Bun.sleep(10);
+    expect(names.every(name => existsSync(join(signals, name + ".ready")))).toBe(true);
+    writeFileSync(go, "");
+    expect(await Promise.all(children.map(child => child.exited))).toEqual(names.map(() => 0));
+    expect(manifest(dir).paths).toEqual(expect.arrayContaining(names));
+  }), 60_000);
+});
