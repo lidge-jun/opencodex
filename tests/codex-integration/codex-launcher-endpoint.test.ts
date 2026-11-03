@@ -146,7 +146,8 @@ function configurationFixture(client: boolean, run: (home: string) => void) {
   }
 }
 
-for (const client of [false, true]) codexLaunchOwnershipTest(`${client ? "direct client" : "standalone"} binds proof to the final provider destination`, () => {
+// A direct client's proof comes from its machine listener (12200), never from the hub it dials (12199).
+for (const client of [false, true]) codexLaunchOwnershipTest(`${client ? "direct client requires its own listener proof" : "standalone binds proof to the final provider destination"}`, () => {
   configurationFixture(client, home => {
     for (const port of [12199, 12200]) {
       let reads = 0;
@@ -154,8 +155,15 @@ for (const client of [false, true]) codexLaunchOwnershipTest(`${client ? "direct
         routingKind: "opencodex-local", runtimeAttestation: { origin: `http://127.0.0.1:${port}` },
         serviceToken: () => { reads++; return token; },
       });
-      expect(reads).toBe(port === 12199 ? 1 : 0);
-      expect(result.OPENCODEX_API_AUTH_TOKEN).toBe(port === 12199 ? token : undefined);
+      const injected = client || port === 12199;
+      expect(reads).toBe(injected ? 1 : 0);
+      expect(result.OPENCODEX_API_AUTH_TOKEN).toBe(injected ? token : undefined);
+    }
+    for (const runtimeAttestation of [null, undefined]) {
+      let reads = 0;
+      const result = buildCodexPrivateFixtureLaunchEnv({ CODEX_HOME: home }, { routingKind: "opencodex-local", runtimeAttestation, serviceToken: () => { reads++; return token; } });
+      expect(reads).toBe(0);
+      expect(result.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     }
     writeFileSync(join(home, "managed_config.toml"), "");
     let reads = 0;

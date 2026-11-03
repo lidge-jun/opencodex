@@ -64,16 +64,20 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
     if (diagnostics.error || diagnostics.source === "fallback") return refuse("installationConfig");
     const cfg = diagnostics.config;
     let target = standaloneCodexRoutingTarget(cfg.port, cfg);
+    // A direct client's proof comes from its own machine listener, never from the hub it
+    // dials, so only a standalone destination can be compared with the proven origin.
+    let destinationIsProvenListener = true;
     if (cfg.runtimeRole === "client") {
       // Direct clients bind to persisted connection state; link clients use an authless relay.
       const connection = readClientConnectionState();
       if (connection.kind !== "connected" || connection.value.transport === "link") return refuse("connection");
       target = validateCodexRoutingTarget({ baseUrl: `${connection.value.serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
+      destinationIsProvenListener = false;
     }
     const url = new URL(target.baseUrl);
     if (!target.requiresAdmissionToken) return refuse("admission");
     if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) return refuse("loopback");
-    if (!codexRuntimeAttestationMatchesTarget(target.baseUrl, runtimeAttestation)) return refuse("destination");
+    if (destinationIsProvenListener && !codexRuntimeAttestationMatchesTarget(target.baseUrl, runtimeAttestation)) return refuse("destination");
     const content = readBoundedCodexConfig(join(home, "config.toml"));
     if (content === null) return refuse("configRead");
     const config = Bun.TOML.parse(content) as Record<string, unknown>;
