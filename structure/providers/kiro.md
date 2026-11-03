@@ -159,6 +159,13 @@ budget until emitted, discarded, or cancelled; replay collectors are released af
 retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
 progress from an answer and therefore still require validation. Normal private completion
 and real tool calls need no completion retry.
+Validation also fires when the held text already was the answer: claude-sonnet-5 answers a
+trivial request in plain text with `END_TURN`, where the 5.5 models call the completion tool.
+The retry instruction (`KIRO_COMPLETION_RETRY_MESSAGE`) therefore states that ordinary text has
+not reached the user and asks for an already complete reply to be resubmitted unchanged through
+the completion tool, rather than telling the model to continue an existing task, which it read as
+the user's next message and answered with "no active task to continue" in place of the real answer.
+Coverage: `tests/providers/kiro/kiro-completion-retry-wording.test.ts`.
 The retry snapshots cloneable request fields without top-level runtime callbacks, leaving the original request intact.
 
 A turn can carry a real tool call and the private completion call together, in either order.
