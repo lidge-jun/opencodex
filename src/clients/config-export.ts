@@ -993,6 +993,8 @@ const KIMI_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
 type KimiEffort = typeof KIMI_EFFORT_ORDER[number];
 
 function kimiEfforts(model: ExportModel): { support_efforts?: KimiEffort[]; default_effort?: KimiEffort } {
+  // An explicit "no reasoning" declaration outranks any ladder that reached the exporter.
+  if (model.supportsReasoning === false || model.supportsReasoningEffort === false) return {};
   const offered = new Set((model.reasoningEfforts ?? []).map(effort => effort.trim().toLowerCase()));
   const support = KIMI_EFFORT_ORDER.filter(effort => offered.has(effort));
   if (support.length === 0) return {};
