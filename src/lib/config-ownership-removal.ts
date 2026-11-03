@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmdirSy
 import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { isWindowsReparsePoint, nativeReparseProbeApplies } from "./private-sqlite-path";
 import { isCurrentWindowsProcessElevated } from "./windows-elevation";
-import { verifyWindowsEntriesAcl, WINDOWS_OWNER_ACL_TIMEOUT_MS } from "./windows-owner-acl";
+import { verifyWindowsEntriesAcl, WINDOWS_OWNER_ACL_TIMEOUT_MS, type WindowsAclEntry } from "./windows-owner-acl";
 
 /**
  * Path checks for `ocx uninstall`'s owned-state removal. Every recorded path is resolved from the
@@ -17,7 +17,13 @@ import { verifyWindowsEntriesAcl, WINDOWS_OWNER_ACL_TIMEOUT_MS } from "./windows
 // Read once at load: tests replace `process.platform`, and the native query must follow the real system.
 const NATIVE_REPARSE = nativeReparseProbeApplies(process.platform, process.arch);
 const DARWIN_LS_BATCH = 128;
-const MAX_LINK_DEPTH = 32;
+/** Linux resolves up to 40 links in one lookup (macOS 32); a longer chain or a cycle stops here. */
+const MAX_LINK_DEPTH = 40;
+/**
+ * Paths per ACL read. Each read is one bounded PowerShell call taking its paths over stdin, so a
+ * large tree costs more reads rather than outgrowing a single read's deadline.
+ */
+const WINDOWS_ACL_BATCH = 256;
 
 export class OwnedPathRedirectedError extends Error {
   constructor() {
@@ -332,6 +338,13 @@ function rootAncestors(rootPath: string): string[] {
   }
 }
 
+function windowsAclAllows(entries: readonly WindowsAclEntry[]): boolean {
+  for (let start = 0; start < entries.length; start += WINDOWS_ACL_BATCH) {
+    if (!verifyWindowsEntriesAcl(entries.slice(start, start + WINDOWS_ACL_BATCH), WINDOWS_OWNER_ACL_TIMEOUT_MS)) return false;
+  }
+  return true;
+}
+
 /**
  * macOS extended ACLs grant access independently of the mode bits. True when no listed directory has
  * an allow entry; deny entries (such as the stock "everyone deny delete") take nothing away from the
@@ -371,20 +384,19 @@ function onlyThisAccountCanChange(configDir: string): boolean {
     const nearest = windowsSpellingNearest(configDir);
     if (nearest === null) return false;
     if (!existsSync(configDir)) {
-      return verifyWindowsEntriesAcl([
+      return windowsAclAllows([
         ...rootAncestors(nearest).map(path => ({ path, directory: true, policy: "trusted-ancestry" as const })),
         { path: nearest, directory: true, policy: "write-private" as const },
-      ], WINDOWS_OWNER_ACL_TIMEOUT_MS);
+      ]);
     }
     const rootPath = realpathSync.native(configDir);
     // An elevated Windows run accepts no link or reparse point anywhere in the tree.
     const tree = rootTree(rootPath, () => null);
     if (tree === null) return false;
-    // One read for the whole tree: the ACL reader takes a large batch over stdin.
-    return verifyWindowsEntriesAcl([
+    return windowsAclAllows([
       ...rootAncestors(rootPath).map(path => ({ path, directory: true, policy: "trusted-ancestry" as const })),
       ...tree.directories.map(path => ({ path, directory: true, policy: "write-private" as const })),
-    ], WINDOWS_OWNER_ACL_TIMEOUT_MS);
+    ]);
   }
   const euid = process.geteuid?.();
   if (euid === undefined) return false;

@@ -346,7 +346,7 @@ describe("owned path removal stays inside the config root", () => {
     }
   });
 
-  test("an elevated Windows run reads a large tree in one ACL pass", () => {
+  test("an elevated Windows run reads the tree in bounded ACL batches", () => {
     const { parent, dir } = ownedHome("ocx-removal-windows-tree-");
     const calls: number[] = [];
     try {
@@ -358,11 +358,46 @@ describe("owned path removal stays inside the config root", () => {
         return { success: false, timedOut: true, stdout: "" };
       });
       expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir))).toBe(ELEVATED_UNINSTALL_REFUSAL);
+      // A tree larger than one batch is read in several, each with its own deadline.
+      for (let index = 48; index < 600; index += 1) mkdirSync(join(dir, "artifacts", `d${index}`));
+      expect(withPlatform("win32", process.arch, () => elevatedRemovalRefusal(dir))).toBe(ELEVATED_UNINSTALL_REFUSAL);
     } finally {
       removeTreeWithRetry(parent);
     }
-    expect(calls.length).toBe(1);
+    // The small tree fits one read; the large one starts with a full batch (and fails closed there).
     expect(calls[0]).toBeGreaterThan(50);
+    expect(calls[1]).toBe(256);
+  });
+
+  (process.platform === "linux" ? test : test.skip)("a chain of links within the kernel's limit is followed (Linux allows 40)", () => {
+    const { parent, dir } = ownedHome("ocx-removal-link-chain-");
+    try {
+      chmodSync(dir, 0o700);
+      mkdirSync(join(dir, "inner"), { mode: 0o700 });
+      let previous = join(dir, "inner");
+      for (let index = 0; index < 36; index += 1) {
+        const link = join(dir, `l${index}`);
+        symlinkSync(previous, link, "dir");
+        previous = link;
+      }
+      setUninstallElevationProbeForTests(() => true);
+      expect(uninstallPrivilegeRefusal(dir)).toBeNull();
+    } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  posix("a link cycle in the tree is refused", () => {
+    const { parent, dir } = ownedHome("ocx-removal-link-cycle-");
+    try {
+      chmodSync(dir, 0o700);
+      symlinkSync(join(dir, "b"), join(dir, "a"), "dir");
+      symlinkSync(join(dir, "a"), join(dir, "b"), "dir");
+      setUninstallElevationProbeForTests(() => true);
+      expect(uninstallPrivilegeRefusal(dir)).toBe(ELEVATED_UNINSTALL_REFUSAL);
+    } finally {
+      removeTreeWithRetry(parent);
+    }
   });
 
   posix("an elevated run refuses a directory deep inside a recorded directory that another account can write", () => {

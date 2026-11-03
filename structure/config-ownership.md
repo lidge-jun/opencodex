@@ -140,8 +140,10 @@ directories must be owned by the effective uid with no group or other write bit,
 must be owned by it or by root and not shared-writable unless sticky; on macOS no listed directory
 or link, including every one the walk of the given path passed, may carry an ACL allow entry. On
 Windows they are read with the `write-private` and
-`trusted-ancestry` policies of `src/lib/windows-owner-acl.ts` in one pass (above 16 paths its
-synchronous reader takes them over stdin). Otherwise the run is refused as a whole. `ocx uninstall`
+`trusted-ancestry` policies of `src/lib/windows-owner-acl.ts`, in reads of up to 256 paths that each
+have their own deadline (above 16 paths the synchronous reader takes them over stdin), so a large tree
+costs more reads and is not refused for its size. Link chains are followed up to 40 links, the Linux
+limit; a cycle stops there and is refused. Otherwise the run is refused as a whole. `ocx uninstall`
 checks this before its first teardown step; the remover checks it again before it takes the lock,
 which a refusal there never creates, and once more under the lock before the tombstone, which a
 refusal there never writes. During an elevated POSIX run every directory the removal passes through
