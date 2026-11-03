@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import { supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import type { OcxConfig } from "../../types";
 import type { RequestLogContext } from "../request-log";
@@ -44,7 +45,7 @@ export async function handleResponsesInner(
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
-    if (transportState instanceof Response) return transportState;
+    if (transportState instanceof Response) return markProxyError(transportState);
     options.onCompactionRecoveryRoute?.(requestState.route);
     if (requestState.parsed._compactionRequest && options.compactionRecoveryKind !== "compaction-v1"
       && (requestState.parsed._portableCompaction || !supportsNativeResponsesCompactionTrigger(requestState.route.provider))) {
@@ -54,7 +55,7 @@ export async function handleResponsesInner(
     }
     const execute = async (): Promise<Response> => {
       const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
-      if (sidecarState instanceof Response) return sidecarState;
+      if (sidecarState instanceof Response) return markProxyError(sidecarState);
       const responseEffects = createResponsesEffects(
         requestContext,
         admissionState,
@@ -62,7 +63,7 @@ export async function handleResponsesInner(
         sidecarState,
       );
       const sendBudgetState = createResponsesSendBudget(requestContext);
-      if (sendBudgetState instanceof Response) return sendBudgetState;
+      if (sendBudgetState instanceof Response) return markProxyError(sendBudgetState);
       if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
         const passthroughResult = await executePassthroughResponse(
           requestContext,

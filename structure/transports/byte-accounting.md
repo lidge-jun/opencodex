@@ -147,6 +147,14 @@ frames retain their order without one `shift()` per chunk. `tests/providers/devi
 bounds prefix-removal calls and discarded-array slots on fragmented frames and covers split/coalesced headers and payloads,
 Unicode, empty frames and gzip. Existing frame/inflation caps, EOS handling and teardown remain in force.
 
+Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
+allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
+only a fragment containing a newline triggers splitting of the accumulated record. Complete
+records and the remaining residual retain their independent size checks and existing reservation
+order, including CRLF and EOF handling. The fatal streaming decoder emits complete code points,
+so fragment counts remain exact across split UTF-8 reads. `tests/providers/ollama/ollama-native-scaling.test.ts`
+checks linear measurement and splitting work, framing equivalence, invalid UTF-8 and cancellation.
+
 `src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
 and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
 gates subsequent socket input even when the decoder would accept more coded bytes.

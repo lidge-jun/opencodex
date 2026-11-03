@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
@@ -50,6 +51,9 @@ function leasePath(statePaths) {
     catch { return `${authority}.mutation.lock`; }
   }
 }
+
+/** The same path used by acquisition, for conservative read-only inspection. */
+export function ownershipMutationLeasePath(statePaths) { return leasePath(statePaths); }
 
 function ownerName(record) {
   return `v1-${record.pid}-${record.processInstance}-${record.token}.json`;
@@ -138,12 +142,18 @@ function leaseHolder(path, now, alive, image) {
   if (!observed && !incomplete && !existsSync(path)) return null;
   const pid = observed?.record.pid ?? incomplete?.pid ?? null;
   const since = observed ? Math.max(observed.record.createdAt, observed.mtimeMs) : incomplete?.mtimeMs ?? null;
-  const live = pid === null ? null : alive(pid);
+  const delegate = observed?.record.delegatePid;
+  const delegateValid = delegate === undefined || (Number.isSafeInteger(delegate) && delegate > 0);
+  const holderAlive = pid === null ? null : alive(pid);
+  const live = !delegateValid ? null : holderAlive === null ? null : holderAlive || (delegate !== undefined && alive(delegate));
   return {
     path,
     pid,
+    delegatePid: delegateValid ? delegate ?? null : null,
+    holderAlive,
     alive: live,
-    image: live ? image(pid) : null,
+    holderKind: observed?.record.holderKind ?? null,
+    image: holderAlive ? image(pid) : null,
     ageMs: since === null ? null : Math.max(0, now() - since),
     record: observed ? "complete" : incomplete?.ownerPath ? "incomplete" : incomplete ? "empty" : "unreadable",
   };
@@ -153,16 +163,21 @@ function describeHolder(holder) {
   const age = holder.ageMs === null ? "" : `, lease age ${Math.round(holder.ageMs / 1_000)}s`;
   if (holder.record === "unreadable") return "holder unknown: the lock directory does not hold exactly one owner file";
   if (holder.record === "empty") return `no owner file written yet${age}`;
-  const state = holder.alive ? ["alive", ...(holder.image ? [holder.image] : [])].join(", ") : "not alive";
+  const state = holder.holderAlive ? ["alive", ...(holder.image ? [holder.image] : [])].join(", ") : "not alive";
   const partial = holder.record === "incomplete" ? ", owner record incomplete" : "";
-  return `recorded PID ${holder.pid} [${state}, identity unverified${partial}]${age}`;
+  const delegate = holder.delegatePid === null ? "" : `, delegate PID ${holder.delegatePid} (identity unverified)`;
+  return `recorded PID ${holder.pid} [${state}, identity unverified${partial}]${delegate}${age}`;
 }
 
 const RECLAIM_HINT = `stale leases are reclaimed after ${STALE_MS / 1_000}s once the recorded PID is no longer alive`;
+function reclaimHint(holder) {
+  return holder.delegatePid !== null || (holder.record === "complete" && holder.alive === null)
+    ? `${RECLAIM_HINT} and any delegate is known absent or no longer alive` : RECLAIM_HINT;
+}
 
 /** The recorded lease owner for `statePaths`, identity unverified, or null if free. Reads only; never reclaims. */
 export function inspectOwnershipMutationLease(statePaths, options = {}) {
-  return leaseHolder(leasePath(statePaths), options.now ?? Date.now, options.processAlive ?? processAlive,
+  return leaseHolder(options.lockPath ?? leasePath(statePaths), options.now ?? Date.now, options.processAlive ?? processAlive,
     options.processImage ?? processImage);
 }
 
@@ -171,13 +186,32 @@ export function ownershipMutationLeaseStatusLine(statePaths, options = {}) {
   const holder = inspectOwnershipMutationLease(statePaths, options);
   if (!holder) return null;
   return `Runtime mutation lease busy at ${holder.path} (${describeHolder(holder)}); `
-    + `opencodex waits for it to start or change service state, and ${RECLAIM_HINT}.`;
+    + `opencodex waits for it to start or change service state, and ${reclaimHint(holder)}.`;
 }
 
 function createLeaseHandle(path, generation, token, options) {
   let released = false;
   return {
     token,
+    addDelegate: pid => {
+      if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("invalid mutation lease delegate pid");
+      const current = held.get(path);
+      const observed = readOwner(path);
+      if (released || !current || current.generation !== generation || current.delegated || !observed || !sameOwner(current.snapshot, observed)) throw new Error("mutation lease is no longer held");
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      let created = false;
+      try {
+        writeFileSync(temporary, `${JSON.stringify({ ...observed.record, delegatePid: pid })}\n`, { flag: "wx", mode: 0o600 });
+        created = true;
+        renameSync(temporary, observed.ownerPath);
+        created = false;
+        const updated = readOwner(path);
+        if (!updated || updated.record.token !== token || updated.record.delegatePid !== pid) throw new Error("mutation lease delegate could not be verified");
+        current.snapshot = updated;
+      } finally {
+        if (created) { try { unlinkSync(temporary); } catch (error) { if (error?.code !== "ENOENT") throw error; } }
+      }
+    },
     release: () => {
       if (released) return;
       released = true;
@@ -192,6 +226,8 @@ function reclaim(path, now, alive) {
   if (!observed && !incomplete) return false;
   const createdAt = observed ? Math.max(observed.record.createdAt, observed.mtimeMs) : incomplete.mtimeMs;
   const pid = observed?.record.pid ?? incomplete.pid;
+  const delegate = observed?.record.delegatePid;
+  if (delegate !== undefined && (!Number.isSafeInteger(delegate) || delegate <= 0 || alive(delegate))) return false;
   if (now() - createdAt <= STALE_MS || (pid !== null && alive(pid))) return false;
   if (observed) {
     const current = readOwner(path);
@@ -209,17 +245,23 @@ export function acquireOwnershipMutationLease(
   statePaths,
   options = {},
 ) {
-  const path = leasePath(statePaths);
+  const path = options.lockPath ?? leasePath(statePaths);
   const nested = held.get(path);
   if (nested) {
+    if (options.isolated) {
+      const error = new Error("another operation owns the isolated mutation lease");
+      error.code = "OWNERSHIP_MUTATION_LEASE_BUSY";
+      error.holder = leaseHolder(path, options.now ?? Date.now, options.processAlive ?? processAlive, options.processImage ?? processImage);
+      throw error;
+    }
     nested.depth += 1;
     return createLeaseHandle(path, nested.generation, nested.snapshot.record.token, options);
   }
   const now = options.now ?? Date.now;
   const alive = options.processAlive ?? processAlive;
   const explicitJoinToken = options.joinToken;
-  const envJoinToken = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
-  const joinToken = explicitJoinToken ?? envJoinToken ?? delegatedTokens.get(path);
+  const envJoinToken = options.isolated ? undefined : process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  const joinToken = options.isolated ? undefined : explicitJoinToken ?? envJoinToken ?? delegatedTokens.get(path);
   if (joinToken) {
     const owner = readOwner(path);
     if (owner?.record.token === joinToken && alive(owner.record.pid)) {
@@ -237,7 +279,7 @@ export function acquireOwnershipMutationLease(
   const deadline = now() + wait;
   if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   for (;;) {
-    const record = { version: 1, pid: process.pid, processInstance: PROCESS_INSTANCE, token: randomUUID(), createdAt: now() };
+    const record = { version: 1, pid: process.pid, processInstance: PROCESS_INSTANCE, token: randomUUID(), createdAt: now(), ...(options.holderKind ? { holderKind: options.holderKind } : {}) };
     const ownerPath = join(path, ownerName(record));
     let madeDirectory = false;
     let descriptor = null;
@@ -265,7 +307,7 @@ export function acquireOwnershipMutationLease(
       if (now() >= deadline) {
         const holder = leaseHolder(path, now, alive, options.processImage ?? processImage);
         const error = new Error(`another process owns the runtime mutation lease at ${path}`
-          + (holder ? ` (${describeHolder(holder)}; ${RECLAIM_HINT})` : ""));
+          + (holder ? ` (${describeHolder(holder)}; ${reclaimHint(holder)})` : ""));
         error.code = "OWNERSHIP_MUTATION_LEASE_BUSY";
         error.holder = holder;
         throw error;

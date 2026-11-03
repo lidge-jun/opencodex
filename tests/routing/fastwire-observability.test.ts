@@ -154,8 +154,9 @@ describe("FastWire attempt outcomes", () => {
       canonical: "priority",
       fastOutcome: "applied",
       confirmation: "confirmed",
-      responseServiceTier: "performance",
     });
+    // The configured wire value confirms Fast, but only closed tier members are recorded.
+    expect(confirmed.outcome.responseServiceTier).toBeUndefined();
     expect(serviceTierContextFromOutcome(confirmed.outcome)).toEqual({
       responseServiceTier: "priority",
     });
@@ -368,10 +369,10 @@ describe("FastWire logging and persistence", () => {
     expect(normalized.callerServiceTier).toBe(`priority${"y".repeat(56)}`);
   });
 
-  test("upstream service tiers are sanitized before live and durable logging", () => {
+  test("upstream service tiers outside the closed set are omitted from live and durable logging", () => {
     const secret = ["sk", "proj", "upstream", "A".repeat(40)].join("-");
     const rawTier = ` authorization: Bearer ${secret}\n\u0085\u2028\u2029${"x".repeat(80)} `;
-    const expected = sanitizeLogMetadataString(rawTier)!;
+    const expected = undefined;
     const tracker = createAdapterTierMetadata(
       observation({ capability: undefined, eligibility: "unclassified" }),
       { kind: "forward-caller" },
