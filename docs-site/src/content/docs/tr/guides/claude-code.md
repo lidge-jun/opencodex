@@ -18,9 +18,9 @@ fazla Claude hesabına giriş yapabilirsiniz. Varsayılan olarak her istek yaln�
 (`anthropicAccountPool.enabled`), bu OAuth hesapları arasında yapışkan oturum
 bağlılığı ve kullanıma dayalı yeni oturum seçimi ekler. 429 yük devretmesini **kontrol etmez**: iki veya daha fazla kullanılabilir hesap saklandığında, hız sınırına takılan istek bu anahtar açık da kapalı da olsa başka bir hesaba geçer ve bu kapatılamaz. Yalnızca
 **yeni** oturumlar için `anthropicAccountPool.strategy` uygun hesaplar arasından
-seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
-`anthropicAccountPool.quotaWindow` ile yapılandırılan penceredeki bilinen en düşük kullanımı
-seçer (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir); `round-robin` eşit olarak dağıtır
+seçim yapar: `quota` (varsayılan), etkin hesabı `anthropicAccountPool.quotaWindow` ile belirlenen penceredeki
+kullanımı (`five-hour` varsayılandır; `weekly` ve `max-utilization` da kullanılabilir)
+`autoSwitchThreshold` değerine (varsayılan 80) ulaşana kadar korur, sonra kendi eşiğinin altındaki hesapları tercih ederek en az kullanılan hesaba geçer; `round-robin` eşit olarak dağıtır
 (`stickyLimit`, varsayılan `1`); `fill-first`, bekleme süresi, yeniden kimlik
 doğrulama veya eşiğe kadar aktif hesabı tüketir, ardından ilerler. **Varsayılan
 olarak kapalıdır** ve deneyseldir.
@@ -770,7 +770,7 @@ kimlik/ad içermeyen `tool_use`; ad içermeyen adlandırılmış `tool_choice`.
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409
 `conflict_error`, 413 `request_too_large`, 429 `rate_limit_error`, 504
 `timeout_error`, 529 `overloaded_error`, diğer 5xx `api_error`. `Retry-After`
-korunur.
+tam saniye olarak gönderilir (HTTP tarihi kalan saniyeye çevrilir) ve en fazla sekiz gündür.
 
 ## İstem önbellekleme ve token kullanımı
 

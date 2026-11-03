@@ -3,7 +3,8 @@ import { buildWinswXml, ensureWinswBinary, parseWinswStatus, probeScmRegistratio
 import { parseServiceArgs, serviceInstallArgs, serviceReinstallArgs } from "../../src/service";
 import { loadServiceTokenFromFile } from "../../src/lib/service-secrets";
 import { getConfigDir } from "../../src/config";
-import { mkdtempSync, readFileSync, writeFileSync} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -100,6 +101,34 @@ describe("winsw xml", () => {
     expect(xml).toContain('<log mode="roll-by-size">');
     expect(xml).toContain(`<id>${WINSW_SERVICE_ID}</id>`);
   });
+  test("uses the canonical default Codex home when ~/.codex is a junction", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-winsw-junction-"));
+    const physical = join(root, "physical-codex-home");
+    const alias = join(root, ".codex");
+    try {
+      mkdirSync(physical, { recursive: true });
+      // Directory symlinks are junctions on Windows and the same realpath case on POSIX.
+      symlinkSync(physical, alias, process.platform === "win32" ? "junction" : "dir");
+      const expected = realpathSync(physical);
+      const source = [
+        `const { buildWinswXml } = await import(${JSON.stringify(new URL("../../src/lib/winsw.ts", import.meta.url).href)});`,
+        // Run with HOME set before Bun starts so its homedir resolver targets only this fixture.
+        // Remove the test preload's explicit CODEX_HOME pin to exercise the default resolver.
+        "delete process.env.CODEX_HOME;",
+        `process.stdout.write(buildWinswXml(${JSON.stringify(entry)}, process.env, 10100));`,
+      ].join("\n");
+      const xml = execFileSync(process.execPath, ["-e", source], {
+        cwd: process.cwd(),
+        env: { ...process.env, HOME: root, USERPROFILE: root, CODEX_HOME: "" },
+        encoding: "utf8",
+      });
+      expect(winswEnvValue(xml, "CODEX_HOME")).toBe(expected);
+      expect(winswEnvValue(xml, "CODEX_HOME")).not.toBe(alias);
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
   test("honors OCX_BAKE_PORT when building WinSW arguments", () => {
     const xml = buildWinswXml(entry, { ...env, OCX_BAKE_PORT: "14444" });
     expect(xml).toContain("start --port 14444");

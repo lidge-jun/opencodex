@@ -8,7 +8,7 @@ retain their previous allowance. No disabled header clock detaches client cancel
 Thinking enablement is separate from strength: `src/responses/schema.ts` accepts the OCX `reasoning.enabled` boolean and `src/responses/parser.ts` retains it as `options.thinkingEnabled`, independently of `options.reasoning`. Chat `thinking.type` and Anthropic `thinking.type` preserve this choice through their inbound translators; the existing Anthropic disabled-effort sentinel remains for legacy destinations. `src/clients/reasoning-controls.ts` decodes effort-only client aliases for declared toggle-only models before strength caps run. Route fallback restores the original choice alongside effort in `src/server/effort-policy.ts`; a cleared strength list does not clear a thinking switch. Regression coverage lives in `tests/responses/responses-parser.test.ts`, `tests/responses/chat-inbound-reasoning-none.test.ts`, `tests/claude-integration/claude-inbound.test.ts`, and `tests/codex-integration/effort-policy.test.ts`.
 
 The names used for these paths (native, translated, legacy bridge) and the declared per-feature
-dispositions are owned by [Protocol Paths](protocol-paths.md).
+dispositions are owned by [Protocol Paths](protocol-paths.md). The Ollama-compatible `/api/*` routes are owned by [Ollama-Compatible Inbound](ollama-inbound.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
@@ -389,6 +389,23 @@ canonical Go transport, including combo selection and failover. No Go-only repla
 reaches non-Go destinations. Shared system cache keys never become conversation identity.
 The request-scoped fallback is stable across retries and distinct across client requests.
 
+The Messages bridge carries a separate private Codex pool identity without changing replay headers.
+It requires admission and excludes spawn markers, any ingress parent or thread header (even empty)
+and a replay with a complete pool key. Explicit session_id then session-id aliases win; conflicting,
+empty-only or invalid aliases block derivation. Otherwise the metadata session (the uuid form of the
+metadata-derived prompt_cache_key), then the Claude session header, supplies the value; a system-derived
+cohort key never does. Every value, aliases included, is HMAC-keyed with a process-local secret over its
+admission scope (loopback, or the principal a remote caller must have), so no caller can name another
+scope's pool key, not even as a complete pair. A caller-supplied complete pair stays unscoped.
+
+The identity is selection-only: session-id and thread-id are completed for Codex account selection
+(final and alternate-account), selection previews, recovery and the route-independent pool key used
+as state-binding fallback. Every upstream header set (first send, 401 refresh, alternate-account retry)
+is built from the uncompleted headers, so the wire is unchanged and no synthesized pair or digest is
+forwarded. Non-Codex routes, Anthropic passthrough, request logs, reasoning replay, Go lanes and adapter
+fingerprints are unchanged. claude-bridge-pool-session.test.ts and claude-bridge-pool-dispatch.test.ts
+cover the rules, the wire contract, 401 refresh and alternate-account failover.
+
 Claude metadata also supplies a private native-session value. Only the final canonical ChatGPT
 attempt receives it, in copied forwarding headers; an explicit underscore session, hyphenated
 session or thread header suppresses synthesis. Refresh and alternate-account retries retain
@@ -579,3 +596,5 @@ it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and 
 `forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
 the caller's original one, and is dropped under a pool override. Coverage:
 `tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
+
+Chat upstream error responses use [the owned client-body contract](error-detail.md#client-error-bodies-chat). Native and translated local refusals retain producer provenance; upstream-derived failures select fixed wording. Undeclared-tool refusals share one fixed sentence without the tool name across Chat, Messages and Responses. Choice error normalization preserves all other ordinary relay fields.

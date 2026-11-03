@@ -25,6 +25,52 @@ function tempGrokHome(): { root: string; grokHome: string } {
 }
 
 describe("syncGrokConfig", () => {
+  test("declined caller admission performs no catalog work or file writes", async () => {
+    let fetchCalls = 0, injectCalls = 0;
+    const result = await syncGrokConfig(10190, baseConfig, { admit: () => false }, {
+      fetchAllModels: async () => { fetchCalls++; return []; },
+      injectGrokConfig: () => { injectCalls++; return { ok: true, changed: true, message: "unexpected" }; },
+    });
+    expect(result).toMatchObject({ ok: true, changed: false });
+    expect(fetchCalls).toBe(0);
+    expect(injectCalls).toBe(0);
+  });
+
+  for (const change of ["disabled", "stopping", "unchanged"] as const) {
+    test(`rechecks caller admission after a delayed catalog: ${change}`, async () => {
+      const { root, grokHome } = tempGrokHome();
+      const original = "# user Grok config\n";
+      writeFileSync(join(grokHome, "config.toml"), original);
+      let finishCatalog!: (models: CatalogModel[]) => void;
+      const catalog = new Promise<CatalogModel[]>(resolve => { finishCatalog = resolve; });
+      let enabled = true, running = true, injectCalls = 0;
+      const options = { grokHome, admit: () => enabled && running };
+      try {
+        const pending = syncGrokConfig(10190, baseConfig, options, {
+          fetchAllModels: () => catalog,
+          injectGrokConfig: (...args) => { injectCalls++; return injectGrokConfig(...args); },
+        });
+        if (change === "disabled") enabled = false;
+        if (change === "stopping") running = false;
+        finishCatalog([]);
+        const result = await pending;
+        if (change === "unchanged") {
+          expect(result).toMatchObject({ ok: true, changed: true });
+          expect(injectCalls).toBe(1);
+          expect(readFileSync(join(grokHome, "config.toml"), "utf8")).toContain("opencodex managed block");
+        } else {
+          expect(result).toMatchObject({ ok: true, changed: false });
+          expect(injectCalls).toBe(0);
+          expect(readFileSync(join(grokHome, "config.toml"), "utf8")).toBe(original);
+          expect(existsSync(join(grokHome, "config.toml.bak-opencodex"))).toBe(false);
+        }
+      } finally {
+        finishCatalog([]);
+        removeTreeWithRetry(root);
+      }
+    });
+  }
+
   test("injects natives plus routed models with catalog context windows", async () => {
     const { root, grokHome } = tempGrokHome();
     try {

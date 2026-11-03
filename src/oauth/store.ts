@@ -34,7 +34,7 @@ import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync, loadConfig } from "../config";
 import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { recordOwnedConfigPath, registerOwnedConfigPath, type OwnedPathRegistration } from "../lib/config-ownership";
 import { statTimeMs } from "../lib/file-identity";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
 import { publishAccountSelection, publishOAuthAccountPauseChange, publishOAuthAccountRoutingPolicyChange } from "../lib/account-selection-events";
@@ -467,18 +467,28 @@ function backupLegacyOnce(): void {
   // Any existing entry, including a dangling symlink existsSync would call absent, is left
   // alone, and the copy is exclusive, so credentials are never written through a link.
   if (!existsSync(path) || directoryEntryExists(backup)) return;
+  // Register before creating, so no credential copy ever exists without its manifest entry. The
+  // entry is checked absent above and the copy below is exclusive, so nothing existing is adopted.
+  let registration: OwnedPathRegistration;
+  try {
+    registration = registerOwnedConfigPath(getConfigDir(), backup);
+  } catch {
+    // Uninstall in progress, or a busy ownership lock: defer the migration. The legacy store stays
+    // as it is and the next mutation backs it up again.
+    throw new Error("OAuth store migration deferred: its recovery backup could not be registered for uninstall; retry shortly.");
+  }
+  if (registration === "full") {
+    // An owned home whose manifest is full: a copy made now would survive uninstall with the legacy
+    // credentials in it. Migrate without the downgrade copy instead of blocking credential writes.
+    console.warn("[oauth] Recovery backup skipped: the uninstall ownership manifest is full.");
+    return;
+  }
   try {
     publishCredentialSync(() => copyFileSync(path, backup, fsConstants.COPYFILE_EXCL));
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
-    try {
-      // Register only the copy we just created. An unowned home still needs downgrade recovery.
-      if (!recordOwnedConfigPath(getConfigDir(), backup)) {
-        console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
-      }
-    } catch {
-      console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
-    }
-  } catch { /* best-effort */ }
+  } catch { return; /* best-effort */ }
+  // An unowned home still needs downgrade recovery; it has no manifest to record the copy in.
+  if (registration === "unowned") console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
 }
 
 /**
@@ -1610,7 +1620,7 @@ export async function markAccountNeedsReauth(
   }, [provider, accountId]);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");if(isAnthropicInstanceId(provider))assertAnthropicCredentialSource(provider,safe);return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void;keepReauthMarkedAfterDispatch?:boolean}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");if(isAnthropicInstanceId(provider))assertAnthropicCredentialSource(provider,safe);return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"&&!(opts.keepReauthMarkedAfterDispatch&&account.needsReauth)){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
 // A late refresh failure must not change an operator-paused account's health. Check under
 // the mutation lock, not before awaiting it, so a concurrent pause cannot be overwritten.
 export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account",isCurrent?:(store:AuthStore)=>boolean):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;if(isCurrent&&!isCurrent(store))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
