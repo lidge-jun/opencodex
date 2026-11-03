@@ -143,20 +143,22 @@ const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
  * compact. Quoted values are removed first, a stated maximum counts only when the stated request
  * is larger, and a negated verdict ("does not exceed") never counts.
  */
-const TOO_LONG_TEXT_RE = /\b(?:prompt|input) is too long\b/i;
+const TOO_LONG_TEXT_RE = /\b(?:prompt|input) is too long\b([^.\n]{0,60})/i;
+const CONDITIONAL_LEAD_RE = /\b(?:if|whether|unless)\b[^.\n]{0,40}$/i;
 const STATED_COUNTS_RE = /maximum context length is (\d+)[^]{0,200}?\b(?:resulted in|you requested|requested) (\d+) tokens/i;
-const EXCEEDS_TEXT_RE = /\b(?:input|prompt|request|messages?|conversation)\b([^.\n]{0,60})\bexceed(?:s|ed)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
-const NEGATION_RE = /\b(?:not|never|no)\b|n['\u2019]t\b/i;
+const EXCEEDS_TEXT_RE = /\b(?:input|prompt|request|messages?|conversation)\b[^.\n]{0,60}\bexceed(?:s|ed|ing)?\b[^.\n]{0,40}\b(?:context (?:window|length)|maximum context|token limit)/i;
+const NEGATION_RE = /\b(?:not|never|no|neither|nor)\b|n['\u2019]t\b/i;
 /** A quoted value inside a message (a field, enum or tool name), ASCII or typographic; an apostrophe inside a word does not open one. */
 const QUOTED_SPAN_RE = /(?<!\w)(['"`])[^'"`\n]{1,200}\1(?!\w)|\u2018[^\u2019\n]{1,200}\u2019|\u201c[^\u201d\n]{1,200}\u201d/g;
 
 function assertsOverflow(message: string): boolean {
   const text = message.replace(QUOTED_SPAN_RE, " ");
-  if (TOO_LONG_TEXT_RE.test(text)) return true;
+  const tooLong = TOO_LONG_TEXT_RE.exec(text);
+  if (tooLong && !NEGATION_RE.test(tooLong[1] ?? "") && !CONDITIONAL_LEAD_RE.test(text.slice(0, tooLong.index))) return true;
   const counts = STATED_COUNTS_RE.exec(text);
   if (counts && Number(counts[2]) > Number(counts[1])) return true;
   const exceeds = EXCEEDS_TEXT_RE.exec(text);
-  return exceeds !== null && !NEGATION_RE.test(exceeds[1] ?? "");
+  return exceeds !== null && !NEGATION_RE.test(exceeds[0]);
 }
 
 /**

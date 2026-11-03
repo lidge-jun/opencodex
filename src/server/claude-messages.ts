@@ -1429,7 +1429,7 @@ async function handleClaudeMessagesWithBudget(
         "translation_buffer_limit",
       );
     }
-    if (error && isContextOverflowError(error, error.message ?? "")) {
+    if (error && isContextOverflowError(error, typeof error.message === "string" ? error.message : "")) {
       return anthropicErrorResponse(400, error.message ?? "upstream context limit exceeded", "invalid_request_error", "context_length_exceeded");
     }
     return anthropicErrorResponse(502, error?.message ?? "upstream request failed", "api_error");

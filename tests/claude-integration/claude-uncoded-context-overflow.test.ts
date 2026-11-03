@@ -57,6 +57,10 @@ describe("isContextOverflowError", () => {
     [{}, "Your request doesn\u2019t exceed the token limit; retry later", false],
     [{}, "Invalid tool name: \u2018prompt is too long\u2019", false],
     [{}, "Invalid value: \u201cinput exceeds the context window\u201d is not an allowed enum", false],
+    [{}, "Your input is exceeding the context window", true],
+    [{}, "The prompt is too long? No, the upstream service is unavailable", false],
+    [{}, "if the prompt is too long, shorten it", false],
+    [{}, "Your request exceeds neither the context window nor the token limit; the service is temporarily unavailable", false],
     [{}, "Invalid max_tokens: must be positive. The maximum context length is 128000 tokens.", false],
     [{}, "Invalid tool name: 'prompt is too long'", false],
     [{}, "Invalid value for 'input': \"input exceeds the context window\" is not an allowed enum", false],
@@ -147,5 +151,10 @@ describe("translated Messages route end to end", () => {
     const { response, text } = await send(() => Response.json({ id: "resp_x", object: "response", status: "failed", output: [], error: { message: OVERFLOW } }));
     expect(response.status).toBe(400);
     expect(seesPromptTooLong(JSON.parse(text).error.message)).toBe(true);
+  });
+
+  test("a failed JSON body with a non-string message answers the generic 502 instead of throwing", async () => {
+    const { response } = await send(() => Response.json({ id: "resp_y", object: "response", status: "failed", output: [], error: { message: 42 } }));
+    expect(response.status).toBe(502);
   });
 });
