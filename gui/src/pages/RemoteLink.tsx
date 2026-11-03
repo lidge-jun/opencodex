@@ -438,7 +438,7 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
   const childHome = role === "child" && standaloneRuntime;
   const showLinks = uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining";
   const showStatusMessage = !sheetOpen && (uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError?.key !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed"))));
-  const roleKeys = (index: number, enabled: boolean) => (event: KeyboardEvent<HTMLButtonElement>) => {
+  const onRoleKey = (event: KeyboardEvent<HTMLButtonElement>, index: number, enabled: boolean) => {
     if (enabled && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(index, event.key); }
   };
 
@@ -461,9 +461,9 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
             <p className="m-0 max-w-[72ch] text-[13px] leading-5 text-fg-muted">{t("link.role.hint")}</p>
             <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={t("link.role.title")}>
               <RoleCard role="home" buttonRef={element => { roleRefs.current[0] = element; }} tabIndex={role === "home" ? 0 : -1} checked={role === "home"}
-                onSelect={() => setRole("home")} onKeyDown={roleKeys(0, true)} />
+                onSelect={() => setRole("home")} onKeyDown={event => onRoleKey(event, 0, true)} />
               <RoleCard role="child" buttonRef={element => { roleRefs.current[1] = element; }} tabIndex={childSelectable && role === "child" ? 0 : -1} checked={role === "child"} disabled={!childSelectable}
-                onSelect={() => { if (childSelectable) { setRole("child"); void openSheet(); } }} onKeyDown={roleKeys(1, childSelectable)} />
+                onSelect={() => { if (childSelectable) { setRole("child"); void openSheet(); } }} onKeyDown={event => onRoleKey(event, 1, childSelectable)} />
             </div>
             {!standaloneRuntime && <Banner tone="warn">{t("remoteLink.childDisabled")}</Banner>}
             {standaloneRuntime && status !== null && !status.joinAvailable && <Banner tone="warn">{t(joinDeniedKey)}</Banner>}

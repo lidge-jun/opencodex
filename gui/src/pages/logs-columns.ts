@@ -38,16 +38,16 @@ function readColumns(): Record<LogsOptionalColumn, boolean> {
 
 export function useLogsColumns() {
   const [columns, setColumns] = useState(readColumns);
+  // Each toggle is its own click, so `columns` is current here; the store write stays out of
+  // the state updater, which React may replay.
   const toggle = useCallback((key: LogsOptionalColumn) => {
-    setColumns(previous => {
-      const next = { ...previous, [key]: !previous[key] };
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Private mode or a blocked store: the toggle still applies for this visit.
-      }
-      return next;
-    });
-  }, []);
+    const next = { ...columns, [key]: !columns[key] };
+    setColumns(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Private mode or a blocked store: the toggle still applies for this visit.
+    }
+  }, [columns]);
   return { columns, toggle };
 }
