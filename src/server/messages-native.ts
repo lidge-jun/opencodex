@@ -46,7 +46,7 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
 import { redactSecretString } from "../lib/redact";
-import { resolveClientRetryAfter } from "../lib/retry-after";
+import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import {
@@ -132,7 +132,7 @@ import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
 import { sseFieldValue } from "../lib/sse-decoder";
-import { admissionModelDeniedResponse, type AdmissionModelScope } from "./admission-model-scope";
+import { admissionModelDeniedResponse, projectAdmissionModelDeniedLog, type AdmissionModelScope } from "./admission-model-scope";
 import { nativeMessagesToolScopeDenial } from "./messages-native-scope";
 import { retainUpstreamMessagesRequestId } from "./messages-response-headers";
 
@@ -411,7 +411,8 @@ export async function runNativeMessagesAttempt(
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const response = fail(429, error.message, "rate_limit_error");
-      if (error.retryAfterSeconds !== null) response.headers.set("retry-after", String(error.retryAfterSeconds));
+      const advice = error.retryAfterSeconds !== null ? formatClientRetryAfter(error.retryAfterSeconds) : undefined;
+      if (advice !== undefined) response.headers.set("retry-after", advice);
       return response;
     }
     if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
@@ -425,6 +426,7 @@ export async function runNativeMessagesAttempt(
 
   const toolScopeDenial = nativeMessagesToolScopeDenial(options.modelScope, route.providerName, requestedModel, body);
   if (toolScopeDenial) {
+    projectAdmissionModelDeniedLog(toolScopeDenial, logCtx);
     finishLog(403, toolScopeDenial.message);
     return admissionModelDeniedResponse(toolScopeDenial);
   }
@@ -485,7 +487,8 @@ export async function runNativeMessagesAttempt(
       cleanupAbort(); upstream.abort();
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
       const refusal = fail(429, error.message, "rate_limit_error");
-      refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+      const advice = formatClientRetryAfter(error.retryAfterSeconds);
+      if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
   }
@@ -869,7 +872,8 @@ export async function runNativeMessagesAttempt(
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = fail(429, sendError.message, "rate_limit_error");
-      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
+      if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
@@ -1036,7 +1040,7 @@ export async function runNativeMessagesAttempt(
   const undeclaredTool = clientDeclaredEmptyToolCatalog ? nativeMessagesClientToolName(message, declaredInlineTools) : undefined;
   if (undeclaredTool !== undefined) {
     logCtx.errorCode = UNDECLARED_TOOL_CALL_ERROR_CODE;
-    return fail(502, undeclaredToolCallMessage(undeclaredTool), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
+    return fail(502, undeclaredToolCallMessage(), "api_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
   if (onFirstOutput) onFirstOutput();
@@ -1119,7 +1123,8 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
       ?? (upstreamRetryAfter?.trim() === "0" ? "0" : undefined);
   finishLog(response.status, safeMessage);
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (retryAfter) headers.set("Retry-After", retryAfter);
+  const clientRetryAfter = formatClientRetryAfter(retryAfter);
+  if (clientRetryAfter) headers.set("Retry-After", clientRetryAfter);
   else if (transient) headers.set("Retry-After", "2");
   if (replayRefusal) applyReplayRefusalClientHeaders(headers);
   // The native envelope keeps its shape (no added code); only an overflow's wording changes, so

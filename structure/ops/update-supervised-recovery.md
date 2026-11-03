@@ -256,12 +256,18 @@ transitive effects outside those patterns can escape this lint. A green scan doe
 that all effects are guarded. `tests/helpers/update-mutation-scanner.ts` shares known patterns
 with `tests/helpers/update-capability-policy.ts`; `tests/helpers/update-import-policy.ts` records
 dependency/binding snapshots, and `tests/helpers/update-primitive-allowlist.ts` records exact
-probe and cleanup exceptions. These snapshots confer no runtime authority.
+probe and cleanup exceptions. The orchestrated-update modules keep their rows in two sidecars,
+`tests/helpers/update-review-orchestrated-entry.ts` and `tests/helpers/update-review-orchestrated-child.ts`
+(shape in `tests/helpers/update-review-table.ts`), which the base tables merge unchanged; a file's
+static imports may be reviewed in only one table. These snapshots confer no runtime authority.
 The helper inventory scans update modules and the launcher's direct source imports using known
 function/call/count patterns; detected unclassified sites fail the regression check. The launcher
 resolver-body snapshot and `tests/update/update-capability-policy.test.ts` are likewise auxiliary.
 These lint cases parse through TypeScript 7's sync client, which cannot start under Bun on POSIX
 (`tests/helpers/update-lint-parser.ts`); there they are skipped, while every runtime guard case runs.
+Thus the lint executes only on Windows. In the package-manager launcher it permits exit 10 after
+`homePolicy` only in the exact mutation-entry refusal branch: the immediately preceding declaration
+awaits `session.enterMutation()`, and the `!entered.ok` block releases the update lease and exits 10.
 `tests/update/update-mutation-scanner.test.ts` rejects raw named-options, spread and member-read
 mutants, native import aliases, Bun shell imports/references and tagged-template execution.
 It also rejects direct worker/process and file-write primitives outside exact reviewed

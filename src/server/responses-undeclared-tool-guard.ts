@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE } from "../lib/client-error-body";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { hasItemProvenance, isHistoricalItem } from "../responses/item-provenance";
 import {
@@ -76,9 +77,6 @@ const NAMELESS_TOOL_SPEC_TYPES = new Set([
   "local_shell",
   "x_search",
 ]);
-
-/** An upstream-supplied name reaches the error message; keep it bounded. */
-const MAX_REPORTED_NAME_CHARS = 100;
 
 export { UNDECLARED_TOOL_CALL_ERROR_CODE };
 
@@ -519,12 +517,10 @@ export function undeclaredToolCallNameInResponse(
 /**
  * Formats an error message indicating that a routed provider emitted an undeclared tool call.
  *
- * @param name - The undeclared tool name emitted by the provider.
  * @returns A formatted error message string.
  */
-export function undeclaredToolCallMessage(name: string): string {
-  const reported = name.slice(0, MAX_REPORTED_NAME_CHARS);
-  return `routed provider emitted undeclared client tool "${reported}"; only request-declared tools may be called`;
+export function undeclaredToolCallMessage(): string {
+  return UNDECLARED_TOOL_CALL_MESSAGE;
 }
 
 /**
@@ -694,11 +690,11 @@ export function normalizeDefaultNamespaceInJson(
   }
 }
 
-function failedBlocks(name: string, newline: string): readonly string[] {
+function failedBlocks(newline: string): readonly string[] {
   const failure = {
     type: "upstream_error",
     code: UNDECLARED_TOOL_CALL_ERROR_CODE,
-    message: undeclaredToolCallMessage(name),
+    message: undeclaredToolCallMessage(),
   };
   const payload = JSON.stringify({
     type: "response.failed",
@@ -716,7 +712,7 @@ function failedBlocks(name: string, newline: string): readonly string[] {
  * it has no top-level handler for — `apply_patch`, which under code mode exists only as a nested
  * `tools.apply_patch(...)` helper inside `exec` — and the turn surfaced as a bare `aborted` with
  * no output and no explanation. Replacing the offending event with an explicit `response.failed`
- * turns that silent dead end into a compatibility error naming the tool.
+ * turns that silent dead end into a compatibility error describing the request catalog restriction.
  *
  * Everything after the trip is dropped so a later `response.completed` cannot contradict the
  * terminal already sent. Non-JSON and non-item blocks pass through untouched.
@@ -734,7 +730,7 @@ export function createUndeclaredToolCallGuardBlockRewrite(
   providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
   declaredBare?: ReadonlySet<string>,
   declaredCustom?: ReadonlySet<string>,
-  options?: { refuseUndeclared?: boolean },
+  options?: { refuseUndeclared?: boolean; onRefusal?: (message: string) => void },
 ): SseBlockRewrite {
   // Deferred-catalog wires (Chat/Anthropic) keep the default-namespace normalization — the
   // client can only resolve the bare name it declared — while the refusal itself stays off.
@@ -754,7 +750,8 @@ export function createUndeclaredToolCallGuardBlockRewrite(
       const name = undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare, declaredCustom);
       if (name !== undefined) {
         tripped = true;
-        return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");
+        options?.onRefusal?.(undeclaredToolCallMessage());
+        return failedBlocks(block.includes("\r\n") ? "\r\n" : "\n");
       }
     }
     const normalized = normalizeDefaultNamespaceInPayload(parsed, declared, declaredBare);

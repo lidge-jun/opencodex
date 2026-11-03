@@ -251,3 +251,161 @@ for (const entry of ["retry helper", "messages ingress"] as const) {
     }
   });
 }
+
+test.each([false, true])("caller-owned retry from Pool to main scrubs continuation (affinity=%s)", async enabled => {
+  const { rememberServingConversationStateIssuer, conversationStateBindingFromAuth, applyAccountChangeConversationStateScrub } = await import("../../src/server/responses/account-change-state");
+  const { peekConversationStateIssuer } = await import("../../src/codex/routing/thread-affinity");
+  const bearer = fakeChatGptJwt("fixture-caller", { exp: 4_000_000_000 });
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "session-id": "session", "thread-id": "thread" });
+  config.codexPool = { requestOwnedAffinity: enabled };
+  config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const turn = tryAdmitTurn();
+  expect(turn).not.toBeNull();
+  const controller = new AbortController();
+  try {
+    const authOptions = { modelId: "gpt-5.5", requestScopedMainCredential: true, primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    const reused = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    expect(first.affinityDecision?.move).toBe(enabled ? "new_bind" : "unbound");
+    expect(reused.affinityDecision?.move).toBe(enabled ? "reused" : "unbound");
+    expect(first.kind).toBe("pool");
+    if (first.kind !== "pool") throw new Error("expected pool fixture");
+    rememberServingConversationStateIssuer(first);
+    config.pausedCodexAccountIds = [];
+    let sentBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return completedInference();
+    }) as typeof fetch;
+    const parsed = parseRequest({ model: "gpt-5.5", previous_response_id: "opaque-previous", input: "hello", stream: false });
+    const result = await retryCodexPoolOnAlternateAccount({
+      callerAuthHeaders: headers, config, firstAuthCtx: first, firstResponse: quotaRefusal(), outcomeStatus: 429,
+      route: { providerName: "openai", modelId: "gpt-5.5", provider: config.providers.openai! },
+      parsed, logCtx: { model: "", provider: "" },
+      options: { abortSignal: controller.signal, translatorBudget: createTranslatorBudget(), turnAdmissionLease: turn! },
+      upstream: controller, connectMs: 10_000, stream: false, httpOnly: true,
+    });
+    expect(result.kind).toBe("retried");
+    if (result.kind !== "retried") throw new Error("expected alternate retry");
+    expect(result.authCtx.kind).toBe("main");
+    expect(sentBody?.previous_response_id).toBeUndefined();
+    rememberServingConversationStateIssuer(result.authCtx, first.conversationStateKey);
+    expect(peekConversationStateIssuer(first.conversationStateKey!)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+    clearCodexUpstreamHealth();
+    const next = await resolveCodexAuthContext(headers, config, "pool", authOptions);
+    const binding = conversationStateBindingFromAuth(next)!;
+    const body = { previous_response_id: "opaque-main-response" };
+    expect(applyAccountChangeConversationStateScrub({ body, bindingKey: binding.bindingKey, servingAccountId: binding.accountId })).toBe(true);
+    expect(body).not.toHaveProperty("previous_response_id");
+  } finally { turn?.release(); }
+});
+
+test("regular Responses scrubs retained issuer on a manual main pin and on return to Pool", async () => {
+  const { rememberServingConversationStateIssuer } = await import("../../src/server/responses/account-change-state");
+  const { forgetRuntimeActiveCodexAccount, resetCodexRoutingForManualSelection } = await import("../../src/codex/routing/active-account");
+  const { handleResponses } = await import("../../src/server/responses");
+  const { rememberResponseState, clearResponseStateForTests } = await import("../../src/responses/state");
+  const bearer = fakeChatGptJwt("fixture-pin-caller", { exp: 4_000_000_000 });
+  const headers = new Headers({ authorization: `Bearer ${bearer}`, "content-type": "application/json", "session-id": "session", "thread-id": "thread" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  const turn = tryAdmitTurn();
+  expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    expect(first.kind).toBe("pool"); rememberServingConversationStateIssuer(second);
+    resetCodexRoutingForManualSelection(MAIN_CODEX_ACCOUNT_ID);
+    config.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID; config.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID; config.pausedCodexAccountIds = [];
+    const sent: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>); return completedInference(); }) as typeof fetch;
+    clearResponseStateForTests();
+    rememberResponseState({ model: "gpt-5.5", input: [{ role: "user", content: "earlier" }] }, { id: "opaque", status: "completed", output: [] }, undefined, { force: true });
+    const request = (input: unknown = [{ role: "user", content: "hello" }]) => new Request("http://localhost/v1/responses", { method: "POST", headers,
+      body: JSON.stringify({ model: "gpt-5.5", previous_response_id: "opaque", input, stream: false }) });
+    const refusal = await handleResponses(request([{ role: "user", file_id: "opaque" }]), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(refusal.status).toBe(400); expect(await refusal.text()).toContain("uploaded file"); expect(sent).toHaveLength(0);
+    const pinned = await handleResponses(request(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    const pinnedText = await pinned.text();
+    if (pinned.status !== 200) throw new Error(`pinned status ${pinned.status}: ${pinnedText}`);
+    expect(sent[0]?.previous_response_id).toBeUndefined();
+    forgetRuntimeActiveCodexAccount();
+    config.activeCodexAccountId = POOL_ID; config.activeCodexAccountPinned = undefined; config.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+    const back = await handleResponses(request(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(back.status).toBe(200); await back.text(); expect(sent[1]?.previous_response_id).toBeUndefined();
+  } finally { clearResponseStateForTests(); turn?.release(); }
+});
+
+test.each([429, 503])("caller-owned Responses main quota refusal %s releases only its conversation binding", async refusalStatus => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const { getCodexQuotaHealthSnapshot } = await import("../../src/codex/routing");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("owned-responses-failure")}`, "content-type": "application/json", "session-id": "s", "thread-id": "t" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [POOL_ID];
+  config.accountPoolStrategy = "round-robin"; config.accountPoolStickyLimit = 1;
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    config.pausedCodexAccountIds = [];
+    let status = 200;
+    globalThis.fetch = (async () => status === 200 ? completedInference() : refusalStatus === 429 ? quotaRefusal() : Response.json({ error: { code: "usage_limit_reached", message: "usage limit reached" } }, { status: 503, headers: { "retry-after": "600" } })) as typeof fetch;
+    const makeRequest = () => new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }) });
+    const success = await handleResponses(makeRequest(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(success.status).toBe(200); await success.text();
+    expect(getThreadAffinity(first.affinityKey!, "shared")?.accountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    status = 429;
+    const failure = await handleResponses(makeRequest(), config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(failure.status).toBe(refusalStatus); await failure.text();
+    expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
+    expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared")).toBeNull();
+    const next = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(next.affinityDecision?.move).toBe("rebound"); expect(next.affinityDecision?.reason).toBe("quota_refusal");
+  } finally { turn?.release(); }
+});
+
+test("websocket terminal recorder releases a caller-owned main binding on quota refusal", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const { getThreadAffinity } = await import("../../src/codex/routing/thread-affinity");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("owned-ws-failure")}`, "content-type": "application/json", "session-id": "s", "thread-id": "t" });
+  config.codexPool = { requestOwnedAffinity: true }; config.pausedCodexAccountIds = [POOL_ID];
+  config.accountPoolStrategy = "round-robin"; config.accountPoolStickyLimit = 1;
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  try {
+    const options = { requestScopedMainCredential: true, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {}, beginCodexAccountSelection: codexAccountSelectionForTurn(turn!) };
+    const first = await resolveCodexAuthContext(headers, config, "pool", options);
+    const second = await resolveCodexAuthContext(headers, config, "pool", options);
+    expect(first.kind).toBe("main"); expect(first.affinityDecision?.move).toBe("new_bind"); expect(second.affinityDecision?.move).toBe("reused");
+    config.pausedCodexAccountIds = [];
+    globalThis.fetch = (async () => completedInference()) as typeof fetch;
+    let record: ((status: "completed" | "failed" | "incomplete", httpStatusOverride?: number) => void) | undefined;
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { turnAdmissionLease: turn!, inboundTransport: "websocket", recordTerminalOutcomes: false, setTerminalOutcomeRecorder: fn => { record = fn; } });
+    expect(response.status).toBe(200); await response.text();
+    expect(record).toBeDefined();
+    record!("incomplete", 429);
+    expect(getThreadAffinity(first.affinityKey!, "shared")).toBeUndefined();
+  } finally { turn?.release(); }
+});
+
+test("unkeyed caller-main 5xx does not inspect quota response body", async () => {
+  const { handleResponses } = await import("../../src/server/responses");
+  const account = await import("../../src/server/responses/core-codex-account");
+  const { spyOn } = await import("bun:test");
+  const headers = new Headers({ authorization: `Bearer ${fakeChatGptJwt("unkeyed-inspection")}`, "content-type": "application/json" });
+  config.pausedCodexAccountIds = [POOL_ID];
+  const turn = tryAdmitTurn(); expect(turn).not.toBeNull();
+  const quotaInspector = spyOn(account, "shouldRetryCodexPoolAccountQuota").mockResolvedValue(false);
+  try {
+    globalThis.fetch = (async () => Response.json({ error: { message: "server error" } }, { status: 503, headers: { "retry-after": "600" } })) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { method: "POST", headers, body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }) });
+    const response = await handleResponses(req, config, { model: "", provider: "" }, { turnAdmissionLease: turn! });
+    expect(response.status).toBe(503);
+    expect(quotaInspector).not.toHaveBeenCalled();
+    await response.text();
+  } finally { quotaInspector.mockRestore(); turn?.release(); }
+});

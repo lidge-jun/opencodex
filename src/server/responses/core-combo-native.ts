@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../../lib/error-destination";
 /**
  * Native Chat candidates inside the combo loop (PF-07).
  *
@@ -139,7 +140,7 @@ export function createComboProtocolLanes(input: {
   const settle = (target: ComboTarget, targetRoute: RouteResult): RouteResult | undefined => {
     try {
       const route: RouteResult = { ...targetRoute };
-      assertRouteAllowedByScope(admissionScope, selector(target), route);
+      assertRouteAllowedByScope(admissionScope, clientFacingModelLabel(undefined), route);
       const routedProvider = route.provider;
       const inboundWire = source.inbound === "messages" ? "anthropic" : "chat";
       route.staticPolicy = captureRouteStaticPolicy(

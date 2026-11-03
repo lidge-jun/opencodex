@@ -210,6 +210,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "__update-orchestrated-identity") process.exit(await (await import("../update/orchestrated-identity-probe-entry")).runIdentityProbe(process.argv.slice(2)));
 if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
@@ -606,6 +607,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
+        command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
@@ -781,7 +783,10 @@ async function handleStart(options: { block?: boolean } = {}) {
   // one restart, because the toggle removed the fence and start wrote it back.
   if (shouldSyncGrokOnStart(config)) try {
     const { syncGrokConfig } = await import("../grok/sync");
-    const r = await syncGrokConfig(port, config, config.hostname ? { hostname: config.hostname } : {});
+    const r = await syncGrokConfig(port, config, {
+      ...(config.hostname ? { hostname: config.hostname } : {}),
+      admit: () => !shuttingDown && !cleaned && shouldSyncGrokOnStart(loadConfig()),
+    });
     if (r.changed) console.log("   + Grok Build config updated (~/.grok/config.toml)");
     else if (!r.ok) console.error(`⚠️  ${r.message}`);
   } catch (err) {
