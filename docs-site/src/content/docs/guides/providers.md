@@ -92,8 +92,11 @@ The built-in Claude model seeds advertise text and image input for both `anthrop
 Explicit per-model input-modality overrides remain authoritative; unknown models are not assumed
 image-capable. This applies across integrations wherever the client's configuration supports image
 capability metadata: OpenClaw exports a declared `input` array, and Kimi Code exports
-`capabilities: ["image_in"]` only for image-capable models. OpenClaw omits `input` when no supported
-modalities are declared; Kimi omits `capabilities` for unknown or text-only models. Clients without
+`capabilities: ["image_in"]` only for image-capable models, adding `"thinking"` when the model
+declares an effort ladder. Kimi Code also receives that ladder as `support_efforts` (limited to
+`low`, `medium`, `high`, `xhigh` and `max`, in that order) and the declared default as
+`default_effort` when it is in the ladder. OpenClaw omits `input` when no supported modalities are
+declared; Kimi omits `capabilities` for models that declare neither image input nor an effort ladder. Clients without
 a supported capability field keep their existing configuration shape. After updating opencodex,
 regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
 
