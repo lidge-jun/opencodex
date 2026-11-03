@@ -5,16 +5,32 @@
  * generated profile writes, the plan reads the real profile path, and an edit that
  * lands before the write lock is not overwritten.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildProfileFileForTarget, preserveUnmanagedProfileKeys } from "../../src/codex/inject/config-toml";
-import { deriveCodexInjectionPlan } from "../../src/codex/inject/plan";
-import { CODEX_PROFILE_PATH } from "../../src/codex/paths";
+import { tmpdir, userInfo } from "node:os";
+import { join, relative, isAbsolute } from "node:path";
 import type { OcxConfig } from "../../src/types";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+// The profile path is fixed when src/codex/paths first loads, so own a Codex home before the
+// path-dependent modules are imported. A run without the repository preload (an absolute test
+// path from another directory) must never touch the developer's real profile.
+const isolatedHome = installIsolatedCodexHome("ocx-profile-preservation-");
+const { buildProfileFileForTarget, preserveUnmanagedProfileKeys } = await import("../../src/codex/inject/config-toml");
+const { deriveCodexInjectionPlan } = await import("../../src/codex/inject/plan");
+const { CODEX_PROFILE_PATH } = await import("../../src/codex/paths");
+const within = (root: string, path: string) => {
+  const rel = relative(realpathSync(root), realpathSync(join(path, "..")));
+  return !rel.startsWith("..") && !isAbsolute(rel);
+};
+// Only this test's own home, or a preload sandbox HOME distinct from the account's real home.
+const sandboxHome = process.env.HOME && process.env.HOME !== userInfo().homedir ? process.env.HOME : null;
+if (!within(isolatedHome.path, CODEX_PROFILE_PATH) && !(sandboxHome && within(sandboxHome, CODEX_PROFILE_PATH))) {
+  throw new Error("codex-profile-preservation: refusing to run against a Codex profile outside a test home");
+}
+afterAll(() => { isolatedHome.restore(); });
 
 const loopback = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
 const remote = { baseUrl: "http://10.20.30.40:10100/v1", requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
