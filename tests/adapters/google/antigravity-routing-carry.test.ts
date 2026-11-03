@@ -7,7 +7,7 @@ import { clearModelCache } from "../../../src/codex/model-cache";
 import * as outbound from "../../../src/lib/provider-outbound";
 import * as oauth from "../../../src/oauth";
 import type { OAuthProviderDef } from "../../../src/oauth";
-import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredentialWithStatus } from "../../../src/oauth/store";
+import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredentialWithStatus, markAccountNeedsReauth } from "../../../src/oauth/store";
 import { preferredInitialAccount, routeAntigravityModel, clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import {
   ANTIGRAVITY_MODEL_DENIAL_TTL_MS, antigravityAccountSupportsModel, antigravityAccountRosterModelIds,
@@ -180,6 +180,48 @@ for (const revoke of [true, false]) test(`sibling refresh rechecks discovery aut
       expect(after.credential.refresh).toBe("synthetic-refresh-c-new");
       expect(antigravityAccountRosterModelIds(provider, "c")).toEqual(["model-after-lock"]);
     }
+  } finally { guard.release(); await pending; resolver.mockRestore(); }
+});
+
+test("a sibling marked needsReauth while waiting for its refresh lock is neither refreshed nor sent", async () => {
+  const { cfg, store, home } = setup();
+  store[provider].accounts[2]!.credential.expires = Date.now() - 1;
+  writeFileSync(join(home, "auth.json"), JSON.stringify(store));
+  const before = getAccountCredentialWithStatus(provider, "c")!;
+  const guard = await createOAuthRefreshIntentLock(provider, "c").acquire();
+  let entered!: () => void;
+  const atResolver = new Promise<void>(resolve => { entered = resolve; });
+  const originalResolver = oauth.getValidAccessSnapshotForAccount;
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation((...args) => {
+    const pending = originalResolver(...args);
+    if (args[1] === "c") entered();
+    return pending;
+  });
+  let refreshes = 0;
+  const sends: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url === "https://oauth2.googleapis.com/token") {
+      refreshes++;
+      return Response.json({ access_token: "synthetic-c-new", refresh_token: "synthetic-refresh-c-new", expires_in: 3600 });
+    }
+    if (url.includes("/userinfo")) return Response.json({ email: "fixture@example.test" });
+    if (url.includes("loadCodeAssist")) return Response.json({ cloudaicompanionProject: "project-c" });
+    sends.push(new Headers(init?.headers).get("authorization")!);
+    return Response.json(payload("model-after-reauth"));
+  }) as typeof fetch;
+  const pending = gatherRoutedModels(cfg);
+  try {
+    await atResolver;
+    await markAccountNeedsReauth(provider, "c", true);
+    guard.release();
+    await pending;
+    expect(refreshes).toBe(0);
+    expect(sends).toEqual(["Bearer synthetic-a", "Bearer synthetic-b"]);
+    const after = getAccountCredentialWithStatus(provider, "c")!;
+    expect(after.needsReauth).toBe(true);
+    expect(after.credential).toEqual(before.credential);
+    expect(antigravityAccountRosterModelIds(provider, "c")).toBeUndefined();
   } finally { guard.release(); await pending; resolver.mockRestore(); }
 });
 

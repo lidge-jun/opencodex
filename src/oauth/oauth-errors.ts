@@ -17,6 +17,9 @@ export class OAuthLoginRequiredError extends Error {
   }
 }
 
+/** A usable-account caller found needsReauth under the refresh lock; unrestricted joiners retry alone. */
+export class OAuthAccountUnusableError extends OAuthLoginRequiredError {}
+
 /** An operator-paused account is temporarily unavailable, not an invalid login. */
 export class OAuthAccountPausedError extends Error {
   constructor() {
